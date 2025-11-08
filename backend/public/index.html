@@ -1,0 +1,25 @@
+<html>
+    <body style="font-family: sans-serif; background-color: #1e2022; color: rgb(158, 158, 158)">
+        <div style="width: 100%; text-align: center; padding-top: 10%">
+            <h1 style="font-weight: 300">EFS backend in development mode</h1>
+            <p>
+                Please launch the UI for more usefulness. See <code style="color: white; font-size: 18px">README.md</code>.
+            </p>
+        </div>
+        <script>
+            const ws = new WebSocket(`ws://${window.location.host}`)
+            ws.onopen = () => {
+                console.log("WebSocket connection established")
+            }
+            ws.onmessage = (event) => {
+                console.log("WebSocket message received:", event.data)
+            }
+            ws.onerror = (error) => {
+                console.error("WebSocket error:", error)
+            }
+            ws.onclose = () => {
+                console.log("WebSocket connection closed")
+            }
+        </script>
+    </body>
+</html>

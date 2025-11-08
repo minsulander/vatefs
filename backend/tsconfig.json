@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+      "module": "nodenext",
+      "moduleResolution": "nodenext",
+      "target": "es6",
+      "outDir": "./dist/build",
+      "allowJs": true,
+      "esModuleInterop": true
+    },
+    "include": [
+      "src/**/*"
+    ]
+  }
+  
