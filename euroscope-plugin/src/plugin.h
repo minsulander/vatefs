@@ -1,0 +1,50 @@
+#pragma once
+
+#pragma warning(push, 0)
+#include "EuroScopePlugIn.h"
+#pragma warning(pop)
+
+#include "json.hpp"
+#include <string>
+
+namespace VatEFS
+{
+
+class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
+{
+    public:
+    VatEFSPlugin();
+    ~VatEFSPlugin();
+
+    void OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan);
+    void OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan, int DataType);
+    void OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan);
+    bool OnCompileCommand(const char *commandLine);
+    void OnTimer(int counter);
+
+
+    private:
+    void UpdateMyself();
+    void PostUpdates();
+    void DebugMessage(const std::string &message, const std::string &sender = "EFS");
+    void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
+    bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
+    void UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan);
+
+    bool disabled;
+    bool updateAll;
+    bool debug;
+    nlohmann::json pendingUpdates;
+    std::time_t lastUpdateTime, lastPostTime, enabledTime;
+    void* udpReceiveSocket; // SOCKET (using void* to avoid including winsock2.h in header)
+    bool winsockInitialized;
+    std::string connectionError;
+
+    void InitializeWinsock();
+    void CleanupWinsock();
+    void InitializeUdpReceiveSocket();
+    void CleanupUdpReceiveSocket();
+    void ReceiveUdpMessages();
+    void PostJson(const nlohmann::json& jsonData);
+};
+} // namespace VatEFS
