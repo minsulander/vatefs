@@ -1,27 +1,28 @@
 {
-  "name": "vatefs",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "readmeFilename": "README.md",
-  "scripts": {
-    "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node10 --outfile=dist/server.js && cp -r public/ dist/ && cp -r audio/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
-    "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js",
-    "start": "tsx src/server.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@types/node": "^24.10.0",
-    "esbuild": "^0.25.12",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "express": "^5.1.0",
-    "morgan": "^1.10.1",
-    "serve-static": "^2.2.0",
-    "ws": "^8.18.3"
-  }
+    "name": "@vatefs/backend",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "readmeFilename": "README.md",
+    "scripts": {
+        "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node10 --outfile=dist/server.js && cp -r public/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
+        "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js",
+        "start": "tsx src/server.ts"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "@types/node": "^24.10.0",
+        "esbuild": "^0.25.12",
+        "tsx": "^4.20.6",
+        "typescript": "^5.9.3"
+    },
+    "dependencies": {
+        "@vatefs/common": "file:../common",
+        "express": "^5.1.0",
+        "morgan": "^1.10.1",
+        "serve-static": "^2.2.0",
+        "ws": "^8.18.3"
+    }
 }

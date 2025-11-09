@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "target": "es6",
+        "declaration": true,
+        "sourceMap": true,
+        "lib": [
+            "es2017",
+            "dom"
+        ],
+        "outDir": "dist",
+        "removeComments": true,
+        "esModuleInterop": true,
+        "moduleResolution": "nodenext",
+        "module": "nodenext"
+    },
+    "include": [
+        "src/**/*"
+    ]
+}

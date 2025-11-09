@@ -638,7 +638,7 @@ void VatEFSPlugin::InitializeUdpReceiveSocket()
             return;
         }
 
-        // Set up local address (localhost:17772)
+        // Set up local address (127.0.0.1:17772)
         sockaddr_in localAddr;
         memset(&localAddr, 0, sizeof(localAddr));
         localAddr.sin_family = AF_INET;
@@ -735,7 +735,7 @@ void VatEFSPlugin::PostJson(const nlohmann::json& jsonData)
             return;
         }
 
-        // Set up destination address (localhost:17771)
+        // Set up destination address (127.0.0.1:17771)
         sockaddr_in destAddr;
         memset(&destAddr, 0, sizeof(destAddr));
         destAddr.sin_family = AF_INET;

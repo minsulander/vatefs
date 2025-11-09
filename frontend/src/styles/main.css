@@ -1,0 +1,40 @@
+html,
+body {
+    overflow-y: overlay;
+    background-color: #14181b;
+    min-height: 100%;
+    scrollbar-color: grey #14181b;
+    scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-track-piece {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(200, 200, 200, 0.5);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+.v-theme--dark .v-overlay__scrim {
+    background: black;
+    opacity: 0.4;
+}
+
+.v-tooltip .v-overlay__content {
+    background: #34383b;
+    color: #eee;
+}
+
+a {
+    text-decoration: none;
+    color: inherit;
+}

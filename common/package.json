@@ -1,0 +1,25 @@
+{
+  "name": "@vatefs/common",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/*.ts --no-fix",
+    "lint:fix": "eslint src/*.ts --fix"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/*"
+  ],
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^18.11.9",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "snake-camel": "^1.0.8",
+    "yaml": "^2.4.3"
+  }
+}
