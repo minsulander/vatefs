@@ -1,5 +1,5 @@
 <template>
-  <div class="efs-bay">
+  <div class="efs-bay" :data-bay-id="bay.id">
     <EfsSection
       v-for="section in bay.sections"
       :key="section.id"

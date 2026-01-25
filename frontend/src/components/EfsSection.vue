@@ -1,5 +1,5 @@
 <template>
-  <div class="efs-section">
+  <div class="efs-section" :data-section-id="section.id">
     <div class="section-header">
       <span class="section-title">{{ section.title }}</span>
     </div>

@@ -1,14 +1,20 @@
 <template>
   <div
+    ref="stripElement"
     class="flight-strip"
     :class="[stripTypeClass, { dragging: isDragging }]"
     draggable="true"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
+    @touchstart="onTouchStart"
+    @touchmove.prevent="onTouchMove"
+    @touchend="onTouchEnd"
+    @touchcancel="onTouchCancel"
+    @contextmenu.prevent
     @click="onStripClick"
   >
     <!-- Color indicator bar on left -->
-    <div class="strip-indicator" @click.stop="onEdgeClick"></div>
+    <div class="strip-indicator" @click.stop="onEdgeClick" @touchend.stop="onEdgeTouch"></div>
 
     <!-- Main strip content - structured grid layout -->
     <div class="strip-body">
@@ -82,6 +88,7 @@
 import { ref, computed } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
+import { getTouchDragInstance } from '@/composables/useTouchDrag'
 
 const props = defineProps<{
   strip: FlightStrip
@@ -90,7 +97,16 @@ const props = defineProps<{
 }>()
 
 const store = useEfsStore()
+const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
+
+// Touch drag state
+let touchStarted = false
+let touchMoved = false
+let longPressTimer: number | null = null
+const LONG_PRESS_DELAY = 150 // ms before drag starts
+
+const touchDrag = getTouchDragInstance()
 
 const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
 
@@ -101,6 +117,7 @@ const displayTime = computed(() => {
   return props.strip.eta || ''
 })
 
+// Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
   isDragging.value = true
   if (event.dataTransfer) {
@@ -117,8 +134,105 @@ function onDragEnd() {
   isDragging.value = false
 }
 
+// Touch drag handlers (mobile/tablet)
+function onTouchStart(event: TouchEvent) {
+  if (event.touches.length !== 1) return
+
+  touchStarted = true
+  touchMoved = false
+
+  const touch = event.touches[0]
+
+  // Start drag after a short delay to distinguish from scroll
+  longPressTimer = window.setTimeout(() => {
+    if (touchStarted && stripElement.value && touch) {
+      // Prevent context menu by stopping the event chain early
+      event.preventDefault()
+      isDragging.value = true
+      touchDrag.startDrag(stripElement.value, {
+        stripId: props.strip.id,
+        bayId: props.bayId,
+        sectionId: props.sectionId
+      }, touch)
+    }
+  }, LONG_PRESS_DELAY)
+}
+
+function onTouchMove(event: TouchEvent) {
+  if (!touchStarted) return
+
+  touchMoved = true
+
+  // If we haven't started dragging yet and moved, cancel the long press
+  if (!isDragging.value && longPressTimer) {
+    // Allow some movement before canceling (for jitter)
+    // The drag will start once the timer fires
+  }
+
+  if (isDragging.value && event.touches.length === 1 && event.touches[0]) {
+    touchDrag.moveDrag(event.touches[0])
+  }
+}
+
+function onTouchEnd(event: TouchEvent) {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+
+  if (isDragging.value) {
+    const result = touchDrag.endDrag()
+
+    if (result.dropTarget && result.data) {
+      // Find the section info from the drop target
+      const sectionEl = result.dropTarget.closest('.efs-section')
+      const bayEl = sectionEl?.closest('.efs-bay')
+
+      if (sectionEl && bayEl) {
+        const targetSectionId = sectionEl.getAttribute('data-section-id')
+        const targetBayId = bayEl.getAttribute('data-bay-id')
+
+        if (targetSectionId && targetBayId) {
+          store.moveStripToSection(
+            result.data.stripId,
+            targetBayId,
+            targetSectionId,
+            result.dropPosition
+          )
+        }
+      }
+    }
+
+    isDragging.value = false
+  }
+
+  touchStarted = false
+}
+
+function onTouchCancel() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+
+  if (isDragging.value) {
+    touchDrag.cancelDrag()
+    isDragging.value = false
+  }
+
+  touchStarted = false
+}
+
 function onEdgeClick() {
   store.moveStripToNextSection(props.strip.id)
+}
+
+function onEdgeTouch(event: TouchEvent) {
+  // Prevent drag from starting when tapping the edge
+  if (!touchMoved) {
+    event.preventDefault()
+    store.moveStripToNextSection(props.strip.id)
+  }
 }
 
 function onStripClick() {
@@ -139,6 +253,10 @@ function onStripClick() {
   font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 11px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  touch-action: none; /* Prevent default touch behaviors during drag */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* Prevent iOS callout/context menu */
 }
 
 .flight-strip:hover {
@@ -156,6 +274,7 @@ function onStripClick() {
 .strip-indicator {
   cursor: pointer;
   transition: filter 0.15s ease;
+  touch-action: manipulation;
 }
 
 .strip-indicator:hover {
