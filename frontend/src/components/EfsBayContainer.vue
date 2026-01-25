@@ -26,7 +26,7 @@ const bays = computed(() => store.getBays)
 .efs-bay-container {
   height: 100vh;
   overflow: hidden;
-  background: #0f1315;
+  background: #080a0c;
 }
 
 .fill-height {

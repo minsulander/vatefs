@@ -23,8 +23,8 @@ defineProps<{
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #1a1e22;
-  border-right: 2px solid #3a3e42;
+  background: #0d1014;
+  border-right: 1px solid #2a2e32;
 }
 
 .efs-bay:last-child {

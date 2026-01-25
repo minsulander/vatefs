@@ -1,6 +1,5 @@
 <template>
     <v-app>
-        behold, tis an app
         <router-view />
     </v-app>
 </template>

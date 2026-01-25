@@ -102,7 +102,7 @@ function onDrop(event: DragEvent) {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  border-bottom: 1px solid #3a3e42;
+  border-bottom: 1px solid #2a2e32;
 }
 
 .efs-section:last-child {
@@ -110,55 +110,62 @@ function onDrop(event: DragEvent) {
 }
 
 .section-header {
-  background: linear-gradient(180deg, #2a2e32 0%, #252a2e 100%);
-  padding: 6px 8px;
-  border-bottom: 2px solid rgb(var(--v-theme-primary));
+  background: #1a1d20;
+  padding: 4px 8px;
+  border-bottom: 1px solid #3a3e42;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .section-title {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 1px;
-  color: rgb(var(--v-theme-primary));
+  letter-spacing: 1.5px;
+  color: #8a9199;
   text-transform: uppercase;
+  font-family: 'Segoe UI', 'Arial', sans-serif;
 }
 
 .section-content {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 0;
-  min-height: 60px;
+  padding: 2px 0;
+  min-height: 50px;
+  background: #12151a;
   transition: background 0.2s ease;
 }
 
 .section-content.drag-over {
-  background: rgba(var(--v-theme-primary), 0.1);
-  box-shadow: inset 0 0 8px rgba(var(--v-theme-primary), 0.3);
+  background: rgba(0, 150, 180, 0.1);
+  box-shadow: inset 0 0 10px rgba(0, 150, 180, 0.2);
 }
 
 .empty-section {
   text-align: center;
-  padding: 20px;
-  color: #555;
-  font-size: 0.8rem;
-  font-style: italic;
+  padding: 15px;
+  color: #3a3e42;
+  font-size: 0.75rem;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 1px;
 }
 
 .section-content::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 
 .section-content::-webkit-scrollbar-track {
-  background: #1a1e22;
+  background: #12151a;
 }
 
 .section-content::-webkit-scrollbar-thumb {
-  background: #3a3e42;
-  border-radius: 3px;
+  background: #2a2e32;
+  border-radius: 2px;
 }
 
 .section-content::-webkit-scrollbar-thumb:hover {
-  background: #4a4e52;
+  background: #3a3e42;
 }
 </style>

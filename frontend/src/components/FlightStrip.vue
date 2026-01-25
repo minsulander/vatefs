@@ -1,38 +1,85 @@
 <template>
   <div
     class="flight-strip"
-    :class="{ dragging: isDragging }"
+    :class="[stripTypeClass, { dragging: isDragging }]"
     draggable="true"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
+    @click="onStripClick"
   >
-    <div class="strip-edge" @click="onEdgeClick"></div>
-    <div class="strip-content">
-      <div class="strip-header">
-        <span class="callsign">{{ strip.callsign }}</span>
-        <span class="aircraft-type">{{ strip.aircraftType }}</span>
+    <!-- Color indicator bar on left -->
+    <div class="strip-indicator" @click.stop="onEdgeClick"></div>
+
+    <!-- Main strip content - structured grid layout -->
+    <div class="strip-body">
+      <!-- Left section: Callsign block -->
+      <div class="strip-left">
+        <div class="callsign">{{ strip.callsign }}</div>
+        <div class="callsign-sub">
+          <span class="flight-rules">{{ strip.flightRules }}</span>
+          <span class="aircraft-type">{{ strip.aircraftType }}{{ strip.wakeTurbulence }}</span>
+        </div>
+        <div class="squawk" v-if="strip.squawk">{{ strip.squawk }}</div>
       </div>
+
+      <!-- Divider -->
+      <div class="strip-divider"></div>
+
+      <!-- Time section -->
+      <div class="strip-time">
+        <div class="time-value">{{ displayTime }}</div>
+        <div class="time-label" v-if="strip.stripType === 'departure'">EOBT</div>
+        <div class="time-label" v-else>ETA</div>
+      </div>
+
+      <!-- Divider -->
+      <div class="strip-divider"></div>
+
+      <!-- SID/Clearance section -->
+      <div class="strip-sid">
+        <div class="sid-value">{{ strip.sid || '' }}</div>
+        <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
+          <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
+          <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+        </div>
+      </div>
+
+      <!-- Divider -->
+      <div class="strip-divider"></div>
+
+      <!-- Airports section -->
+      <div class="strip-airports">
+        <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' }">
+          <span class="icao">{{ strip.adep }}</span>
+        </div>
+        <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' }">
+          <span class="icao">{{ strip.ades }}</span>
+        </div>
+      </div>
+
+      <!-- Divider -->
+      <div class="strip-divider"></div>
+
+      <!-- Route & RFL section -->
       <div class="strip-route">
-        <span class="airport">{{ strip.origin }}</span>
-        <span class="arrow">→</span>
-        <span class="airport">{{ strip.destination }}</span>
+        <div class="route-text">{{ strip.route || '' }}</div>
+        <div class="rfl" v-if="strip.rfl">{{ strip.rfl }}</div>
       </div>
-      <div class="strip-details">
-        <span v-if="strip.altitude" class="detail">{{ strip.altitude }}</span>
-        <span v-if="strip.speed" class="detail">{{ strip.speed }}kt</span>
-        <span v-if="strip.squawk" class="detail squawk">{{ strip.squawk }}</span>
+
+      <!-- Divider -->
+      <div class="strip-divider"></div>
+
+      <!-- Stand/Remarks section -->
+      <div class="strip-stand">
+        <div class="stand-value" v-if="strip.stand">{{ strip.stand }}</div>
+        <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
       </div>
-      <div class="strip-times">
-        <span v-if="strip.departureTime" class="time">DEP {{ strip.departureTime }}</span>
-        <span v-if="strip.arrivalTime" class="time">ARR {{ strip.arrivalTime }}</span>
-      </div>
-      <div v-if="strip.route" class="strip-route-detail">{{ strip.route }}</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 
@@ -44,6 +91,15 @@ const props = defineProps<{
 
 const store = useEfsStore()
 const isDragging = ref(false)
+
+const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
+
+const displayTime = computed(() => {
+  if (props.strip.stripType === 'departure') {
+    return props.strip.eobt || ''
+  }
+  return props.strip.eta || ''
+})
 
 function onDragStart(event: DragEvent) {
   isDragging.value = true
@@ -64,120 +120,264 @@ function onDragEnd() {
 function onEdgeClick() {
   store.moveStripToNextSection(props.strip.id)
 }
+
+function onStripClick() {
+  // Future: open strip detail/edit modal
+}
 </script>
 
 <style scoped>
 .flight-strip {
   display: grid;
-  grid-template-columns: 30px 1fr;
-  background: linear-gradient(135deg, #1e2226 0%, #2a2e32 100%);
-  border: 1px solid #3a3e42;
-  border-left: 3px solid rgb(var(--v-theme-primary));
+  grid-template-columns: 10px 1fr;
+  background: #f0ebe0;
+  border: 1px solid #888;
   margin: 2px 4px;
-  border-radius: 2px;
+  min-height: 44px;
   cursor: move;
-  transition: all 0.2s ease;
-  font-family: 'Roboto', sans-serif;
+  transition: all 0.12s ease;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  font-size: 11px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .flight-strip:hover {
-  border-color: rgb(var(--v-theme-primary));
-  box-shadow: 0 2px 8px rgba(0, 133, 148, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
+  z-index: 10;
 }
 
 .flight-strip.dragging {
-  opacity: 0.5;
+  opacity: 0.4;
+  transform: scale(0.98);
 }
 
-.strip-edge {
-  background: rgba(var(--v-theme-primary), 0.1);
+/* Strip type color indicators */
+.strip-indicator {
   cursor: pointer;
-  transition: background 0.2s ease;
-  border-right: 1px solid #3a3e42;
+  transition: filter 0.15s ease;
 }
 
-.strip-edge:hover {
-  background: rgba(var(--v-theme-primary), 0.3);
+.strip-indicator:hover {
+  filter: brightness(1.15);
 }
 
-.strip-content {
-  padding: 6px 8px;
+/* Departure - Blue */
+.strip-departure .strip-indicator {
+  background: #3b7dd8;
+}
+
+/* Arrival - Yellow/Amber */
+.strip-arrival .strip-indicator {
+  background: #daa520;
+}
+
+/* Local - Red */
+.strip-local .strip-indicator {
+  background: #cc4444;
+}
+
+/* VFR - Green */
+.strip-vfr .strip-indicator {
+  background: #3d9e3d;
+}
+
+/* Strip body layout */
+.strip-body {
+  display: flex;
+  align-items: stretch;
+  background: #f5f2ea;
+}
+
+/* Vertical dividers */
+.strip-divider {
+  width: 1px;
+  background: #aaa;
+  margin: 2px 0;
+}
+
+/* Left section - Callsign block */
+.strip-left {
+  width: 75px;
+  min-width: 75px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  font-size: 0.85rem;
-}
-
-.strip-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  background: #fff;
+  border-right: 1px solid #999;
 }
 
 .callsign {
-  color: #00e5ff;
+  font-weight: bold;
+  font-size: 13px;
+  color: #000;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+.callsign-sub {
+  display: flex;
+  gap: 4px;
+  font-size: 9px;
+  color: #555;
+  margin-top: 1px;
+}
+
+.flight-rules {
   font-weight: 600;
-  font-size: 0.95rem;
-  letter-spacing: 0.5px;
+  color: #333;
 }
 
 .aircraft-type {
-  color: #bbb;
-  font-size: 0.8rem;
-}
-
-.strip-route {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  color: #ddd;
-  font-size: 0.8rem;
-}
-
-.airport {
-  font-weight: 500;
-  letter-spacing: 0.5px;
-}
-
-.arrow {
-  color: #888;
-}
-
-.strip-details {
-  display: flex;
-  gap: 8px;
-  color: #aaa;
-  font-size: 0.75rem;
-}
-
-.detail {
-  padding: 1px 4px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 2px;
+  color: #666;
 }
 
 .squawk {
-  color: #ffa726;
+  font-size: 10px;
+  color: #444;
   font-weight: 500;
+  margin-top: 1px;
 }
 
-.strip-times {
+/* Time section */
+.strip-time {
+  width: 42px;
+  min-width: 42px;
   display: flex;
-  gap: 8px;
-  font-size: 0.75rem;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2px;
 }
 
-.time {
-  color: #ffa726;
+.time-value {
+  font-weight: 600;
+  font-size: 11px;
+  color: #222;
+}
+
+.time-label {
+  font-size: 7px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* SID/Clearance section */
+.strip-sid {
+  width: 65px;
+  min-width: 65px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2px 4px;
+}
+
+.sid-value {
+  font-weight: 600;
+  font-size: 10px;
+  color: #0055aa;
+}
+
+.cleared-data {
+  display: flex;
+  gap: 4px;
+  font-size: 9px;
+  margin-top: 2px;
+}
+
+.alt {
+  color: #0066cc;
   font-weight: 500;
 }
 
-.strip-route-detail {
-  color: #999;
-  font-size: 0.7rem;
-  font-family: 'Roboto Mono', monospace;
+.hdg {
+  color: #666;
+}
+
+/* Airports section */
+.strip-airports {
+  width: 80px;
+  min-width: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2px 4px;
+}
+
+.airport {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.airport.highlight .icao {
+  font-weight: bold;
+  color: #000;
+}
+
+.icao {
+  font-weight: 500;
+  color: #444;
+  letter-spacing: 0.3px;
+}
+
+/* Route section */
+.strip-route {
+  flex: 1;
+  min-width: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 2px 4px;
+  overflow: hidden;
+}
+
+.route-text {
+  font-size: 9px;
+  color: #555;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.rfl {
+  font-weight: 600;
+  font-size: 10px;
+  color: #0055aa;
+  margin-top: 1px;
+}
+
+/* Stand section */
+.strip-stand {
+  width: 40px;
+  min-width: 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2px;
+  background: #e8e4d8;
+}
+
+.stand-value {
+  font-weight: bold;
+  font-size: 12px;
+  color: #333;
+}
+
+.runway-value {
+  font-size: 9px;
+  color: #666;
+  font-weight: 500;
+}
+
+/* Heavy wake turbulence highlighting */
+.strip-departure .aircraft-type:has(+ .wtc-heavy),
+.strip-arrival .aircraft-type:has(+ .wtc-heavy) {
+  color: #cc0000;
 }
 </style>

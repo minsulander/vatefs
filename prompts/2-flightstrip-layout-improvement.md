@@ -1,0 +1,1 @@
+Take a look at @prompts/fps-flight-progress-strips.pdf, @prompts/efs-sim.png, @prompts/multitwr-efs.png, @prompts/saab-efs.jpeg, and let's focus on improving the Flight Strip layout, structure and fields to better prepare for filling it with relevant information from EuroScope. Also, if you can, adjust the look and colors to better match the images.
