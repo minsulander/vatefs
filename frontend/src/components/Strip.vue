@@ -1,3 +1,0 @@
-<template>
-    strip
-</template>
