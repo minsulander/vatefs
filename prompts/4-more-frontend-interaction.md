@@ -38,5 +38,5 @@ Slut på tokens.
 Börjar ana att vi målat in oss i ett AI-hörn..
 
 Funkar fortfarande inte:
-- non-touch mode: horizontal scroll by drag
-- touch-mode: byta sorteringsordning genom att dra nedåt (skapar hela tiden gap)
+- non-touch mode: horizontal scroll by drag (försökt fixa flera gånger)
+- touch-mode: byta sorteringsordning genom att dra nedåt funkar men inte gap, tidigare skapades gap men gick inte att byta sorteringsordning

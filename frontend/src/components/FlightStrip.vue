@@ -8,6 +8,10 @@
     draggable="true"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
+    @touchstart="onDragAreaTouchStart"
+      @touchmove.prevent="onDragAreaTouchMove"
+      @touchend="onDragAreaTouchEnd"
+      @touchcancel="onDragAreaTouchCancel"
     @contextmenu.prevent
     @click="onStripClick"
   >
@@ -17,10 +21,6 @@
     <!-- Left section: Callsign block (always visible) -->
     <div
       class="strip-left"
-      @touchstart="onDragAreaTouchStart"
-      @touchmove.prevent="onDragAreaTouchMove"
-      @touchend="onDragAreaTouchEnd"
-      @touchcancel="onDragAreaTouchCancel"
     >
       <div class="callsign">{{ strip.callsign }}</div>
       <div class="callsign-sub">
@@ -34,9 +34,6 @@
     <div
       class="strip-middle"
       ref="stripMiddle"
-      @mousedown="onMiddleMouseDown"
-      @dragstart="onMiddleDragStart"
-      @dragend="onMiddleDragEnd"
     >
       <div class="strip-middle-content">
         <!-- Time section -->
@@ -302,78 +299,6 @@ function onDragAreaTouchCancel() {
   touchStarted = false
 }
 
-// Middle section mouse handlers for horizontal scroll vs vertical drag
-function onMiddleMouseDown(event: MouseEvent) {
-  if (event.button !== 0) return // Only left click
-
-  middleMouseState = 'pending'
-  middleStartX = event.clientX
-  middleStartY = event.clientY
-  middleScrollStart = stripMiddle.value?.scrollLeft ?? 0
-
-  // Add document-level listeners
-  document.addEventListener('mousemove', onMiddleMouseMove)
-  document.addEventListener('mouseup', onMiddleMouseUp)
-}
-
-function onMiddleMouseMove(event: MouseEvent) {
-  if (middleMouseState === 'idle') return
-
-  const deltaX = event.clientX - middleStartX
-  const deltaY = event.clientY - middleStartY
-
-  if (middleMouseState === 'pending') {
-    // Determine direction based on which threshold is crossed first
-    const absX = Math.abs(deltaX)
-    const absY = Math.abs(deltaY)
-
-    if (absX > DIRECTION_THRESHOLD && absX > absY) {
-      // Horizontal dominant - enter scroll mode
-      middleMouseState = 'scrolling'
-      event.preventDefault()
-    } else if (absY > DIRECTION_THRESHOLD && absY >= absX) {
-      // Vertical dominant - let drag happen, stop tracking
-      middleMouseState = 'idle'
-      cleanupMiddleMouseListeners()
-      return
-    }
-  }
-
-  if (middleMouseState === 'scrolling' && stripMiddle.value) {
-    // Scroll the middle section
-    stripMiddle.value.scrollLeft = middleScrollStart - deltaX
-    event.preventDefault()
-  }
-}
-
-function onMiddleMouseUp() {
-  cleanupMiddleMouseListeners()
-  middleMouseState = 'idle'
-}
-
-function cleanupMiddleMouseListeners() {
-  document.removeEventListener('mousemove', onMiddleMouseMove)
-  document.removeEventListener('mouseup', onMiddleMouseUp)
-}
-
-function onMiddleDragStart(event: DragEvent) {
-  // Prevent drag if we're in scroll mode
-  if (middleMouseState === 'scrolling') {
-    event.preventDefault()
-    event.stopPropagation()
-    return
-  }
-  // Clean up and let drag proceed
-  cleanupMiddleMouseListeners()
-  middleMouseState = 'idle'
-}
-
-function onMiddleDragEnd() {
-  // Ensure state is reset after drag completes
-  cleanupMiddleMouseListeners()
-  middleMouseState = 'idle'
-}
-
 // Action button handlers
 function onActionClick() {
   store.moveStripToNextSection(props.strip.id)
@@ -491,10 +416,11 @@ function onStripClick() {
 
 /* Middle section - horizontally scrollable */
 .strip-middle {
-  overflow-x: auto;
+  /*touch-action: pan-x; 
+  overflow-x: auto;*/
+  overflow-x: hidden;
   overflow-y: hidden;
   background: #f5f2ea;
-  touch-action: pan-x;
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE/Edge */
 }
