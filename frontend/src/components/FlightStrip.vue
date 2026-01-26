@@ -8,80 +8,94 @@
     draggable="true"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
-    @touchstart="onTouchStart"
-    @touchmove.prevent="onTouchMove"
-    @touchend="onTouchEnd"
-    @touchcancel="onTouchCancel"
     @contextmenu.prevent
     @click="onStripClick"
   >
     <!-- Color indicator bar on left -->
-    <div class="strip-indicator" @click.stop="onEdgeClick" @touchend.stop="onEdgeTouch"></div>
+    <div class="strip-indicator"></div>
 
-    <!-- Main strip content - structured grid layout -->
-    <div class="strip-body">
-      <!-- Left section: Callsign block -->
-      <div class="strip-left">
-        <div class="callsign">{{ strip.callsign }}</div>
-        <div class="callsign-sub">
-          <span class="flight-rules">{{ strip.flightRules }}</span>
-          <span class="aircraft-type">{{ strip.aircraftType }}{{ strip.wakeTurbulence }}</span>
+    <!-- Left section: Callsign block (always visible) -->
+    <div
+      class="strip-left"
+      @touchstart="onDragAreaTouchStart"
+      @touchmove.prevent="onDragAreaTouchMove"
+      @touchend="onDragAreaTouchEnd"
+      @touchcancel="onDragAreaTouchCancel"
+    >
+      <div class="callsign">{{ strip.callsign }}</div>
+      <div class="callsign-sub">
+        <span class="flight-rules">{{ strip.flightRules }}</span>
+        <span class="aircraft-type">{{ strip.aircraftType }}{{ strip.wakeTurbulence }}</span>
+      </div>
+      <div class="squawk" v-if="strip.squawk">{{ strip.squawk }}</div>
+    </div>
+
+    <!-- Middle section (horizontally scrollable) -->
+    <div
+      class="strip-middle"
+      ref="stripMiddle"
+      @mousedown="onMiddleMouseDown"
+      @dragstart="onMiddleDragStart"
+      @dragend="onMiddleDragEnd"
+    >
+      <div class="strip-middle-content">
+        <!-- Time section -->
+        <div class="strip-section strip-time">
+          <div class="time-value">{{ displayTime }}</div>
+          <div class="time-label" v-if="strip.stripType === 'departure'">EOBT</div>
+          <div class="time-label" v-else>ETA</div>
         </div>
-        <div class="squawk" v-if="strip.squawk">{{ strip.squawk }}</div>
-      </div>
 
-      <!-- Divider -->
-      <div class="strip-divider"></div>
+        <div class="strip-divider"></div>
 
-      <!-- Time section -->
-      <div class="strip-time">
-        <div class="time-value">{{ displayTime }}</div>
-        <div class="time-label" v-if="strip.stripType === 'departure'">EOBT</div>
-        <div class="time-label" v-else>ETA</div>
-      </div>
+        <!-- SID/Clearance section -->
+        <div class="strip-section strip-sid">
+          <div class="sid-value">{{ strip.sid || '' }}</div>
+          <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
+            <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
+            <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+          </div>
+        </div>
 
-      <!-- Divider -->
-      <div class="strip-divider"></div>
+        <div class="strip-divider"></div>
 
-      <!-- SID/Clearance section -->
-      <div class="strip-sid">
-        <div class="sid-value">{{ strip.sid || '' }}</div>
-        <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
-          <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
-          <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+        <!-- Airports section -->
+        <div class="strip-section strip-airports">
+          <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' }">
+            <span class="icao">{{ strip.adep }}</span>
+          </div>
+          <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' }">
+            <span class="icao">{{ strip.ades }}</span>
+          </div>
+        </div>
+
+        <div class="strip-divider"></div>
+
+        <!-- Route & RFL section -->
+        <div class="strip-section strip-route">
+          <div class="route-text">{{ strip.route || '' }}</div>
+          <div class="rfl" v-if="strip.rfl">{{ strip.rfl }}</div>
+        </div>
+
+        <div class="strip-divider"></div>
+
+        <!-- Stand/Remarks section -->
+        <div class="strip-section strip-stand">
+          <div class="stand-value" v-if="strip.stand">{{ strip.stand }}</div>
+          <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
         </div>
       </div>
+    </div>
 
-      <!-- Divider -->
-      <div class="strip-divider"></div>
-
-      <!-- Airports section -->
-      <div class="strip-airports">
-        <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' }">
-          <span class="icao">{{ strip.adep }}</span>
-        </div>
-        <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' }">
-          <span class="icao">{{ strip.ades }}</span>
-        </div>
-      </div>
-
-      <!-- Divider -->
-      <div class="strip-divider"></div>
-
-      <!-- Route & RFL section -->
-      <div class="strip-route">
-        <div class="route-text">{{ strip.route || '' }}</div>
-        <div class="rfl" v-if="strip.rfl">{{ strip.rfl }}</div>
-      </div>
-
-      <!-- Divider -->
-      <div class="strip-divider"></div>
-
-      <!-- Stand/Remarks section -->
-      <div class="strip-stand">
-        <div class="stand-value" v-if="strip.stand">{{ strip.stand }}</div>
-        <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
-      </div>
+    <!-- Right section: Action button (always visible) -->
+    <div class="strip-right">
+      <button
+        class="action-button"
+        @click.stop="onActionClick"
+        @touchend.stop="onActionTouch"
+      >
+        <span class="action-icon">›</span>
+      </button>
     </div>
   </div>
 </template>
@@ -103,6 +117,7 @@ const props = withDefaults(defineProps<{
 
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
+const stripMiddle = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
 
 // Touch drag state
@@ -110,6 +125,13 @@ let touchStarted = false
 let touchMoved = false
 let longPressTimer: number | null = null
 const LONG_PRESS_DELAY = 150 // ms before drag starts
+
+// Middle section mouse scroll state
+let middleMouseState: 'idle' | 'pending' | 'scrolling' | 'dragging' = 'idle'
+let middleStartX = 0
+let middleStartY = 0
+let middleScrollStart = 0
+const DIRECTION_THRESHOLD = 5 // pixels to determine direction
 
 const touchDrag = getTouchDragInstance()
 
@@ -150,8 +172,8 @@ function onDragEnd() {
   isDragging.value = false
 }
 
-// Touch drag handlers (mobile/tablet)
-function onTouchStart(event: TouchEvent) {
+// Touch drag handlers for drag areas (strip-left)
+function onDragAreaTouchStart(event: TouchEvent) {
   if (event.touches.length !== 1) return
 
   touchStarted = true
@@ -177,23 +199,17 @@ function onTouchStart(event: TouchEvent) {
   }, LONG_PRESS_DELAY)
 }
 
-function onTouchMove(event: TouchEvent) {
+function onDragAreaTouchMove(event: TouchEvent) {
   if (!touchStarted) return
 
   touchMoved = true
-
-  // If we haven't started dragging yet and moved, cancel the long press
-  if (!isDragging.value && longPressTimer) {
-    // Allow some movement before canceling (for jitter)
-    // The drag will start once the timer fires
-  }
 
   if (isDragging.value && event.touches.length === 1 && event.touches[0]) {
     touchDrag.moveDrag(event.touches[0])
   }
 }
 
-function onTouchEnd(event: TouchEvent) {
+function onDragAreaTouchEnd(event: TouchEvent) {
   if (longPressTimer) {
     clearTimeout(longPressTimer)
     longPressTimer = null
@@ -226,34 +242,15 @@ function onTouchEnd(event: TouchEvent) {
           } else if (isSameSection &&
                      result.data.originalTop !== undefined &&
                      result.data.originalBottom !== undefined) {
-            // Same section - check for gap adjustment vs reorder
+            // Same section - check position first, then gap adjustment
             const dropY = result.touchY
             const originalTop = result.data.originalTop
             const originalBottom = result.data.originalBottom
             const currentGap = props.strip.gapBefore || 0
 
-            // Dragging down (drop below original bottom) = increase gap
-            if (dropY > originalBottom) {
-              const delta = dropY - originalBottom
-              store.setStripGap(result.data.stripId, currentGap + delta)
-            }
-            // Dragging up (drop above original top) = decrease gap or reorder
-            else if (dropY < originalTop) {
-              if (currentGap > 0) {
-                const delta = originalTop - dropY
-                store.setStripGap(result.data.stripId, Math.max(0, currentGap - delta))
-              } else {
-                // No gap to reduce, do normal reorder
-                store.moveStripToSection(
-                  result.data.stripId,
-                  targetBayId,
-                  targetSectionId,
-                  result.dropPosition
-                )
-              }
-            }
-            // Dropped within original bounds with different position = reorder
-            else if (result.dropPosition !== props.strip.position) {
+            // First check if position changed (crossed another strip's midpoint)
+            if (result.dropPosition !== props.strip.position) {
+              // Position changed - do reorder
               store.moveStripToSection(
                 result.data.stripId,
                 targetBayId,
@@ -261,7 +258,18 @@ function onTouchEnd(event: TouchEvent) {
                 result.dropPosition
               )
             }
-            // Dropped within original bounds at same position = no change
+            // Same position - handle gap adjustment based on drag direction
+            else if (dropY > originalBottom) {
+              // Dragging down = increase gap
+              const delta = dropY - originalBottom
+              store.setStripGap(result.data.stripId, currentGap + delta)
+            }
+            else if (dropY < originalTop && currentGap > 0) {
+              // Dragging up with existing gap = decrease gap
+              const delta = originalTop - dropY
+              store.setStripGap(result.data.stripId, Math.max(0, currentGap - delta))
+            }
+            // else: dropped within original bounds at same position = no change
           } else {
             store.moveStripToSection(
               result.data.stripId,
@@ -280,7 +288,7 @@ function onTouchEnd(event: TouchEvent) {
   touchStarted = false
 }
 
-function onTouchCancel() {
+function onDragAreaTouchCancel() {
   if (longPressTimer) {
     clearTimeout(longPressTimer)
     longPressTimer = null
@@ -294,16 +302,86 @@ function onTouchCancel() {
   touchStarted = false
 }
 
-function onEdgeClick() {
+// Middle section mouse handlers for horizontal scroll vs vertical drag
+function onMiddleMouseDown(event: MouseEvent) {
+  if (event.button !== 0) return // Only left click
+
+  middleMouseState = 'pending'
+  middleStartX = event.clientX
+  middleStartY = event.clientY
+  middleScrollStart = stripMiddle.value?.scrollLeft ?? 0
+
+  // Add document-level listeners
+  document.addEventListener('mousemove', onMiddleMouseMove)
+  document.addEventListener('mouseup', onMiddleMouseUp)
+}
+
+function onMiddleMouseMove(event: MouseEvent) {
+  if (middleMouseState === 'idle') return
+
+  const deltaX = event.clientX - middleStartX
+  const deltaY = event.clientY - middleStartY
+
+  if (middleMouseState === 'pending') {
+    // Determine direction based on which threshold is crossed first
+    const absX = Math.abs(deltaX)
+    const absY = Math.abs(deltaY)
+
+    if (absX > DIRECTION_THRESHOLD && absX > absY) {
+      // Horizontal dominant - enter scroll mode
+      middleMouseState = 'scrolling'
+      event.preventDefault()
+    } else if (absY > DIRECTION_THRESHOLD && absY >= absX) {
+      // Vertical dominant - let drag happen, stop tracking
+      middleMouseState = 'idle'
+      cleanupMiddleMouseListeners()
+      return
+    }
+  }
+
+  if (middleMouseState === 'scrolling' && stripMiddle.value) {
+    // Scroll the middle section
+    stripMiddle.value.scrollLeft = middleScrollStart - deltaX
+    event.preventDefault()
+  }
+}
+
+function onMiddleMouseUp() {
+  cleanupMiddleMouseListeners()
+  middleMouseState = 'idle'
+}
+
+function cleanupMiddleMouseListeners() {
+  document.removeEventListener('mousemove', onMiddleMouseMove)
+  document.removeEventListener('mouseup', onMiddleMouseUp)
+}
+
+function onMiddleDragStart(event: DragEvent) {
+  // Prevent drag if we're in scroll mode
+  if (middleMouseState === 'scrolling') {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+  // Clean up and let drag proceed
+  cleanupMiddleMouseListeners()
+  middleMouseState = 'idle'
+}
+
+function onMiddleDragEnd() {
+  // Ensure state is reset after drag completes
+  cleanupMiddleMouseListeners()
+  middleMouseState = 'idle'
+}
+
+// Action button handlers
+function onActionClick() {
   store.moveStripToNextSection(props.strip.id)
 }
 
-function onEdgeTouch(event: TouchEvent) {
-  // Prevent drag from starting when tapping the edge
-  if (!touchMoved) {
-    event.preventDefault()
-    store.moveStripToNextSection(props.strip.id)
-  }
+function onActionTouch(event: TouchEvent) {
+  event.preventDefault()
+  store.moveStripToNextSection(props.strip.id)
 }
 
 function onStripClick() {
@@ -314,7 +392,7 @@ function onStripClick() {
 <style scoped>
 .flight-strip {
   display: grid;
-  grid-template-columns: 10px 1fr;
+  grid-template-columns: 10px auto 1fr auto;
   background: #f0ebe0;
   border: 1px solid #888;
   margin: 2px 4px;
@@ -324,10 +402,9 @@ function onStripClick() {
   font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 11px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-  touch-action: none; /* Prevent default touch behaviors during drag */
   user-select: none;
   -webkit-user-select: none;
-  -webkit-touch-callout: none; /* Prevent iOS callout/context menu */
+  -webkit-touch-callout: none;
 }
 
 .flight-strip:hover {
@@ -343,13 +420,7 @@ function onStripClick() {
 
 /* Strip type color indicators */
 .strip-indicator {
-  cursor: pointer;
   transition: filter 0.15s ease;
-  touch-action: manipulation;
-}
-
-.strip-indicator:hover {
-  filter: brightness(1.15);
 }
 
 /* Departure - Blue */
@@ -372,21 +443,7 @@ function onStripClick() {
   background: #3d9e3d;
 }
 
-/* Strip body layout */
-.strip-body {
-  display: flex;
-  align-items: stretch;
-  background: #f5f2ea;
-}
-
-/* Vertical dividers */
-.strip-divider {
-  width: 1px;
-  background: #aaa;
-  margin: 2px 0;
-}
-
-/* Left section - Callsign block */
+/* Left section - Callsign block (always visible) */
 .strip-left {
   width: 75px;
   min-width: 75px;
@@ -396,6 +453,8 @@ function onStripClick() {
   padding: 2px 4px;
   background: #fff;
   border-right: 1px solid #999;
+  touch-action: none;
+  cursor: move;
 }
 
 .callsign {
@@ -428,6 +487,39 @@ function onStripClick() {
   color: #444;
   font-weight: 500;
   margin-top: 1px;
+}
+
+/* Middle section - horizontally scrollable */
+.strip-middle {
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #f5f2ea;
+  touch-action: pan-x;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.strip-middle::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+.strip-middle-content {
+  display: flex;
+  align-items: stretch;
+  min-width: max-content;
+  height: 100%;
+}
+
+/* Vertical dividers */
+.strip-divider {
+  width: 1px;
+  background: #aaa;
+  margin: 2px 0;
+  flex-shrink: 0;
+}
+
+.strip-section {
+  flex-shrink: 0;
 }
 
 /* Time section */
@@ -517,21 +609,18 @@ function onStripClick() {
 
 /* Route section */
 .strip-route {
-  flex: 1;
-  min-width: 80px;
+  width: 100px;
+  min-width: 100px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   padding: 2px 4px;
-  overflow: hidden;
 }
 
 .route-text {
   font-size: 9px;
   color: #555;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .rfl {
@@ -565,9 +654,78 @@ function onStripClick() {
   font-weight: 500;
 }
 
-/* Heavy wake turbulence highlighting */
-.strip-departure .aircraft-type:has(+ .wtc-heavy),
-.strip-arrival .aircraft-type:has(+ .wtc-heavy) {
-  color: #cc0000;
+/* Right section - Action button */
+.strip-right {
+  display: flex;
+  align-items: stretch;
+  border-left: 1px solid #999;
+}
+
+.action-button {
+  width: 28px;
+  border: none;
+  background: linear-gradient(to bottom, #f8f8f8, #e0e0e0);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+  touch-action: manipulation;
+}
+
+.action-button:hover {
+  background: linear-gradient(to bottom, #fff, #e8e8e8);
+}
+
+.action-button:active {
+  background: linear-gradient(to bottom, #d0d0d0, #c0c0c0);
+}
+
+.action-icon {
+  font-size: 18px;
+  font-weight: bold;
+  color: #555;
+  line-height: 1;
+}
+
+/* Strip type specific action button colors */
+.strip-departure .action-button {
+  background: linear-gradient(to bottom, #5a9be8, #3b7dd8);
+}
+.strip-departure .action-button:hover {
+  background: linear-gradient(to bottom, #6aabf8, #4b8de8);
+}
+.strip-departure .action-button .action-icon {
+  color: #fff;
+}
+
+.strip-arrival .action-button {
+  background: linear-gradient(to bottom, #eab530, #daa520);
+}
+.strip-arrival .action-button:hover {
+  background: linear-gradient(to bottom, #fac540, #eab530);
+}
+.strip-arrival .action-button .action-icon {
+  color: #fff;
+}
+
+.strip-local .action-button {
+  background: linear-gradient(to bottom, #dc5454, #cc4444);
+}
+.strip-local .action-button:hover {
+  background: linear-gradient(to bottom, #ec6464, #dc5454);
+}
+.strip-local .action-button .action-icon {
+  color: #fff;
+}
+
+.strip-vfr .action-button {
+  background: linear-gradient(to bottom, #4dae4d, #3d9e3d);
+}
+.strip-vfr .action-button:hover {
+  background: linear-gradient(to bottom, #5dbe5d, #4dae4d);
+}
+.strip-vfr .action-button .action-icon {
+  color: #fff;
 }
 </style>
