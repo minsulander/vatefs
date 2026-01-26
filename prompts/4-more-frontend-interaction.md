@@ -1,0 +1,6 @@
+Now we're going to implement some more frontend interaction features regarding flight strips, bays and sections:
+- The default behavior when dragging a strip to a section should be as it is now - auto-sort from the top.
+- The user should be able to create a gap between strips, by dragging a strip within the same section, but not far enough that it passes half of another strip (which changes the sorting order).
+- The user should be able to attach strips to the bottom of the section instead, by dragging it to a small (say 10px tall) drop area at the bottom of the section. More than one strip can be placed at the bottom, and they can be resorted etc, so essentially bottom and top of sections follow the same principles but the top section is default, and attaching to bottom only happens when the user specifically drags a strip to that small drop area at the bottom.
+- When overflowing, strips attached to bottom have priority (there should mostly be just 1 or 2 strips attached to bottom), so that the overflow and scrolling is for the top-attached strips only. When a section is overflowing, the scrollbar should always be visible (regardless of touch device or not) and not change width, so a mac/ios-style scrollbar (but always visible).
+- Sections can be resized by dragging the section header up and down.

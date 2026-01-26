@@ -117,7 +117,6 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - `src/App.vue` - Root component
 - `src/router.ts` - Route definitions with hash/history mode detection
 - `src/store/efs.ts` - WebSocket connection management
-- `src/components/Strip.vue` - Flight strip component
 - `src/views/HomeView.vue` - Main view
 
 ### Backend Structure

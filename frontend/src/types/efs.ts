@@ -40,12 +40,17 @@ export interface FlightStrip {
   bayId: string
   sectionId: string
   position: number
+
+  // Visual state
+  gapBefore?: number  // Pixels of visual gap before this strip
 }
 
 export interface Section {
   id: string
   title: string
-  stripIds: string[]
+  stripIds: string[]         // Top-attached strips (scrollable)
+  bottomStripIds: string[]   // Bottom-attached strips (pinned)
+  height?: number            // Section height in pixels (for resize)
 }
 
 export interface Bay {

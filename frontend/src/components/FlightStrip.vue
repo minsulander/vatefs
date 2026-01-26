@@ -2,7 +2,9 @@
   <div
     ref="stripElement"
     class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging }]"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': isBottom }]"
+    :style="stripStyle"
+    :data-strip-id="strip.id"
     draggable="true"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
@@ -90,11 +92,14 @@ import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   strip: FlightStrip
   sectionId: string
   bayId: string
-}>()
+  isBottom?: boolean
+}>(), {
+  isBottom: false
+})
 
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
@@ -110,6 +115,14 @@ const touchDrag = getTouchDragInstance()
 
 const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
 
+const stripStyle = computed(() => {
+  const style: Record<string, string> = {}
+  if (props.strip.gapBefore && props.strip.gapBefore > 0) {
+    style.marginTop = `${props.strip.gapBefore}px`
+  }
+  return style
+})
+
 const displayTime = computed(() => {
   if (props.strip.stripType === 'departure') {
     return props.strip.eobt || ''
@@ -120,12 +133,15 @@ const displayTime = computed(() => {
 // Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
   isDragging.value = true
-  if (event.dataTransfer) {
+  if (event.dataTransfer && stripElement.value) {
+    const rect = stripElement.value.getBoundingClientRect()
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('application/json', JSON.stringify({
       stripId: props.strip.id,
       bayId: props.bayId,
-      sectionId: props.sectionId
+      sectionId: props.sectionId,
+      originalTop: rect.top,
+      originalBottom: rect.bottom
     }))
   }
 }
@@ -149,10 +165,13 @@ function onTouchStart(event: TouchEvent) {
       // Prevent context menu by stopping the event chain early
       event.preventDefault()
       isDragging.value = true
+      const rect = stripElement.value.getBoundingClientRect()
       touchDrag.startDrag(stripElement.value, {
         stripId: props.strip.id,
         bayId: props.bayId,
-        sectionId: props.sectionId
+        sectionId: props.sectionId,
+        originalTop: rect.top,
+        originalBottom: rect.bottom
       }, touch)
     }
   }, LONG_PRESS_DELAY)
@@ -193,12 +212,64 @@ function onTouchEnd(event: TouchEvent) {
         const targetBayId = bayEl.getAttribute('data-bay-id')
 
         if (targetSectionId && targetBayId) {
-          store.moveStripToSection(
-            result.data.stripId,
-            targetBayId,
-            targetSectionId,
-            result.dropPosition
-          )
+          const isSameSection = result.data.bayId === targetBayId &&
+                               result.data.sectionId === targetSectionId
+
+          if (result.isBottomDrop) {
+            // Move to bottom strips
+            store.moveStripToBottom(
+              result.data.stripId,
+              targetBayId,
+              targetSectionId,
+              result.dropPosition
+            )
+          } else if (isSameSection &&
+                     result.data.originalTop !== undefined &&
+                     result.data.originalBottom !== undefined) {
+            // Same section - check for gap adjustment vs reorder
+            const dropY = result.touchY
+            const originalTop = result.data.originalTop
+            const originalBottom = result.data.originalBottom
+            const currentGap = props.strip.gapBefore || 0
+
+            // Dragging down (drop below original bottom) = increase gap
+            if (dropY > originalBottom) {
+              const delta = dropY - originalBottom
+              store.setStripGap(result.data.stripId, currentGap + delta)
+            }
+            // Dragging up (drop above original top) = decrease gap or reorder
+            else if (dropY < originalTop) {
+              if (currentGap > 0) {
+                const delta = originalTop - dropY
+                store.setStripGap(result.data.stripId, Math.max(0, currentGap - delta))
+              } else {
+                // No gap to reduce, do normal reorder
+                store.moveStripToSection(
+                  result.data.stripId,
+                  targetBayId,
+                  targetSectionId,
+                  result.dropPosition
+                )
+              }
+            }
+            // Dropped within original bounds with different position = reorder
+            else if (result.dropPosition !== props.strip.position) {
+              store.moveStripToSection(
+                result.data.stripId,
+                targetBayId,
+                targetSectionId,
+                result.dropPosition
+              )
+            }
+            // Dropped within original bounds at same position = no change
+          } else {
+            store.moveStripToSection(
+              result.data.stripId,
+              targetBayId,
+              targetSectionId,
+              result.dropPosition
+            )
+          }
         }
       }
     }

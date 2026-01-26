@@ -47,31 +47,61 @@ export const useEfsStore = defineStore("efs", () => {
         return sectionStrips.sort((a, b) => a.position - b.position)
     }
 
+    // Get top-attached strips (scrollable area)
+    const getTopStrips = (bayId: string, sectionId: string) => {
+        const bay = config.value.bays.find(b => b.id === bayId)
+        const section = bay?.sections.find(s => s.id === sectionId)
+        if (!section) return []
+        return section.stripIds
+            .map(id => strips.value.get(id))
+            .filter((s): s is FlightStrip => s !== undefined)
+    }
+
+    // Get bottom-attached strips (pinned at bottom)
+    const getBottomStrips = (bayId: string, sectionId: string) => {
+        const bay = config.value.bays.find(b => b.id === bayId)
+        const section = bay?.sections.find(s => s.id === sectionId)
+        if (!section) return []
+        return section.bottomStripIds
+            .map(id => strips.value.get(id))
+            .filter((s): s is FlightStrip => s !== undefined)
+    }
+
     // Actions
     function moveStripToSection(
         stripId: string,
         targetBayId: string,
         targetSectionId: string,
-        position?: number
+        position?: number,
+        gapBefore?: number
     ) {
         const strip = strips.value.get(stripId)
         if (!strip) return
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
+        const isSameSection = oldBayId === targetBayId && oldSectionId === targetSectionId
 
-        // Remove from old section
+        // Remove from old section (both top and bottom lists)
         const oldBay = config.value.bays.find(b => b.id === oldBayId)
         const oldSection = oldBay?.sections.find(s => s.id === oldSectionId)
         if (oldSection) {
             oldSection.stripIds = oldSection.stripIds.filter(id => id !== stripId)
+            oldSection.bottomStripIds = oldSection.bottomStripIds.filter(id => id !== stripId)
         }
 
         // Update strip
         strip.bayId = targetBayId
         strip.sectionId = targetSectionId
 
-        // Add to new section
+        // Reset gap when moving to different section
+        if (!isSameSection) {
+            strip.gapBefore = undefined
+        } else if (gapBefore !== undefined) {
+            strip.gapBefore = gapBefore
+        }
+
+        // Add to new section (top strips)
         const targetBay = config.value.bays.find(b => b.id === targetBayId)
         const targetSection = targetBay?.sections.find(s => s.id === targetSectionId)
         if (targetSection) {
@@ -84,8 +114,66 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Recompute positions
         recomputePositions(targetBayId, targetSectionId)
+        if (!isSameSection) {
+            recomputePositions(oldBayId, oldSectionId)
+        }
+    }
+
+    function moveStripToBottom(
+        stripId: string,
+        targetBayId: string,
+        targetSectionId: string,
+        position?: number
+    ) {
+        const strip = strips.value.get(stripId)
+        if (!strip) return
+
+        const oldBayId = strip.bayId
+        const oldSectionId = strip.sectionId
+
+        // Remove from old section (both lists)
+        const oldBay = config.value.bays.find(b => b.id === oldBayId)
+        const oldSection = oldBay?.sections.find(s => s.id === oldSectionId)
+        if (oldSection) {
+            oldSection.stripIds = oldSection.stripIds.filter(id => id !== stripId)
+            oldSection.bottomStripIds = oldSection.bottomStripIds.filter(id => id !== stripId)
+        }
+
+        // Update strip
+        strip.bayId = targetBayId
+        strip.sectionId = targetSectionId
+        strip.gapBefore = undefined // Reset gap for bottom strips
+
+        // Add to bottom of target section
+        const targetBay = config.value.bays.find(b => b.id === targetBayId)
+        const targetSection = targetBay?.sections.find(s => s.id === targetSectionId)
+        if (targetSection) {
+            if (position !== undefined) {
+                targetSection.bottomStripIds.splice(position, 0, stripId)
+            } else {
+                targetSection.bottomStripIds.push(stripId)
+            }
+        }
+
+        // Recompute positions
+        recomputePositions(targetBayId, targetSectionId)
         if (oldBayId !== targetBayId || oldSectionId !== targetSectionId) {
             recomputePositions(oldBayId, oldSectionId)
+        }
+    }
+
+    function setStripGap(stripId: string, gapBefore: number | undefined) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strip.gapBefore = gapBefore
+        }
+    }
+
+    function setSectionHeight(bayId: string, sectionId: string, height: number) {
+        const bay = config.value.bays.find(b => b.id === bayId)
+        const section = bay?.sections.find(s => s.id === sectionId)
+        if (section) {
+            section.height = Math.max(80, height) // Enforce min height
         }
     }
 
@@ -124,31 +212,31 @@ export const useEfsStore = defineStore("efs", () => {
                 {
                     id: 'bay1',
                     sections: [
-                        { id: 'arrivals', title: 'ARRIVALS', stripIds: [] },
-                        { id: 'rwy34r34l', title: 'RUNWAY 34R/34L', stripIds: [] }
+                        { id: 'arrivals', title: 'ARRIVALS', stripIds: [], bottomStripIds: [] },
+                        { id: 'rwy16r34l', title: 'RUNWAY 16R/34L', stripIds: [], bottomStripIds: [] }
                     ]
                 },
                 {
                     id: 'bay2',
                     sections: [
-                        { id: 'pending_dep', title: 'PENDING DEP', stripIds: [] },
-                        { id: 'rwy34l34r', title: 'RUNWAY 34L/34R', stripIds: [] }
+                        { id: 'pending_dep', title: 'PENDING DEP', stripIds: [], bottomStripIds: [] },
+                        { id: 'rwy16l34r', title: 'RUNWAY 16L/34R', stripIds: [], bottomStripIds: [] }
                     ]
                 },
                 {
                     id: 'bay3',
                     sections: [
-                        { id: 'airborne', title: 'AIRBORNE', stripIds: [] },
-                        { id: 'taxi_arr', title: 'TAXI ARR', stripIds: [] }
+                        { id: 'airborne', title: 'AIRBORNE', stripIds: [], bottomStripIds: [] },
+                        { id: 'taxi_arr', title: 'TAXI ARR', stripIds: [], bottomStripIds: [] }
                     ]
                 },
                 {
                     id: 'bay4',
                     sections: [
-                        { id: 'transit', title: 'TRANSIT', stripIds: [] },
-                        { id: 'safeguard', title: 'SAFEGUARD', stripIds: [] },
-                        { id: 'vfr', title: 'VFR', stripIds: [] },
-                        { id: 'taxi_dep', title: 'TAXI DEP', stripIds: [] }
+                        { id: 'transit', title: 'TRANSIT', stripIds: [], bottomStripIds: [] },
+                        { id: 'safeguard', title: 'SAFEGUARD', stripIds: [], bottomStripIds: [] },
+                        { id: 'vfr', title: 'VFR', stripIds: [], bottomStripIds: [] },
+                        { id: 'taxi_dep', title: 'TAXI DEP', stripIds: [], bottomStripIds: [] }
                     ]
                 }
             ]
@@ -386,7 +474,12 @@ export const useEfsStore = defineStore("efs", () => {
         connected,
         getBays,
         getStripsBySection,
+        getTopStrips,
+        getBottomStrips,
         moveStripToSection,
-        moveStripToNextSection
+        moveStripToNextSection,
+        moveStripToBottom,
+        setStripGap,
+        setSectionHeight
     }
 })

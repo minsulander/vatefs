@@ -4,6 +4,8 @@ export interface DragData {
   stripId: string
   bayId: string
   sectionId: string
+  originalTop?: number
+  originalBottom?: number
 }
 
 // Global state for touch drag operations
@@ -12,10 +14,12 @@ const dragData = ref<DragData | null>(null)
 const dragElement = ref<HTMLElement | null>(null)
 const dragClone = ref<HTMLElement | null>(null)
 const currentDropTarget = ref<HTMLElement | null>(null)
+const isOverBottomZone = ref(false)
 
 // Offset from touch point to element top-left
 let offsetX = 0
 let offsetY = 0
+let lastTouchY = 0
 
 // Track if global listeners are installed
 let globalListenersInstalled = false
@@ -62,6 +66,7 @@ export function useTouchDrag() {
 
     const x = touch.clientX - offsetX
     const y = touch.clientY - offsetY
+    lastTouchY = touch.clientY
 
     dragClone.value.style.left = `${x}px`
     dragClone.value.style.top = `${y}px`
@@ -72,8 +77,27 @@ export function useTouchDrag() {
     const elementUnder = document.elementFromPoint(touch.clientX, touch.clientY)
     dragClone.value.style.display = ''
 
-    // Find the section-content element
-    const dropTarget = elementUnder?.closest('.section-content') as HTMLElement | null
+    // Check if over bottom drop zone
+    const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
+    isOverBottomZone.value = bottomZone !== null
+
+    // Find the section-content element (or the section wrapper for bottom zone)
+    let dropTarget: HTMLElement | null = null
+    if (bottomZone) {
+      // When over bottom zone, use the parent section-content
+      dropTarget = bottomZone.closest('.section-content') as HTMLElement | null
+      bottomZone.classList.add('drop-active')
+    } else {
+      // Find top-strips-container or section-content
+      dropTarget = elementUnder?.closest('.top-strips-container, .section-content') as HTMLElement | null
+    }
+
+    // Remove highlight from previous bottom zone
+    document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => {
+      if (el !== bottomZone) {
+        el.classList.remove('drop-active')
+      }
+    })
 
     // Update highlight
     if (currentDropTarget.value && currentDropTarget.value !== dropTarget) {
@@ -85,11 +109,19 @@ export function useTouchDrag() {
     currentDropTarget.value = dropTarget
   }
 
-  function endDrag(): { dropTarget: HTMLElement | null; data: DragData | null; dropPosition: number } {
+  function endDrag(): {
+    dropTarget: HTMLElement | null
+    data: DragData | null
+    dropPosition: number
+    isBottomDrop: boolean
+    touchY: number
+  } {
     const result = {
       dropTarget: currentDropTarget.value,
       data: dragData.value,
-      dropPosition: 0
+      dropPosition: 0,
+      isBottomDrop: isOverBottomZone.value,
+      touchY: lastTouchY
     }
 
     // Calculate drop position within section
@@ -97,7 +129,12 @@ export function useTouchDrag() {
       const cloneRect = dragClone.value.getBoundingClientRect()
       const cloneCenterY = cloneRect.top + cloneRect.height / 2
 
-      const strips = Array.from(currentDropTarget.value.querySelectorAll('.flight-strip'))
+      // Find strips in the appropriate container
+      const container = result.isBottomDrop
+        ? currentDropTarget.value.querySelector('.bottom-strips-container')
+        : currentDropTarget.value.querySelector('.top-strips-container') || currentDropTarget.value
+
+      const strips = Array.from(container?.querySelectorAll('.flight-strip') || [])
       let position = strips.length
 
       for (let i = 0; i < strips.length; i++) {
@@ -126,7 +163,13 @@ export function useTouchDrag() {
       currentDropTarget.value = null
     }
 
+    // Clean up bottom zone highlights
+    document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => {
+      el.classList.remove('drop-active')
+    })
+
     isDragging.value = false
+    isOverBottomZone.value = false
     dragData.value = null
     dragElement.value = null
 
@@ -163,6 +206,9 @@ export function useTouchDrag() {
     // Remove drag-over highlights
     document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'))
 
+    // Remove bottom zone highlights
+    document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => el.classList.remove('drop-active'))
+
     // Reset dragging elements opacity
     document.querySelectorAll('.flight-strip').forEach(el => {
       (el as HTMLElement).style.opacity = ''
@@ -170,6 +216,7 @@ export function useTouchDrag() {
 
     // Reset state
     isDragging.value = false
+    isOverBottomZone.value = false
     dragData.value = null
     dragElement.value = null
     dragClone.value = null
@@ -216,6 +263,7 @@ export function useTouchDrag() {
 
   return {
     isDragging,
+    isOverBottomZone,
     dragData,
     startDrag,
     moveDrag,
