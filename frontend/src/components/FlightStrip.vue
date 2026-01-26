@@ -145,7 +145,9 @@ function onDragStart(event: DragEvent) {
       bayId: props.bayId,
       sectionId: props.sectionId,
       originalTop: rect.top,
-      originalBottom: rect.bottom
+      originalBottom: rect.bottom,
+      stripHeight: rect.height,
+      dragOffsetY: event.clientY - rect.top // Offset from cursor to strip top
     }))
   }
 }
