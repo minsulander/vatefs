@@ -41,8 +41,6 @@ export interface FlightStrip {
   sectionId: string
   position: number
 
-  // Visual state
-  gapBefore?: number  // Pixels of visual gap before this strip
 }
 
 export interface Section {
@@ -51,6 +49,7 @@ export interface Section {
   stripIds: string[]         // Top-attached strips (scrollable)
   bottomStripIds: string[]   // Bottom-attached strips (pinned)
   height?: number            // Section height in pixels (for resize)
+  gaps: Record<number, number>  // Index-based gaps: position index -> gap size in pixels
 }
 
 export interface Bay {

@@ -31,10 +31,7 @@
     </div>
 
     <!-- Middle section (horizontally scrollable) -->
-    <div
-      class="strip-middle"
-      ref="stripMiddle"
-    >
+    <div class="strip-middle">
       <div class="strip-middle-content">
         <!-- Time section -->
         <div class="strip-section strip-time">
@@ -114,21 +111,12 @@ const props = withDefaults(defineProps<{
 
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
-const stripMiddle = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
 
 // Touch drag state
 let touchStarted = false
-let touchMoved = false
 let longPressTimer: number | null = null
 const LONG_PRESS_DELAY = 150 // ms before drag starts
-
-// Middle section mouse scroll state
-let middleMouseState: 'idle' | 'pending' | 'scrolling' | 'dragging' = 'idle'
-let middleStartX = 0
-let middleStartY = 0
-let middleScrollStart = 0
-const DIRECTION_THRESHOLD = 5 // pixels to determine direction
 
 const touchDrag = getTouchDragInstance()
 
@@ -136,9 +124,6 @@ const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
 
 const stripStyle = computed(() => {
   const style: Record<string, string> = {}
-  if (props.strip.gapBefore && props.strip.gapBefore > 0) {
-    style.marginTop = `${props.strip.gapBefore}px`
-  }
   return style
 })
 
@@ -174,7 +159,6 @@ function onDragAreaTouchStart(event: TouchEvent) {
   if (event.touches.length !== 1) return
 
   touchStarted = true
-  touchMoved = false
 
   const touch = event.touches[0]
 
@@ -198,8 +182,6 @@ function onDragAreaTouchStart(event: TouchEvent) {
 
 function onDragAreaTouchMove(event: TouchEvent) {
   if (!touchStarted) return
-
-  touchMoved = true
 
   if (isDragging.value && event.touches.length === 1 && event.touches[0]) {
     touchDrag.moveDrag(event.touches[0])
@@ -225,9 +207,6 @@ function onDragAreaTouchEnd(event: TouchEvent) {
         const targetBayId = bayEl.getAttribute('data-bay-id')
 
         if (targetSectionId && targetBayId) {
-          const isSameSection = result.data.bayId === targetBayId &&
-                               result.data.sectionId === targetSectionId
-
           if (result.isBottomDrop) {
             // Move to bottom strips
             store.moveStripToBottom(
@@ -236,37 +215,6 @@ function onDragAreaTouchEnd(event: TouchEvent) {
               targetSectionId,
               result.dropPosition
             )
-          } else if (isSameSection &&
-                     result.data.originalTop !== undefined &&
-                     result.data.originalBottom !== undefined) {
-            // Same section - check position first, then gap adjustment
-            const dropY = result.touchY
-            const originalTop = result.data.originalTop
-            const originalBottom = result.data.originalBottom
-            const currentGap = props.strip.gapBefore || 0
-
-            // First check if position changed (crossed another strip's midpoint)
-            if (result.dropPosition !== props.strip.position) {
-              // Position changed - do reorder
-              store.moveStripToSection(
-                result.data.stripId,
-                targetBayId,
-                targetSectionId,
-                result.dropPosition
-              )
-            }
-            // Same position - handle gap adjustment based on drag direction
-            else if (dropY > originalBottom) {
-              // Dragging down = increase gap
-              const delta = dropY - originalBottom
-              store.setStripGap(result.data.stripId, currentGap + delta)
-            }
-            else if (dropY < originalTop && currentGap > 0) {
-              // Dragging up with existing gap = decrease gap
-              const delta = originalTop - dropY
-              store.setStripGap(result.data.stripId, Math.max(0, currentGap - delta))
-            }
-            // else: dropped within original bounds at same position = no change
           } else {
             store.moveStripToSection(
               result.data.stripId,
