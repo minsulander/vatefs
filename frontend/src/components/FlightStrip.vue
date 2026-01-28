@@ -144,6 +144,7 @@ function onDragStart(event: DragEvent) {
       stripId: props.strip.id,
       bayId: props.bayId,
       sectionId: props.sectionId,
+      isBottom: props.isBottom,
       originalTop: rect.top,
       originalBottom: rect.bottom,
       stripHeight: rect.height,
@@ -175,8 +176,11 @@ function onDragAreaTouchStart(event: TouchEvent) {
         stripId: props.strip.id,
         bayId: props.bayId,
         sectionId: props.sectionId,
+        isBottom: props.isBottom,
         originalTop: rect.top,
-        originalBottom: rect.bottom
+        originalBottom: rect.bottom,
+        stripHeight: rect.height,
+        dragOffsetY: touch.clientY - rect.top
       }, touch)
     }
   }, LONG_PRESS_DELAY)
@@ -210,7 +214,7 @@ function onDragAreaTouchEnd(event: TouchEvent) {
 
         if (targetSectionId && targetBayId) {
           if (result.isBottomDrop) {
-            // Move to bottom strips
+            // Move to bottom strips - no gap logic for bottom strips
             store.moveStripToBottom(
               result.data.stripId,
               targetBayId,
@@ -218,11 +222,14 @@ function onDragAreaTouchEnd(event: TouchEvent) {
               result.dropPosition
             )
           } else {
-            store.moveStripToSection(
-              result.data.stripId,
+            // Apply gap logic (same as desktop onTopDrop)
+            handleTouchDropWithGaps(
+              result.data,
               targetBayId,
               targetSectionId,
-              result.dropPosition
+              result.dropTarget,
+              result.draggedStripTop,
+              result.touchY
             )
           }
         }
@@ -233,6 +240,213 @@ function onDragAreaTouchEnd(event: TouchEvent) {
   }
 
   touchStarted = false
+}
+
+// Handle touch drop with full gap logic (mirrors EfsSection.vue onTopDrop)
+function handleTouchDropWithGaps(
+  data: { stripId: string; bayId: string; sectionId: string; isBottom?: boolean; originalTop?: number; originalBottom?: number; stripHeight?: number; dragOffsetY?: number },
+  targetBayId: string,
+  targetSectionId: string,
+  dropTarget: HTMLElement,
+  draggedStripTop: number,
+  touchY: number
+) {
+  const { stripId, bayId: sourceBayId, sectionId: sourceSectionId, originalTop, originalBottom, stripHeight, dragOffsetY } = data
+
+  // Find the top-strips-container within the drop target
+  const container = dropTarget.querySelector('.top-strips-container') || dropTarget
+  if (!container) {
+    store.moveStripToSection(stripId, targetBayId, targetSectionId, 0)
+    return
+  }
+
+  // Only consider "same section" if strip is in top zone of same section
+  // Strips from bottom zone don't leave a space in top zone, so treat as cross-section move
+  const isSameSection = sourceBayId === targetBayId && sourceSectionId === targetSectionId && !data.isBottom
+  const allStripElements = Array.from(container.querySelectorAll('.flight-strip'))
+  const allGapElements = Array.from(container.querySelectorAll('.strip-gap'))
+
+  const draggedStripHeight = stripHeight || 50
+
+  // Find the dragged strip's current index
+  let draggedIndex = -1
+  for (let i = 0; i < allStripElements.length; i++) {
+    const el = allStripElements[i]
+    if (el && el.getAttribute('data-strip-id') === stripId) {
+      draggedIndex = i
+      break
+    }
+  }
+
+  // Check if drop happened on a gap
+  let droppedOnGap = false
+  let gapIndex = -1
+  let gapRect: DOMRect | null = null
+  let dropOnTopHalf = false
+
+  for (const gapEl of allGapElements) {
+    const rect = gapEl.getBoundingClientRect()
+    if (touchY >= rect.top && touchY <= rect.bottom) {
+      droppedOnGap = true
+      gapIndex = parseInt(gapEl.getAttribute('data-gap-index') || '-1')
+      gapRect = rect
+      dropOnTopHalf = touchY < rect.top + rect.height / 2
+      break
+    }
+  }
+
+  // Handle drop on gap
+  if (droppedOnGap && gapIndex !== -1 && gapRect) {
+    const currentGapSize = store.getGapAtIndex(targetBayId, targetSectionId, gapIndex)
+
+    // Check if the dragged strip was adjacent to this gap
+    const wasAboveGap = isSameSection && draggedIndex === gapIndex - 1
+    const wasBelowGap = isSameSection && draggedIndex === gapIndex
+
+    // Calculate new gap size
+    let newGapSize: number
+    if (wasBelowGap && originalTop !== undefined) {
+      // Strip below gap dragged upward - reduce gap by the distance dragged up
+      const draggedUpDistance = originalTop - draggedStripTop
+      newGapSize = draggedUpDistance > 0 ? Math.max(0, currentGapSize - draggedUpDistance) : currentGapSize
+    } else if (wasAboveGap) {
+      // Strip above gap dropped on gap - keep gap unchanged
+      newGapSize = currentGapSize
+    } else {
+      // Strip from elsewhere - reduce gap by strip height
+      newGapSize = currentGapSize - draggedStripHeight
+    }
+
+    // Remove the gap before moving (so adjustGapsForMove doesn't affect it)
+    store.removeGapAtIndex(targetBayId, targetSectionId, gapIndex)
+
+    // Determine insert position based on which half of the gap was hit
+    let insertPosition: number
+
+    if (dropOnTopHalf) {
+      if (isSameSection && draggedIndex < gapIndex) {
+        insertPosition = gapIndex - 1
+      } else {
+        insertPosition = gapIndex
+      }
+    } else {
+      if (isSameSection && draggedIndex < gapIndex) {
+        insertPosition = gapIndex - 1
+      } else {
+        insertPosition = gapIndex
+      }
+    }
+
+    // Move the strip
+    store.moveStripToSection(stripId, targetBayId, targetSectionId, insertPosition)
+
+    // Re-add the gap at the correct position with the new size
+    if (newGapSize >= store.GAP_BUFFER) {
+      if (dropOnTopHalf) {
+        store.setGapAtIndex(targetBayId, targetSectionId, insertPosition + 1, newGapSize)
+      } else {
+        store.setGapAtIndex(targetBayId, targetSectionId, insertPosition, newGapSize)
+      }
+    }
+
+    return
+  }
+
+  // Calculate position, skipping the dragged strip for same-section moves
+  const stripElements = isSameSection
+    ? allStripElements.filter(el => el.getAttribute('data-strip-id') !== stripId)
+    : allStripElements
+
+  // Find drop position and check if dropping below last strip
+  let position = stripElements.length
+  let droppedBelowLastStrip = false
+  let distanceBelowLastStrip = 0
+  let droppedIntoEmptySection = false
+  let distanceFromTop = 0
+
+  if (stripElements.length > 0) {
+    const lastStrip = stripElements[stripElements.length - 1]
+    if (lastStrip) {
+      const lastRect = lastStrip.getBoundingClientRect()
+      if (draggedStripTop > lastRect.bottom) {
+        droppedBelowLastStrip = true
+        distanceBelowLastStrip = draggedStripTop - lastRect.bottom
+      }
+    }
+  } else {
+    // Empty section - check distance from container top
+    const containerRect = container.getBoundingClientRect()
+    distanceFromTop = draggedStripTop - containerRect.top
+    if (distanceFromTop >= store.GAP_BUFFER) {
+      droppedIntoEmptySection = true
+    }
+  }
+
+  // Find position based on midpoints (using touchY for consistency with desktop using clientY)
+  for (let i = 0; i < stripElements.length; i++) {
+    const element = stripElements[i]
+    if (!element) continue
+
+    const rect = element.getBoundingClientRect()
+    const midpoint = rect.top + rect.height / 2
+
+    if (touchY < midpoint) {
+      position = i
+      droppedBelowLastStrip = false
+      break
+    }
+  }
+
+  // Handle same-section gap adjustments
+  if (isSameSection && draggedIndex !== -1) {
+    const currentGap = store.getGapAtIndex(targetBayId, targetSectionId, draggedIndex)
+
+    // Check if position is effectively unchanged
+    if (position === draggedIndex || (position === draggedIndex + 1 && draggedIndex === stripElements.length)) {
+      if (originalTop !== undefined && originalBottom !== undefined) {
+        const stripTopY = draggedStripTop
+
+        // Get the position of the strip above
+        const prevStripEl = draggedIndex > 0 ? allStripElements[draggedIndex - 1] : null
+        const measureFromY = prevStripEl
+          ? prevStripEl.getBoundingClientRect().bottom
+          : container.getBoundingClientRect().top
+
+        // Dragging down = increase gap (only for last strip)
+        if (stripTopY > measureFromY + store.GAP_BUFFER && draggedIndex == stripElements.length) {
+          const newGap = stripTopY - measureFromY
+          store.setGapAtIndex(targetBayId, targetSectionId, draggedIndex, newGap)
+          return
+        }
+
+        // Dragging up = decrease gap
+        if (stripTopY < originalTop && currentGap > 0) {
+          const delta = originalTop - stripTopY
+          store.setGapAtIndex(targetBayId, targetSectionId, draggedIndex, Math.max(0, currentGap - delta))
+          return
+        }
+      }
+
+      // Dropped within original bounds - no change
+      return
+    }
+  }
+
+  // Move the strip
+  store.moveStripToSection(stripId, targetBayId, targetSectionId, position)
+
+  // Create gap if dropped below last strip with enough distance
+  if (droppedBelowLastStrip && distanceBelowLastStrip >= store.GAP_BUFFER) {
+    const gapSize = isSameSection
+      ? distanceBelowLastStrip + draggedStripHeight
+      : distanceBelowLastStrip
+    store.setGapAtIndex(targetBayId, targetSectionId, position, gapSize)
+  }
+
+  // Create gap if dropped into empty section below the buffer distance
+  if (droppedIntoEmptySection) {
+    store.setGapAtIndex(targetBayId, targetSectionId, 0, distanceFromTop)
+  }
 }
 
 function onDragAreaTouchCancel() {

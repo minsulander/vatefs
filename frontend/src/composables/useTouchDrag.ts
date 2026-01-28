@@ -4,8 +4,11 @@ export interface DragData {
   stripId: string
   bayId: string
   sectionId: string
+  isBottom?: boolean
   originalTop?: number
   originalBottom?: number
+  stripHeight?: number
+  dragOffsetY?: number
 }
 
 // Global state for touch drag operations
@@ -77,16 +80,24 @@ export function useTouchDrag() {
     const elementUnder = document.elementFromPoint(touch.clientX, touch.clientY)
     dragClone.value.style.display = ''
 
-    // Check if over bottom drop zone
+    // Check if over bottom drop zone OR bottom strips container
     const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
-    isOverBottomZone.value = bottomZone !== null
+    const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
+    const isOverBottom = bottomZone !== null || bottomStripsContainer !== null
+    isOverBottomZone.value = isOverBottom
 
     // Find the section-content element (or the section wrapper for bottom zone)
     let dropTarget: HTMLElement | null = null
-    if (bottomZone) {
-      // When over bottom zone, use the parent section-content
-      dropTarget = bottomZone.closest('.section-content') as HTMLElement | null
-      bottomZone.classList.add('drop-active')
+    if (isOverBottom) {
+      // When over bottom zone or bottom strips, use the parent section-content for positioning
+      // but don't highlight the section-content itself
+      dropTarget = (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
+      if (bottomZone) {
+        bottomZone.classList.add('drop-active')
+      }
+      if (bottomStripsContainer) {
+        bottomStripsContainer.classList.add('drag-over')
+      }
     } else {
       // Find top-strips-container or section-content
       dropTarget = elementUnder?.closest('.top-strips-container, .section-content') as HTMLElement | null
@@ -99,12 +110,23 @@ export function useTouchDrag() {
       }
     })
 
-    // Update highlight
+    // Remove highlight from previous bottom strips container
+    document.querySelectorAll('.bottom-strips-container.drag-over').forEach(el => {
+      if (el !== bottomStripsContainer) {
+        el.classList.remove('drag-over')
+      }
+    })
+
+    // Update highlight - but NOT when over bottom area (bottom has its own highlight)
     if (currentDropTarget.value && currentDropTarget.value !== dropTarget) {
       currentDropTarget.value.classList.remove('drag-over')
     }
-    if (dropTarget && dropTarget !== currentDropTarget.value) {
+    if (dropTarget && dropTarget !== currentDropTarget.value && !isOverBottom) {
       dropTarget.classList.add('drag-over')
+    }
+    // Remove drag-over from section-content when over bottom area
+    if (isOverBottom && dropTarget) {
+      dropTarget.classList.remove('drag-over')
     }
     currentDropTarget.value = dropTarget
   }
@@ -115,13 +137,21 @@ export function useTouchDrag() {
     dropPosition: number
     isBottomDrop: boolean
     touchY: number
+    draggedStripTop: number
+    cloneRect: DOMRect | null
   } {
+    // Calculate dragged strip top position from clone
+    const cloneRect = dragClone.value?.getBoundingClientRect() || null
+    const draggedStripTop = cloneRect ? cloneRect.top : 0
+
     const result = {
       dropTarget: currentDropTarget.value,
       data: dragData.value,
       dropPosition: 0,
       isBottomDrop: isOverBottomZone.value,
-      touchY: lastTouchY
+      touchY: lastTouchY,
+      draggedStripTop,
+      cloneRect
     }
 
     // Calculate drop position within section
@@ -163,9 +193,12 @@ export function useTouchDrag() {
       currentDropTarget.value = null
     }
 
-    // Clean up bottom zone highlights
+    // Clean up bottom zone and bottom strips container highlights
     document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => {
       el.classList.remove('drop-active')
+    })
+    document.querySelectorAll('.bottom-strips-container.drag-over').forEach(el => {
+      el.classList.remove('drag-over')
     })
 
     isDragging.value = false

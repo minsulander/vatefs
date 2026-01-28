@@ -6,11 +6,12 @@
   >
     <div
       class="section-header"
+      :class="{ 'no-resize': isFirstSection }"
       @mousedown="onResizeStart"
       @touchstart="onResizeStart"
     >
       <span class="section-title">{{ section.title }}</span>
-      <div class="resize-handle"></div>
+      <div v-if="!isFirstSection" class="resize-handle"></div>
     </div>
     <div
       class="section-content"
@@ -83,10 +84,13 @@ import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import FlightStrip from './FlightStrip.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   section: Section
   bayId: string
-}>()
+  isFirstSection?: boolean
+}>(), {
+  isFirstSection: false
+})
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
@@ -107,10 +111,38 @@ const sectionStyle = computed(() => {
 
 // Resize handling
 function onResizeStart(event: MouseEvent | TouchEvent) {
+  // First section header is not resizable (no section above to resize)
+  if (props.isFirstSection) return
+
   const sectionEl = (event.currentTarget as HTMLElement).closest('.efs-section')
   if (!sectionEl) return
-  const currentHeight = sectionEl.getBoundingClientRect().height
-  startResize(event, props.bayId, props.section.id, currentHeight)
+
+  const bayEl = sectionEl.closest('.efs-bay')
+  if (!bayEl) return
+
+  // Find the section above this one
+  const allSections = Array.from(bayEl.querySelectorAll('.efs-section'))
+  const currentIndex = allSections.indexOf(sectionEl)
+  if (currentIndex <= 0) return // No section above
+
+  const sectionAbove = allSections[currentIndex - 1]
+  const sectionAboveId = sectionAbove?.getAttribute('data-section-id')
+  if (!sectionAbove || !sectionAboveId) return
+
+  // Fix all section heights in the bay to their current pixel values
+  // This prevents weird behavior when sections have flex/relative heights
+  allSections.forEach((section) => {
+    const sectionId = section.getAttribute('data-section-id')
+    if (sectionId) {
+      const height = section.getBoundingClientRect().height
+      store.setSectionHeight(props.bayId, sectionId, height)
+    }
+  })
+
+  // Start resize: section above grows/shrinks, current section does the inverse
+  const aboveHeight = sectionAbove.getBoundingClientRect().height
+  const belowHeight = sectionEl.getBoundingClientRect().height
+  startResize(event, props.bayId, sectionAboveId, aboveHeight, props.section.id, belowHeight)
 }
 
 // Gap click handler - remove the gap
@@ -146,12 +178,14 @@ function onTopDrop(event: DragEvent) {
 
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
-    const { stripId, bayId: sourceBayId, sectionId: sourceSectionId, originalTop, originalBottom, stripHeight, dragOffsetY } = data
+    const { stripId, bayId: sourceBayId, sectionId: sourceSectionId, isBottom: sourceIsBottom, originalTop, originalBottom, stripHeight, dragOffsetY } = data
 
     const container = topContainer.value
     if (!container) return
 
-    const isSameSection = sourceBayId === props.bayId && sourceSectionId === props.section.id
+    // Only consider "same section" if strip is in top zone of same section
+    // Strips from bottom zone don't leave a space in top zone, so treat as cross-section move
+    const isSameSection = sourceBayId === props.bayId && sourceSectionId === props.section.id && !sourceIsBottom
     const allStripElements = Array.from(container.querySelectorAll('.flight-strip'))
     const allGapElements = Array.from(container.querySelectorAll('.strip-gap'))
 
@@ -464,6 +498,10 @@ function onBottomStripsDrop(event: DragEvent) {
   user-select: none;
 }
 
+.section-header.no-resize {
+  cursor: default;
+}
+
 .section-title {
   font-size: 0.7rem;
   font-weight: 600;
@@ -540,8 +578,9 @@ function onBottomStripsDrop(event: DragEvent) {
 .bottom-drop-zone {
   height: 25px;
   flex-shrink: 0;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, border-top 0.2s ease;
   border-top: 1px dashed transparent;
+  background: transparent;
 }
 
 .bottom-drop-zone.has-bottom {
@@ -551,7 +590,6 @@ function onBottomStripsDrop(event: DragEvent) {
 .bottom-drop-zone.drop-active {
   background: rgba(0, 150, 180, 0.3);
   border-top: 1px dashed rgba(0, 150, 180, 0.6);
-  height: 16px;
 }
 
 /* Bottom strips container - pinned */

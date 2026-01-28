@@ -1,10 +1,11 @@
 <template>
   <div class="efs-bay" :data-bay-id="bay.id">
     <EfsSection
-      v-for="section in bay.sections"
+      v-for="(section, index) in bay.sections"
       :key="section.id"
       :section="section"
       :bay-id="bay.id"
+      :is-first-section="index === 0"
     />
   </div>
 </template>
