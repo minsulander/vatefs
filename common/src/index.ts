@@ -14,9 +14,12 @@ export type {
 // WebSocket API messages
 export type {
     ConfigMessage,
-    FlightMessage,
+    StripMessage,
     ServerMessage,
     RequestMessage,
+    MoveStripMessage,
+    SetGapMessage,
+    SetSectionHeightMessage,
     ClientMessage
 } from "./messages.js"
 

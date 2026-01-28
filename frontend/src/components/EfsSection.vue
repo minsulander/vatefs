@@ -382,6 +382,7 @@ function onTopDrop(event: DragEvent) {
         ? distanceBelowLastStrip + draggedStripHeight
         : distanceBelowLastStrip
       store.setGapAtIndex(props.bayId, props.section.id, position, gapSize)
+      console.log("GOT A GAP YO", gapSize)
     }
 
     // Create gap if dropped into empty section below the buffer distance

@@ -35,7 +35,7 @@ export const mockConfig: EfsConfig = {
     ]
 }
 
-export const mockFlights: FlightStrip[] = [
+export const mockStrips: FlightStrip[] = [
     // Arrivals
     {
         id: 'strip1',

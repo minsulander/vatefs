@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsConfig, ServerMessage, ClientMessage } from "@vatefs/common"
+import type { FlightStrip, EfsConfig, ClientMessage } from "@vatefs/common"
 import { isServerMessage } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -17,13 +17,12 @@ export const useEfsStore = defineStore("efs", () => {
         ;(window as any).socket = socket
         if (socket.readyState == WebSocket.OPEN) {
             console.log("socket open at mounted")
-            requestData()
             connected.value = true
         }
         socket.onopen = () => {
             console.log("socket opened")
-            requestData()
             connected.value = true
+            // Server sends initial state on connect, no need to request
         }
         socket.onclose = () => {
             console.log("socket closed")
@@ -34,18 +33,16 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
-    // Request initial data from server
-    function requestData() {
-        // Use legacy "?" for backwards compatibility
-        if (socket) socket.send("?")
+    // Send a message to the server
+    function sendMessage(message: ClientMessage) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(message))
+        }
     }
 
     // Send a typed request to the server
-    function sendRequest(request: ClientMessage['request']) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            const message: ClientMessage = { type: 'request', request }
-            socket.send(JSON.stringify(message))
-        }
+    function sendRequest(request: 'config' | 'strips') {
+        sendMessage({ type: 'request', request })
     }
 
     // Handle incoming WebSocket messages
@@ -55,8 +52,8 @@ export const useEfsStore = defineStore("efs", () => {
             if (isServerMessage(message)) {
                 if (message.type === 'config') {
                     handleConfigMessage(message.config)
-                } else if (message.type === 'flight') {
-                    handleFlightMessage(message.flight)
+                } else if (message.type === 'strip') {
+                    handleStripMessage(message.strip)
                 }
             } else {
                 console.log("received unknown message:", message)
@@ -72,16 +69,16 @@ export const useEfsStore = defineStore("efs", () => {
         config.value = newConfig
     }
 
-    // Handle flight message from server
-    function handleFlightMessage(flight: FlightStrip) {
-        console.log("received flight:", flight.callsign)
-        strips.value.set(flight.id, flight)
+    // Handle strip message from server
+    function handleStripMessage(strip: FlightStrip) {
+        console.log("received strip:", strip.callsign)
+        strips.value.set(strip.id, strip)
 
-        // Add strip to the appropriate section
-        const bay = config.value.bays.find(b => b.id === flight.bayId)
-        const section = bay?.sections.find(s => s.id === flight.sectionId)
-        if (section && !section.stripIds.includes(flight.id)) {
-            section.stripIds.push(flight.id)
+        // Add strip to the appropriate section if not already there
+        const bay = config.value.bays.find(b => b.id === strip.bayId)
+        const section = bay?.sections.find(s => s.id === strip.sectionId)
+        if (section && !section.stripIds.includes(strip.id) && !section.bottomStripIds.includes(strip.id)) {
+            section.stripIds.push(strip.id)
         }
     }
 
@@ -176,6 +173,16 @@ export const useEfsStore = defineStore("efs", () => {
         if (!isSameSection) {
             recomputePositions(oldBayId, oldSectionId)
         }
+
+        // Send update to server
+        sendMessage({
+            type: 'moveStrip',
+            stripId,
+            targetBayId,
+            targetSectionId,
+            position,
+            isBottom: false
+        })
     }
 
     function moveStripToBottom(
@@ -221,6 +228,16 @@ export const useEfsStore = defineStore("efs", () => {
         if (oldBayId !== targetBayId || oldSectionId !== targetSectionId) {
             recomputePositions(oldBayId, oldSectionId)
         }
+
+        // Send update to server
+        sendMessage({
+            type: 'moveStrip',
+            stripId,
+            targetBayId,
+            targetSectionId,
+            position,
+            isBottom: true
+        })
     }
 
     // Gap management - gaps are stored by index position in the section
@@ -236,6 +253,15 @@ export const useEfsStore = defineStore("efs", () => {
         } else {
             delete section.gaps[index]
         }
+
+        // Send update to server
+        sendMessage({
+            type: 'setGap',
+            bayId,
+            sectionId,
+            index,
+            gapSize
+        })
     }
 
     function removeGapAtIndex(bayId: string, sectionId: string, index: number) {
@@ -243,6 +269,15 @@ export const useEfsStore = defineStore("efs", () => {
         const section = bay?.sections.find(s => s.id === sectionId)
         if (!section) return
         delete section.gaps[index]
+
+        // Send update to server (gapSize 0 will remove it)
+        sendMessage({
+            type: 'setGap',
+            bayId,
+            sectionId,
+            index,
+            gapSize: 0
+        })
     }
 
     function getGapAtIndex(bayId: string, sectionId: string, index: number): number {
@@ -300,12 +335,39 @@ export const useEfsStore = defineStore("efs", () => {
         cleanupGaps(bayId, sectionId)
     }
 
-    function setSectionHeight(bayId: string, sectionId: string, height: number) {
+    function setSectionHeight(bayId: string, sectionId: string, height: number, broadcast: boolean = true) {
         const bay = config.value.bays.find(b => b.id === bayId)
         const section = bay?.sections.find(s => s.id === sectionId)
         if (section) {
             section.height = Math.max(80, height) // Enforce min height
         }
+
+        // Send update to server (only if requested - during resize we send after completion)
+        if (broadcast) {
+            sendMessage({
+                type: 'setSectionHeight',
+                bayId,
+                sectionId,
+                height: Math.max(80, height)
+            })
+        }
+    }
+
+    // Batch send section heights (called at end of resize)
+    function broadcastSectionHeights(bayId: string) {
+        const bay = config.value.bays.find(b => b.id === bayId)
+        if (!bay) return
+
+        bay.sections.forEach(section => {
+            if (section.height !== undefined) {
+                sendMessage({
+                    type: 'setSectionHeight',
+                    bayId,
+                    sectionId: section.id,
+                    height: section.height
+                })
+            }
+        })
     }
 
     function moveStripToNextSection(stripId: string) {
@@ -355,6 +417,7 @@ export const useEfsStore = defineStore("efs", () => {
         removeGapAtIndex,
         getGapAtIndex,
         setSectionHeight,
+        broadcastSectionHeights,
         GAP_BUFFER,
         sendRequest
     }
