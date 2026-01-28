@@ -226,7 +226,7 @@ export const mockFlights: FlightStrip[] = [
     // Local IFR
     {
         id: 'strip11',
-        callsign: 'CBRN21',
+        callsign: 'CBN21',
         aircraftType: 'BE20',
         wakeTurbulence: 'L',
         flightRules: 'I',

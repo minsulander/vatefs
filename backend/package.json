@@ -7,7 +7,7 @@
     "scripts": {
         "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node10 --outfile=dist/server.js && cp -r public/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
         "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js",
-        "start": "nodemon --exec tsx src/server.ts"
+        "start": "tsx --watch src/server.ts"
     },
     "keywords": [],
     "author": "",
@@ -15,8 +15,6 @@
     "devDependencies": {
         "@types/node": "^24.10.0",
         "esbuild": "^0.25.12",
-        "nodemon": "^3.1.11",
-        "ts-node": "^10.9.2",
         "tsx": "^4.20.6",
         "typescript": "^5.9.3"
     },

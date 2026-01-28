@@ -194,10 +194,20 @@ function onTopDrop(event: DragEvent) {
       // Gap at index N: strip at N-1 is above, strip at N is below
       const wasAboveGap = isSameSection && draggedIndex === gapIndex - 1
       const wasBelowGap = isSameSection && draggedIndex === gapIndex
-      const wasAdjacent = wasAboveGap || wasBelowGap
 
-      // Calculate new gap size (only reduce if not adjacent)
-      const newGapSize = wasAdjacent ? currentGapSize : currentGapSize - draggedStripHeight
+      // Calculate new gap size
+      let newGapSize: number
+      if (wasBelowGap && originalTop !== undefined) {
+        // Strip below gap dragged upward - reduce gap by the distance dragged up
+        const draggedUpDistance = originalTop - draggedStripTop
+        newGapSize = draggedUpDistance > 0 ? Math.max(0, currentGapSize - draggedUpDistance) : currentGapSize
+      } else if (wasAboveGap) {
+        // Strip above gap dropped on gap - keep gap unchanged
+        newGapSize = currentGapSize
+      } else {
+        // Strip from elsewhere - reduce gap by strip height
+        newGapSize = currentGapSize - draggedStripHeight
+      }
 
       // Remove the gap before moving (so adjustGapsForMove doesn't affect it)
       store.removeGapAtIndex(props.bayId, props.section.id, gapIndex)
@@ -297,10 +307,19 @@ function onTopDrop(event: DragEvent) {
           // Use strip top position for gap calculation
           const stripTopY = draggedStripTop
 
-          // Dragging down (strip top below original bottom) = increase gap
-          if (stripTopY > originalBottom + store.GAP_BUFFER) {
-            const newGap = stripTopY - originalBottom
-            store.setGapAtIndex(props.bayId, props.section.id, draggedIndex, currentGap + newGap)
+          // Get the position of the strip above (not the dragged strip's placeholder)
+          // This is where the gap should be measured from
+          const prevStripEl = draggedIndex > 0 ? allStripElements[draggedIndex - 1] : null
+          const measureFromY = prevStripEl
+            ? prevStripEl.getBoundingClientRect().bottom
+            : container.getBoundingClientRect().top
+
+          // Dragging down = increase gap
+          // Check distance from strip above (not from self placeholder)
+          if (stripTopY > measureFromY + store.GAP_BUFFER && draggedIndex == stripElements.length) {
+            // Gap = distance from strip above + strip height (accounts for placeholder)
+            const newGap = (stripTopY - measureFromY)// + draggedStripHeight
+            store.setGapAtIndex(props.bayId, props.section.id, draggedIndex, newGap)
             return
           }
 
@@ -323,7 +342,12 @@ function onTopDrop(event: DragEvent) {
     // Create gap if dropped below last strip with enough distance
     if (droppedBelowLastStrip && distanceBelowLastStrip >= store.GAP_BUFFER) {
       // The strip is now at the last position, create gap before it
-      store.setGapAtIndex(props.bayId, props.section.id, position, distanceBelowLastStrip)
+      // For same-section moves, add strip height to account for the space freed up
+      // when the strip moves from its original position
+      const gapSize = isSameSection
+        ? distanceBelowLastStrip + draggedStripHeight
+        : distanceBelowLastStrip
+      store.setGapAtIndex(props.bayId, props.section.id, position, gapSize)
     }
 
     // Create gap if dropped into empty section below the buffer distance
