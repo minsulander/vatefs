@@ -1,6 +1,6 @@
 // WebSocket API message types
 
-import type { EfsConfig, FlightStrip } from "./types.js"
+import type { EfsConfig, FlightStrip, Gap, Section } from "./types.js"
 
 // Server -> Client messages
 
@@ -14,7 +14,30 @@ export interface StripMessage {
     strip: FlightStrip
 }
 
-export type ServerMessage = ConfigMessage | StripMessage
+export interface StripDeleteMessage {
+    type: 'stripDelete'
+    stripId: string
+}
+
+export interface GapMessage {
+    type: 'gap'
+    gap: Gap
+}
+
+export interface GapDeleteMessage {
+    type: 'gapDelete'
+    bayId: string
+    sectionId: string
+    index: number
+}
+
+export interface SectionMessage {
+    type: 'section'
+    bayId: string
+    section: Section
+}
+
+export type ServerMessage = ConfigMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage
 
 // Client -> Server messages
 
@@ -52,8 +75,12 @@ export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | 
 // Type guards for message parsing
 
 export function isServerMessage(data: unknown): data is ServerMessage {
-    return typeof data === 'object' && data !== null && 'type' in data &&
-        (data.type === 'config' || data.type === 'strip')
+    if (typeof data !== 'object' || data === null || !('type' in data)) {
+        return false
+    }
+    const type = (data as { type: unknown }).type
+    return type === 'config' || type === 'strip' || type === 'stripDelete' ||
+           type === 'gap' || type === 'gapDelete' || type === 'section'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {

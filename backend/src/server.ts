@@ -6,7 +6,8 @@ import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 
 import { constants, isClientMessage } from "@vatefs/common"
-import type { ConfigMessage, StripMessage, ServerMessage, ClientMessage } from "@vatefs/common"
+import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
+import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 
 const __dirname = path.dirname(__filename)
@@ -35,6 +36,36 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
     })
 }
 
+// Broadcast a strip update
+function broadcastStrip(strip: FlightStrip, exclude?: WebSocket) {
+    const message: StripMessage = { type: 'strip', strip }
+    broadcast(message, exclude)
+}
+
+// Broadcast a strip delete
+function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
+    const message: StripDeleteMessage = { type: 'stripDelete', stripId }
+    broadcast(message, exclude)
+}
+
+// Broadcast a gap update
+function broadcastGap(gap: Gap, exclude?: WebSocket) {
+    const message: GapMessage = { type: 'gap', gap }
+    broadcast(message, exclude)
+}
+
+// Broadcast a gap delete
+function broadcastGapDelete(bayId: string, sectionId: string, index: number, exclude?: WebSocket) {
+    const message: GapDeleteMessage = { type: 'gapDelete', bayId, sectionId, index }
+    broadcast(message, exclude)
+}
+
+// Broadcast a section update
+function broadcastSection(bayId: string, section: Section, exclude?: WebSocket) {
+    const message: SectionMessage = { type: 'section', bayId, section }
+    broadcast(message, exclude)
+}
+
 // Send config to a client
 function sendConfig(socket: WebSocket) {
     const message: ConfigMessage = {
@@ -48,7 +79,7 @@ function sendConfig(socket: WebSocket) {
 // Send all strips to a client
 function sendStrips(socket: WebSocket) {
     const strips = store.getAllStrips()
-    strips.forEach((strip, index) => {
+    strips.forEach((strip) => {
         const message: StripMessage = {
             type: 'strip',
             strip: strip
@@ -56,6 +87,19 @@ function sendStrips(socket: WebSocket) {
         sendMessage(socket, message)
     })
     console.log(`Sent ${strips.length} strips to client`)
+}
+
+// Send all gaps to a client
+function sendGaps(socket: WebSocket) {
+    const gaps = store.getAllGaps()
+    gaps.forEach((gap) => {
+        const message: GapMessage = {
+            type: 'gap',
+            gap: gap
+        }
+        sendMessage(socket, message)
+    })
+    console.log(`Sent ${gaps.length} gaps to client`)
 }
 
 // Handle incoming client messages
@@ -68,15 +112,25 @@ function handleClientMessage(socket: WebSocket, text: string) {
     } catch {
         // Not a JSON message, check for legacy "?" request
         if (text === '?') {
-            // Legacy request: send config and strips
+            // Legacy request: send config, strips, and gaps
             sendConfig(socket)
             sendStrips(socket)
+            sendGaps(socket)
         } else {
             // Forward to UDP (EuroScope plugin)
             sendUdp(text + "\n")
             console.log("WS -> UDP:", text)
         }
     }
+}
+
+// Helper to parse gap key (bayId:sectionId:index)
+function parseGapKey(key: string): { bayId: string, sectionId: string, index: number } | null {
+    const parts = key.split(':')
+    if (parts.length !== 3) return null
+    const index = parseInt(parts[2], 10)
+    if (isNaN(index)) return null
+    return { bayId: parts[0], sectionId: parts[1], index }
 }
 
 // Handle typed client messages
@@ -87,50 +141,58 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 sendConfig(socket)
             } else if (message.request === 'strips') {
                 sendStrips(socket)
+                sendGaps(socket)
             }
             break
 
         case 'moveStrip': {
-            const success = store.moveStrip(
+            const result = store.moveStrip(
                 message.stripId,
                 message.targetBayId,
                 message.targetSectionId,
                 message.position,
                 message.isBottom
             )
-            if (success) {
-                // Broadcast updated config to all clients (including sender for consistency)
-                const configMsg: ConfigMessage = {
-                    type: 'config',
-                    config: store.getConfig()
-                }
-                broadcast(configMsg, socket)
+            if (result) {
+                // Broadcast the moved strip
+                broadcastStrip(result.strip, socket)
+
+                // Broadcast affected gaps
+                result.affectedGaps.forEach(gap => {
+                    broadcastGap(gap, socket)
+                })
+
+                // Broadcast deleted gaps
+                result.deletedGapKeys.forEach(key => {
+                    const parsed = parseGapKey(key)
+                    if (parsed) {
+                        broadcastGapDelete(parsed.bayId, parsed.sectionId, parsed.index, socket)
+                    }
+                })
+
                 console.log(`Strip ${message.stripId} moved to ${message.targetSectionId} (bottom: ${message.isBottom})`)
             }
             break
         }
 
         case 'setGap': {
-            store.setGap(message.bayId, message.sectionId, message.index, message.gapSize)
-            // Broadcast updated config
-            const configMsg: ConfigMessage = {
-                type: 'config',
-                config: store.getConfig()
+            const result = store.setGap(message.bayId, message.sectionId, message.index, message.gapSize)
+            if (result.deleted) {
+                broadcastGapDelete(message.bayId, message.sectionId, message.index, socket)
+                console.log(`Gap deleted at ${message.sectionId}[${message.index}]`)
+            } else if (result.gap) {
+                broadcastGap(result.gap, socket)
+                console.log(`Gap set at ${message.sectionId}[${message.index}] = ${message.gapSize}px`)
             }
-            broadcast(configMsg, socket) // Don't send back to sender (they already have the update)
-            console.log(`Gap set at ${message.sectionId}[${message.index}] = ${message.gapSize}px`)
             break
         }
 
         case 'setSectionHeight': {
-            store.setSectionHeight(message.bayId, message.sectionId, message.height)
-            // Broadcast updated config
-            const configMsg: ConfigMessage = {
-                type: 'config',
-                config: store.getConfig()
+            const section = store.setSectionHeight(message.bayId, message.sectionId, message.height)
+            if (section) {
+                broadcastSection(message.bayId, section, socket)
+                console.log(`Section ${message.sectionId} height set to ${message.height}px`)
             }
-            broadcast(configMsg, socket) // Don't send back to sender
-            console.log(`Section ${message.sectionId} height set to ${message.height}px`)
             break
         }
     }
@@ -145,6 +207,7 @@ wsServer.on("connection", (socket) => {
     // Send initial state immediately on connect
     sendConfig(socket)
     sendStrips(socket)
+    sendGaps(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()

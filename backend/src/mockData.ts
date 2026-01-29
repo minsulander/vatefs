@@ -5,31 +5,31 @@ export const mockConfig: EfsConfig = {
         {
             id: 'bay1',
             sections: [
-                { id: 'arrivals', title: 'ARRIVALS', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'rwy16r34l', title: 'RUNWAY 16R/34L', stripIds: [], bottomStripIds: [], gaps: {} }
+                { id: 'arrivals', title: 'ARRIVALS' },
+                { id: 'rwy16r34l', title: 'RUNWAY 16R/34L' }
             ]
         },
         {
             id: 'bay2',
             sections: [
-                { id: 'pending_dep', title: 'PENDING DEP', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'rwy16l34r', title: 'RUNWAY 16L/34R', stripIds: [], bottomStripIds: [], gaps: {} }
+                { id: 'pending_dep', title: 'PENDING DEP' },
+                { id: 'rwy16l34r', title: 'RUNWAY 16L/34R' }
             ]
         },
         {
             id: 'bay3',
             sections: [
-                { id: 'airborne', title: 'AIRBORNE', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'taxi_arr', title: 'TAXI ARR', stripIds: [], bottomStripIds: [], gaps: {} }
+                { id: 'airborne', title: 'AIRBORNE' },
+                { id: 'taxi_arr', title: 'TAXI ARR' }
             ]
         },
         {
             id: 'bay4',
             sections: [
-                { id: 'transit', title: 'TRANSIT', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'safeguard', title: 'SAFEGUARD', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'vfr', title: 'VFR', stripIds: [], bottomStripIds: [], gaps: {} },
-                { id: 'taxi_dep', title: 'TAXI DEP', stripIds: [], bottomStripIds: [], gaps: {} }
+                { id: 'transit', title: 'TRANSIT' },
+                { id: 'safeguard', title: 'SAFEGUARD' },
+                { id: 'vfr', title: 'VFR' },
+                { id: 'taxi_dep', title: 'TAXI DEP' }
             ]
         }
     ]
@@ -54,7 +54,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'arrival',
         bayId: 'bay1',
         sectionId: 'arrivals',
-        position: 0
+        position: 0,
+        bottom: false
     },
     {
         id: 'strip2',
@@ -72,7 +73,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'arrival',
         bayId: 'bay1',
         sectionId: 'arrivals',
-        position: 1
+        position: 1,
+        bottom: false
     },
     {
         id: 'strip3',
@@ -90,7 +92,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'arrival',
         bayId: 'bay1',
         sectionId: 'arrivals',
-        position: 2
+        position: 2,
+        bottom: false
     },
     {
         id: 'strip9',
@@ -109,7 +112,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'arrival',
         bayId: 'bay1',
         sectionId: 'arrivals',
-        position: 3
+        position: 3,
+        bottom: false
     },
     // Departures
     {
@@ -129,7 +133,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'departure',
         bayId: 'bay2',
         sectionId: 'pending_dep',
-        position: 0
+        position: 0,
+        bottom: false
     },
     {
         id: 'strip5',
@@ -148,7 +153,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'departure',
         bayId: 'bay2',
         sectionId: 'pending_dep',
-        position: 1
+        position: 1,
+        bottom: false
     },
     {
         id: 'strip10',
@@ -168,7 +174,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'departure',
         bayId: 'bay2',
         sectionId: 'pending_dep',
-        position: 2
+        position: 2,
+        bottom: false
     },
     // Airborne
     {
@@ -186,7 +193,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'departure',
         bayId: 'bay3',
         sectionId: 'airborne',
-        position: 0
+        position: 0,
+        bottom: false
     },
     // Transit
     {
@@ -204,7 +212,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'arrival',
         bayId: 'bay4',
         sectionId: 'transit',
-        position: 0
+        position: 0,
+        bottom: false
     },
     // VFR
     {
@@ -221,7 +230,8 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'vfr',
         bayId: 'bay4',
         sectionId: 'vfr',
-        position: 0
+        position: 0,
+        bottom: false
     },
     // Local IFR
     {
@@ -239,6 +249,7 @@ export const mockStrips: FlightStrip[] = [
         stripType: 'local',
         bayId: 'bay4',
         sectionId: 'vfr',
-        position: 1
+        position: 1,
+        bottom: false
     }
 ]

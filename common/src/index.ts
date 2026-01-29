@@ -8,13 +8,18 @@ export type {
     FlightStrip,
     Section,
     Bay,
-    EfsConfig
+    EfsConfig,
+    Gap
 } from "./types.js"
 
 // WebSocket API messages
 export type {
     ConfigMessage,
     StripMessage,
+    StripDeleteMessage,
+    GapMessage,
+    GapDeleteMessage,
+    SectionMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,

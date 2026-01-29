@@ -2,7 +2,7 @@
   <div
     ref="stripElement"
     class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': isBottom }]"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom }]"
     :style="stripStyle"
     :data-strip-id="strip.id"
     draggable="true"
@@ -100,14 +100,11 @@ import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   strip: FlightStrip
   sectionId: string
   bayId: string
-  isBottom?: boolean
-}>(), {
-  isBottom: false
-})
+}>()
 
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
@@ -144,7 +141,7 @@ function onDragStart(event: DragEvent) {
       stripId: props.strip.id,
       bayId: props.bayId,
       sectionId: props.sectionId,
-      isBottom: props.isBottom,
+      isBottom: props.strip.bottom,
       originalTop: rect.top,
       originalBottom: rect.bottom,
       stripHeight: rect.height,
@@ -176,7 +173,7 @@ function onDragAreaTouchStart(event: TouchEvent) {
         stripId: props.strip.id,
         bayId: props.bayId,
         sectionId: props.sectionId,
-        isBottom: props.isBottom,
+        isBottom: props.strip.bottom,
         originalTop: rect.top,
         originalBottom: rect.bottom,
         stripHeight: rect.height,

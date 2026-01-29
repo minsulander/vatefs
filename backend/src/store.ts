@@ -1,15 +1,32 @@
-import type { EfsConfig, FlightStrip, Section, Bay } from "@vatefs/common"
+import type { EfsConfig, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
 import { mockConfig, mockStrips } from "./mockData.js"
 
 const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
 
+export interface MoveStripResult {
+    strip: FlightStrip
+    affectedGaps: Gap[]
+    deletedGapKeys: string[]
+}
+
+export interface SetGapResult {
+    gap: Gap | null  // null if gap was deleted
+    deleted: boolean
+}
+
+function gapKey(bayId: string, sectionId: string, index: number): string {
+    return `${bayId}:${sectionId}:${index}`
+}
+
 class EfsStore {
     private config: EfsConfig
     private strips: Map<string, FlightStrip>
+    private gaps: Map<string, Gap>  // key: bayId:sectionId:index
 
     constructor() {
         this.config = { bays: [] }
         this.strips = new Map()
+        this.gaps = new Map()
     }
 
     // Initialize store with mock data
@@ -17,15 +34,9 @@ class EfsStore {
         // Deep clone config to avoid mutations to original
         this.config = JSON.parse(JSON.stringify(mockConfig))
 
-        // Load strips and populate section stripIds
+        // Load strips
         mockStrips.forEach(strip => {
             this.strips.set(strip.id, { ...strip })
-
-            // Add strip to appropriate section
-            const section = this.findSection(strip.bayId, strip.sectionId)
-            if (section && !section.stripIds.includes(strip.id)) {
-                section.stripIds.push(strip.id)
-            }
         })
 
         console.log(`Store loaded: ${this.strips.size} strips, ${this.config.bays.length} bays`)
@@ -41,9 +52,36 @@ class EfsStore {
         return Array.from(this.strips.values())
     }
 
+    // Get all gaps as array
+    getAllGaps(): Gap[] {
+        return Array.from(this.gaps.values())
+    }
+
     // Get a single strip
     getStrip(stripId: string): FlightStrip | undefined {
         return this.strips.get(stripId)
+    }
+
+    // Get strips for a specific section and zone
+    getStripsForSection(bayId: string, sectionId: string, bottom: boolean): FlightStrip[] {
+        const result: FlightStrip[] = []
+        this.strips.forEach(strip => {
+            if (strip.bayId === bayId && strip.sectionId === sectionId && strip.bottom === bottom) {
+                result.push(strip)
+            }
+        })
+        return result.sort((a, b) => a.position - b.position)
+    }
+
+    // Get gaps for a specific section
+    getGapsForSection(bayId: string, sectionId: string): Gap[] {
+        const result: Gap[] = []
+        this.gaps.forEach(gap => {
+            if (gap.bayId === bayId && gap.sectionId === sectionId) {
+                result.push(gap)
+            }
+        })
+        return result.sort((a, b) => a.index - b.index)
     }
 
     // Find a bay by ID
@@ -64,145 +102,170 @@ class EfsStore {
         targetSectionId: string,
         position?: number,
         isBottom: boolean = false
-    ): boolean {
+    ): MoveStripResult | null {
         const strip = this.strips.get(stripId)
-        if (!strip) return false
+        if (!strip) return null
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
-
-        // Find old section
-        const oldSection = this.findSection(oldBayId, oldSectionId)
-
-        // Find old position and whether it was in bottom
-        let oldPosition = -1
-        let wasBottom = false
-        if (oldSection) {
-            oldPosition = oldSection.stripIds.indexOf(stripId)
-            if (oldPosition === -1) {
-                oldPosition = oldSection.bottomStripIds.indexOf(stripId)
-                wasBottom = oldPosition !== -1
-            }
-        }
+        const oldBottom = strip.bottom
+        const oldPosition = strip.position
 
         const isSameSection = oldBayId === targetBayId && oldSectionId === targetSectionId
+        const isSameZone = isSameSection && oldBottom === isBottom
 
-        // Remove from old section
-        if (oldSection) {
-            oldSection.stripIds = oldSection.stripIds.filter(id => id !== stripId)
-            oldSection.bottomStripIds = oldSection.bottomStripIds.filter(id => id !== stripId)
+        // Get current strips in target zone (excluding the moving strip if same section)
+        const targetStrips = this.getStripsForSection(targetBayId, targetSectionId, isBottom)
+            .filter(s => s.id !== stripId)
+
+        // Calculate target position
+        const targetPosition = (position !== undefined && position >= 0 && position <= targetStrips.length)
+            ? position
+            : targetStrips.length
+
+        // Track affected gaps and deleted gap keys
+        const affectedGaps: Gap[] = []
+        const deletedGapKeys: string[] = []
+
+        // Handle gap adjustments for same-zone moves (top to top only, gaps don't exist for bottom)
+        if (isSameZone && !isBottom) {
+            const gapResult = this.adjustGapsForMove(targetBayId, targetSectionId, oldPosition, targetPosition)
+            affectedGaps.push(...gapResult.affected)
+            deletedGapKeys.push(...gapResult.deleted)
         }
 
         // Update strip metadata
         strip.bayId = targetBayId
         strip.sectionId = targetSectionId
+        strip.bottom = isBottom
 
-        // Add to target section
-        const targetSection = this.findSection(targetBayId, targetSectionId)
-        if (targetSection) {
-            const targetList = isBottom ? targetSection.bottomStripIds : targetSection.stripIds
-            if (position !== undefined && position >= 0 && position <= targetList.length) {
-                targetList.splice(position, 0, stripId)
-            } else {
-                targetList.push(stripId)
-            }
+        // Insert strip at target position and recompute all positions
+        // targetStrips is already sorted and excludes the moving strip
+        targetStrips.splice(targetPosition, 0, strip)
+        targetStrips.forEach((s, index) => {
+            s.position = index
+        })
+
+        // If moved to different section/zone, recompute old section too
+        if (!isSameZone) {
+            this.recomputePositions(oldBayId, oldSectionId, oldBottom)
         }
 
-        // Handle gaps for same-section moves (top to top only)
-        if (isSameSection && !wasBottom && !isBottom && oldPosition !== -1 && position !== undefined) {
-            this.adjustGapsForMove(targetBayId, targetSectionId, oldPosition, position)
+        // Cleanup gaps (only for top zone)
+        if (!isBottom) {
+            const cleanupResult = this.cleanupGaps(targetBayId, targetSectionId)
+            deletedGapKeys.push(...cleanupResult)
+        }
+        if (!isSameSection && !oldBottom) {
+            const cleanupResult = this.cleanupGaps(oldBayId, oldSectionId)
+            deletedGapKeys.push(...cleanupResult)
         }
 
-        // Cleanup gaps
-        if (isSameSection) {
-            this.cleanupGaps(targetBayId, targetSectionId)
-        } else {
-            this.cleanupGaps(oldBayId, oldSectionId)
-            this.cleanupGaps(targetBayId, targetSectionId)
-        }
-
-        // Recompute positions
-        this.recomputePositions(targetBayId, targetSectionId)
-        if (!isSameSection) {
-            this.recomputePositions(oldBayId, oldSectionId)
-        }
-
-        return true
+        return { strip, affectedGaps, deletedGapKeys }
     }
 
-    // Set a gap at an index
-    setGap(bayId: string, sectionId: string, index: number, gapSize: number) {
-        const section = this.findSection(bayId, sectionId)
-        if (!section) return
+    // Set a gap at an index - returns the gap or null if deleted
+    setGap(bayId: string, sectionId: string, index: number, gapSize: number): SetGapResult {
+        const key = gapKey(bayId, sectionId, index)
 
         if (gapSize >= GAP_BUFFER) {
-            section.gaps[index] = gapSize
+            const gap: Gap = { bayId, sectionId, index, size: gapSize }
+            this.gaps.set(key, gap)
+            return { gap, deleted: false }
         } else {
-            delete section.gaps[index]
+            this.gaps.delete(key)
+            return { gap: null, deleted: true }
         }
     }
 
-    // Set section height
-    setSectionHeight(bayId: string, sectionId: string, height: number) {
+    // Get a gap
+    getGap(bayId: string, sectionId: string, index: number): Gap | undefined {
+        return this.gaps.get(gapKey(bayId, sectionId, index))
+    }
+
+    // Set section height - returns the section
+    setSectionHeight(bayId: string, sectionId: string, height: number): Section | null {
         const section = this.findSection(bayId, sectionId)
         if (section) {
             section.height = Math.max(80, height)
+            return section
         }
+        return null
     }
 
-    // Clean up trailing gaps
-    private cleanupGaps(bayId: string, sectionId: string) {
-        const section = this.findSection(bayId, sectionId)
-        if (!section) return
+    // Clean up trailing gaps - returns deleted keys
+    private cleanupGaps(bayId: string, sectionId: string): string[] {
+        const strips = this.getStripsForSection(bayId, sectionId, false)
+        const stripCount = strips.length
+        const deletedKeys: string[] = []
 
-        const stripCount = section.stripIds.length
-        Object.keys(section.gaps).forEach(key => {
-            const idx = parseInt(key)
-            if (idx >= stripCount) {
-                delete section.gaps[idx]
+        this.gaps.forEach((gap, key) => {
+            if (gap.bayId === bayId && gap.sectionId === sectionId && gap.index >= stripCount) {
+                this.gaps.delete(key)
+                deletedKeys.push(key)
             }
         })
+
+        return deletedKeys
     }
 
-    // Adjust gap indices when strips are moved
-    private adjustGapsForMove(bayId: string, sectionId: string, fromIndex: number, toIndex: number) {
-        const section = this.findSection(bayId, sectionId)
-        if (!section) return
+    // Adjust gap indices when strips are moved - returns affected and deleted gaps
+    private adjustGapsForMove(
+        bayId: string,
+        sectionId: string,
+        fromIndex: number,
+        toIndex: number
+    ): { affected: Gap[], deleted: string[] } {
+        const sectionGaps = this.getGapsForSection(bayId, sectionId)
+        const affected: Gap[] = []
+        const deleted: string[] = []
 
-        const newGaps: Record<number, number> = {}
+        // Calculate new indices
+        const updates: { oldKey: string, gap: Gap, newIndex: number }[] = []
 
-        Object.entries(section.gaps).forEach(([key, value]) => {
-            let idx = parseInt(key)
+        sectionGaps.forEach(gap => {
+            let newIndex = gap.index
 
             if (fromIndex < toIndex) {
                 // Moving down
-                if (idx > fromIndex && idx <= toIndex) {
-                    idx -= 1
+                if (gap.index > fromIndex && gap.index <= toIndex) {
+                    newIndex = gap.index - 1
                 }
             } else {
                 // Moving up
-                if (idx >= toIndex && idx < fromIndex) {
-                    idx += 1
+                if (gap.index >= toIndex && gap.index < fromIndex) {
+                    newIndex = gap.index + 1
                 }
             }
 
-            newGaps[idx] = value
+            if (newIndex !== gap.index) {
+                updates.push({
+                    oldKey: gapKey(bayId, sectionId, gap.index),
+                    gap,
+                    newIndex
+                })
+            }
         })
 
-        section.gaps = newGaps
-        this.cleanupGaps(bayId, sectionId)
+        // Apply updates
+        updates.forEach(({ oldKey, gap, newIndex }) => {
+            this.gaps.delete(oldKey)
+            deleted.push(oldKey)
+
+            const newGap: Gap = { ...gap, index: newIndex }
+            const newKey = gapKey(bayId, sectionId, newIndex)
+            this.gaps.set(newKey, newGap)
+            affected.push(newGap)
+        })
+
+        return { affected, deleted }
     }
 
     // Recompute strip positions
-    private recomputePositions(bayId: string, sectionId: string) {
-        const section = this.findSection(bayId, sectionId)
-        if (!section) return
-
-        section.stripIds.forEach((stripId, index) => {
-            const strip = this.strips.get(stripId)
-            if (strip) {
-                strip.position = index
-            }
+    private recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
+        const strips = this.getStripsForSection(bayId, sectionId, bottom)
+        strips.forEach((strip, index) => {
+            strip.position = index
         })
     }
 }

@@ -6,6 +6,7 @@
       :section="section"
       :bay-id="bay.id"
       :is-first-section="index === 0"
+      :is-last-section="index === bay.sections.length - 1"
     />
   </div>
 </template>

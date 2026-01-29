@@ -42,15 +42,20 @@ export interface FlightStrip {
     bayId: string
     sectionId: string
     position: number
+    bottom: boolean            // Whether strip is in bottom zone (pinned)
 }
 
 export interface Section {
     id: string
     title: string
-    stripIds: string[]         // Top-attached strips (scrollable)
-    bottomStripIds: string[]   // Bottom-attached strips (pinned)
     height?: number            // Section height in pixels (for resize)
-    gaps: Record<number, number>  // Index-based gaps: position index -> gap size in pixels
+}
+
+export interface Gap {
+    bayId: string
+    sectionId: string
+    index: number              // Position index (gap appears before strip at this index)
+    size: number               // Gap size in pixels
 }
 
 export interface Bay {

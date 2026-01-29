@@ -29,17 +29,16 @@
         <template v-for="(strip, index) in topStrips" :key="strip.id">
           <!-- Gap before this strip (if any) -->
           <div
-            v-if="section.gaps[index]"
+            v-if="sectionGaps[index]"
             class="strip-gap"
             :data-gap-index="index"
-            :style="{ height: section.gaps[index] + 'px' }"
+            :style="{ height: sectionGaps[index] + 'px' }"
             @click="onGapClick(index)"
           ></div>
           <FlightStrip
             :strip="strip"
             :section-id="section.id"
             :bay-id="bayId"
-            :is-bottom="false"
           />
         </template>
         <div v-if="topStrips.length === 0 && bottomStrips.length === 0" class="empty-section">
@@ -70,7 +69,6 @@
           :strip="strip"
           :section-id="section.id"
           :bay-id="bayId"
-          :is-bottom="true"
         />
       </div>
     </div>
@@ -88,8 +86,10 @@ const props = withDefaults(defineProps<{
   section: Section
   bayId: string
   isFirstSection?: boolean
+  isLastSection?: boolean
 }>(), {
-  isFirstSection: false
+  isFirstSection: false,
+  isLastSection: false
 })
 
 const store = useEfsStore()
@@ -101,10 +101,19 @@ const topContainer = ref<HTMLElement | null>(null)
 
 const topStrips = computed(() => store.getTopStrips(props.bayId, props.section.id))
 const bottomStrips = computed(() => store.getBottomStrips(props.bayId, props.section.id))
+const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.section.id))
 
 const sectionStyle = computed(() => {
+  // Last section always flexes to fill remaining space
+  if (props.isLastSection) {
+    return { flex: '1 1 auto' }
+  }
+  // Other sections: apply stored height but allow shrinking if viewport is too small
   if (props.section.height) {
-    return { height: `${props.section.height}px`, flex: 'none' }
+    return {
+      height: `${props.section.height}px`,
+      flex: '0 1 auto'  // don't grow, but can shrink
+    }
   }
   return {}
 })
@@ -131,7 +140,10 @@ function onResizeStart(event: MouseEvent | TouchEvent) {
 
   // Fix all section heights in the bay to their current pixel values
   // This prevents weird behavior when sections have flex/relative heights
-  allSections.forEach((section) => {
+  // Skip the last section - it should always flex to fill remaining space
+  const lastIndex = allSections.length - 1
+  allSections.forEach((section, index) => {
+    if (index === lastIndex) return  // Last section always flexes
     const sectionId = section.getAttribute('data-section-id')
     if (sectionId) {
       const height = section.getBoundingClientRect().height
@@ -142,7 +154,7 @@ function onResizeStart(event: MouseEvent | TouchEvent) {
   // Start resize: section above grows/shrinks, current section does the inverse
   const aboveHeight = sectionAbove.getBoundingClientRect().height
   const belowHeight = sectionEl.getBoundingClientRect().height
-  startResize(event, props.bayId, sectionAboveId, aboveHeight, props.section.id, belowHeight)
+  startResize(event, props.bayId, sectionAboveId, aboveHeight, props.section.id, belowHeight, props.isLastSection)
 }
 
 // Gap click handler - remove the gap
@@ -222,7 +234,7 @@ function onTopDrop(event: DragEvent) {
 
     // Handle drop on gap
     if (droppedOnGap && gapIndex !== -1 && gapRect) {
-      const currentGapSize = props.section.gaps[gapIndex] || 0
+      const currentGapSize = sectionGaps.value[gapIndex] || 0
 
       // Check if the dragged strip was adjacent to this gap
       // Gap at index N: strip at N-1 is above, strip at N is below
@@ -382,7 +394,6 @@ function onTopDrop(event: DragEvent) {
         ? distanceBelowLastStrip + draggedStripHeight
         : distanceBelowLastStrip
       store.setGapAtIndex(props.bayId, props.section.id, position, gapSize)
-      console.log("GOT A GAP YO", gapSize)
     }
 
     // Create gap if dropped into empty section below the buffer distance
@@ -548,31 +559,33 @@ function onBottomStripsDrop(event: DragEvent) {
 /* Top strips container - scrollable */
 .top-strips-container {
   flex: 1;
-  overflow-y: scroll;
+  overflow-y: auto;
   overflow-x: hidden;
   padding: 2px 0;
   min-height: 0;
-  scrollbar-gutter: stable;
+
+  /* Firefox scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
-/* Always-visible scrollbar styling */
+/* Webkit (Chrome, Safari, Edge) scrollbar styling - overlay style */
 .top-strips-container::-webkit-scrollbar {
-  -webkit-appearance: none;
-  width: 8px;
+  width: 6px;
+  background: transparent;
 }
 
 .top-strips-container::-webkit-scrollbar-track {
-  background: #12151a;
+  background: transparent;
 }
 
 .top-strips-container::-webkit-scrollbar-thumb {
-  background: #3a3e42;
-  border-radius: 4px;
-  border: 1px solid #12151a;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
 }
 
 .top-strips-container::-webkit-scrollbar-thumb:hover {
-  background: #4a4e52;
+  background: rgba(255, 255, 255, 0.3);
 }
 
 /* Bottom drop zone */

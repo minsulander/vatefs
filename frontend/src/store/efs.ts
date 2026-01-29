@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsConfig, ClientMessage } from "@vatefs/common"
+import type { FlightStrip, EfsConfig, Gap, Section, ClientMessage } from "@vatefs/common"
 import { isServerMessage } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -10,6 +10,13 @@ export const useEfsStore = defineStore("efs", () => {
     const connected = ref(false)
     const config = ref<EfsConfig>({ bays: [] })
     const strips = ref<Map<string, FlightStrip>>(new Map())
+    const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
+
+    const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
+
+    function gapKey(bayId: string, sectionId: string, index: number): string {
+        return `${bayId}:${sectionId}:${index}`
+    }
 
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
@@ -50,10 +57,25 @@ export const useEfsStore = defineStore("efs", () => {
         try {
             const message = JSON.parse(data)
             if (isServerMessage(message)) {
-                if (message.type === 'config') {
-                    handleConfigMessage(message.config)
-                } else if (message.type === 'strip') {
-                    handleStripMessage(message.strip)
+                switch (message.type) {
+                    case 'config':
+                        handleConfigMessage(message.config)
+                        break
+                    case 'strip':
+                        handleStripMessage(message.strip)
+                        break
+                    case 'stripDelete':
+                        handleStripDeleteMessage(message.stripId)
+                        break
+                    case 'gap':
+                        handleGapMessage(message.gap)
+                        break
+                    case 'gapDelete':
+                        handleGapDeleteMessage(message.bayId, message.sectionId, message.index)
+                        break
+                    case 'section':
+                        handleSectionMessage(message.bayId, message.section)
+                        break
                 }
             } else {
                 console.log("received unknown message:", message)
@@ -73,19 +95,69 @@ export const useEfsStore = defineStore("efs", () => {
     function handleStripMessage(strip: FlightStrip) {
         console.log("received strip:", strip.callsign)
         strips.value.set(strip.id, strip)
+    }
 
-        // Add strip to the appropriate section if not already there
-        const bay = config.value.bays.find(b => b.id === strip.bayId)
-        const section = bay?.sections.find(s => s.id === strip.sectionId)
-        if (section && !section.stripIds.includes(strip.id) && !section.bottomStripIds.includes(strip.id)) {
-            section.stripIds.push(strip.id)
+    // Handle strip delete message from server
+    function handleStripDeleteMessage(stripId: string) {
+        console.log("received strip delete:", stripId)
+        strips.value.delete(stripId)
+    }
+
+    // Handle gap message from server
+    function handleGapMessage(gap: Gap) {
+        console.log("received gap:", gap.sectionId, gap.index, gap.size)
+        gaps.value.set(gapKey(gap.bayId, gap.sectionId, gap.index), gap)
+    }
+
+    // Handle gap delete message from server
+    function handleGapDeleteMessage(bayId: string, sectionId: string, index: number) {
+        console.log("received gap delete:", sectionId, index)
+        gaps.value.delete(gapKey(bayId, sectionId, index))
+    }
+
+    // Handle section message from server
+    function handleSectionMessage(bayId: string, section: Section) {
+        console.log("received section:", section.id, section.height)
+        const bay = config.value.bays.find(b => b.id === bayId)
+        if (bay) {
+            const existingIndex = bay.sections.findIndex(s => s.id === section.id)
+            if (existingIndex !== -1) {
+                // If this is the last section, clear its height (it should always flex)
+                if (existingIndex === bay.sections.length - 1) {
+                    delete section.height
+                }
+                bay.sections[existingIndex] = section
+            }
         }
     }
 
     // Computed getters
     const getBays = computed(() => config.value.bays)
 
-    const getStripsBySection = (bayId: string, sectionId: string) => {
+    // Get top-attached strips (scrollable area) - computed from strips Map
+    function getTopStrips(bayId: string, sectionId: string): FlightStrip[] {
+        const result: FlightStrip[] = []
+        strips.value.forEach(strip => {
+            if (strip.bayId === bayId && strip.sectionId === sectionId && !strip.bottom) {
+                result.push(strip)
+            }
+        })
+        return result.sort((a, b) => a.position - b.position)
+    }
+
+    // Get bottom-attached strips (pinned at bottom) - computed from strips Map
+    function getBottomStrips(bayId: string, sectionId: string): FlightStrip[] {
+        const result: FlightStrip[] = []
+        strips.value.forEach(strip => {
+            if (strip.bayId === bayId && strip.sectionId === sectionId && strip.bottom) {
+                result.push(strip)
+            }
+        })
+        return result.sort((a, b) => a.position - b.position)
+    }
+
+    // Get all strips for a section (both top and bottom)
+    function getStripsBySection(bayId: string, sectionId: string): FlightStrip[] {
         const sectionStrips: FlightStrip[] = []
         strips.value.forEach((strip) => {
             if (strip.bayId === bayId && strip.sectionId === sectionId) {
@@ -95,24 +167,21 @@ export const useEfsStore = defineStore("efs", () => {
         return sectionStrips.sort((a, b) => a.position - b.position)
     }
 
-    // Get top-attached strips (scrollable area)
-    const getTopStrips = (bayId: string, sectionId: string) => {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return []
-        return section.stripIds
-            .map(id => strips.value.get(id))
-            .filter((s): s is FlightStrip => s !== undefined)
+    // Get gaps for a section as a Record (for backwards compatibility)
+    function getGapsForSection(bayId: string, sectionId: string): Record<number, number> {
+        const result: Record<number, number> = {}
+        gaps.value.forEach(gap => {
+            if (gap.bayId === bayId && gap.sectionId === sectionId) {
+                result[gap.index] = gap.size
+            }
+        })
+        return result
     }
 
-    // Get bottom-attached strips (pinned at bottom)
-    const getBottomStrips = (bayId: string, sectionId: string) => {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return []
-        return section.bottomStripIds
-            .map(id => strips.value.get(id))
-            .filter((s): s is FlightStrip => s !== undefined)
+    // Get gap at specific index
+    function getGapAtIndex(bayId: string, sectionId: string, index: number): number {
+        const gap = gaps.value.get(gapKey(bayId, sectionId, index))
+        return gap?.size ?? 0
     }
 
     // Actions
@@ -127,51 +196,45 @@ export const useEfsStore = defineStore("efs", () => {
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
+        const oldBottom = strip.bottom
+        const oldPosition = strip.position
         const isSameSection = oldBayId === targetBayId && oldSectionId === targetSectionId
+        const isSameZone = isSameSection && !oldBottom  // moving within top zone
 
-        // Find old position before removal
-        const oldBay = config.value.bays.find(b => b.id === oldBayId)
-        const oldSection = oldBay?.sections.find(s => s.id === oldSectionId)
-        const oldPosition = oldSection?.stripIds.indexOf(stripId) ?? -1
+        // Get target strips count (excluding the moving strip)
+        const targetStrips = getTopStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
+        const targetPosition = (position !== undefined && position >= 0 && position <= targetStrips.length)
+            ? position
+            : targetStrips.length
 
-        // Remove from old section (both top and bottom lists)
-        if (oldSection) {
-            oldSection.stripIds = oldSection.stripIds.filter(id => id !== stripId)
-            oldSection.bottomStripIds = oldSection.bottomStripIds.filter(id => id !== stripId)
+        // Handle gaps for same-zone moves
+        if (isSameZone) {
+            adjustGapsForMove(targetBayId, targetSectionId, oldPosition, targetPosition)
         }
 
-        // Update strip
+        // Update strip location
         strip.bayId = targetBayId
         strip.sectionId = targetSectionId
+        strip.bottom = false
 
-        // Add to new section (top strips)
-        const targetBay = config.value.bays.find(b => b.id === targetBayId)
-        const targetSection = targetBay?.sections.find(s => s.id === targetSectionId)
-        if (targetSection) {
-            if (position !== undefined) {
-                targetSection.stripIds.splice(position, 0, stripId)
-            } else {
-                targetSection.stripIds.push(stripId)
-            }
+        // Insert strip at target position and recompute all positions
+        // targetStrips is already sorted and excludes the moving strip
+        targetStrips.splice(targetPosition, 0, strip)
+        targetStrips.forEach((s, index) => {
+            s.position = index
+        })
+
+        // Recompute old section if moved from different zone
+        if (!isSameZone) {
+            recomputePositions(oldBayId, oldSectionId, oldBottom)
         }
 
-        // Handle gaps for same-section moves
-        if (isSameSection && oldPosition !== -1 && position !== undefined) {
-            adjustGapsForMove(targetBayId, targetSectionId, oldPosition, position)
-        }
-
-        // Cleanup gaps (remove trailing gaps)
-        if (isSameSection) {
+        // Cleanup gaps
+        if (!oldBottom || isSameSection) {
             cleanupGaps(targetBayId, targetSectionId)
-        } else {
+        }
+        if (!isSameSection && !oldBottom) {
             cleanupGaps(oldBayId, oldSectionId)
-            cleanupGaps(targetBayId, targetSectionId)
-        }
-
-        // Recompute positions
-        recomputePositions(targetBayId, targetSectionId)
-        if (!isSameSection) {
-            recomputePositions(oldBayId, oldSectionId)
         }
 
         // Send update to server
@@ -180,7 +243,7 @@ export const useEfsStore = defineStore("efs", () => {
             stripId,
             targetBayId,
             targetSectionId,
-            position,
+            position: targetPosition,
             isBottom: false
         })
     }
@@ -196,37 +259,34 @@ export const useEfsStore = defineStore("efs", () => {
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
+        const oldBottom = strip.bottom
 
-        // Remove from old section (both lists)
-        const oldBay = config.value.bays.find(b => b.id === oldBayId)
-        const oldSection = oldBay?.sections.find(s => s.id === oldSectionId)
-        if (oldSection) {
-            oldSection.stripIds = oldSection.stripIds.filter(id => id !== stripId)
-            oldSection.bottomStripIds = oldSection.bottomStripIds.filter(id => id !== stripId)
-        }
+        // Get target bottom strips count (excluding the moving strip)
+        const targetStrips = getBottomStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
+        const targetPosition = (position !== undefined && position >= 0 && position <= targetStrips.length)
+            ? position
+            : targetStrips.length
 
-        // Update strip
+        // Update strip location
         strip.bayId = targetBayId
         strip.sectionId = targetSectionId
+        strip.bottom = true
 
-        // Add to bottom of target section
-        const targetBay = config.value.bays.find(b => b.id === targetBayId)
-        const targetSection = targetBay?.sections.find(s => s.id === targetSectionId)
-        if (targetSection) {
-            if (position !== undefined) {
-                targetSection.bottomStripIds.splice(position, 0, stripId)
-            } else {
-                targetSection.bottomStripIds.push(stripId)
-            }
+        // Insert strip at target position and recompute all positions
+        // targetStrips is already sorted and excludes the moving strip
+        targetStrips.splice(targetPosition, 0, strip)
+        targetStrips.forEach((s, index) => {
+            s.position = index
+        })
+
+        // Recompute old section if moved from different zone
+        if (oldBayId !== targetBayId || oldSectionId !== targetSectionId || !oldBottom) {
+            recomputePositions(oldBayId, oldSectionId, oldBottom)
         }
 
-        // Cleanup gaps in old section
-        cleanupGaps(oldBayId, oldSectionId)
-
-        // Recompute positions
-        recomputePositions(targetBayId, targetSectionId)
-        if (oldBayId !== targetBayId || oldSectionId !== targetSectionId) {
-            recomputePositions(oldBayId, oldSectionId)
+        // Cleanup gaps in old section if was in top zone
+        if (!oldBottom) {
+            cleanupGaps(oldBayId, oldSectionId)
         }
 
         // Send update to server
@@ -235,23 +295,20 @@ export const useEfsStore = defineStore("efs", () => {
             stripId,
             targetBayId,
             targetSectionId,
-            position,
+            position: targetPosition,
             isBottom: true
         })
     }
 
-    // Gap management - gaps are stored by index position in the section
-    const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
-
+    // Gap management
     function setGapAtIndex(bayId: string, sectionId: string, index: number, gapSize: number) {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return
+        const key = gapKey(bayId, sectionId, index)
 
         if (gapSize >= GAP_BUFFER) {
-            section.gaps[index] = gapSize
+            const gap: Gap = { bayId, sectionId, index, size: gapSize }
+            gaps.value.set(key, gap)
         } else {
-            delete section.gaps[index]
+            gaps.value.delete(key)
         }
 
         // Send update to server
@@ -265,10 +322,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function removeGapAtIndex(bayId: string, sectionId: string, index: number) {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return
-        delete section.gaps[index]
+        gaps.value.delete(gapKey(bayId, sectionId, index))
 
         // Send update to server (gapSize 0 will remove it)
         sendMessage({
@@ -280,58 +334,62 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
-    function getGapAtIndex(bayId: string, sectionId: string, index: number): number {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        return section?.gaps[index] ?? 0
-    }
-
-    // Clean up gaps: remove any gap at the last position (after all strips)
+    // Clean up gaps: remove any gap at or beyond the strip count
     function cleanupGaps(bayId: string, sectionId: string) {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return
+        const stripCount = getTopStrips(bayId, sectionId).length
+        const keysToDelete: string[] = []
 
-        const stripCount = section.stripIds.length
-        // Remove gaps at or beyond the strip count (gaps after last strip)
-        Object.keys(section.gaps).forEach(key => {
-            const idx = parseInt(key)
-            if (idx >= stripCount) {
-                delete section.gaps[idx]
+        gaps.value.forEach((gap, key) => {
+            if (gap.bayId === bayId && gap.sectionId === sectionId && gap.index >= stripCount) {
+                keysToDelete.push(key)
             }
         })
+
+        keysToDelete.forEach(key => gaps.value.delete(key))
     }
 
     // Adjust gap indices when strips are moved
     function adjustGapsForMove(bayId: string, sectionId: string, fromIndex: number, toIndex: number) {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return
+        const sectionGaps: Gap[] = []
+        gaps.value.forEach(gap => {
+            if (gap.bayId === bayId && gap.sectionId === sectionId) {
+                sectionGaps.push(gap)
+            }
+        })
 
-        const newGaps: Record<number, number> = {}
+        const updates: { oldKey: string, gap: Gap, newIndex: number }[] = []
 
-        Object.entries(section.gaps).forEach(([key, value]) => {
-            let idx = parseInt(key)
+        sectionGaps.forEach(gap => {
+            let newIndex = gap.index
 
             if (fromIndex < toIndex) {
                 // Moving down: gaps between from and to shift up by 1
-                if (idx > fromIndex && idx <= toIndex) {
-                    idx -= 1
-                } else if (idx === fromIndex) {
-                    // Gap at the original position stays at the same index
-                    // (strip moved away, gap remains)
+                if (gap.index > fromIndex && gap.index <= toIndex) {
+                    newIndex = gap.index - 1
                 }
             } else {
                 // Moving up: gaps between to and from shift down by 1
-                if (idx >= toIndex && idx < fromIndex) {
-                    idx += 1
+                if (gap.index >= toIndex && gap.index < fromIndex) {
+                    newIndex = gap.index + 1
                 }
             }
 
-            newGaps[idx] = value
+            if (newIndex !== gap.index) {
+                updates.push({
+                    oldKey: gapKey(bayId, sectionId, gap.index),
+                    gap,
+                    newIndex
+                })
+            }
         })
 
-        section.gaps = newGaps
+        // Apply updates
+        updates.forEach(({ oldKey, gap, newIndex }) => {
+            gaps.value.delete(oldKey)
+            const newGap: Gap = { ...gap, index: newIndex }
+            gaps.value.set(gapKey(bayId, sectionId, newIndex), newGap)
+        })
+
         cleanupGaps(bayId, sectionId)
     }
 
@@ -385,16 +443,13 @@ export const useEfsStore = defineStore("efs", () => {
         moveStripToSection(stripId, strip.bayId, nextSection.id)
     }
 
-    function recomputePositions(bayId: string, sectionId: string) {
-        const bay = config.value.bays.find(b => b.id === bayId)
-        const section = bay?.sections.find(s => s.id === sectionId)
-        if (!section) return
+    function recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
+        const sectionStrips = bottom
+            ? getBottomStrips(bayId, sectionId)
+            : getTopStrips(bayId, sectionId)
 
-        section.stripIds.forEach((stripId, index) => {
-            const strip = strips.value.get(stripId)
-            if (strip) {
-                strip.position = index
-            }
+        sectionStrips.forEach((strip, index) => {
+            strip.position = index
         })
     }
 
@@ -410,6 +465,7 @@ export const useEfsStore = defineStore("efs", () => {
         getStripsBySection,
         getTopStrips,
         getBottomStrips,
+        getGapsForSection,
         moveStripToSection,
         moveStripToNextSection,
         moveStripToBottom,

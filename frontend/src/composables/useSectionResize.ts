@@ -9,6 +9,7 @@ export interface ResizeState {
   bayId: string
   aboveSectionId: string // The section ABOVE (grows when dragging down)
   belowSectionId: string // The section BELOW (shrinks when dragging down)
+  belowIsLast: boolean   // If true, below section flexes and doesn't need height set
 }
 
 export function useSectionResize() {
@@ -24,7 +25,8 @@ export function useSectionResize() {
     aboveSectionId: string,
     aboveHeight: number,
     belowSectionId: string,
-    belowHeight: number
+    belowHeight: number,
+    belowIsLast: boolean = false
   ) {
     event.preventDefault()
     event.stopPropagation()
@@ -39,7 +41,8 @@ export function useSectionResize() {
       belowStartHeight: belowHeight,
       bayId,
       aboveSectionId,
-      belowSectionId
+      belowSectionId,
+      belowIsLast
     }
 
     document.body.classList.add('section-resizing')
@@ -75,11 +78,15 @@ export function useSectionResize() {
       resizeState.value.aboveSectionId,
       aboveNewHeight
     )
-    store.setSectionHeight(
-      resizeState.value.bayId,
-      resizeState.value.belowSectionId,
-      belowNewHeight
-    )
+    // Only set height on below section if it's not the last one
+    // Last section always flexes to fill remaining space
+    if (!resizeState.value.belowIsLast) {
+      store.setSectionHeight(
+        resizeState.value.bayId,
+        resizeState.value.belowSectionId,
+        belowNewHeight
+      )
+    }
   }
 
   function onEnd() {
