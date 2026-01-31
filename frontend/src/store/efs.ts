@@ -76,9 +76,11 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'section':
                         handleSectionMessage(message.bayId, message.section)
                         break
+                    default:
+                        console.log(`received ${message.type ?? 'unknown'} server message:`, message)
                 }
             } else {
-                console.log("received unknown message:", message)
+                console.log(`received ${message.type ?? 'unknown'} message:`, message)
             }
         } catch (err) {
             console.log("received non-JSON message:", data)

@@ -22,9 +22,7 @@ char DllPathFile[_MAX_PATH];
 VatEFSPlugin::VatEFSPlugin()
 : CPlugIn(EuroScopePlugIn::COMPATIBILITY_CODE, PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR, PLUGIN_LICENSE)
 {
-    lastPostTime = std::time(NULL);
     disabled = true; // ... until connected - see OnTimer
-    updateAll = false;
     debug = false;
     udpReceiveSocket = nullptr;
     winsockInitialized = false;
@@ -42,20 +40,17 @@ VatEFSPlugin::VatEFSPlugin()
                 c = (char)std::tolower(c);
             if (line == "debug")
                 debug = true;
-            else if (line == "updateall")
-                updateAll = true;
             else
                 DisplayMessage("Unknown setting: " + line);
         }
     }
-    DebugMessage("Version " + std::string(PLUGIN_VERSION) + (updateAll ? " updateAll" : ""));
+    DebugMessage("Version " + std::string(PLUGIN_VERSION));
 }
 
 VatEFSPlugin::~VatEFSPlugin()
 {
     CleanupUdpReceiveSocket();
     CleanupWinsock();
-    pendingUpdates.clear();
 }
 
 void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan FlightPlan)
@@ -74,6 +69,10 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             DebugMessage("Invalid flight plan data");
             return;
         }
+
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "flightPlanDataUpdate";
+        message["callsign"] = callsign;
 
         std::stringstream out;
         out << "FlightPlanDataUpdate " << callsign;
@@ -98,7 +97,8 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         // }
 
         DebugMessage(out.str());
-        UpdateRoute(FlightPlan);
+        UpdateRoute(FlightPlan, message);
+        PostJson(message);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanFlightPlanDataUpdate exception: ") + e.what());
     } catch (...) {
@@ -110,6 +110,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 {
     try {
         if (disabled || !FilterFlightPlan(FlightPlan)) return;
+
 
         std::string callsign = FlightPlan.GetCallsign();
         if (callsign.empty() || callsign.length() > 20) {
@@ -123,9 +124,13 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             return;
         }
 
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        message["callsign"] = callsign;
+
         const char *controllerCallsign = FlightPlan.GetTrackingControllerCallsign();
         if (controllerCallsign && strlen(controllerCallsign) > 0 && strlen(controllerCallsign) < 20) {
-            pendingUpdates[callsign]["controller"] = controllerCallsign;
+            message["controller"] = controllerCallsign;
         }
 
         const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData = FlightPlan.GetControllerAssignedData();
@@ -140,7 +145,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             const char* squawk = ctrData.GetSquawk();
             if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
                 out << " squawk " << squawk;
-                pendingUpdates[callsign]["squawk"] = squawk;
+                message["squawk"] = squawk;
             }
             break;
         }
@@ -148,20 +153,20 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             int rfl = ctrData.GetFinalAltitude();
             if (rfl >= 0 && rfl <= 100000) { // Reasonable altitude range
                 out << " rfl " << rfl;
-                pendingUpdates[callsign]["rfl"] = rfl;
+                message["rfl"] = rfl;
             }
             break;
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_TEMPORARY_ALTITUDE: {
             int cfl = ctrData.GetClearedAltitude();
             out << " cfl " << cfl;
-            pendingUpdates[callsign]["cfl"] = cfl;
+            message["cfl"] = cfl;
             // 0 - no cleared level (use the final instead of)
             // 1 - cleared for ILS approach
             // 2 - cleared for visual approach
             if (cfl == 1 || cfl == 2) {
-                pendingUpdates[callsign]["ahdg"] = 0;
-                pendingUpdates[callsign]["direct"] = "";
+                message["ahdg"] = 0;
+                message["direct"] = "";
             }
             break;
         }
@@ -183,10 +188,10 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             
             // Safe string comparisons
             if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
-                pendingUpdates[callsign]["groundstate"] = scratch;
+                message["groundstate"] = scratch;
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
-                pendingUpdates[callsign]["stand"] = scratch.substr(6);
+                message["stand"] = scratch.substr(6);
             }
             // Scratch pad inputs noticed in the wild (if we ever want to
             // reverse-engineer/understand some TopSky plugin features): /PRESHDG/ /ASP=/ /ASP+/
@@ -221,11 +226,11 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_GROUND_STATE:
             out << " groundstate " << FlightPlan.GetGroundState();
-            pendingUpdates[callsign]["groundstate"] = FlightPlan.GetGroundState();
+            message["groundstate"] = FlightPlan.GetGroundState();
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_CLEARENCE_FLAG:
             out << " clearance " << FlightPlan.GetClearenceFlag();
-            pendingUpdates[callsign]["clearence"] = (bool)FlightPlan.GetClearenceFlag();
+            message["clearence"] = (bool)FlightPlan.GetClearenceFlag();
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_DEPARTURE_SEQUENCE:
             out << " dsq"; // TODO where dis dsq?
@@ -234,7 +239,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             int speed = ctrData.GetAssignedSpeed();
             if (speed >= 0 && speed <= 1500) { // Reasonable speed range
                 out << " asp " << speed;
-                pendingUpdates[callsign]["asp"] = speed;
+                message["asp"] = speed;
             }
             break;
         }
@@ -242,7 +247,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             double mach = ctrData.GetAssignedMach();
             if (mach >= 0.0 && mach <= 10.0) { // Reasonable mach range
                 out << " mach " << mach;
-                pendingUpdates[callsign]["mach"] = mach;
+                message["mach"] = mach;
             }
             break;
         }
@@ -250,7 +255,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             int rate = ctrData.GetAssignedRate();
             if (rate >= -50000 && rate <= 50000) { // Reasonable rate range
                 out << " arc " << rate;
-                pendingUpdates[callsign]["arc"] = rate;
+                message["arc"] = rate;
             }
             break;
         }
@@ -258,8 +263,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             int heading = ctrData.GetAssignedHeading();
             if (heading >= 0 && heading <= 360) { // Valid heading range
                 out << " ahdg " << heading;
-                pendingUpdates[callsign]["ahdg"] = heading;
-                pendingUpdates[callsign]["direct"] = "";
+                message["ahdg"] = heading;
+                message["direct"] = "";
             }
             break;
         }
@@ -267,11 +272,14 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             const char* directTo = ctrData.GetDirectToPointName();
             if (directTo && strlen(directTo) > 0 && strlen(directTo) < 50) { // Reasonable waypoint name length
                 out << " direct " << directTo;
-                pendingUpdates[callsign]["direct"] = directTo;
-                pendingUpdates[callsign]["ahdg"] = 0;
+                message["direct"] = directTo;
+                message["ahdg"] = 0;
             }
             break;
         }
+        default:
+            out << " unknown data type " << DataType;
+            break;
         }
         // for (int i = 0; i < 9; i++) {
         //     const char* annotation = ctrData.GetFlightStripAnnotation(i);
@@ -280,7 +288,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         //     }
         // }
         DebugMessage(out.str());
-        UpdateRoute(FlightPlan);
+        UpdateRoute(FlightPlan, message);
+        PostJson(message);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanControllerAssignedDataUpdate exception: ") + e.what());
     } catch (...) {
@@ -291,34 +300,112 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPlan)
 {
     if (disabled || !FilterFlightPlan(FlightPlan)) return;
-    // TODO remove not really useful
+    std::stringstream out;
+    out << "FlightPlanDisconnect " << FlightPlan.GetCallsign();
+    DebugMessage(out.str());
+    nlohmann::json message = nlohmann::json::object();
+    message["type"] = "flightPlanDisconnect";
+    message["callsign"] = FlightPlan.GetCallsign();
+    PostJson(message);
+}
+
+void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan, const char * sSenderController, const char * sTargetController) 
+{
+    if (disabled || !FilterFlightPlan(FlightPlan)) return;
+    std::stringstream out;
+    out << "FlightPlanFlightStripPushed " << FlightPlan.GetCallsign();
+    if (sSenderController && strlen(sSenderController) > 0 && strlen(sSenderController) < 20)
+        out << " sender " << sSenderController;
+    if (sTargetController && strlen(sTargetController) > 0 && strlen(sTargetController) < 20)
+        out << " target " << sTargetController;
+    DebugMessage(out.str());
+    nlohmann::json message = nlohmann::json::object();
+    message["type"] = "flightPlanFlightStripPushed";
+    message["callsign"] = FlightPlan.GetCallsign();
+    if (sSenderController && strlen(sSenderController) > 0 && strlen(sSenderController) < 20)
+        message["sender"] = sSenderController;
+    if (sTargetController && strlen(sTargetController) > 0 && strlen(sTargetController) < 20)
+        message["target"] = sTargetController;
+    PostJson(message);
+}
+
+void VatEFSPlugin::OnControllerPositionUpdate (EuroScopePlugIn::CController Controller)
+{
+    if (disabled) return;
     // std::stringstream out;
-    // out << "FlightPlanDisconnect " << FlightPlan.GetCallsign();
+    // out << "ControllerPositionUpdate " << Controller.GetCallsign();
     // DebugMessage(out.str());
+    nlohmann::json message = nlohmann::json::object();
+    message["type"] = "controllerPositionUpdate";
+    message["callsign"] = Controller.GetCallsign();
+    message["position"] = Controller.GetPositionId();
+    message["name"] = Controller.GetFullName();
+    message["frequency"] = Controller.GetPrimaryFrequency();
+    message["rating"] = Controller.GetRating();
+    message["facility"] = Controller.GetFacility();
+    message["sector"] = Controller.GetSectorFileName();
+    message["controller"] = Controller.IsController();
+    message["me"] = std::string(Controller.GetCallsign()) == std::string(ControllerMyself().GetCallsign());
+    PostJson(message);
+}
+
+void VatEFSPlugin::OnControllerDisconnect (EuroScopePlugIn::CController Controller)
+{
+    if (disabled) return;
+    std::stringstream out;
+    out << "ControllerDisconnect " << Controller.GetCallsign();
+    DebugMessage(out.str());
+    nlohmann::json message = nlohmann::json::object();
+    message["type"] = "controllerDisconnect";
+    message["callsign"] = Controller.GetCallsign();
+    PostJson(message);
 }
 
 bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 {
-    if (strncmp(commandLine, ".efs all", 12) == 0) {
-        DisplayMessage("Updating all flight plans");
-        updateAll = true;
-        return true;
-    } else if (strncmp(commandLine, ".efs mine", 13) == 0) {
-        DisplayMessage("Updating my flight plans");
-        updateAll = false;
-        return true;
-    } else if (strncmp(commandLine, ".efs debug", 14) == 0) {
+    std::string command = commandLine;
+    if (command.length() < 5 || command.compare(0, 5, ".efs ") != 0)
+        return false;
+    std::string rest = command.substr(5);
+
+    // First word is subcommand
+    std::string::size_type subEnd = rest.find(' ');
+    std::string subcommand = (subEnd == std::string::npos) ? rest : rest.substr(0, subEnd);
+
+    if (subcommand == "debug") {
         DisplayMessage("Debug mode enabled");
         debug = true;
         return true;
-    } else if (strncmp(commandLine, ".efs test", 13) == 0) {
-        std::stringstream out;
-        out << "me " << ControllerMyself().GetCallsign();
-        out << " " << ControllerMyself().GetPositionId();
-        out << " " << ControllerMyself().GetFullName();
-        out << " " << ControllerMyself().GetPrimaryFrequency();
-        out << " " << ControllerMyself().GetSectorFileName();
-        DisplayMessage(out.str());
+    } else if (subcommand == "scratch" || subcommand == "scratmp") {
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign;
+        std::string content;
+        std::string::size_type callEnd = remainder.find(' ');
+        if (callEnd == std::string::npos) {
+            callsign = remainder;
+        } else {
+            callsign = remainder.substr(0, callEnd);
+            content = remainder.substr(callEnd + 1);
+        }
+        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("Flight plan not found: " + callsign);
+            return false;
+        }
+        bool resetAfterSet = (subcommand == "scratmp");
+        std::string originalScratch;
+        if (resetAfterSet) {
+            const char* p = fp.GetControllerAssignedData().GetScratchPadString();
+            originalScratch = p ? p : "";
+        }
+        bool success = fp.GetControllerAssignedData().SetScratchPadString(content.c_str());
+        if (success && resetAfterSet) {
+            success = fp.GetControllerAssignedData().SetScratchPadString(originalScratch.c_str());
+            if (!success) DisplayMessage("Failed to reset scratch pad for " + callsign);
+        }
+        if (!success) DisplayMessage("Failed to set scratch pad for " + callsign);
+        else DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
     }
     return false;
@@ -329,9 +416,8 @@ void VatEFSPlugin::OnTimer(int counter)
     try {
         if (disabled && GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT) {
             disabled = false;
-            enabledTime = std::time(NULL);
             DebugMessage("EFS updates enabled");
-            
+            enabledTime = std::time(NULL);
             // Initialize Winsock and UDP receive socket
             InitializeWinsock();
             InitializeUdpReceiveSocket();
@@ -351,10 +437,7 @@ void VatEFSPlugin::OnTimer(int counter)
         ReceiveUdpMessages();
 
         if (std::time(NULL) - enabledTime < 10) return;
-        if (counter % 30 == 0) UpdateMyself();
-        if (pendingUpdates.empty()) return;
-        if (std::time(NULL) - lastPostTime < (5 + (std::rand() % 10))) return;
-        PostUpdates();
+        if (counter % 5 == 0) UpdateMyself();
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnTimer exception: ") + e.what());
     } catch (...) {
@@ -365,12 +448,6 @@ void VatEFSPlugin::OnTimer(int counter)
 void VatEFSPlugin::UpdateMyself()
 {
     try {
-        // Limit the size of controller updates
-        if (pendingUpdates.size() > 1000) {
-            DebugMessage("Too many pending updates in UpdateMyself");
-            pendingUpdates.clear();
-        }
-
         EuroScopePlugIn::CController me = ControllerMyself();
         if (!me.IsValid()) {
             DebugMessage("UpdateMyself: Controller not valid");
@@ -383,26 +460,19 @@ void VatEFSPlugin::UpdateMyself()
             return;
         }
 
-        // Validate and limit controller data
-        const char *fullName = me.GetFullName();
-        if (fullName && *fullName && strlen(fullName) < 50) {
-            pendingUpdates[callsign]["name"] = fullName;
-        }
-
-        double frequency = me.GetPrimaryFrequency();
-        if (frequency >= 100.0 && frequency <= 200.0) {
-            pendingUpdates[callsign]["frequency"] = frequency;
-        }
-
-        pendingUpdates[callsign]["controller"] = me.IsController();
-        pendingUpdates[callsign]["pluginVersion"] = PLUGIN_VERSION;
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "myselfUpdate";
+        message["callsign"] = callsign;
+        message["name"] = me.GetFullName();
+        message["frequency"] = me.GetPrimaryFrequency();
+        message["rating"] = me.GetRating();
+        message["facility"] = me.GetFacility();
+        message["sector"] = me.GetSectorFileName();
+        message["controller"] = me.IsController();
+        message["pluginVersion"] = PLUGIN_VERSION;
 
         // Limit the size of the rwyconfig structure
-        nlohmann::json& rwyconfig = pendingUpdates[callsign]["rwyconfig"];
-        if (rwyconfig.size() > 100) {
-            DebugMessage("Too many airports in rwyconfig");
-            rwyconfig.clear();
-        }
+        message["rwyconfig"] = nlohmann::json::object();
 
         SelectActiveSectorfile();
 
@@ -423,9 +493,9 @@ void VatEFSPlugin::UpdateMyself()
             if (airportStr.empty()) continue;
 
             if (airport.IsElementActive(false))
-                rwyconfig[airportStr]["arr"] = true;
+                message["rwyconfig"][airportStr]["arr"] = true;
             if (airport.IsElementActive(true))
-                rwyconfig[airportStr]["dep"] = true;
+                message["rwyconfig"][airportStr]["dep"] = true;
         }
 
         // Safe runway iteration with count limit
@@ -451,55 +521,26 @@ void VatEFSPlugin::UpdateMyself()
             // Validate runway names
             if (rwyName0 && *rwyName0 && strlen(rwyName0) <= 5) {
                 if (runway.IsElementActive(false, 0))
-                    rwyconfig[airport][rwyName0]["arr"] = true;
+                    message["rwyconfig"][airport][rwyName0]["arr"] = true;
                 if (runway.IsElementActive(true, 0))
-                    rwyconfig[airport][rwyName0]["dep"] = true;
+                    message["rwyconfig"][airport][rwyName0]["dep"] = true;
             }
 
             if (rwyName1 && *rwyName1 && strlen(rwyName1) <= 5) {
                 if (runway.IsElementActive(false, 1))
-                    rwyconfig[airport][rwyName1]["arr"] = true;
+                    message["rwyconfig"][airport][rwyName1]["arr"] = true;
                 if (runway.IsElementActive(true, 1))
-                    rwyconfig[airport][rwyName1]["dep"] = true;
+                    message["rwyconfig"][airport][rwyName1]["dep"] = true;
             }
 
             runway = SectorFileElementSelectNext(runway, EuroScopePlugIn::SECTOR_ELEMENT_RUNWAY);
         } while (runway.IsValid() && runwayCount < MAX_RUNWAYS);
 
+        PostJson(message);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("UpdateMyself exception: ") + e.what());
-        // Clear updates on error to prevent corrupted state
-        pendingUpdates.clear();
     } catch (...) {
         DisplayMessage("UpdateMyself: Unknown exception");
-        // Clear updates on error to prevent corrupted state
-        pendingUpdates.clear();
-    }
-}
-
-void VatEFSPlugin::PostUpdates()
-{
-    lastPostTime = std::time(NULL);
-
-    try {
-        // Limit the size of updates to prevent memory issues
-        const size_t MAX_UPDATES = 1000;
-        if (pendingUpdates.size() > MAX_UPDATES) {
-            DebugMessage("Too many pending updates, clearing old ones");
-            pendingUpdates.clear();
-            return;
-        }
-
-        auto updates = pendingUpdates;
-        pendingUpdates.clear();
-        DebugMessage("Posting updates " + std::to_string(updates.size()));
-        PostJson(updates);
-    } catch (const std::exception &e) {
-        DisplayMessage(std::string("PostUpdates exception: ") + e.what());
-        pendingUpdates.clear(); // Clear updates on error
-    } catch (...) {
-        DisplayMessage("PostUpdates: Unknown exception");
-        pendingUpdates.clear(); // Clear updates on error
     }
 }
 
@@ -536,26 +577,9 @@ bool VatEFSPlugin::FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan)
     }
 }
 
-void VatEFSPlugin::UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan)
+void VatEFSPlugin::UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan, nlohmann::json& message)
 {
     try {
-        // Limit the size of flight updates
-        if (pendingUpdates.size() > 1000) {
-            DebugMessage("Too many pending updates in UpdateRoute");
-            pendingUpdates.clear();
-        }
-
-        std::string callsign = FlightPlan.GetCallsign();
-        if (callsign.empty() || callsign.length() > 20) {
-            DisplayMessage("UpdateRoute: Invalid callsign");
-            return;
-        }
-
-        if (pendingUpdates.size() > 1000) {
-            DebugMessage("Too many pending updates, clearing old ones");
-            pendingUpdates.clear();
-        }
-
         EuroScopePlugIn::CFlightPlanData fpData = FlightPlan.GetFlightPlanData();
         if (!fpData.IsReceived()) return;
 
@@ -564,16 +588,15 @@ void VatEFSPlugin::UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan)
         const char *depRwy = fpData.GetDepartureRwy();
         const char *sidName = fpData.GetSidName();
 
-        // Safer string handling with explicit null checks and length limits
-        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) pendingUpdates[callsign]["arrRwy"] = arrRwy;
-        if (starName && *starName && strlen(starName) < 10) pendingUpdates[callsign]["star"] = starName;
-        if (depRwy && *depRwy && strlen(depRwy) < 5) pendingUpdates[callsign]["depRwy"] = depRwy;
-        if (sidName && *sidName && strlen(sidName) < 10) pendingUpdates[callsign]["sid"] = sidName;
+        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) message["arrRwy"] = arrRwy;
+        if (starName && *starName && strlen(starName) < 10) message["star"] = starName;
+        if (depRwy && *depRwy && strlen(depRwy) < 5) message["depRwy"] = depRwy;
+        if (sidName && *sidName && strlen(sidName) < 10) message["sid"] = sidName;
 
         // int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
         // if (ete > 0) {
         //     try {
-        //         pendingUpdates[callsign]["eta"] =
+        //         message["eta"] =
         //         std::format("{:%FT%TZ}", std::chrono::system_clock::now() + std::chrono::minutes(ete));
         //     } catch (const std::exception &e) {
         //         DisplayMessage(std::string("UpdateRoute format exception: ") + e.what());
@@ -759,7 +782,7 @@ void VatEFSPlugin::PostJson(const nlohmann::json& jsonData)
         closesocket(sock);
         WSACleanup();
         connectionError = "";
-        DisplayMessage(std::string("Sent UDP ") + std::to_string(jsonString.length()));
+        // DisplayMessage(std::string("Sent UDP ") + std::to_string(jsonString.length()));
     } catch (...) {
         connectionError = "Unknown exception in PostJson";
         if (sock != INVALID_SOCKET) {
