@@ -376,6 +376,76 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         DisplayMessage("Debug mode enabled");
         debug = true;
         return true;
+    } else if (subcommand == "assume") {
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign = remainder;
+        std::string::size_type space = remainder.find(' ');
+        if (space != std::string::npos)
+            callsign = remainder.substr(0, space);
+        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        if (callsign.empty()) {
+            DisplayMessage("Usage: .efs assume CALLSIGN");
+            return false;
+        }
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("Flight plan not found: " + callsign);
+            return false;
+        }
+        const char* handoffTarget = fp.GetHandoffTargetControllerCallsign();
+        const char* trackingCallsign = fp.GetTrackingControllerCallsign();
+        bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' &&
+            ControllerMyself().IsValid() &&
+            strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
+        bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
+        if (handoffToMe) {
+            fp.AcceptHandoff();
+            DisplayMessage("Accepted handoff for " + callsign);
+            return true;
+        }
+        if (untracked) {
+            bool ok = fp.StartTracking();
+            if (ok)
+                DisplayMessage("Started tracking " + callsign);
+            else
+                DisplayMessage("Failed to start tracking " + callsign);
+            return true;
+        }
+        DisplayMessage(callsign + " is already tracked by " + std::string(trackingCallsign));
+        return true;
+    } else if (subcommand == "transfer") {
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign = remainder;
+        std::string::size_type space = remainder.find(' ');
+        if (space != std::string::npos)
+            callsign = remainder.substr(0, space);
+        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        if (callsign.empty()) {
+            DisplayMessage("Usage: .efs transfer CALLSIGN");
+            return false;
+        }
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("Flight plan not found: " + callsign);
+            return false;
+        }
+        auto ctrData = fp.GetControllerAssignedData();
+        const char* nextCtr = fp.GetCoordinatedNextController();
+        bool hasNext = nextCtr && nextCtr[0] != '\0';
+        if (hasNext) {
+            bool ok = fp.InitiateHandoff(nextCtr);
+            if (ok)
+                DisplayMessage("Handoff initiated to " + std::string(nextCtr) + " for " + callsign);
+            else
+                DisplayMessage("Failed to initiate handoff for " + callsign);
+        } else {
+            bool ok = fp.EndTracking();
+            if (ok)
+                DisplayMessage("Ended tracking " + callsign);
+            else
+                DisplayMessage("Failed to end tracking " + callsign);
+        }
+        return true;
     } else if (subcommand == "scratch" || subcommand == "scratmp") {
         std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         std::string callsign;
