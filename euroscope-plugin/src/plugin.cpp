@@ -89,15 +89,53 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char* trackingController = FlightPlan.GetTrackingControllerCallsign();
         if (trackingController && strlen(trackingController) > 0 && strlen(trackingController) < 20) {
             out << " controller " << trackingController;
+            message["controller"] = trackingController;
         }
+        const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
+        if (handoffTargetController && strlen(handoffTargetController) > 0 && strlen(handoffTargetController) < 20) {
+            out << " handoffTargetController " << handoffTargetController;
+            message["handoffTargetController"] = handoffTargetController;
+        }
+        const char *nextController = FlightPlan.GetCoordinatedNextController();
+        if (nextController && strlen(nextController) > 0 && strlen(nextController) < 20) {
+            out << " nextController " << nextController;
+            message["nextController"] = nextController;
+        }
+
+        const char* aircraftType = fpData.GetAircraftFPType();
+        if (aircraftType && strlen(aircraftType) > 0 && strlen(aircraftType) < 20) {
+            message["aircraftType"] = aircraftType;
+        }
+        message["wakeTurbulence"] = std::string("") + fpData.GetAircraftWtc();
+
+        const char* origin = fpData.GetOrigin();
+        if (origin && strlen(origin) > 0 && strlen(origin) < 10) message["origin"] = origin;
+        const char* destination = fpData.GetDestination();
+        if (destination && strlen(destination) > 0 && strlen(destination) < 10) message["destination"] = destination;
+        message["flightRules"] = fpData.GetPlanType();
+        message["communicationType"] = std::string("") + fpData.GetCommunicationType();
+        // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
+        message["groundstate"] = FlightPlan.GetGroundState();
+        message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+
+        const char *arrRwy = fpData.GetArrivalRwy();
+        const char *starName = fpData.GetStarName();
+        const char *depRwy = fpData.GetDepartureRwy();
+        const char *sidName = fpData.GetSidName();
+
+        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) message["arrRwy"] = arrRwy;
+        if (starName && *starName && strlen(starName) < 10) message["star"] = starName;
+        if (depRwy && *depRwy && strlen(depRwy) < 5) message["depRwy"] = depRwy;
+        if (sidName && *sidName && strlen(sidName) < 10) message["sid"] = sidName;
+
 
         // int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
         // if (ete >= 0 && ete <= 1000) { // Reasonable ETE range
         //     out << " ete " << ete;
         // }
 
+
         DebugMessage(out.str());
-        UpdateRoute(FlightPlan, message);
         PostJson(message);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanFlightPlanDataUpdate exception: ") + e.what());
@@ -288,7 +326,6 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         //     }
         // }
         DebugMessage(out.str());
-        UpdateRoute(FlightPlan, message);
         PostJson(message);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanControllerAssignedDataUpdate exception: ") + e.what());
@@ -361,6 +398,31 @@ void VatEFSPlugin::OnControllerDisconnect (EuroScopePlugIn::CController Controll
     PostJson(message);
 }
 
+void VatEFSPlugin::OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget RadarTarget)
+{
+    if (disabled || !RadarTarget.IsValid()) return;
+    std::stringstream out;
+    out << "RadarTargetPositionUpdate " << RadarTarget.GetCallsign();
+    DebugMessage(out.str());
+    nlohmann::json message = nlohmann::json::object();
+    message["type"] = "radarTargetPositionUpdate";
+    message["callsign"] = RadarTarget.GetCallsign();
+    message["verticalSpeed"] = RadarTarget.GetVerticalSpeed();
+    message["gs"] = RadarTarget.GetGS();
+    auto position = RadarTarget.GetPosition();
+    if (position.IsValid()) {
+        message["latitude"] = position.GetPosition().m_Latitude;
+        message["longitude"] = position.GetPosition().m_Longitude;
+        message["altitude"] = position.GetPressureAltitude();
+        message["headingMagnetic"] = position.GetReportedHeading();
+        message["headingTrue"] = position.GetReportedHeadingTrueNorth();
+        message["squawk"] = position.GetSquawk();
+        message["transponderC"] = position.GetTransponderC();
+        message["transponderI"] = position.GetTransponderI();
+    }
+    PostJson(message);
+}
+
 bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 {
     std::string command = commandLine;
@@ -429,7 +491,6 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             DisplayMessage("Flight plan not found: " + callsign);
             return false;
         }
-        auto ctrData = fp.GetControllerAssignedData();
         const char* nextCtr = fp.GetCoordinatedNextController();
         bool hasNext = nextCtr && nextCtr[0] != '\0';
         if (hasNext) {
@@ -484,14 +545,14 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 void VatEFSPlugin::OnTimer(int counter)
 {
     try {
-        if (disabled && GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT) {
+        if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT || GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK)) {
             disabled = false;
             DebugMessage("EFS updates enabled");
             enabledTime = std::time(NULL);
             // Initialize Winsock and UDP receive socket
             InitializeWinsock();
             InitializeUdpReceiveSocket();
-        } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT) {
+        } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK) {
             disabled = true;
             DebugMessage("EFS updates disabled");
             
@@ -507,7 +568,8 @@ void VatEFSPlugin::OnTimer(int counter)
         ReceiveUdpMessages();
 
         if (std::time(NULL) - enabledTime < 10) return;
-        if (counter % 5 == 0) UpdateMyself();
+        // TODO temporarily disabled
+        // if (counter % 5 == 0) UpdateMyself();
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnTimer exception: ") + e.what());
     } catch (...) {
@@ -644,38 +706,6 @@ bool VatEFSPlugin::FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan)
     } catch (...) {
         DisplayMessage("FilterFlightPlan: Exception occurred");
         return false;
-    }
-}
-
-void VatEFSPlugin::UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan, nlohmann::json& message)
-{
-    try {
-        EuroScopePlugIn::CFlightPlanData fpData = FlightPlan.GetFlightPlanData();
-        if (!fpData.IsReceived()) return;
-
-        const char *arrRwy = fpData.GetArrivalRwy();
-        const char *starName = fpData.GetStarName();
-        const char *depRwy = fpData.GetDepartureRwy();
-        const char *sidName = fpData.GetSidName();
-
-        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) message["arrRwy"] = arrRwy;
-        if (starName && *starName && strlen(starName) < 10) message["star"] = starName;
-        if (depRwy && *depRwy && strlen(depRwy) < 5) message["depRwy"] = depRwy;
-        if (sidName && *sidName && strlen(sidName) < 10) message["sid"] = sidName;
-
-        // int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
-        // if (ete > 0) {
-        //     try {
-        //         message["eta"] =
-        //         std::format("{:%FT%TZ}", std::chrono::system_clock::now() + std::chrono::minutes(ete));
-        //     } catch (const std::exception &e) {
-        //         DisplayMessage(std::string("UpdateRoute format exception: ") + e.what());
-        //     }
-        // }
-    } catch (const std::exception &e) {
-        DisplayMessage(std::string("UpdateRoute exception: ") + e.what());
-    } catch (...) {
-        DisplayMessage("UpdateRoute: Unknown exception");
     }
 }
 

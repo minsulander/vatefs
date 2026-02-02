@@ -457,6 +457,9 @@ export const useEfsStore = defineStore("efs", () => {
     return {
         connected,
         getBays,
+        config,
+        strips,
+        gaps,
         getStripsBySection,
         getTopStrips,
         getBottomStrips,

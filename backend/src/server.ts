@@ -1,5 +1,6 @@
 import express from "express"
 import path from "path"
+import fs from "fs"
 import logRequests from "morgan"
 import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
@@ -10,7 +11,7 @@ import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDe
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign } from "./config.js"
+import { setMyCallsign, staticConfig } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 
 const __dirname = path.dirname(__filename)
@@ -19,6 +20,57 @@ const port = 17770
 const udpInPort = 17771
 const udpOutPort = 17772
 const udpHost = "127.0.0.1"
+
+// Parse command-line arguments
+function parseArgs(): { airport?: string; callsign?: string; recordFile?: string } {
+    const args = process.argv.slice(2)
+    const result: { airport?: string; callsign?: string; recordFile?: string } = {}
+
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--airport' && args[i + 1]) {
+            result.airport = args[++i]
+        } else if (args[i] === '--callsign' && args[i + 1]) {
+            result.callsign = args[++i]
+        } else if (args[i] === '--record' && args[i + 1]) {
+            result.recordFile = args[++i]
+        }
+    }
+
+    return result
+}
+
+const cliArgs = parseArgs()
+
+// Apply command-line config overrides
+if (cliArgs.airport) {
+    staticConfig.ourAirport = cliArgs.airport
+    console.log(`Airport set to: ${cliArgs.airport}`)
+}
+if (cliArgs.callsign) {
+    staticConfig.myCallsign = cliArgs.callsign
+    console.log(`Callsign set to: ${cliArgs.callsign}`)
+}
+
+// Recording state
+let recordStream: fs.WriteStream | null = null
+let recordStartTime: number | null = null
+
+if (cliArgs.recordFile) {
+    recordStream = fs.createWriteStream(cliArgs.recordFile, { flags: 'a' })
+    console.log(`Recording UDP messages to: ${cliArgs.recordFile}`)
+}
+
+function recordMessage(message: string) {
+    if (!recordStream) return
+
+    const now = Date.now()
+    if (recordStartTime === null) {
+        recordStartTime = now
+    }
+
+    const relativeTime = now - recordStartTime
+    recordStream.write(`${relativeTime}\t${message}\n`)
+}
 
 // Initialize store with mock data
 store.loadMockData()
@@ -263,8 +315,12 @@ function sendUdp(udpString: string) {
 // UDP socket for receiving
 const udpIn = dgram.createSocket("udp4")
 udpIn.on("message", (msg, rinfo) => {
+    const text = msg.toString("utf8").trim()
+    console.log("UDP:", text)
+
+    // Record the message if recording is enabled
+    recordMessage(text)
     try {
-        const text = msg.toString("utf8").trim()
         const data = JSON.parse(text)
 
         // Handle myselfUpdate to set our callsign
@@ -300,12 +356,11 @@ udpIn.on("message", (msg, rinfo) => {
         } else {
             // Not a flight-related plugin message, forward raw JSON to clients
             // (e.g., controllerPositionUpdate, myselfUpdate)
-            wsClients.forEach((client) => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(text)
-                }
-            })
-            console.log("UDP -> WS:", text)
+            // wsClients.forEach((client) => {
+            //     if (client.readyState === WebSocket.OPEN) {
+            //         client.send(text)
+            //     }
+            // })
         }
     } catch (err) {
         console.error("Failed to parse UDP message as JSON:", err)

@@ -44,7 +44,8 @@ function ctrUpdate(
  * - Bay 3: TAXI (all taxiing aircraft)
  * - Bay 4: PENDING CLR (no clearance), CLEARED (has clearance), START&PUSH (de-ice/push)
  */
-export const mockPluginMessages: PluginMessage[] = [
+export const mockPluginMessages: PluginMessage[] = []
+const foobar = [
     // === INBOUND: Arrivals not yet assumed ===
 
     // SAS911 - Arrival from Oslo, not yet on frequency

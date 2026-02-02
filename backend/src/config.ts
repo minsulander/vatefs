@@ -330,7 +330,7 @@ export const staticConfig: EfsStaticConfig = {
             sectionId: 'taxi',
             bayId: 'bay3',
             direction: 'arrival',
-            groundstates: ['TAXI'],
+            groundstates: ['TXIN'],
             priority: 30
         },
 

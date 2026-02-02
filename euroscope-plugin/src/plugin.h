@@ -22,6 +22,7 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan, const char * sSenderController, const char * sTargetController);
     void OnControllerPositionUpdate (EuroScopePlugIn::CController Controller);
     void OnControllerDisconnect (EuroScopePlugIn::CController Controller);
+    void OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget RadarTarget);
 
     bool OnCompileCommand(const char *commandLine);
     void OnTimer(int counter);
@@ -32,7 +33,6 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
-    void UpdateRoute(EuroScopePlugIn::CFlightPlan FlightPlan, nlohmann::json& message);
 
     bool disabled;
     bool debug;

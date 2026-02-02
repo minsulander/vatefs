@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 
 import App from './App.vue'
 import router from './router'
+import { useEfsStore } from './store/efs'
 
 const app = createApp(App)
 
@@ -28,3 +29,6 @@ app.mount('#app')
 
 import { constants } from "@vatefs/common"
 console.log("EFS version", constants.version)
+
+const efs = useEfsStore()
+;(window as any).efs = efs

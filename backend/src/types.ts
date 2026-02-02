@@ -4,7 +4,7 @@
  * Ground state values from EuroScope
  * Empty string means no groundstate set (aircraft not on ground or state unknown)
  */
-export type GroundState = '' | 'NSTS' | 'STUP' | 'PUSH' | 'TAXI' | 'DEPA' | 'ARR' | 'LINEUP' | 'ONFREQ' | 'DE-ICE'
+export type GroundState = '' | 'NSTS' | 'STUP' | 'PUSH' | 'TAXI' | 'TXIN' | 'DEPA' | 'ARR' | 'LINEUP' | 'ONFREQ' | 'DE-ICE'
 
 /**
  * Raw flight data built from EuroScope plugin messages.
