@@ -9,17 +9,17 @@ Run backend with recording:
 
 ```sh
 cd backend
-npm start -- --airport ESSA --callsign ESSA_W_TWR --record ./session.log
+npm start -- --airport ESGG --callsign ESGG_TWR --record ./logs/esgg.log
 ```
 
 Stop, rerun without recording:
 
 ```sh
-npm start -- --airport ESSA --callsign ESSA_W_TWR
+npm start -- --airport ESGG --callsign ESGG_TWR
 ```
 
 Playback:
 
 ```sh
-npm run playback -- ./session.log --speed 2.0
+npm run playback -- ./logs/esgg.log --speed 2.0
 ```
