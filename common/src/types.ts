@@ -43,6 +43,9 @@ export interface FlightStrip {
     sectionId: string
     position: number
     bottom: boolean            // Whether strip is in bottom zone (pinned)
+
+    // Default action (if any) - shown as button text
+    defaultAction?: string     // e.g., "ASSUME", "CTL", "CTO"
 }
 
 export interface Section {

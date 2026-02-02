@@ -81,14 +81,14 @@
       </div>
     </div>
 
-    <!-- Right section: Action button (always visible) -->
-    <div class="strip-right">
+    <!-- Right section: Action button (only shown when there's a default action) -->
+    <div v-if="strip.defaultAction" class="strip-right">
       <button
         class="action-button"
         @click.stop="onActionClick"
         @touchend.stop="onActionTouch"
       >
-        <span class="action-icon">›</span>
+        <span class="action-text">{{ strip.defaultAction }}</span>
       </button>
     </div>
   </div>
@@ -462,12 +462,16 @@ function onDragAreaTouchCancel() {
 
 // Action button handlers
 function onActionClick() {
-  store.moveStripToNextSection(props.strip.id)
+  if (props.strip.defaultAction) {
+    store.sendStripAction(props.strip.id, props.strip.defaultAction)
+  }
 }
 
 function onActionTouch(event: TouchEvent) {
   event.preventDefault()
-  store.moveStripToNextSection(props.strip.id)
+  if (props.strip.defaultAction) {
+    store.sendStripAction(props.strip.id, props.strip.defaultAction)
+  }
 }
 
 function onStripClick() {
@@ -749,9 +753,11 @@ function onStripClick() {
 }
 
 .action-button {
-  width: 28px;
+  min-width: 36px;
+  width: auto;
+  padding: 0 4px;
   border: none;
-  background: linear-gradient(to bottom, #f8f8f8, #e0e0e0);
+  background: linear-gradient(to bottom, #e8e8e8, #c8c8c8);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -761,58 +767,17 @@ function onStripClick() {
 }
 
 .action-button:hover {
-  background: linear-gradient(to bottom, #fff, #e8e8e8);
+  background: linear-gradient(to bottom, #f0f0f0, #d8d8d8);
 }
 
 .action-button:active {
-  background: linear-gradient(to bottom, #d0d0d0, #c0c0c0);
+  background: linear-gradient(to bottom, #c0c0c0, #a8a8a8);
 }
 
-.action-icon {
-  font-size: 18px;
+.action-text {
+  font-size: 9px;
   font-weight: bold;
-  color: #555;
-  line-height: 1;
-}
-
-/* Strip type specific action button colors */
-.strip-departure .action-button {
-  background: linear-gradient(to bottom, #5a9be8, #3b7dd8);
-}
-.strip-departure .action-button:hover {
-  background: linear-gradient(to bottom, #6aabf8, #4b8de8);
-}
-.strip-departure .action-button .action-icon {
-  color: #fff;
-}
-
-.strip-arrival .action-button {
-  background: linear-gradient(to bottom, #eab530, #daa520);
-}
-.strip-arrival .action-button:hover {
-  background: linear-gradient(to bottom, #fac540, #eab530);
-}
-.strip-arrival .action-button .action-icon {
-  color: #fff;
-}
-
-.strip-local .action-button {
-  background: linear-gradient(to bottom, #dc5454, #cc4444);
-}
-.strip-local .action-button:hover {
-  background: linear-gradient(to bottom, #ec6464, #dc5454);
-}
-.strip-local .action-button .action-icon {
-  color: #fff;
-}
-
-.strip-vfr .action-button {
-  background: linear-gradient(to bottom, #4dae4d, #3d9e3d);
-}
-.strip-vfr .action-button:hover {
-  background: linear-gradient(to bottom, #5dbe5d, #4dae4d);
-}
-.strip-vfr .action-button .action-icon {
-  color: #fff;
+  color: #333;
+  letter-spacing: 0.3px;
 }
 </style>

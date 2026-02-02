@@ -77,7 +77,7 @@ export const useEfsStore = defineStore("efs", () => {
                         handleSectionMessage(message.bayId, message.section)
                         break
                     default:
-                        console.log(`received ${message.type ?? 'unknown'} server message:`, message)
+                        console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
                 }
             } else {
                 console.log(`received ${message.type ?? 'unknown'} message:`, message)
@@ -430,19 +430,12 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
-    function moveStripToNextSection(stripId: string) {
-        const strip = strips.value.get(stripId)
-        if (!strip) return
-
-        const bay = config.value.bays.find(b => b.id === strip.bayId)
-        if (!bay) return
-
-        const currentSectionIndex = bay.sections.findIndex(s => s.id === strip.sectionId)
-        if (currentSectionIndex === -1 || currentSectionIndex >= bay.sections.length - 1) return
-
-        const nextSection = bay.sections[currentSectionIndex + 1]
-        if (!nextSection) return
-        moveStripToSection(stripId, strip.bayId, nextSection.id)
+    function sendStripAction(stripId: string, action: string) {
+        sendMessage({
+            type: 'stripAction',
+            stripId,
+            action
+        })
     }
 
     function recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
@@ -469,13 +462,13 @@ export const useEfsStore = defineStore("efs", () => {
         getBottomStrips,
         getGapsForSection,
         moveStripToSection,
-        moveStripToNextSection,
         moveStripToBottom,
         setGapAtIndex,
         removeGapAtIndex,
         getGapAtIndex,
         setSectionHeight,
         broadcastSectionHeights,
+        sendStripAction,
         GAP_BUFFER,
         sendRequest
     }

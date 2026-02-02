@@ -9,6 +9,9 @@ import { constants, isClientMessage } from "@vatefs/common"
 import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
+import { flightStore } from "./flightStore.js"
+import { setMyCallsign } from "./config.js"
+import type { MyselfUpdateMessage } from "./types.js"
 
 const __dirname = path.dirname(__filename)
 
@@ -195,6 +198,22 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
+        case 'stripAction': {
+            const strip = store.getStrip(message.stripId)
+            if (strip) {
+                // TODO: Send action to EuroScope plugin via UDP
+                console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
+                console.log(`  Flight: ${strip.adep} -> ${strip.ades}`)
+                console.log(`  Current section: ${strip.sectionId}`)
+
+                // Placeholder for future UDP message to plugin
+                // sendUdp(JSON.stringify({ type: 'action', callsign: strip.callsign, action: message.action }))
+            } else {
+                console.log(`[ACTION] ${message.action} on unknown strip ${message.stripId}`)
+            }
+            break
+        }
     }
 }
 
@@ -245,13 +264,49 @@ function sendUdp(udpString: string) {
 const udpIn = dgram.createSocket("udp4")
 udpIn.on("message", (msg, rinfo) => {
     try {
-        const message = msg.toString("utf8").trim()
-        wsClients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(message)
+        const text = msg.toString("utf8").trim()
+        const data = JSON.parse(text)
+
+        // Handle myselfUpdate to set our callsign
+        if (data.type === 'myselfUpdate') {
+            const msg = data as MyselfUpdateMessage
+            setMyCallsign(msg.callsign)
+            console.log(`My callsign set to: ${msg.callsign}`)
+            // Forward to clients
+            wsClients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(text)
+                }
+            })
+            return
+        }
+
+        // Try to process as plugin message
+        const result = store.tryProcessPluginMessage(data)
+
+        if (result) {
+            // Plugin message was processed
+            if (result.deleteStripId) {
+                broadcastStripDelete(result.deleteStripId)
+                console.log(`UDP: Flight ${result.deleteStripId} disconnected`)
+            } else if (result.strip) {
+                broadcastStrip(result.strip)
+                if (result.sectionChanged) {
+                    console.log(`UDP: Strip ${result.strip.callsign} moved to ${result.strip.sectionId}`)
+                } else {
+                    console.log(`UDP: Strip ${result.strip.callsign} updated`)
+                }
             }
-        })
-        console.log("UDP -> WS:", message)
+        } else {
+            // Not a flight-related plugin message, forward raw JSON to clients
+            // (e.g., controllerPositionUpdate, myselfUpdate)
+            wsClients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(text)
+                }
+            })
+            console.log("UDP -> WS:", text)
+        }
     } catch (err) {
         console.error("Failed to parse UDP message as JSON:", err)
         console.error("Raw message:", msg.toString("utf8"))

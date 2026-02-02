@@ -1,2 +1,5 @@
+                                                                                                                                                                                            
+  - Plugin needs to send origin, destination, aircraftType in flightPlanDataUpdate                                                                                                          
+
 
 ...

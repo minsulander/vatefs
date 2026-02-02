@@ -1,5 +1,9 @@
 import type { EfsConfig, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
-import { mockConfig, mockStrips } from "./mockData.js"
+import { staticConfig } from "./config.js"
+import { flightStore } from "./flightStore.js"
+import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
+import type { PluginMessage } from "./types.js"
+import { isPluginMessage } from "./types.js"
 
 const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
 
@@ -31,15 +35,81 @@ class EfsStore {
 
     // Initialize store with mock data
     loadMockData() {
-        // Deep clone config to avoid mutations to original
-        this.config = JSON.parse(JSON.stringify(mockConfig))
+        // Load config from static config
+        this.config = JSON.parse(JSON.stringify(staticConfig.layout))
 
-        // Load strips
-        mockStrips.forEach(strip => {
-            this.strips.set(strip.id, { ...strip })
-        })
+        // Clear existing data
+        this.strips.clear()
+        this.gaps.clear()
+        flightStore.clear()
+
+        // Process mock plugin messages through the flight store
+        for (const message of mockPluginMessages) {
+            const result = flightStore.processMessage(message)
+            if (result.strip) {
+                this.strips.set(result.strip.id, result.strip)
+            }
+        }
+
+        // Apply backend state updates (clearedToLand, airborne flags)
+        for (const update of mockBackendStateUpdates) {
+            const result = flightStore.setBackendFlags(update.callsign, {
+                clearedToLand: update.clearedToLand,
+                airborne: update.airborne
+            })
+            if (result.strip) {
+                this.strips.set(result.strip.id, result.strip)
+            }
+        }
 
         console.log(`Store loaded: ${this.strips.size} strips, ${this.config.bays.length} bays`)
+    }
+
+    /**
+     * Process a plugin message and return any resulting strip changes
+     */
+    processPluginMessage(message: PluginMessage): {
+        strip?: FlightStrip
+        deleteStripId?: string
+        sectionChanged?: boolean
+        previousSection?: { bayId: string; sectionId: string }
+    } {
+        const result = flightStore.processMessage(message)
+
+        if (result.deleteStripId) {
+            this.strips.delete(result.deleteStripId)
+            return { deleteStripId: result.deleteStripId }
+        }
+
+        if (result.strip) {
+            // If section changed, we need to recompute positions in both old and new sections
+            if (result.sectionChanged && result.previousSection) {
+                this.recomputePositions(
+                    result.previousSection.bayId,
+                    result.previousSection.sectionId,
+                    false
+                )
+            }
+
+            this.strips.set(result.strip.id, result.strip)
+            return {
+                strip: result.strip,
+                sectionChanged: result.sectionChanged,
+                previousSection: result.previousSection
+            }
+        }
+
+        return {}
+    }
+
+    /**
+     * Check if data is a plugin message and process it
+     */
+    tryProcessPluginMessage(data: unknown): ReturnType<typeof this.processPluginMessage> | null {
+        if (isPluginMessage(data)) {
+            return this.processPluginMessage(data)
+        }
+        return null
     }
 
     // Get full config (for sending to clients)
@@ -105,6 +175,9 @@ class EfsStore {
     ): MoveStripResult | null {
         const strip = this.strips.get(stripId)
         if (!strip) return null
+
+        // Notify flight store about manual move (prevents auto-move back)
+        flightStore.setStripAssignment(strip.callsign, targetBayId, targetSectionId, position ?? 0, isBottom)
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId

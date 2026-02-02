@@ -70,7 +70,13 @@ export interface SetSectionHeightMessage {
     height: number
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage
+export interface StripActionMessage {
+    type: 'stripAction'
+    stripId: string
+    action: string             // e.g., "ASSUME", "CTL", "CTO"
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage
 
 // Type guards for message parsing
 
@@ -88,5 +94,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction'
 }
