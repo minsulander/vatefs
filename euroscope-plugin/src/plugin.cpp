@@ -8,8 +8,8 @@
 #include <sstream>
 #include <string>
 #include <windows.h>
-//#include <winsock2.h>
-//#include <ws2tcpip.h>
+// #include <winsock2.h>
+// #include <ws2tcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -76,7 +76,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         std::stringstream out;
         out << "FlightPlanDataUpdate " << callsign;
-        
+
         // Safe state checks
         int state = FlightPlan.GetState();
         int fpstate = FlightPlan.GetFPState();
@@ -86,7 +86,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         if (FlightPlan.GetSimulated()) out << " simulated";
 
-        const char* trackingController = FlightPlan.GetTrackingControllerCallsign();
+        const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
         if (trackingController && strlen(trackingController) < 20) {
             out << " controller " << trackingController;
             message["controller"] = trackingController;
@@ -102,15 +102,15 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             message["nextController"] = nextController;
         }
 
-        const char* aircraftType = fpData.GetAircraftFPType();
+        const char *aircraftType = fpData.GetAircraftFPType();
         if (aircraftType && strlen(aircraftType) > 0 && strlen(aircraftType) < 20) {
             message["aircraftType"] = aircraftType;
         }
         message["wakeTurbulence"] = std::string("") + fpData.GetAircraftWtc();
 
-        const char* origin = fpData.GetOrigin();
+        const char *origin = fpData.GetOrigin();
         if (origin && strlen(origin) < 10) message["origin"] = origin;
-        const char* destination = fpData.GetDestination();
+        const char *destination = fpData.GetDestination();
         if (destination && strlen(destination) < 10) message["destination"] = destination;
         message["flightRules"] = fpData.GetPlanType();
         message["communicationType"] = std::string("") + fpData.GetCommunicationType();
@@ -136,7 +136,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
 
         DebugMessage(out.str());
-        PostJson(message);
+        PostJson(message, "OnFlightPlanFlightPlanDataUpdate");
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanFlightPlanDataUpdate exception: ") + e.what());
     } catch (...) {
@@ -156,8 +156,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             return;
         }
 
-        if (DataType < EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK || 
-            DataType > EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO) {
+        if (DataType < EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK || DataType > EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO) {
             DebugMessage("Invalid DataType received: " + std::to_string(DataType));
             return;
         }
@@ -175,11 +174,12 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             out << " controller " << controllerCallsign;
         }
 
-        const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData = FlightPlan.GetControllerAssignedData();
+        const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData =
+        FlightPlan.GetControllerAssignedData();
 
         switch (DataType) {
         case EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK: {
-            const char* squawk = ctrData.GetSquawk();
+            const char *squawk = ctrData.GetSquawk();
             if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
                 out << " squawk " << squawk;
                 message["squawk"] = squawk;
@@ -211,18 +211,18 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             out << " comm " << ctrData.GetCommunicationType();
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_SCRATCH_PAD_STRING: {
-            const char* scratchStr = ctrData.GetScratchPadString();
+            const char *scratchStr = ctrData.GetScratchPadString();
             if (!scratchStr) return;
-            
+
             // Limit scratch pad string length
             if (strlen(scratchStr) > 50) {
                 DebugMessage("Scratch pad string too long: " + std::string(scratchStr));
                 return;
             }
-            
+
             std::string scratch = scratchStr;
             out << " scratch " << scratch;
-            
+
             // Safe string comparisons
             if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
                 message["groundstate"] = scratch;
@@ -308,7 +308,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             break;
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO: {
-            const char* directTo = ctrData.GetDirectToPointName();
+            const char *directTo = ctrData.GetDirectToPointName();
             if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
                 out << " direct " << directTo;
                 message["direct"] = directTo;
@@ -327,7 +327,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         //     }
         // }
         DebugMessage(out.str());
-        PostJson(message);
+        PostJson(message, "OnFlightPlanControllerAssignedDataUpdate");
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanControllerAssignedDataUpdate exception: ") + e.what());
     } catch (...) {
@@ -344,10 +344,12 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
     message["callsign"] = FlightPlan.GetCallsign();
-    PostJson(message);
+    PostJson(message, "OnFlightPlanDisconnect");
 }
 
-void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan, const char * sSenderController, const char * sTargetController) 
+void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan FlightPlan,
+                                                 const char *sSenderController,
+                                                 const char *sTargetController)
 {
     if (disabled || !FilterFlightPlan(FlightPlan)) return;
     std::stringstream out;
@@ -364,10 +366,10 @@ void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan Fl
         message["sender"] = sSenderController;
     if (sTargetController && strlen(sTargetController) > 0 && strlen(sTargetController) < 20)
         message["target"] = sTargetController;
-    PostJson(message);
+    PostJson(message, "OnFlightPlanFlightStripPushed");
 }
 
-void VatEFSPlugin::OnControllerPositionUpdate (EuroScopePlugIn::CController Controller)
+void VatEFSPlugin::OnControllerPositionUpdate(EuroScopePlugIn::CController Controller)
 {
     if (disabled) return;
     // std::stringstream out;
@@ -384,10 +386,10 @@ void VatEFSPlugin::OnControllerPositionUpdate (EuroScopePlugIn::CController Cont
     message["sector"] = Controller.GetSectorFileName();
     message["controller"] = Controller.IsController();
     message["me"] = std::string(Controller.GetCallsign()) == std::string(ControllerMyself().GetCallsign());
-    PostJson(message);
+    PostJson(message, "OnControllerPositionUpdate");
 }
 
-void VatEFSPlugin::OnControllerDisconnect (EuroScopePlugIn::CController Controller)
+void VatEFSPlugin::OnControllerDisconnect(EuroScopePlugIn::CController Controller)
 {
     if (disabled) return;
     std::stringstream out;
@@ -396,10 +398,10 @@ void VatEFSPlugin::OnControllerDisconnect (EuroScopePlugIn::CController Controll
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "controllerDisconnect";
     message["callsign"] = Controller.GetCallsign();
-    PostJson(message);
+    PostJson(message, "OnControllerDisconnect");
 }
 
-void VatEFSPlugin::OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget RadarTarget)
+void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget RadarTarget)
 {
     if (disabled || !RadarTarget.IsValid()) return;
     // std::stringstream out;
@@ -423,19 +425,18 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget Ra
     }
     auto fp = RadarTarget.GetCorrelatedFlightPlan();
     if (fp.IsValid()) {
-        const char* trackingCallsign = fp.GetTrackingControllerCallsign();
+        const char *trackingCallsign = fp.GetTrackingControllerCallsign();
         if (trackingCallsign && strlen(trackingCallsign) < 20) {
             message["controller"] = trackingCallsign;
         }
     }
-    PostJson(message);
+    PostJson(message, "OnRadarTargetPositionUpdate");
 }
 
 bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 {
     std::string command = commandLine;
-    if (command.length() < 5 || command.compare(0, 5, ".efs ") != 0)
-        return false;
+    if (command.length() < 5 || command.compare(0, 5, ".efs ") != 0) return false;
     std::string rest = command.substr(5);
 
     // First word is subcommand
@@ -450,9 +451,9 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         std::string callsign = remainder;
         std::string::size_type space = remainder.find(' ');
-        if (space != std::string::npos)
-            callsign = remainder.substr(0, space);
-        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        if (space != std::string::npos) callsign = remainder.substr(0, space);
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
         if (callsign.empty()) {
             DisplayMessage("Usage: .efs assume CALLSIGN");
             return false;
@@ -462,11 +463,10 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             DisplayMessage("Flight plan not found: " + callsign);
             return false;
         }
-        const char* handoffTarget = fp.GetHandoffTargetControllerCallsign();
-        const char* trackingCallsign = fp.GetTrackingControllerCallsign();
-        bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' &&
-            ControllerMyself().IsValid() &&
-            strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
+        const char *handoffTarget = fp.GetHandoffTargetControllerCallsign();
+        const char *trackingCallsign = fp.GetTrackingControllerCallsign();
+        bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
+                           strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
         bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
         if (handoffToMe) {
             fp.AcceptHandoff();
@@ -487,9 +487,9 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         std::string callsign = remainder;
         std::string::size_type space = remainder.find(' ');
-        if (space != std::string::npos)
-            callsign = remainder.substr(0, space);
-        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        if (space != std::string::npos) callsign = remainder.substr(0, space);
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
         if (callsign.empty()) {
             DisplayMessage("Usage: .efs transfer CALLSIGN");
             return false;
@@ -499,7 +499,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             DisplayMessage("Flight plan not found: " + callsign);
             return false;
         }
-        const char* nextCtr = fp.GetCoordinatedNextController();
+        const char *nextCtr = fp.GetCoordinatedNextController();
         bool hasNext = nextCtr && nextCtr[0] != '\0';
         if (hasNext) {
             bool ok = fp.InitiateHandoff(nextCtr);
@@ -526,7 +526,8 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             callsign = remainder.substr(0, callEnd);
             content = remainder.substr(callEnd + 1);
         }
-        for (auto& c : callsign) c = (char)std::toupper((unsigned char)c);
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
         auto fp = FlightPlanSelect(callsign.c_str());
         if (!fp.IsValid()) {
             DisplayMessage("Flight plan not found: " + callsign);
@@ -535,7 +536,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         bool resetAfterSet = (subcommand == "scratmp");
         std::string originalScratch;
         if (resetAfterSet) {
-            const char* p = fp.GetControllerAssignedData().GetScratchPadString();
+            const char *p = fp.GetControllerAssignedData().GetScratchPadString();
             originalScratch = p ? p : "";
         }
         bool success = fp.GetControllerAssignedData().SetScratchPadString(content.c_str());
@@ -543,8 +544,10 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             success = fp.GetControllerAssignedData().SetScratchPadString(originalScratch.c_str());
             if (!success) DisplayMessage("Failed to reset scratch pad for " + callsign);
         }
-        if (!success) DisplayMessage("Failed to set scratch pad for " + callsign);
-        else DisplayMessage("Scratch pad set for " + callsign + ": " + content);
+        if (!success)
+            DisplayMessage("Failed to set scratch pad for " + callsign);
+        else
+            DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
     }
     return false;
@@ -553,17 +556,19 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 void VatEFSPlugin::OnTimer(int counter)
 {
     try {
-        if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT || GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK)) {
+        if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT ||
+                         GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK)) {
             disabled = false;
             DebugMessage("EFS updates enabled");
             enabledTime = std::time(NULL);
             // Initialize Winsock and UDP receive socket
             InitializeWinsock();
             InitializeUdpReceiveSocket();
-        } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK) {
+        } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT &&
+                   GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK) {
             disabled = true;
             DebugMessage("EFS updates disabled");
-            
+
             // Cleanup UDP receive socket
             CleanupUdpReceiveSocket();
             CleanupWinsock();
@@ -623,25 +628,25 @@ void VatEFSPlugin::UpdateMyself()
              SectorFileElementSelectFirst(EuroScopePlugIn::SECTOR_ELEMENT_AIRPORT);
              airport.IsValid() && airportCount < MAX_AIRPORTS;
              airport = SectorFileElementSelectNext(airport, EuroScopePlugIn::SECTOR_ELEMENT_AIRPORT)) {
-            
+
             airportCount++;
             const char *airportName = airport.GetName();
             if (!airportName || !*airportName || strlen(airportName) > 10) continue;
 
             std::string airportStr = airportName;
-            airportStr.erase(std::remove_if(airportStr.begin(), airportStr.end(), ::isspace), airportStr.end());
+            airportStr.erase(std::remove_if(airportStr.begin(), airportStr.end(), ::isspace),
+                             airportStr.end());
             if (airportStr.empty()) continue;
 
-            if (airport.IsElementActive(false))
-                message["rwyconfig"][airportStr]["arr"] = true;
-            if (airport.IsElementActive(true))
-                message["rwyconfig"][airportStr]["dep"] = true;
+            if (airport.IsElementActive(false)) message["rwyconfig"][airportStr]["arr"] = true;
+            if (airport.IsElementActive(true)) message["rwyconfig"][airportStr]["dep"] = true;
         }
 
         // Safe runway iteration with count limit
         int runwayCount = 0;
         const int MAX_RUNWAYS = 1000;
-        EuroScopePlugIn::CSectorElement runway = SectorFileElementSelectFirst(EuroScopePlugIn::SECTOR_ELEMENT_RUNWAY);
+        EuroScopePlugIn::CSectorElement runway =
+        SectorFileElementSelectFirst(EuroScopePlugIn::SECTOR_ELEMENT_RUNWAY);
         if (!runway.IsValid()) {
             return;
         }
@@ -676,7 +681,7 @@ void VatEFSPlugin::UpdateMyself()
             runway = SectorFileElementSelectNext(runway, EuroScopePlugIn::SECTOR_ELEMENT_RUNWAY);
         } while (runway.IsValid() && runwayCount < MAX_RUNWAYS);
 
-        PostJson(message);
+        PostJson(message, "UpdateMyself");
     } catch (const std::exception &e) {
         DisplayMessage(std::string("UpdateMyself exception: ") + e.what());
     } catch (...) {
@@ -698,18 +703,18 @@ bool VatEFSPlugin::FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan)
 {
     try {
         if (!FlightPlan.IsValid()) return false;
-        
+
         EuroScopePlugIn::CFlightPlanData fpData = FlightPlan.GetFlightPlanData();
         if (!fpData.IsReceived()) return false;
-        
-        const char* origin = fpData.GetOrigin();
-        const char* destination = fpData.GetDestination();
+
+        const char *origin = fpData.GetOrigin();
+        const char *destination = fpData.GetDestination();
         if (!origin || !destination || !*origin || !*destination) return false;
-        
+
         // Safe string comparison with length check
         if (strlen(origin) < 2 || strlen(destination) < 2) return false;
         if (strncmp(origin, "ES", 2) != 0 && strncmp(destination, "ES", 2) != 0) return false;
-        
+
         return true;
     } catch (...) {
         DisplayMessage("FilterFlightPlan: Exception occurred");
@@ -777,13 +782,13 @@ void VatEFSPlugin::InitializeUdpReceiveSocket()
         localAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
         // Bind socket
-        if (bind(sock, (sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
+        if (bind(sock, (sockaddr *)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
             DisplayMessage("UDP bind failed: " + std::to_string(WSAGetLastError()));
             closesocket(sock);
             return;
         }
 
-        udpReceiveSocket = reinterpret_cast<void*>(sock);
+        udpReceiveSocket = reinterpret_cast<void *>(sock);
         DebugMessage("UDP receive socket initialized on port 17772");
     } catch (...) {
         DisplayMessage("InitializeUdpReceiveSocket: Unknown exception");
@@ -811,8 +816,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
         int fromAddrLen = sizeof(fromAddr);
 
         // Try to receive (non-blocking, so it returns immediately if no data)
-        int recvResult = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
-                                 (sockaddr*)&fromAddr, &fromAddrLen);
+        int recvResult = recvfrom(sock, buffer, sizeof(buffer) - 1, 0, (sockaddr *)&fromAddr, &fromAddrLen);
 
         if (recvResult == SOCKET_ERROR) {
             int error = WSAGetLastError();
@@ -842,7 +846,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
     }
 }
 
-void VatEFSPlugin::PostJson(const nlohmann::json& jsonData)
+void VatEFSPlugin::PostJson(const nlohmann::json &jsonData, const char *whereaboutsInDaCode)
 {
     std::stringstream err;
     SOCKET sock = INVALID_SOCKET;
@@ -877,8 +881,8 @@ void VatEFSPlugin::PostJson(const nlohmann::json& jsonData)
         std::string jsonString = jsonData.dump() + "\n";
 
         // Send UDP packet
-        int sendResult = sendto(sock, jsonString.c_str(), static_cast<int>(jsonString.length()),
-                                0, (sockaddr*)&destAddr, sizeof(destAddr));
+        int sendResult = sendto(sock, jsonString.c_str(), static_cast<int>(jsonString.length()), 0,
+                                (sockaddr *)&destAddr, sizeof(destAddr));
         if (sendResult == SOCKET_ERROR) {
             err << "Send failed: " << WSAGetLastError();
             connectionError = err.str();
@@ -891,8 +895,14 @@ void VatEFSPlugin::PostJson(const nlohmann::json& jsonData)
         WSACleanup();
         connectionError = "";
         // DisplayMessage(std::string("Sent UDP ") + std::to_string(jsonString.length()));
+    } catch (const std::exception &e) {
+        connectionError = "Exception in PostJson at " + std::string(whereaboutsInDaCode) + ": " + e.what();
+        if (sock != INVALID_SOCKET) {
+            closesocket(sock);
+            WSACleanup();
+        }
     } catch (...) {
-        connectionError = "Unknown exception in PostJson";
+        connectionError = "Unknown exception in PostJson at " + std::string(whereaboutsInDaCode);
         if (sock != INVALID_SOCKET) {
             closesocket(sock);
             WSACleanup();

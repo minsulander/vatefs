@@ -46,6 +46,6 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void InitializeUdpReceiveSocket();
     void CleanupUdpReceiveSocket();
     void ReceiveUdpMessages();
-    void PostJson(const nlohmann::json& jsonData);
+    void PostJson(const nlohmann::json& jsonData, const char *whereaboutsInDaCode);
 };
 } // namespace VatEFS
