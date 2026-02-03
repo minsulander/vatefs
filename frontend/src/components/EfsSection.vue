@@ -106,13 +106,14 @@ const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.se
 const sectionStyle = computed(() => {
   // Last section always flexes to fill remaining space
   if (props.isLastSection) {
-    return { flex: '1 1 auto' }
+    return { flex: '1 1 auto', minHeight: '80px' }
   }
-  // Other sections: apply stored height but allow shrinking if viewport is too small
+  // Other sections: apply stored height, don't grow or shrink
+  // Using flex: 0 0 auto prevents other sections from "bumping" during resize
   if (props.section.height) {
     return {
       height: `${props.section.height}px`,
-      flex: '0 1 auto'  // don't grow, but can shrink
+      flex: '0 0 auto'  // don't grow, don't shrink
     }
   }
   return {}
@@ -138,22 +139,19 @@ function onResizeStart(event: MouseEvent | TouchEvent) {
   const sectionAboveId = sectionAbove?.getAttribute('data-section-id')
   if (!sectionAbove || !sectionAboveId) return
 
-  // Fix all section heights in the bay to their current pixel values
-  // This prevents weird behavior when sections have flex/relative heights
-  // Skip the last section - it should always flex to fill remaining space
-  const lastIndex = allSections.length - 1
-  allSections.forEach((section, index) => {
-    if (index === lastIndex) return  // Last section always flexes
-    const sectionId = section.getAttribute('data-section-id')
-    if (sectionId) {
-      const height = section.getBoundingClientRect().height
-      store.setSectionHeight(props.bayId, sectionId, height)
-    }
-  })
+  // Only fix height on the section above (the one we're resizing)
+  // Don't touch other sections to avoid unintended layout shifts
+  const aboveHeight = sectionAbove.getBoundingClientRect().height
+  store.setSectionHeight(props.bayId, sectionAboveId, aboveHeight)
+
+  // For the current section, only fix height if it's NOT the last section
+  // Last section always flexes to fill remaining space
+  const belowHeight = sectionEl.getBoundingClientRect().height
+  if (!props.isLastSection) {
+    store.setSectionHeight(props.bayId, props.section.id, belowHeight)
+  }
 
   // Start resize: section above grows/shrinks, current section does the inverse
-  const aboveHeight = sectionAbove.getBoundingClientRect().height
-  const belowHeight = sectionEl.getBoundingClientRect().height
   startResize(event, props.bayId, sectionAboveId, aboveHeight, props.section.id, belowHeight, props.isLastSection)
 }
 
@@ -491,7 +489,9 @@ function onBottomStripsDrop(event: DragEvent) {
   flex-direction: column;
   flex: 1;
   min-height: 80px;
-  border-bottom: 1px solid #2a2e32;
+  border-bottom: 1px solid #2b2d31;
+  border-right: 1px solid #2b2d31;
+  border-left: 1px solid #2b2d31;
 }
 
 .efs-section:last-child {

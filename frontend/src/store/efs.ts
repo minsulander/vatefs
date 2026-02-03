@@ -467,6 +467,7 @@ export const useEfsStore = defineStore("efs", () => {
         broadcastSectionHeights,
         sendStripAction,
         GAP_BUFFER,
-        sendRequest
+        sendRequest,
+        connect
     }
 })
