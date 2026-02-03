@@ -50,6 +50,8 @@ kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
 
 Start with se-men-inte-röra:
 - Filter on my airport (origin=, destination=, alternate= or on airport location)
+- Filter prefiles
+- Filter on distance - sometimes departures end up in dep strips when they've landed at their destination
 - Rules for ARR CTR -> RUNWAY besides CTL? Maybe check geographically against runway polygon?
 - Rules for RUNWAY -> DEP CTR? Maybe past runway end / outside of runway polygon? Maybe altitude?
 - Delete departure strip when? Transferred/freed = no longer assumed?

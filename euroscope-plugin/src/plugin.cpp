@@ -72,7 +72,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "flightPlanDataUpdate";
-        message["callsign"] = callsign;
+        SetJsonIfValidUtf8(message, "callsign", callsign.c_str());
 
         std::stringstream out;
         out << "FlightPlanDataUpdate " << callsign;
@@ -89,33 +89,33 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
         if (trackingController && strlen(trackingController) < 20) {
             out << " controller " << trackingController;
-            message["controller"] = trackingController;
+            SetJsonIfValidUtf8(message, "controller", trackingController);
         }
         const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
         if (handoffTargetController && strlen(handoffTargetController) < 20) {
             out << " handoffTargetController " << handoffTargetController;
-            message["handoffTargetController"] = handoffTargetController;
+            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
         }
         const char *nextController = FlightPlan.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
             out << " nextController " << nextController;
-            message["nextController"] = nextController;
+            SetJsonIfValidUtf8(message, "nextController", nextController);
         }
 
         const char *aircraftType = fpData.GetAircraftFPType();
         if (aircraftType && strlen(aircraftType) > 0 && strlen(aircraftType) < 20) {
-            message["aircraftType"] = aircraftType;
+            SetJsonIfValidUtf8(message, "aircraftType", aircraftType);
         }
-        message["wakeTurbulence"] = std::string("") + fpData.GetAircraftWtc();
+        SetJsonIfValidUtf8(message, "wakeTurbulence", (std::string("") + fpData.GetAircraftWtc()).c_str());
 
         const char *origin = fpData.GetOrigin();
-        if (origin && strlen(origin) < 10) message["origin"] = origin;
+        if (origin && strlen(origin) < 10) SetJsonIfValidUtf8(message, "origin", origin);
         const char *destination = fpData.GetDestination();
-        if (destination && strlen(destination) < 10) message["destination"] = destination;
-        message["flightRules"] = fpData.GetPlanType();
-        message["communicationType"] = std::string("") + fpData.GetCommunicationType();
+        if (destination && strlen(destination) < 10) SetJsonIfValidUtf8(message, "destination", destination);
+        SetJsonIfValidUtf8(message, "flightRules", fpData.GetPlanType());
+        SetJsonIfValidUtf8(message, "communicationType", (std::string("") + fpData.GetCommunicationType()).c_str());
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
-        message["groundstate"] = FlightPlan.GetGroundState();
+        SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
 
         const char *arrRwy = fpData.GetArrivalRwy();
@@ -123,10 +123,10 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char *depRwy = fpData.GetDepartureRwy();
         const char *sidName = fpData.GetSidName();
 
-        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) message["arrRwy"] = arrRwy;
-        if (starName && *starName && strlen(starName) < 10) message["star"] = starName;
-        if (depRwy && *depRwy && strlen(depRwy) < 5) message["depRwy"] = depRwy;
-        if (sidName && *sidName && strlen(sidName) < 10) message["sid"] = sidName;
+        if (arrRwy && *arrRwy && strlen(arrRwy) < 5) SetJsonIfValidUtf8(message, "arrRwy", arrRwy);
+        if (starName && *starName && strlen(starName) < 10) SetJsonIfValidUtf8(message, "star", starName);
+        if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
+        if (sidName && *sidName && strlen(sidName) < 10) SetJsonIfValidUtf8(message, "sid", sidName);
 
 
         // int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
@@ -166,11 +166,11 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
-        message["callsign"] = callsign;
+        SetJsonIfValidUtf8(message, "callsign", callsign.c_str());
 
         const char *controllerCallsign = FlightPlan.GetTrackingControllerCallsign();
         if (controllerCallsign && strlen(controllerCallsign) > 0 && strlen(controllerCallsign) < 20) {
-            message["controller"] = controllerCallsign;
+            SetJsonIfValidUtf8(message, "controller", controllerCallsign);
             out << " controller " << controllerCallsign;
         }
 
@@ -182,7 +182,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             const char *squawk = ctrData.GetSquawk();
             if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
                 out << " squawk " << squawk;
-                message["squawk"] = squawk;
+                SetJsonIfValidUtf8(message, "squawk", squawk);
             }
             break;
         }
@@ -225,12 +225,12 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 
             // Safe string comparisons
             if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
-                message["groundstate"] = scratch;
+                SetJsonIfValidUtf8(message, "groundstate", scratch.c_str());
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
-                message["stand"] = scratch.substr(6);
+                SetJsonIfValidUtf8(message, "stand", scratch.substr(6).c_str());
             } else {
-                message["scratch"] = scratch;
+                SetJsonIfValidUtf8(message, "scratch", scratch.c_str());
             }
             // Scratch pad inputs noticed in the wild (if we ever want to
             // reverse-engineer/understand some TopSky plugin features): /PRESHDG/ /ASP=/ /ASP+/
@@ -265,7 +265,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_GROUND_STATE:
             out << " groundstate " << FlightPlan.GetGroundState();
-            message["groundstate"] = FlightPlan.GetGroundState();
+            SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_CLEARENCE_FLAG:
             out << " clearance " << FlightPlan.GetClearenceFlag();
@@ -311,7 +311,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             const char *directTo = ctrData.GetDirectToPointName();
             if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
                 out << " direct " << directTo;
-                message["direct"] = directTo;
+                SetJsonIfValidUtf8(message, "direct", directTo);
                 if (strlen(directTo) > 0) message["ahdg"] = 0;
             }
             break;
@@ -343,7 +343,7 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
     DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
-    message["callsign"] = FlightPlan.GetCallsign();
+    SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
     PostJson(message, "OnFlightPlanDisconnect");
 }
 
@@ -361,31 +361,31 @@ void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan Fl
     DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanFlightStripPushed";
-    message["callsign"] = FlightPlan.GetCallsign();
+    SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
     if (sSenderController && strlen(sSenderController) > 0 && strlen(sSenderController) < 20)
-        message["sender"] = sSenderController;
+        SetJsonIfValidUtf8(message, "sender", sSenderController);
     if (sTargetController && strlen(sTargetController) > 0 && strlen(sTargetController) < 20)
-        message["target"] = sTargetController;
+        SetJsonIfValidUtf8(message, "target", sTargetController);
     PostJson(message, "OnFlightPlanFlightStripPushed");
 }
 
 void VatEFSPlugin::OnControllerPositionUpdate(EuroScopePlugIn::CController Controller)
 {
     if (disabled) return;
-    // std::stringstream out;
-    // out << "ControllerPositionUpdate " << Controller.GetCallsign();
-    // DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "controllerPositionUpdate";
-    message["callsign"] = Controller.GetCallsign();
-    message["position"] = Controller.GetPositionId();
-    message["name"] = Controller.GetFullName();
+    SetJsonIfValidUtf8(message, "callsign", Controller.GetCallsign());
+    SetJsonIfValidUtf8(message, "position", Controller.GetPositionId());
+    SetJsonIfValidUtf8(message, "name", Controller.GetFullName());
     message["frequency"] = Controller.GetPrimaryFrequency();
     message["rating"] = Controller.GetRating();
     message["facility"] = Controller.GetFacility();
-    message["sector"] = Controller.GetSectorFileName();
+    SetJsonIfValidUtf8(message, "sector", Controller.GetSectorFileName());
     message["controller"] = Controller.IsController();
-    message["me"] = std::string(Controller.GetCallsign()) == std::string(ControllerMyself().GetCallsign());
+    const char *myCallsign = Controller.GetCallsign();
+    const char *selfCallsign = ControllerMyself().GetCallsign();
+    if (myCallsign && selfCallsign && IsValidUtf8(myCallsign) && IsValidUtf8(selfCallsign))
+        message["me"] = (std::string(myCallsign) == std::string(selfCallsign));
     PostJson(message, "OnControllerPositionUpdate");
 }
 
@@ -397,7 +397,7 @@ void VatEFSPlugin::OnControllerDisconnect(EuroScopePlugIn::CController Controlle
     DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "controllerDisconnect";
-    message["callsign"] = Controller.GetCallsign();
+    SetJsonIfValidUtf8(message, "callsign", Controller.GetCallsign());
     PostJson(message, "OnControllerDisconnect");
 }
 
@@ -409,7 +409,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     // DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "radarTargetPositionUpdate";
-    message["callsign"] = RadarTarget.GetCallsign();
+    SetJsonIfValidUtf8(message, "callsign", RadarTarget.GetCallsign());
     message["verticalSpeed"] = RadarTarget.GetVerticalSpeed();
     message["gs"] = RadarTarget.GetGS();
     auto position = RadarTarget.GetPosition();
@@ -419,7 +419,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         message["altitude"] = position.GetPressureAltitude();
         message["headingMagnetic"] = position.GetReportedHeading();
         message["headingTrue"] = position.GetReportedHeadingTrueNorth();
-        message["squawk"] = position.GetSquawk();
+        SetJsonIfValidUtf8(message, "squawk", position.GetSquawk());
         message["transponderC"] = position.GetTransponderC();
         message["transponderI"] = position.GetTransponderI();
     }
@@ -427,7 +427,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     if (fp.IsValid()) {
         const char *trackingCallsign = fp.GetTrackingControllerCallsign();
         if (trackingCallsign && strlen(trackingCallsign) < 20) {
-            message["controller"] = trackingCallsign;
+            SetJsonIfValidUtf8(message, "controller", trackingCallsign);
         }
     }
     PostJson(message, "OnRadarTargetPositionUpdate");
@@ -607,12 +607,12 @@ void VatEFSPlugin::UpdateMyself()
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "myselfUpdate";
-        message["callsign"] = callsign;
-        message["name"] = me.GetFullName();
+        SetJsonIfValidUtf8(message, "callsign", callsign.c_str());
+        SetJsonIfValidUtf8(message, "name", me.GetFullName());
         message["frequency"] = me.GetPrimaryFrequency();
         message["rating"] = me.GetRating();
         message["facility"] = me.GetFacility();
-        message["sector"] = me.GetSectorFileName();
+        SetJsonIfValidUtf8(message, "sector", me.GetSectorFileName());
         message["controller"] = me.IsController();
         message["pluginVersion"] = PLUGIN_VERSION;
 
@@ -632,6 +632,7 @@ void VatEFSPlugin::UpdateMyself()
             airportCount++;
             const char *airportName = airport.GetName();
             if (!airportName || !*airportName || strlen(airportName) > 10) continue;
+            if (!IsValidUtf8(airportName)) continue;
 
             std::string airportStr = airportName;
             airportStr.erase(std::remove_if(airportStr.begin(), airportStr.end(), ::isspace),
@@ -655,6 +656,7 @@ void VatEFSPlugin::UpdateMyself()
             runwayCount++;
             const char *airportName = runway.GetAirportName();
             if (!airportName || !*airportName || strlen(airportName) > 10) continue;
+            if (!IsValidUtf8(airportName)) continue;
 
             std::string airport = airportName;
             airport.erase(std::remove_if(airport.begin(), airport.end(), ::isspace), airport.end());
@@ -664,14 +666,14 @@ void VatEFSPlugin::UpdateMyself()
             const char *rwyName1 = runway.GetRunwayName(1);
 
             // Validate runway names
-            if (rwyName0 && *rwyName0 && strlen(rwyName0) <= 5) {
+            if (rwyName0 && *rwyName0 && strlen(rwyName0) <= 5 && IsValidUtf8(rwyName0)) {
                 if (runway.IsElementActive(false, 0))
                     message["rwyconfig"][airport][rwyName0]["arr"] = true;
                 if (runway.IsElementActive(true, 0))
                     message["rwyconfig"][airport][rwyName0]["dep"] = true;
             }
 
-            if (rwyName1 && *rwyName1 && strlen(rwyName1) <= 5) {
+            if (rwyName1 && *rwyName1 && strlen(rwyName1) <= 5 && IsValidUtf8(rwyName1)) {
                 if (runway.IsElementActive(false, 1))
                     message["rwyconfig"][airport][rwyName1]["arr"] = true;
                 if (runway.IsElementActive(true, 1))
@@ -843,6 +845,48 @@ void VatEFSPlugin::ReceiveUdpMessages()
         DisplayMessage(std::string("ReceiveUdpMessages exception: ") + e.what());
     } catch (...) {
         DisplayMessage("ReceiveUdpMessages: Unknown exception");
+    }
+}
+
+bool VatEFSPlugin::IsValidUtf8(const char *str)
+{
+    if (!str) return true; // null: caller typically skips
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(str);
+    while (*p) {
+        unsigned char c = *p++;
+        if (c <= 0x7F)
+            continue;
+        if (c >= 0xC2 && c <= 0xDF) {
+            if ((*p++ & 0xC0) != 0x80) return false;
+            continue;
+        }
+        if (c >= 0xE0 && c <= 0xEF) {
+            if ((*p & 0xC0) != 0x80) return false;
+            p++;
+            if ((*p++ & 0xC0) != 0x80) return false;
+            continue;
+        }
+        if (c >= 0xF0 && c <= 0xF4) {
+            if ((*p & 0xC0) != 0x80) return false;
+            p++;
+            if ((*p & 0xC0) != 0x80) return false;
+            p++;
+            if ((*p++ & 0xC0) != 0x80) return false;
+            continue;
+        }
+        return false; // invalid lead byte (0x80-0xBF, 0xC0-0xC1, 0xF5-0xFF)
+    }
+    return true;
+}
+
+void VatEFSPlugin::SetJsonIfValidUtf8(nlohmann::json &j, const char *key, const char *value)
+{
+    if (value) {
+        if (IsValidUtf8(value)) {
+            j[key] = value;
+        } else {
+            DebugMessage("SetJsonIfValidUtf8: Invalid UTF-8 string in key " + std::string(key));
+        }
     }
 }
 
