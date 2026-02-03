@@ -67,6 +67,7 @@ Command-line arguments:
 - `--airport ICAO` - Set the airport code (default: ESGG)
 - `--callsign CALLSIGN` - Set the controller callsign
 - `--record FILE` - Record UDP messages to file for playback
+- `--mock` - Load mock flight data for testing without EuroScope
 
 ### Common (Shared TypeScript)
 

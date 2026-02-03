@@ -1,10 +1,51 @@
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
-- Hur sätta squawk?
+
+
+- Hur ta reda på free? 
+  - Verkar inte gå att hämta controller från radar target correlated flight plan... (kanske pga observer?)
+  - Verkar inte komma flight strip pushed meddelanden... (def pga observer)
+
+  Om det inte går att ta reda på free, backuplösning för CTR DEP -> delete (> 20nm från flygplats eller nåt?)
+
+- Nödlösning för cleared to land i observer mode... "på banan"
+
+- Hur sätta squawk? - verkar gå att trigga TopSky xpdr code assignment! Kolla Developer Guide!
+
+It is possible to trigger a transponder code assignment from another plugin, using “StartTagFunction” with
+the following parameters:
+  o sFunctionPlugInName TopSky plugin
+  o functionID 667
+  o sItemString Callsign of the aircraft
+The “sCallsign” parameter is not used by the plugin, but as StartTagFunction will set that text string (case
+sensitive!) as the ASEL callsign, it is recommended to set a reasonable value to it – for example the current
+ASEL callsign, the same as sItemString, or an empty string. NULL will cause an exception.
+The function will trigger an automatic assignment if all the following conditions are met (otherwise the
+function will do nothing):
+  o SSR menu is not open
+  o A code assignment is currently not in progress
+  o At least 2 seconds have elapsed from the previous call to this function
+  o Both a valid CFlightPlan and a CRadarTarget are found for the requested callsign
+  o You are a controller
+  o The aircraft is not tracked by someone else
+
+Testa i plugin!
+
+
 - Hur sätta clearance flag?
+Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
+
+https://github.com/KingfuChan/Departure-List-Sequencing-PlugIn-for-EuroScope
+använder assigned speed/mach/rate för att "synka"...
+man kan ju synka med scratchpad som alla andra...
+
+kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
+
+
+
 - DCL/PDC - gå direkt på hoppie? 
 
-Verifiera att DE-ICE är S/U och uppdatera konstanter etc, CLAUDE.md med att DE-ICE == startup approved.
-
+- Verifiera att DE-ICE är S/U och uppdatera konstanter etc, CLAUDE.md med att DE-ICE == startup approved.
+  kolla Ground Radar plugin Developer Guide, testa runt...
 
 Start with se-men-inte-röra:
 - Filter on my airport (origin=, destination=, alternate= or on airport location)
@@ -20,11 +61,14 @@ Actions:
 - If no coordinated next controller, free instead of transfer
 - Implement actions
 - Drag-and-drop actions
+- Ändra SID (SA bana 08, prop/slow)
+- Ändra CFL
+- Sätta RMK/OPTEXT2
 
 Vidare i livet:
 - Top bar med lite status, flygplats, callsign, layout, z-tid
 - Skriva egna noteringar
-- Specialstrippar typ som de har på SA (dra upp från botten)
+- Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 
 Tekniskt:
 - Visa nånting i frontend när backend inte är uppkopplad

@@ -23,9 +23,9 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { airport?: string; callsign?: string; recordFile?: string } {
+function parseArgs(): { airport?: string; callsign?: string; recordFile?: string; mock?: boolean } {
     const args = process.argv.slice(2)
-    const result: { airport?: string; callsign?: string; recordFile?: string } = {}
+    const result: { airport?: string; callsign?: string; recordFile?: string; mock?: boolean } = {}
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--airport' && args[i + 1]) {
@@ -34,6 +34,8 @@ function parseArgs(): { airport?: string; callsign?: string; recordFile?: string
             result.callsign = args[++i]
         } else if (args[i] === '--record' && args[i + 1]) {
             result.recordFile = args[++i]
+        } else if (args[i] === '--mock') {
+            result.mock = true
         }
     }
 
@@ -89,8 +91,11 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
     }
 }
 
-// Initialize store with mock data
-store.loadMockData()
+// Initialize store (with mock data if --mock flag is set)
+store.loadMockData(cliArgs.mock ?? false)
+if (cliArgs.mock) {
+    console.log('Mock data enabled')
+}
 
 // Helper to send a message to a WebSocket client
 function sendMessage(socket: WebSocket, message: ServerMessage) {

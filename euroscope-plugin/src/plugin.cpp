@@ -87,17 +87,17 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (FlightPlan.GetSimulated()) out << " simulated";
 
         const char* trackingController = FlightPlan.GetTrackingControllerCallsign();
-        if (trackingController && strlen(trackingController) > 0 && strlen(trackingController) < 20) {
+        if (trackingController && strlen(trackingController) < 20) {
             out << " controller " << trackingController;
             message["controller"] = trackingController;
         }
         const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
-        if (handoffTargetController && strlen(handoffTargetController) > 0 && strlen(handoffTargetController) < 20) {
+        if (handoffTargetController && strlen(handoffTargetController) < 20) {
             out << " handoffTargetController " << handoffTargetController;
             message["handoffTargetController"] = handoffTargetController;
         }
         const char *nextController = FlightPlan.GetCoordinatedNextController();
-        if (nextController && strlen(nextController) > 0 && strlen(nextController) < 20) {
+        if (nextController && strlen(nextController) < 20) {
             out << " nextController " << nextController;
             message["nextController"] = nextController;
         }
@@ -109,9 +109,9 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         message["wakeTurbulence"] = std::string("") + fpData.GetAircraftWtc();
 
         const char* origin = fpData.GetOrigin();
-        if (origin && strlen(origin) > 0 && strlen(origin) < 10) message["origin"] = origin;
+        if (origin && strlen(origin) < 10) message["origin"] = origin;
         const char* destination = fpData.GetDestination();
-        if (destination && strlen(destination) > 0 && strlen(destination) < 10) message["destination"] = destination;
+        if (destination && strlen(destination) < 10) message["destination"] = destination;
         message["flightRules"] = fpData.GetPlanType();
         message["communicationType"] = std::string("") + fpData.GetCommunicationType();
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
@@ -162,6 +162,9 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             return;
         }
 
+        std::stringstream out;
+        out << "ControllerAssignedDataUpdate " << callsign;
+
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
         message["callsign"] = callsign;
@@ -169,14 +172,10 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         const char *controllerCallsign = FlightPlan.GetTrackingControllerCallsign();
         if (controllerCallsign && strlen(controllerCallsign) > 0 && strlen(controllerCallsign) < 20) {
             message["controller"] = controllerCallsign;
+            out << " controller " << controllerCallsign;
         }
 
         const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData = FlightPlan.GetControllerAssignedData();
-
-        std::stringstream out;
-        out << "ControllerAssignedDataUpdate " << callsign;
-        if (controllerCallsign && strlen(controllerCallsign) > 0)
-            out << " controller " << controllerCallsign;
 
         switch (DataType) {
         case EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK: {
@@ -213,7 +212,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_SCRATCH_PAD_STRING: {
             const char* scratchStr = ctrData.GetScratchPadString();
-            if (!scratchStr || strlen(scratchStr) == 0) return;
+            if (!scratchStr) return;
             
             // Limit scratch pad string length
             if (strlen(scratchStr) > 50) {
@@ -230,6 +229,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
                 message["stand"] = scratch.substr(6);
+            } else {
+                message["scratch"] = scratch;
             }
             // Scratch pad inputs noticed in the wild (if we ever want to
             // reverse-engineer/understand some TopSky plugin features): /PRESHDG/ /ASP=/ /ASP+/
@@ -308,10 +309,10 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO: {
             const char* directTo = ctrData.GetDirectToPointName();
-            if (directTo && strlen(directTo) > 0 && strlen(directTo) < 50) { // Reasonable waypoint name length
+            if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
                 out << " direct " << directTo;
                 message["direct"] = directTo;
-                message["ahdg"] = 0;
+                if (strlen(directTo) > 0) message["ahdg"] = 0;
             }
             break;
         }
@@ -401,9 +402,9 @@ void VatEFSPlugin::OnControllerDisconnect (EuroScopePlugIn::CController Controll
 void VatEFSPlugin::OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget RadarTarget)
 {
     if (disabled || !RadarTarget.IsValid()) return;
-    std::stringstream out;
-    out << "RadarTargetPositionUpdate " << RadarTarget.GetCallsign();
-    DebugMessage(out.str());
+    // std::stringstream out;
+    // out << "RadarTargetPositionUpdate " << RadarTarget.GetCallsign();
+    // DebugMessage(out.str());
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "radarTargetPositionUpdate";
     message["callsign"] = RadarTarget.GetCallsign();
@@ -419,6 +420,13 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget Ra
         message["squawk"] = position.GetSquawk();
         message["transponderC"] = position.GetTransponderC();
         message["transponderI"] = position.GetTransponderI();
+    }
+    auto fp = RadarTarget.GetCorrelatedFlightPlan();
+    if (fp.IsValid()) {
+        const char* trackingCallsign = fp.GetTrackingControllerCallsign();
+        if (trackingCallsign && strlen(trackingCallsign) < 20) {
+            message["controller"] = trackingCallsign;
+        }
     }
     PostJson(message);
 }

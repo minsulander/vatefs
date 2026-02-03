@@ -30,8 +30,8 @@ class EfsStore {
         this.gaps = new Map()
     }
 
-    // Initialize store with mock data
-    loadMockData() {
+    // Initialize store, optionally with mock data
+    loadMockData(useMocks: boolean = false) {
         // Load config from static config
         this.config = JSON.parse(JSON.stringify(staticConfig.layout))
 
@@ -41,26 +41,30 @@ class EfsStore {
         this.gaps.clear()
         flightStore.clear()
 
-        // Process mock plugin messages through the flight store
-        for (const message of mockPluginMessages) {
-            const result = flightStore.processMessage(message)
-            if (result.strip) {
-                this.strips.set(result.strip.id, result.strip)
+        if (useMocks) {
+            // Process mock plugin messages through the flight store
+            for (const message of mockPluginMessages) {
+                const result = flightStore.processMessage(message)
+                if (result.strip) {
+                    this.strips.set(result.strip.id, result.strip)
+                }
             }
-        }
 
-        // Apply backend state updates (clearedToLand, airborne flags)
-        for (const update of mockBackendStateUpdates) {
-            const result = flightStore.setBackendFlags(update.callsign, {
-                clearedToLand: update.clearedToLand,
-                airborne: update.airborne
-            })
-            if (result.strip) {
-                this.strips.set(result.strip.id, result.strip)
+            // Apply backend state updates (clearedToLand, airborne flags)
+            for (const update of mockBackendStateUpdates) {
+                const result = flightStore.setBackendFlags(update.callsign, {
+                    clearedToLand: update.clearedToLand,
+                    airborne: update.airborne
+                })
+                if (result.strip) {
+                    this.strips.set(result.strip.id, result.strip)
+                }
             }
-        }
 
-        console.log(`Store loaded: ${this.strips.size} strips, ${this.config.bays.length} bays`)
+            console.log(`Store loaded with mock data: ${this.strips.size} strips, ${this.config.bays.length} bays`)
+        } else {
+            console.log(`Store initialized: ${this.config.bays.length} bays (no mock data)`)
+        }
     }
 
     /**
