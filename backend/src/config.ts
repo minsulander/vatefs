@@ -116,6 +116,37 @@ export interface ActionRule {
 }
 
 /**
+ * Delete rule - determines when a strip should be soft-deleted (hidden)
+ */
+export interface DeleteRule {
+    /** Rule identifier for debugging */
+    id: string
+
+    /**
+     * Rule priority - higher priority rules are evaluated first
+     * Default: 0
+     */
+    priority?: number
+
+    // === Conditions (all specified conditions must match) ===
+
+    /** Flight direction at our airport */
+    direction?: FlightDirection
+
+    /** Groundstate must be one of these values */
+    groundstates?: GroundState[]
+
+    /** Controller relationship */
+    controller?: ControllerCondition
+
+    /**
+     * Minimum altitude above field elevation (in feet) to trigger delete
+     * Only applies when radarTargetPositionUpdate provides altitude data
+     */
+    minAltitudeAboveField?: number
+}
+
+/**
  * Static configuration for the EFS backend
  */
 export interface EfsStaticConfig {
@@ -125,20 +156,26 @@ export interface EfsStaticConfig {
     /** My controller callsign (will be updated from myselfUpdate) */
     myCallsign?: string
 
+    /** Field elevation in feet (default: 500) */
+    fieldElevation: number
+
     /** Bay/section layout configuration */
     layout: EfsConfig
 
     /** Section mapping rules - evaluated in priority order */
     sectionRules: SectionRule[]
 
-    /** Default section for flights that don't match any rule */
-    defaultSection: {
+    /** Default section for flights that don't match any rule (optional) */
+    defaultSection?: {
         bayId: string
         sectionId: string
     }
 
     /** Action rules - determines default action for strips */
     actionRules: ActionRule[]
+
+    /** Delete rules - determines when strips should be soft-deleted */
+    deleteRules: DeleteRule[]
 }
 
 /**
@@ -147,6 +184,7 @@ export interface EfsStaticConfig {
 export const staticConfig: EfsStaticConfig = {
     ourAirport: 'ESGG',
     myCallsign: 'ESGG_TWR', // Mock - will be updated from myselfUpdate
+    fieldElevation: 500, // Default field elevation in feet
 
     layout: {
         bays: [
@@ -202,6 +240,7 @@ export const staticConfig: EfsStaticConfig = {
             bayId: 'bay2',
             direction: 'arrival',
             clearedToLand: true,
+            groundstates: ['', 'NSTS', 'ARR'],
             priority: 95
         },
 
@@ -229,6 +268,7 @@ export const staticConfig: EfsStaticConfig = {
             bayId: 'bay2',
             direction: 'arrival',
             controller: 'myself',
+            groundstates: ['', 'NSTS', 'ARR'],
             priority: 80
         },
 
@@ -279,35 +319,17 @@ export const staticConfig: EfsStaticConfig = {
             bayId: 'bay4',
             direction: 'departure',
             clearance: true,
-            groundstates: ['', 'ONFREQ', 'STUP', 'NSTS'], // Not yet pushing
+            groundstates: ['', 'ONFREQ', 'NSTS'], // Not yet pushing
             priority: 50
         },
 
         // PENDING CLR: Departures without clearance (no groundstate or ONFREQ)
         {
-            id: 'pending_clr_no_gs',
+            id: 'pending_clr',
             sectionId: 'pending_clr',
             bayId: 'bay4',
             direction: 'departure',
-            groundstates: [''],
-            clearance: false,
-            priority: 40
-        },
-        {
-            id: 'pending_clr_onfreq',
-            sectionId: 'pending_clr',
-            bayId: 'bay4',
-            direction: 'departure',
-            groundstates: ['ONFREQ'],
-            clearance: false,
-            priority: 40
-        },
-        {
-            id: 'pending_clr_stup',
-            sectionId: 'pending_clr',
-            bayId: 'bay4',
-            direction: 'departure',
-            groundstates: ['STUP', 'NSTS'],
+            groundstates: ['', 'ONFREQ', 'NSTS'],
             clearance: false,
             priority: 40
         },
@@ -355,10 +377,10 @@ export const staticConfig: EfsStaticConfig = {
         }
     ],
 
-    defaultSection: {
-        bayId: 'bay1',
-        sectionId: 'inbound'
-    },
+    // defaultSection: {
+    //     bayId: 'bay1',
+    //     sectionId: 'inbound'
+    // },
 
     actionRules: [
         // INBOUND arrivals: ASSUME to take control
@@ -415,6 +437,26 @@ export const staticConfig: EfsStaticConfig = {
             clearance: true,
             groundstates: ['', 'ONFREQ', 'STUP', 'NSTS'],
             priority: 70
+        }
+    ],
+
+    deleteRules: [
+        // Departures: Delete when high enough and transferred/freed
+        // Altitude > field elevation + 1500ft AND not controlled by me
+        {
+            id: 'delete_dep_high_transferred',
+            direction: 'departure',
+            controller: 'not_myself',
+            minAltitudeAboveField: 1500,
+            priority: 100
+        },
+
+        // Arrivals: Delete when parked
+        {
+            id: 'delete_arr_parked',
+            direction: 'arrival',
+            groundstates: ['PARK'],
+            priority: 100
         }
     ]
 }
@@ -490,6 +532,7 @@ function evaluateRule(flight: Flight, rule: SectionRule, config: EfsStaticConfig
 
     // Check clearance flag
     if (rule.clearance !== undefined) {
+        console.log(`Checking clearance flag for flight ${flight.callsign}`, flight.clearance, rule.clearance)
         const hasClearance = flight.clearance ?? false
         if (hasClearance !== rule.clearance) {
             return false
@@ -530,6 +573,7 @@ export function determineSectionForFlight(
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateRule(flight, rule, config)) {
+            console.log(`Rule ${rule.id} matched for flight ${flight.callsign}`)
             return {
                 bayId: rule.bayId,
                 sectionId: rule.sectionId,
@@ -539,7 +583,7 @@ export function determineSectionForFlight(
     }
 
     // No rule matched, use default
-    return config.defaultSection
+    return config.defaultSection ?? undefined
 }
 
 /**
@@ -627,4 +671,72 @@ export function determineActionForFlight(
 
     // No action
     return undefined
+}
+
+/**
+ * Evaluate a delete rule against a flight
+ */
+function evaluateDeleteRule(
+    flight: Flight,
+    rule: DeleteRule,
+    config: EfsStaticConfig
+): boolean {
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    // Check groundstate condition
+    if (rule.groundstates !== undefined) {
+        const flightGroundstate = flight.groundstate ?? ''
+        if (!rule.groundstates.includes(flightGroundstate)) {
+            return false
+        }
+    }
+
+    // Check controller condition
+    if (rule.controller !== undefined) {
+        if (!checkControllerCondition(flight, rule.controller, config)) {
+            return false
+        }
+    }
+
+    // Check altitude above field elevation
+    if (rule.minAltitudeAboveField !== undefined) {
+        const currentAltitude = flight.currentAltitude
+        if (currentAltitude === undefined) {
+            return false // No altitude data, can't evaluate
+        }
+        const altitudeAboveField = currentAltitude - config.fieldElevation
+        if (altitudeAboveField < rule.minAltitudeAboveField) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine if a flight should be soft-deleted based on delete rules
+ * Returns the rule ID if a delete rule matches, undefined otherwise
+ */
+export function shouldDeleteFlight(
+    flight: Flight,
+    config: EfsStaticConfig
+): { shouldDelete: boolean; ruleId?: string } {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.deleteRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateDeleteRule(flight, rule, config)) {
+            return { shouldDelete: true, ruleId: rule.id }
+        }
+    }
+
+    return { shouldDelete: false }
 }

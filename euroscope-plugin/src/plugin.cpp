@@ -268,7 +268,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_CLEARENCE_FLAG:
             out << " clearance " << FlightPlan.GetClearenceFlag();
-            message["clearence"] = (bool)FlightPlan.GetClearenceFlag();
+            message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_DEPARTURE_SEQUENCE:
             out << " dsq"; // TODO where dis dsq?

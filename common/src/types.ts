@@ -46,12 +46,16 @@ export interface FlightStrip {
 
     // Default action (if any) - shown as button text
     defaultAction?: string     // e.g., "ASSUME", "CTL", "CTO"
+
+    // Status indicators
+    clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
 }
 
 export interface Section {
     id: string
     title: string
     height?: number            // Section height in pixels (for resize)
+    addFromTop?: boolean       // Whether new strips are added at top (default: true) or bottom
 }
 
 export interface Gap {

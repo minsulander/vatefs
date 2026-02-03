@@ -344,13 +344,43 @@ udpIn.on("message", (msg, rinfo) => {
             // Plugin message was processed
             if (result.deleteStripId) {
                 broadcastStripDelete(result.deleteStripId)
-                console.log(`UDP: Flight ${result.deleteStripId} disconnected`)
+                if (result.softDeleted) {
+                    console.log(`UDP: Flight ${result.deleteStripId} soft-deleted`)
+                } else {
+                    console.log(`UDP: Flight ${result.deleteStripId} disconnected`)
+                }
             } else if (result.strip) {
                 broadcastStrip(result.strip)
-                if (result.sectionChanged) {
+                if (result.restored) {
+                    console.log(`UDP: Strip ${result.strip.callsign} restored and in ${result.strip.sectionId}`)
+                } else if (result.sectionChanged) {
                     console.log(`UDP: Strip ${result.strip.callsign} moved to ${result.strip.sectionId}`)
                 } else {
                     console.log(`UDP: Strip ${result.strip.callsign} updated`)
+                }
+
+                // Broadcast shifted strips (from add-from-top)
+                if (result.shiftedStrips && result.shiftedStrips.length > 0) {
+                    for (const shiftedStrip of result.shiftedStrips) {
+                        broadcastStrip(shiftedStrip)
+                    }
+                    console.log(`UDP: Shifted ${result.shiftedStrips.length} strips in ${result.strip.sectionId}`)
+                }
+
+                // Broadcast gap deletes first, then shifted gaps (from add-from-top)
+                if (result.deletedGapKeys && result.deletedGapKeys.length > 0) {
+                    for (const key of result.deletedGapKeys) {
+                        const parsed = parseGapKey(key)
+                        if (parsed) {
+                            broadcastGapDelete(parsed.bayId, parsed.sectionId, parsed.index)
+                        }
+                    }
+                }
+                if (result.shiftedGaps && result.shiftedGaps.length > 0) {
+                    for (const shiftedGap of result.shiftedGaps) {
+                        broadcastGap(shiftedGap)
+                    }
+                    console.log(`UDP: Shifted ${result.shiftedGaps.length} gaps in ${result.strip.sectionId}`)
                 }
             }
         } else {

@@ -113,7 +113,7 @@ const foobar = [
     ctrUpdate('NAX254', {
         squawk: '2234',
         groundstate: 'LINEUP',
-        clearence: true,
+        clearance: true,
         controller: 'ESGG_TWR'
     }),
 
@@ -127,7 +127,7 @@ const foobar = [
     ctrUpdate('BAW791G', {
         squawk: '6071',
         groundstate: 'DEPA',
-        clearence: true,
+        clearance: true,
         controller: 'ESGG_TWR',
         cfl: 5000
     }),
@@ -145,7 +145,7 @@ const foobar = [
     ctrUpdate('BRA841', {
         squawk: '3421',
         groundstate: 'DEPA',
-        clearence: true,
+        clearance: true,
         controller: 'ESGG_TWR'
         // airborne: true will be set by backend
     }),
@@ -161,7 +161,7 @@ const foobar = [
     ctrUpdate('AFR1234', {
         squawk: '4521',
         groundstate: 'TAXI',
-        clearence: true,
+        clearance: true,
         controller: 'ESGG_TWR',
         stand: '45'
     }),
@@ -191,7 +191,7 @@ const foobar = [
     ctrUpdate('SAS462', {
         squawk: '1567',
         groundstate: '',
-        clearence: false,
+        clearance: false,
         stand: '22A'
     }),
 
@@ -204,7 +204,7 @@ const foobar = [
     ctrUpdate('EZY8821', {
         squawk: '0000',
         groundstate: 'ONFREQ',
-        clearence: false,
+        clearance: false,
         stand: '12'
     }),
 
@@ -219,7 +219,7 @@ const foobar = [
     ctrUpdate('RYR123', {
         squawk: '5544',
         groundstate: '',
-        clearence: true,
+        clearance: true,
         stand: '8'
     }),
 
@@ -232,7 +232,7 @@ const foobar = [
     ctrUpdate('IBE3456', {
         squawk: '6622',
         groundstate: 'ONFREQ',
-        clearence: true,
+        clearance: true,
         stand: '31'
     }),
 
@@ -247,7 +247,7 @@ const foobar = [
     ctrUpdate('WZZ7890', {
         squawk: '3344',
         groundstate: 'PUSH',
-        clearence: true,
+        clearance: true,
         stand: '55'
     }),
 
@@ -260,7 +260,7 @@ const foobar = [
     ctrUpdate('SAS999', {
         squawk: '7711',
         groundstate: 'DE-ICE',
-        clearence: true,
+        clearance: true,
         stand: '7'
     })
 ]

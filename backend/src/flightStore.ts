@@ -1,12 +1,13 @@
-import type { FlightStrip, StripType, WakeCategory, FlightRules } from "@vatefs/common"
+import type { FlightStrip, StripType, WakeCategory, FlightRules, Section } from "@vatefs/common"
 import type {
     Flight,
     PluginMessage,
     FlightPlanDataUpdateMessage,
-    ControllerAssignedDataUpdateMessage
+    ControllerAssignedDataUpdateMessage,
+    RadarTargetPositionUpdateMessage
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
 
 /**
@@ -27,6 +28,15 @@ export interface ProcessMessageResult {
 
     /** Previous section info if section changed */
     previousSection?: { bayId: string; sectionId: string }
+
+    /** Whether the strip should be soft-deleted (hidden from user) */
+    softDeleted?: boolean
+
+    /** Whether the strip was un-deleted (restored from soft-delete) */
+    restored?: boolean
+
+    /** Callsigns of strips whose positions were shifted (for add-from-top) */
+    shiftedCallsigns?: string[]
 }
 
 /**
@@ -88,6 +98,9 @@ class FlightStore {
             case 'flightPlanDisconnect':
                 return this.handleFlightPlanDisconnect(message)
 
+            case 'radarTargetPositionUpdate':
+                return this.handleRadarTargetPositionUpdate(message)
+
             case 'flightPlanFlightStripPushed':
             case 'controllerPositionUpdate':
             case 'controllerDisconnect':
@@ -143,7 +156,7 @@ class FlightStore {
 
         // Check if this is a new strip or section changed
         const isNewStrip = !hadRequiredData || !currentAssignment
-        const sectionChanged = currentAssignment &&
+        const sectionChanged = currentAssignment && targetSection &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -153,8 +166,12 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (isNewStrip) {
-            // New strip - assign to end of section
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            if (!targetSection) {
+                console.log(`No section found for flight ${callsign}`)
+                return { flight }
+            }
+            // New strip - assign position based on section config
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -168,7 +185,7 @@ class FlightStore {
                 bayId: currentAssignment!.bayId,
                 sectionId: currentAssignment!.sectionId
             }
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -183,12 +200,14 @@ class FlightStore {
         }
 
         const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const shiftedCallsigns = this.getLastShiftedCallsigns()
 
         return {
             flight,
             strip,
             sectionChanged: sectionChanged ?? false,
-            previousSection
+            previousSection,
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
         }
     }
 
@@ -218,7 +237,8 @@ class FlightStore {
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.cfl !== undefined) flight.cfl = message.cfl
         if (message.groundstate !== undefined) flight.groundstate = message.groundstate
-        if (message.clearence !== undefined) flight.clearance = message.clearence
+        if (message.clearance !== undefined) flight.clearance = message.clearance
+        if (message.clearedToLand !== undefined) flight.clearedToLand = message.clearedToLand
         if (message.stand !== undefined) flight.stand = message.stand
         if (message.asp !== undefined) flight.asp = message.asp
         if (message.mach !== undefined) flight.mach = message.mach
@@ -227,10 +247,23 @@ class FlightStore {
         if (message.direct !== undefined) flight.direct = message.direct
         flight.lastUpdate = Date.now()
 
+        // Check delete rules (e.g., PARK for arrivals)
+        const wasDeleted = flight.deleted ?? false
+        const deleteResult = shouldDeleteFlight(flight, this.config)
+
+        if (deleteResult.shouldDelete && !wasDeleted) {
+            flight.deleted = true
+            console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
+            return { flight, softDeleted: true }
+        } else if (!deleteResult.shouldDelete && wasDeleted) {
+            flight.deleted = false
+            console.log(`Flight ${callsign} restored from soft-delete`)
+        }
+
         // Check if we should create/update a strip
         const hasRequiredData = flightHasRequiredData(flight)
-        if (!hasRequiredData) {
-            return { flight }
+        if (!hasRequiredData || flight.deleted) {
+            return { flight, softDeleted: flight.deleted }
         }
 
         // Determine section based on rules
@@ -248,7 +281,7 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (isNewStrip) {
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -261,7 +294,7 @@ class FlightStore {
                 bayId: currentAssignment!.bayId,
                 sectionId: currentAssignment!.sectionId
             }
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -275,12 +308,15 @@ class FlightStore {
         }
 
         const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const shiftedCallsigns = this.getLastShiftedCallsigns()
 
         return {
             flight,
             strip,
             sectionChanged: sectionChanged ?? false,
-            previousSection
+            previousSection,
+            restored: !deleteResult.shouldDelete && wasDeleted,
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
         }
     }
 
@@ -301,7 +337,179 @@ class FlightStore {
     }
 
     /**
-     * Get next position in a section
+     * Handle radarTargetPositionUpdate message
+     * Updates altitude and checks for airborne status / delete conditions
+     */
+    private handleRadarTargetPositionUpdate(message: RadarTargetPositionUpdateMessage): ProcessMessageResult {
+        const callsign = message.callsign
+        const flight = this.flights.get(callsign)
+
+        if (!flight) {
+            // Flight not tracked yet, ignore radar update
+            return {}
+        }
+
+        // Update radar data
+        flight.currentAltitude = message.altitude
+        flight.lastUpdate = Date.now()
+
+        // Check for airborne status (departures only)
+        // Aircraft is airborne if altitude > field elevation + 300ft
+        const airborneThreshold = this.config.fieldElevation + 300
+        const wasAirborne = flight.airborne ?? false
+        const isNowAirborne = message.altitude > airborneThreshold
+
+        // Only set airborne for departures (origin is our airport)
+        const isDeparture = flight.origin === this.config.ourAirport
+        if (isDeparture && !wasAirborne && isNowAirborne) {
+            flight.airborne = true
+            console.log(`Flight ${callsign} is now airborne (alt: ${message.altitude}ft)`)
+        }
+
+        // Check delete rules
+        const wasDeleted = flight.deleted ?? false
+        const deleteResult = shouldDeleteFlight(flight, this.config)
+
+        if (deleteResult.shouldDelete && !wasDeleted) {
+            // Soft-delete the flight
+            flight.deleted = true
+            console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
+            return { flight, softDeleted: true }
+        } else if (!deleteResult.shouldDelete && wasDeleted) {
+            // Restore the flight
+            flight.deleted = false
+            console.log(`Flight ${callsign} restored from soft-delete`)
+        }
+
+        // Check if we should create/update a strip
+        if (!flightHasRequiredData(flight) || flight.deleted) {
+            return { flight, softDeleted: flight.deleted }
+        }
+
+        // Determine section based on rules (airborne flag may have changed)
+        const targetSection = determineSectionForFlight(flight, this.config)
+        const currentAssignment = this.stripAssignments.get(callsign)
+
+        const sectionChanged = currentAssignment &&
+            (currentAssignment.bayId !== targetSection.bayId ||
+             currentAssignment.sectionId !== targetSection.sectionId)
+
+        let position: number
+        let bottom: boolean
+        let previousSection: { bayId: string; sectionId: string } | undefined
+
+        if (!currentAssignment) {
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            bottom = false
+            this.stripAssignments.set(callsign, {
+                bayId: targetSection.bayId,
+                sectionId: targetSection.sectionId,
+                position,
+                bottom
+            })
+        } else if (sectionChanged) {
+            previousSection = {
+                bayId: currentAssignment.bayId,
+                sectionId: currentAssignment.sectionId
+            }
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            bottom = false
+            this.stripAssignments.set(callsign, {
+                bayId: targetSection.bayId,
+                sectionId: targetSection.sectionId,
+                position,
+                bottom
+            })
+        } else {
+            position = currentAssignment.position
+            bottom = currentAssignment.bottom
+        }
+
+        const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const shiftedCallsigns = this.getLastShiftedCallsigns()
+
+        return {
+            flight,
+            strip,
+            sectionChanged: sectionChanged ?? false,
+            previousSection,
+            restored: !deleteResult.shouldDelete && wasDeleted,
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
+        }
+    }
+
+    /**
+     * Find section configuration by bay and section ID
+     */
+    private findSectionConfig(bayId: string, sectionId: string): Section | undefined {
+        const bay = this.config.layout.bays.find(b => b.id === bayId)
+        return bay?.sections.find(s => s.id === sectionId)
+    }
+
+    /**
+     * Get the position for a new strip in a section
+     * Handles both "add from top" and "add from bottom" modes
+     * Call getLastShiftedCallsigns() after this to get affected strips
+     */
+    private getNewStripPosition(bayId: string, sectionId: string): number {
+        const section = this.findSectionConfig(bayId, sectionId)
+        const addFromTop = section?.addFromTop ?? true // Default: add from top
+
+        // Clear previous shifted callsigns
+        this.lastShiftedCallsigns = []
+
+        if (addFromTop) {
+            // Add at top: shift all existing strips down and return position 0
+            this.shiftPositionsDown(bayId, sectionId)
+            return 0
+        } else {
+            // Add at bottom: use next available position
+            return this.getNextPosition(bayId, sectionId)
+        }
+    }
+
+    /** Callsigns affected by the last shiftPositionsDown call */
+    private lastShiftedCallsigns: string[] = []
+
+    /**
+     * Shift all strip positions in a section down by 1 (for add from top)
+     * Returns the callsigns of affected strips
+     */
+    private shiftPositionsDown(bayId: string, sectionId: string): string[] {
+        const shifted: string[] = []
+        this.stripAssignments.forEach((assignment, callsign) => {
+            if (assignment.bayId === bayId &&
+                assignment.sectionId === sectionId &&
+                !assignment.bottom) {  // Only shift top zone strips
+                assignment.position += 1
+                shifted.push(callsign)
+            }
+        })
+        // Also increment the counter
+        const key = `${bayId}:${sectionId}`
+        const current = this.positionCounters.get(key) ?? 0
+        this.positionCounters.set(key, current + 1)
+
+        this.lastShiftedCallsigns = shifted
+        return shifted
+    }
+
+    /**
+     * Get the callsigns shifted by the last getNewStripPosition call
+     */
+    getLastShiftedCallsigns(): string[] {
+        return this.lastShiftedCallsigns
+    }
+
+    /**
+     * Clear the last shifted callsigns
+     */
+    clearLastShiftedCallsigns() {
+        this.lastShiftedCallsigns = []
+    }
+
+    /**
+     * Get next position in a section (for add from bottom mode)
      */
     private getNextPosition(bayId: string, sectionId: string): number {
         const key = `${bayId}:${sectionId}`
@@ -346,6 +554,11 @@ class FlightStore {
         // Determine default action
         const defaultAction = determineActionForFlight(flight, sectionId, this.config)
 
+        // Cleared for takeoff: departure with DEPA groundstate, not yet airborne
+        const clearedForTakeoff = stripType === 'departure' &&
+            flight.groundstate === 'DEPA' &&
+            !flight.airborne
+
         return {
             id: flight.callsign, // Use callsign as strip ID
             callsign: flight.callsign,
@@ -368,7 +581,8 @@ class FlightStore {
             sectionId,
             position,
             bottom,
-            defaultAction
+            defaultAction: clearedForTakeoff ? undefined : defaultAction, // No action when cleared for takeoff
+            clearedForTakeoff
         }
     }
 
@@ -470,7 +684,7 @@ class FlightStore {
     setBackendFlags(
         callsign: string,
         flags: { clearedToLand?: boolean; airborne?: boolean }
-    ): { flight?: Flight; strip?: FlightStrip; sectionChanged?: boolean; previousSection?: { bayId: string; sectionId: string } } {
+    ): { flight?: Flight; strip?: FlightStrip; sectionChanged?: boolean; previousSection?: { bayId: string; sectionId: string }; shiftedCallsigns?: string[] } {
         const flight = this.flights.get(callsign)
         if (!flight) return {}
 
@@ -497,7 +711,7 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (!currentAssignment) {
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -510,7 +724,7 @@ class FlightStore {
                 bayId: currentAssignment.bayId,
                 sectionId: currentAssignment.sectionId
             }
-            position = this.getNextPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -524,12 +738,14 @@ class FlightStore {
         }
 
         const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const shiftedCallsigns = this.getLastShiftedCallsigns()
 
         return {
             flight,
             strip,
             sectionChanged: sectionChanged ?? false,
-            previousSection
+            previousSection,
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
         }
     }
 
@@ -538,6 +754,29 @@ class FlightStore {
      */
     getConfig(): EfsStaticConfig {
         return this.config
+    }
+
+    /**
+     * Regenerate a strip for a flight (used when positions are shifted)
+     */
+    regenerateStrip(callsign: string): FlightStrip | undefined {
+        const flight = this.flights.get(callsign)
+        if (!flight || !flightHasRequiredData(flight)) {
+            return undefined
+        }
+
+        const assignment = this.stripAssignments.get(callsign)
+        if (!assignment) {
+            return undefined
+        }
+
+        return this.createStrip(
+            flight,
+            assignment.bayId,
+            assignment.sectionId,
+            assignment.position,
+            assignment.bottom
+        )
     }
 }
 

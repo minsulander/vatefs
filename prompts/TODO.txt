@@ -1,5 +1,6 @@
-                                                                                                                                                                                            
-  - Plugin needs to send origin, destination, aircraftType in flightPlanDataUpdate                                                                                                          
+Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
+- Hur sätta squawk?
+- Hur sätta clearance flag?
+- DCL/PDC - gå direkt på hoppie? 
 
 
-...

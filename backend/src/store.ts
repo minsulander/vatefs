@@ -25,11 +25,13 @@ function gapKey(bayId: string, sectionId: string, index: number): string {
 class EfsStore {
     private config: EfsConfig
     private strips: Map<string, FlightStrip>
+    private deletedStrips: Map<string, FlightStrip>  // Soft-deleted strips (hidden but recoverable)
     private gaps: Map<string, Gap>  // key: bayId:sectionId:index
 
     constructor() {
         this.config = { bays: [] }
         this.strips = new Map()
+        this.deletedStrips = new Map()
         this.gaps = new Map()
     }
 
@@ -40,6 +42,7 @@ class EfsStore {
 
         // Clear existing data
         this.strips.clear()
+        this.deletedStrips.clear()
         this.gaps.clear()
         flightStore.clear()
 
@@ -73,12 +76,37 @@ class EfsStore {
         deleteStripId?: string
         sectionChanged?: boolean
         previousSection?: { bayId: string; sectionId: string }
+        softDeleted?: boolean
+        restored?: boolean
+        shiftedStrips?: FlightStrip[]
+        shiftedGaps?: Gap[]
+        deletedGapKeys?: string[]
     } {
         const result = flightStore.processMessage(message)
 
         if (result.deleteStripId) {
             this.strips.delete(result.deleteStripId)
+            this.deletedStrips.delete(result.deleteStripId)
             return { deleteStripId: result.deleteStripId }
+        }
+
+        // Handle soft-delete: move strip to deletedStrips map
+        if (result.softDeleted && result.flight) {
+            const stripId = result.flight.callsign
+            const existingStrip = this.strips.get(stripId)
+            if (existingStrip) {
+                this.deletedStrips.set(stripId, existingStrip)
+                this.strips.delete(stripId)
+                console.log(`Strip ${stripId} moved to deleted store`)
+                return { deleteStripId: stripId, softDeleted: true }
+            }
+            return { softDeleted: true }
+        }
+
+        // Handle restore: move strip back from deletedStrips
+        if (result.restored && result.strip) {
+            this.deletedStrips.delete(result.strip.id)
+            console.log(`Strip ${result.strip.id} restored from deleted store`)
         }
 
         if (result.strip) {
@@ -92,10 +120,35 @@ class EfsStore {
             }
 
             this.strips.set(result.strip.id, result.strip)
+
+            // Handle shifted strips and gaps (from add-from-top)
+            let shiftedStrips: FlightStrip[] | undefined
+            let shiftedGaps: Gap[] | undefined
+            let deletedGapKeys: string[] | undefined
+            if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+                shiftedStrips = []
+                for (const callsign of result.shiftedCallsigns) {
+                    const regeneratedStrip = flightStore.regenerateStrip(callsign)
+                    if (regeneratedStrip) {
+                        this.strips.set(regeneratedStrip.id, regeneratedStrip)
+                        shiftedStrips.push(regeneratedStrip)
+                    }
+                }
+
+                // Also shift gaps in the section
+                const gapResult = this.shiftGapsDown(result.strip.bayId, result.strip.sectionId)
+                shiftedGaps = gapResult.shiftedGaps
+                deletedGapKeys = gapResult.deletedGapKeys
+            }
+
             return {
                 strip: result.strip,
                 sectionChanged: result.sectionChanged,
-                previousSection: result.previousSection
+                previousSection: result.previousSection,
+                restored: result.restored,
+                shiftedStrips,
+                shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
+                deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined
             }
         }
 
@@ -332,6 +385,37 @@ class EfsStore {
         })
 
         return { affected, deleted }
+    }
+
+    // Shift all gap indices in a section down by 1 (for add-from-top)
+    // Returns the new gaps and the keys of deleted gaps (for client notification)
+    private shiftGapsDown(bayId: string, sectionId: string): { shiftedGaps: Gap[], deletedGapKeys: string[] } {
+        const sectionGaps = this.getGapsForSection(bayId, sectionId)
+        const shiftedGaps: Gap[] = []
+        const deletedGapKeys: string[] = []
+
+        // Collect gaps to update (we need to delete old keys and create new ones)
+        const updates: { oldKey: string, gap: Gap }[] = []
+
+        sectionGaps.forEach(gap => {
+            updates.push({
+                oldKey: gapKey(bayId, sectionId, gap.index),
+                gap
+            })
+        })
+
+        // Apply updates: delete old keys, create new gaps with incremented indices
+        updates.forEach(({ oldKey, gap }) => {
+            this.gaps.delete(oldKey)
+            deletedGapKeys.push(oldKey)
+
+            const newGap: Gap = { ...gap, index: gap.index + 1 }
+            const newKey = gapKey(bayId, sectionId, newGap.index)
+            this.gaps.set(newKey, newGap)
+            shiftedGaps.push(newGap)
+        })
+
+        return { shiftedGaps, deletedGapKeys }
     }
 
     // Recompute strip positions

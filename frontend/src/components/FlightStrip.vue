@@ -81,8 +81,15 @@
       </div>
     </div>
 
-    <!-- Right section: Action button (only shown when there's a default action) -->
-    <div v-if="strip.defaultAction" class="strip-right">
+    <!-- Right section: Action button or status indicator -->
+    <div v-if="strip.clearedForTakeoff" class="strip-right">
+      <div class="takeoff-indicator">
+        <svg viewBox="0 0 24 24" class="takeoff-triangle">
+          <polygon points="12,4 22,20 2,20" />
+        </svg>
+      </div>
+    </div>
+    <div v-else-if="strip.defaultAction" class="strip-right">
       <button
         class="action-button"
         @click.stop="onActionClick"
@@ -779,5 +786,27 @@ function onStripClick() {
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
+}
+
+/* Takeoff indicator - green triangle */
+.takeoff-indicator {
+  min-width: 36px;
+  width: auto;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f2ea;
+}
+
+.takeoff-triangle {
+  width: 20px;
+  height: 20px;
+}
+
+.takeoff-triangle polygon {
+  fill: #2e8b2e;
+  stroke: #1a5c1a;
+  stroke-width: 1;
 }
 </style>

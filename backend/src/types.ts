@@ -4,7 +4,7 @@
  * Ground state values from EuroScope
  * Empty string means no groundstate set (aircraft not on ground or state unknown)
  */
-export type GroundState = '' | 'NSTS' | 'STUP' | 'PUSH' | 'TAXI' | 'TXIN' | 'DEPA' | 'ARR' | 'LINEUP' | 'ONFREQ' | 'DE-ICE'
+export type GroundState = '' | 'NSTS' | 'STUP' | 'PUSH' | 'TAXI' | 'TXIN' | 'DEPA' | 'ARR' | 'LINEUP' | 'ONFREQ' | 'DE-ICE' | 'PARK'
 
 /**
  * Raw flight data built from EuroScope plugin messages.
@@ -46,6 +46,10 @@ export interface Flight {
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
     airborne?: boolean        // Aircraft is airborne after departure
+    deleted?: boolean         // Strip is soft-deleted (hidden from user)
+
+    // Radar position data
+    currentAltitude?: number  // Current altitude from radar in feet
 
     // Timestamps
     firstSeen?: number        // When flight was first seen (Date.now())
@@ -91,7 +95,8 @@ export interface ControllerAssignedDataUpdateMessage {
     rfl?: number
     cfl?: number
     groundstate?: GroundState
-    clearence?: boolean  // Note: typo in plugin, keeping for compatibility
+    clearance?: boolean
+    clearedToLand?: boolean
     stand?: string
     asp?: number
     mach?: number
@@ -143,6 +148,16 @@ export interface MyselfUpdateMessage {
     rwyconfig: Record<string, Record<string, { arr?: boolean; dep?: boolean }>>
 }
 
+export interface RadarTargetPositionUpdateMessage {
+    type: 'radarTargetPositionUpdate'
+    callsign: string
+    altitude: number      // Current altitude in feet
+    groundSpeed?: number  // Ground speed in knots (optional)
+    heading?: number      // Track heading in degrees (optional)
+    latitude?: number     // Position latitude (optional)
+    longitude?: number    // Position longitude (optional)
+}
+
 export type PluginMessage =
     | FlightPlanDataUpdateMessage
     | ControllerAssignedDataUpdateMessage
@@ -151,6 +166,7 @@ export type PluginMessage =
     | ControllerPositionUpdateMessage
     | ControllerDisconnectMessage
     | MyselfUpdateMessage
+    | RadarTargetPositionUpdateMessage
 
 /**
  * Type guard for plugin messages
@@ -167,6 +183,7 @@ export function isPluginMessage(data: unknown): data is PluginMessage {
         type === 'flightPlanFlightStripPushed' ||
         type === 'controllerPositionUpdate' ||
         type === 'controllerDisconnect' ||
-        type === 'myselfUpdate'
+        type === 'myselfUpdate' ||
+        type === 'radarTargetPositionUpdate'
     )
 }
