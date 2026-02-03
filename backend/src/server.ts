@@ -6,7 +6,7 @@ import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 
-import { constants, isClientMessage } from "@vatefs/common"
+import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
 import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
@@ -196,15 +196,6 @@ function handleClientMessage(socket: WebSocket, text: string) {
     }
 }
 
-// Helper to parse gap key (bayId:sectionId:index)
-function parseGapKey(key: string): { bayId: string, sectionId: string, index: number } | null {
-    const parts = key.split(':')
-    if (parts.length !== 3) return null
-    const index = parseInt(parts[2], 10)
-    if (isNaN(index)) return null
-    return { bayId: parts[0], sectionId: parts[1], index }
-}
-
 // Handle typed client messages
 function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
     switch (message.type) {
@@ -246,10 +237,10 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 })
 
-                console.log(`Strip ${message.stripId} moved to ${message.targetSectionId} (bottom: ${message.isBottom})`)
-
                 // Evaluate move rules if section changed
                 if (fromSectionId && fromSectionId !== message.targetSectionId) {
+                    console.log(`Strip ${message.stripId} dragged from ${fromSectionId} to ${message.targetSectionId} (bottom: ${message.isBottom})`)
+
                     const flight = flightStore.getFlight(result.strip.callsign)
                     if (flight) {
                         const moveAction = determineMoveAction(
@@ -264,6 +255,8 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             // sendUdp(JSON.stringify({ type: 'command', callsign: result.strip.callsign, command: moveAction.command }))
                         }
                     }
+                } else {
+                    console.log(`Strip ${message.stripId} dragged within ${message.targetSectionId} (bottom: ${message.isBottom})`)
                 }
             }
             break

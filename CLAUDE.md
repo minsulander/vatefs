@@ -25,7 +25,11 @@ EuroScope Plugin (C++) <--UDP--> Backend (Node.js) <--WebSocket--> Frontend (Vue
 
 ### Shared Code
 
-The `common` package (`@vatefs/common`) contains shared code between frontend and backend. Currently minimal (just version constants), but intended for shared types and utilities.
+The `common` package (`@vatefs/common`) contains shared code between frontend and backend:
+- Type definitions for flight strips, bays, sections, and gaps
+- WebSocket message types (server-to-client and client-to-server)
+- Gap management utilities (shared between frontend and backend)
+- Version constants
 
 ## Development Commands
 
@@ -58,6 +62,11 @@ The backend:
 - Runs HTTP/WebSocket server on port 17770
 - Listens for UDP messages on port 17771 (from EuroScope)
 - Sends UDP messages on port 17772 (to EuroScope)
+
+Command-line arguments:
+- `--airport ICAO` - Set the airport code (default: ESGG)
+- `--callsign CALLSIGN` - Set the controller callsign
+- `--record FILE` - Record UDP messages to file for playback
 
 ### Common (Shared TypeScript)
 
@@ -116,23 +125,60 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - `src/main.ts` - Application entry, Vuetify setup
 - `src/App.vue` - Root component
 - `src/router.ts` - Route definitions with hash/history mode detection
-- `src/store/efs.ts` - WebSocket connection management
-- `src/views/HomeView.vue` - Main view
+- `src/store/efs.ts` - Pinia store: WebSocket connection, strips, gaps, sections
+- `src/views/HomeView.vue` - Main view with strip bay layout
+- `src/components/StripBay.vue` - Bay container with sections
+- `src/components/StripSection.vue` - Section with drag-and-drop strips
+- `src/components/FlightStrip.vue` - Individual flight strip component
 
 ### Backend Structure
-- `src/server.ts` - Single-file server with Express, WebSocket, and UDP logic
+- `src/server.ts` - Main server: Express, WebSocket, and UDP handlers
+- `src/store.ts` - EfsStore: strip and gap management, plugin message processing
+- `src/flightStore.ts` - FlightStore: flight data management, strip creation
+- `src/types.ts` - Plugin message types and Flight interface
+- `src/config.ts` - Re-exports from split configuration modules
+- `src/config-types.ts` - Type definitions for rules (SectionRule, ActionRule, etc.)
+- `src/static-config.ts` - Static configuration: layout, rules, airport settings
+- `src/rules-engine.ts` - Rule evaluation functions for sections, actions, deletes, moves
+- `src/mockPluginMessages.ts` - Mock data for testing (empty by default)
+- `src/playback.ts` - Utility script for replaying recorded UDP messages
+
+### Common Structure
+- `src/index.ts` - Main exports
+- `src/types.ts` - FlightStrip, Section, Bay, Gap, EfsConfig types
+- `src/messages.ts` - WebSocket message types and type guards
+- `src/gap-utils.ts` - Shared gap management utilities
+- `src/constants.ts` - Version constant
 
 ### EuroScope Plugin Structure
 - `src/plugin.h` / `src/plugin.cpp` - Main plugin implementation
 - `src/main.cpp` - DLL entry point
 - `src/Version.h.in` - Version template (configured by CMake)
 
-### Plugin Event Handlers
-- `OnFlightPlanFlightPlanDataUpdate` - Flight plan changes
-- `OnFlightPlanControllerAssignedDataUpdate` - Controller assignments (squawk, altitude, heading, etc.)
-- `OnTimer` - Periodic updates, handles connection state and UDP receive
-- `UpdateMyself` - Collects controller and runway configuration data
-- `PostUpdates` - Sends batched updates via UDP
+## Rules Engine
+
+The backend uses a priority-based rules engine to determine:
+
+### Section Rules
+Determine which section a flight strip belongs to based on:
+- Flight direction (departure/arrival/either)
+- Ground state (NSTS, STUP, PUSH, TAXI, TXIN, DEPA, ARR, LINEUP, etc.)
+- Controller relationship (myself/not_myself/any)
+- Clearance flag, cleared to land flag, airborne flag
+
+### Action Rules
+Determine the default action button on a strip (ASSUME, CTL, CTO, XFER, PUSH, TAXI)
+
+### Delete Rules
+Determine when to soft-delete (hide) a strip:
+- Departures: high altitude + transferred
+- Arrivals: parked
+
+### Move Rules
+Determine EuroScope commands when strips are manually dragged between sections:
+- PENDING CLR → CLEARED: set clearance flag
+- CLEARED → START&PUSH: set groundstate PUSH
+- etc.
 
 ## Important Notes
 
@@ -157,3 +203,21 @@ The plugin reads settings from `VatEFSPlugin.txt` (same directory as DLL):
 
 ### WebSocket Auto-Reconnect
 The frontend store automatically attempts to reconnect every 3 seconds if the WebSocket connection is lost.
+
+### Ground States
+Valid ground state values from EuroScope:
+- Empty string `''` - No ground state set
+- `NSTS` - No status
+- `STUP` - Startup approved
+- `PUSH` - Pushback approved
+- `TAXI` - Taxiing (departure)
+- `TXIN` - Taxiing in (arrival)
+- `DEPA` - Departure roll / airborne
+- `ARR` - Arrival
+- `LINEUP` - Lined up on runway
+- `ONFREQ` - On frequency
+- `DE-ICE` - De-icing
+- `PARK` - Parked
+
+### Strip Positioning
+Sections can be configured with `addFromTop: true` (default) which adds new strips at position 0 and shifts existing strips down, or `addFromTop: false` to add at the bottom.

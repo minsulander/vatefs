@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
 import type { FlightStrip, EfsConfig, Gap, Section, ClientMessage } from "@vatefs/common"
-import { isServerMessage } from "@vatefs/common"
+import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -11,12 +11,6 @@ export const useEfsStore = defineStore("efs", () => {
     const config = ref<EfsConfig>({ bays: [] })
     const strips = ref<Map<string, FlightStrip>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
-
-    const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
-
-    function gapKey(bayId: string, sectionId: string, index: number): string {
-        return `${bayId}:${sectionId}:${index}`
-    }
 
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return

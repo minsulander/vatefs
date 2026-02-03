@@ -3,4 +3,29 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 - Hur sätta clearance flag?
 - DCL/PDC - gå direkt på hoppie? 
 
+Verifiera att DE-ICE är S/U och uppdatera konstanter etc, CLAUDE.md med att DE-ICE == startup approved.
 
+
+Start with se-men-inte-röra:
+- Filter on my airport (origin=, destination=, alternate= or on airport location)
+- Rules for ARR CTR -> RUNWAY besides CTL? Maybe check geographically against runway polygon?
+- Rules for RUNWAY -> DEP CTR? Maybe past runway end / outside of runway polygon? Maybe altitude?
+- Delete departure strip when? Transferred/freed = no longer assumed?
+- EOBT
+- ETA
+
+
+Actions:
+- Assume and transfer based on my callsign
+- If no coordinated next controller, free instead of transfer
+- Implement actions
+- Drag-and-drop actions
+
+Vidare i livet:
+- Top bar med lite status, flygplats, callsign, layout, z-tid
+- Skriva egna noteringar
+- Specialstrippar typ som de har på SA (dra upp från botten)
+
+Tekniskt:
+- Visa nånting i frontend när backend inte är uppkopplad
+- Nåt sätt att ladda config osv.

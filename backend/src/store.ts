@@ -1,11 +1,10 @@
 import type { EfsConfig, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
+import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
 import { flightStore } from "./flightStore.js"
 import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
-
-const GAP_BUFFER = 30 // Minimum pixels to create/maintain a gap
 
 export interface MoveStripResult {
     strip: FlightStrip
@@ -16,10 +15,6 @@ export interface MoveStripResult {
 export interface SetGapResult {
     gap: Gap | null  // null if gap was deleted
     deleted: boolean
-}
-
-function gapKey(bayId: string, sectionId: string, index: number): string {
-    return `${bayId}:${sectionId}:${index}`
 }
 
 class EfsStore {

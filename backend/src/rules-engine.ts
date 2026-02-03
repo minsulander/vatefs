@@ -1,0 +1,341 @@
+/**
+ * Rules engine for evaluating section, action, delete, and move rules.
+ * This module contains the logic for matching flights against configured rules.
+ */
+
+import type { Flight } from "./types.js"
+import type {
+    EfsStaticConfig,
+    FlightDirection,
+    ControllerCondition,
+    SectionRule,
+    ActionRule,
+    DeleteRule,
+    MoveRule,
+    StripAction,
+    EuroscopeCommand
+} from "./config-types.js"
+
+/**
+ * Check if a flight is at our airport in the given direction
+ */
+export function isAtOurAirport(
+    flight: Flight,
+    config: EfsStaticConfig,
+    direction: FlightDirection
+): boolean {
+    const ourAirport = config.ourAirport
+    switch (direction) {
+        case 'departure':
+            return flight.origin === ourAirport
+        case 'arrival':
+            return flight.destination === ourAirport
+        case 'either':
+            return flight.origin === ourAirport || flight.destination === ourAirport
+    }
+}
+
+/**
+ * Check controller condition against flight
+ */
+function checkControllerCondition(
+    flight: Flight,
+    condition: ControllerCondition,
+    config: EfsStaticConfig
+): boolean {
+    if (condition === 'any') return true
+
+    const isMyself = flight.controller === config.myCallsign
+    if (condition === 'myself') return isMyself
+    if (condition === 'not_myself') return !isMyself
+
+    return true
+}
+
+/**
+ * Evaluate a single section rule against a flight
+ */
+function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStaticConfig): boolean {
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    // Check groundstate condition
+    if (rule.groundstates !== undefined) {
+        const flightGroundstate = flight.groundstate ?? ''
+        if (!rule.groundstates.includes(flightGroundstate)) {
+            return false
+        }
+    }
+
+    // Check controller condition
+    if (rule.controller !== undefined) {
+        if (!checkControllerCondition(flight, rule.controller, config)) {
+            return false
+        }
+    }
+
+    // Check clearance flag
+    if (rule.clearance !== undefined) {
+        const hasClearance = flight.clearance ?? false
+        if (hasClearance !== rule.clearance) {
+            return false
+        }
+    }
+
+    // Check cleared to land flag
+    if (rule.clearedToLand !== undefined) {
+        const isClearedToLand = flight.clearedToLand ?? false
+        if (isClearedToLand !== rule.clearedToLand) {
+            return false
+        }
+    }
+
+    // Check airborne flag
+    if (rule.airborne !== undefined) {
+        const isAirborne = flight.airborne ?? false
+        if (isAirborne !== rule.airborne) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine which section a flight should be in based on rules
+ */
+export function determineSectionForFlight(
+    flight: Flight,
+    config: EfsStaticConfig
+): { bayId: string; sectionId: string; ruleId?: string } {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.sectionRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateSectionRule(flight, rule, config)) {
+            return {
+                bayId: rule.bayId,
+                sectionId: rule.sectionId,
+                ruleId: rule.id
+            }
+        }
+    }
+
+    // No rule matched, use default
+    return config.defaultSection ?? undefined!
+}
+
+/**
+ * Evaluate an action rule against a flight
+ */
+function evaluateActionRule(
+    flight: Flight,
+    sectionId: string,
+    rule: ActionRule,
+    config: EfsStaticConfig
+): boolean {
+    // Check section condition
+    if (rule.sectionId !== undefined && rule.sectionId !== sectionId) {
+        return false
+    }
+
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    // Check groundstate condition
+    if (rule.groundstates !== undefined) {
+        const flightGroundstate = flight.groundstate ?? ''
+        if (!rule.groundstates.includes(flightGroundstate)) {
+            return false
+        }
+    }
+
+    // Check controller condition
+    if (rule.controller !== undefined) {
+        if (!checkControllerCondition(flight, rule.controller, config)) {
+            return false
+        }
+    }
+
+    // Check clearance flag
+    if (rule.clearance !== undefined) {
+        const hasClearance = flight.clearance ?? false
+        if (hasClearance !== rule.clearance) {
+            return false
+        }
+    }
+
+    // Check cleared to land flag
+    if (rule.clearedToLand !== undefined) {
+        const isClearedToLand = flight.clearedToLand ?? false
+        if (isClearedToLand !== rule.clearedToLand) {
+            return false
+        }
+    }
+
+    // Check airborne flag
+    if (rule.airborne !== undefined) {
+        const isAirborne = flight.airborne ?? false
+        if (isAirborne !== rule.airborne) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine the default action for a flight strip
+ */
+export function determineActionForFlight(
+    flight: Flight,
+    sectionId: string,
+    config: EfsStaticConfig
+): StripAction | undefined {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.actionRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateActionRule(flight, sectionId, rule, config)) {
+            return rule.action
+        }
+    }
+
+    // No action
+    return undefined
+}
+
+/**
+ * Evaluate a delete rule against a flight
+ */
+function evaluateDeleteRule(
+    flight: Flight,
+    rule: DeleteRule,
+    config: EfsStaticConfig
+): boolean {
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    // Check groundstate condition
+    if (rule.groundstates !== undefined) {
+        const flightGroundstate = flight.groundstate ?? ''
+        if (!rule.groundstates.includes(flightGroundstate)) {
+            return false
+        }
+    }
+
+    // Check controller condition
+    if (rule.controller !== undefined) {
+        if (!checkControllerCondition(flight, rule.controller, config)) {
+            return false
+        }
+    }
+
+    // Check altitude above field elevation
+    if (rule.minAltitudeAboveField !== undefined) {
+        const currentAltitude = flight.currentAltitude
+        if (currentAltitude === undefined) {
+            return false // No altitude data, can't evaluate
+        }
+        const altitudeAboveField = currentAltitude - config.fieldElevation
+        if (altitudeAboveField < rule.minAltitudeAboveField) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine if a flight should be soft-deleted based on delete rules
+ * Returns the rule ID if a delete rule matches, undefined otherwise
+ */
+export function shouldDeleteFlight(
+    flight: Flight,
+    config: EfsStaticConfig
+): { shouldDelete: boolean; ruleId?: string } {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.deleteRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateDeleteRule(flight, rule, config)) {
+            return { shouldDelete: true, ruleId: rule.id }
+        }
+    }
+
+    return { shouldDelete: false }
+}
+
+/**
+ * Evaluate a move rule against a flight and section change
+ */
+function evaluateMoveRule(
+    flight: Flight,
+    fromSectionId: string,
+    toSectionId: string,
+    rule: MoveRule,
+    config: EfsStaticConfig
+): boolean {
+    // Check section conditions
+    if (rule.fromSectionId !== fromSectionId) {
+        return false
+    }
+    if (rule.toSectionId !== toSectionId) {
+        return false
+    }
+
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine what command to send to EuroScope when a strip is manually moved
+ * Returns the command and rule ID if a move rule matches, undefined otherwise
+ */
+export function determineMoveAction(
+    flight: Flight,
+    fromSectionId: string,
+    toSectionId: string,
+    config: EfsStaticConfig
+): { command: EuroscopeCommand; ruleId: string } | undefined {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.moveRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateMoveRule(flight, fromSectionId, toSectionId, rule, config)) {
+            return { command: rule.command, ruleId: rule.id }
+        }
+    }
+
+    return undefined
+}
