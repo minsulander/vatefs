@@ -147,6 +147,46 @@ export interface DeleteRule {
 }
 
 /**
+ * Command type to send to EuroScope plugin
+ */
+export type EuroscopeCommand =
+    | { type: 'setClearance'; value: boolean }
+    | { type: 'setGroundstate'; value: GroundState }
+    | { type: 'setClearedToLand'; value: boolean }
+    | { type: 'setClearedForTakeoff'; value: boolean }
+
+/**
+ * Move rule - determines what command to send to EuroScope when a strip
+ * is manually moved from one section to another
+ */
+export interface MoveRule {
+    /** Rule identifier for debugging */
+    id: string
+
+    /**
+     * Rule priority - higher priority rules are evaluated first
+     * Default: 0
+     */
+    priority?: number
+
+    // === Conditions (all specified conditions must match) ===
+
+    /** Section the strip is moving FROM */
+    fromSectionId: string
+
+    /** Section the strip is moving TO */
+    toSectionId: string
+
+    /** Flight direction at our airport */
+    direction?: FlightDirection
+
+    // === Action to execute ===
+
+    /** Command to send to EuroScope plugin */
+    command: EuroscopeCommand
+}
+
+/**
  * Static configuration for the EFS backend
  */
 export interface EfsStaticConfig {
@@ -176,6 +216,9 @@ export interface EfsStaticConfig {
 
     /** Delete rules - determines when strips should be soft-deleted */
     deleteRules: DeleteRule[]
+
+    /** Move rules - determines what command to send when strip is manually moved */
+    moveRules: MoveRule[]
 }
 
 /**
@@ -458,6 +501,75 @@ export const staticConfig: EfsStaticConfig = {
             groundstates: ['PARK'],
             priority: 100
         }
+    ],
+
+    moveRules: [
+        // === DEPARTURE FLOW ===
+
+        // PENDING CLR -> CLEARED: Set clearance flag
+        {
+            id: 'move_pending_to_cleared',
+            fromSectionId: 'pending_clr',
+            toSectionId: 'cleared',
+            direction: 'departure',
+            command: { type: 'setClearance', value: true }
+        },
+
+        // CLEARED -> START&PUSH: Set groundstate to PUSH
+        {
+            id: 'move_cleared_to_push',
+            fromSectionId: 'cleared',
+            toSectionId: 'start_push',
+            direction: 'departure',
+            command: { type: 'setGroundstate', value: 'PUSH' }
+        },
+
+        // START&PUSH -> TAXI: Set groundstate to TAXI
+        {
+            id: 'move_push_to_taxi',
+            fromSectionId: 'start_push',
+            toSectionId: 'taxi',
+            direction: 'departure',
+            command: { type: 'setGroundstate', value: 'TAXI' }
+        },
+
+        // TAXI -> RUNWAY: Set groundstate to LINEUP
+        {
+            id: 'move_taxi_to_runway',
+            fromSectionId: 'taxi',
+            toSectionId: 'runway',
+            direction: 'departure',
+            command: { type: 'setGroundstate', value: 'LINEUP' }
+        },
+
+        // === ARRIVAL FLOW ===
+
+        // INBOUND -> RUNWAY: Set cleared to land
+        {
+            id: 'move_inbound_to_runway',
+            fromSectionId: 'inbound',
+            toSectionId: 'runway',
+            direction: 'arrival',
+            command: { type: 'setClearedToLand', value: true }
+        },
+
+        // CTR ARR -> RUNWAY: Set cleared to land
+        {
+            id: 'move_ctr_arr_to_runway',
+            fromSectionId: 'ctr_arr',
+            toSectionId: 'runway',
+            direction: 'arrival',
+            command: { type: 'setClearedToLand', value: true }
+        },
+
+        // RUNWAY -> TAXI (arrival): Set groundstate to TXIN
+        {
+            id: 'move_runway_to_taxi_arr',
+            fromSectionId: 'runway',
+            toSectionId: 'taxi',
+            direction: 'arrival',
+            command: { type: 'setGroundstate', value: 'TXIN' }
+        }
     ]
 }
 
@@ -739,4 +851,57 @@ export function shouldDeleteFlight(
     }
 
     return { shouldDelete: false }
+}
+
+/**
+ * Evaluate a move rule against a flight and section change
+ */
+function evaluateMoveRule(
+    flight: Flight,
+    fromSectionId: string,
+    toSectionId: string,
+    rule: MoveRule,
+    config: EfsStaticConfig
+): boolean {
+    // Check section conditions
+    if (rule.fromSectionId !== fromSectionId) {
+        return false
+    }
+    if (rule.toSectionId !== toSectionId) {
+        return false
+    }
+
+    // Check direction condition
+    if (rule.direction !== undefined) {
+        if (!isAtOurAirport(flight, config, rule.direction)) {
+            return false
+        }
+    }
+
+    return true
+}
+
+/**
+ * Determine what command to send to EuroScope when a strip is manually moved
+ * Returns the command and rule ID if a move rule matches, undefined otherwise
+ */
+export function determineMoveAction(
+    flight: Flight,
+    fromSectionId: string,
+    toSectionId: string,
+    config: EfsStaticConfig
+): { command: EuroscopeCommand; ruleId: string } | undefined {
+    // Sort rules by priority (highest first)
+    const sortedRules = [...config.moveRules].sort(
+        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
+    )
+
+    // Find first matching rule
+    for (const rule of sortedRules) {
+        if (evaluateMoveRule(flight, fromSectionId, toSectionId, rule, config)) {
+            return { command: rule.command, ruleId: rule.id }
+        }
+    }
+
+    return undefined
 }

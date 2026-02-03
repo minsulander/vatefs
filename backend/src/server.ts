@@ -11,7 +11,8 @@ import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDe
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, staticConfig } from "./config.js"
+import { setMyCallsign, staticConfig, determineMoveAction } from "./config.js"
+import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 
 const __dirname = path.dirname(__filename)
@@ -70,6 +71,22 @@ function recordMessage(message: string) {
 
     const relativeTime = now - recordStartTime
     recordStream.write(`${relativeTime}\t${message}\n`)
+}
+
+/**
+ * Format an EuroScope command for logging
+ */
+function formatEuroscopeCommand(command: EuroscopeCommand): string {
+    switch (command.type) {
+        case 'setClearance':
+            return `setClearance(${command.value})`
+        case 'setGroundstate':
+            return `setGroundstate(${command.value})`
+        case 'setClearedToLand':
+            return `setClearedToLand(${command.value})`
+        case 'setClearedForTakeoff':
+            return `setClearedForTakeoff(${command.value})`
+    }
 }
 
 // Initialize store with mock data
@@ -201,6 +218,10 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
 
         case 'moveStrip': {
+            // Get the strip before moving to capture source section
+            const stripBefore = store.getStrip(message.stripId)
+            const fromSectionId = stripBefore?.sectionId
+
             const result = store.moveStrip(
                 message.stripId,
                 message.targetBayId,
@@ -226,6 +247,24 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 })
 
                 console.log(`Strip ${message.stripId} moved to ${message.targetSectionId} (bottom: ${message.isBottom})`)
+
+                // Evaluate move rules if section changed
+                if (fromSectionId && fromSectionId !== message.targetSectionId) {
+                    const flight = flightStore.getFlight(result.strip.callsign)
+                    if (flight) {
+                        const moveAction = determineMoveAction(
+                            flight,
+                            fromSectionId,
+                            message.targetSectionId,
+                            staticConfig
+                        )
+                        if (moveAction) {
+                            console.log(`[MOVE ACTION] ${result.strip.callsign}: ${formatEuroscopeCommand(moveAction.command)} (rule: ${moveAction.ruleId})`)
+                            // TODO: Send command to EuroScope plugin via UDP
+                            // sendUdp(JSON.stringify({ type: 'command', callsign: result.strip.callsign, command: moveAction.command }))
+                        }
+                    }
+                }
             }
             break
         }

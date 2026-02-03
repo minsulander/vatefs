@@ -272,7 +272,7 @@ class FlightStore {
 
         // Check if section changed due to groundstate change
         const isNewStrip = !hadRequiredData || !currentAssignment
-        const sectionChanged = currentAssignment &&
+        const sectionChanged = currentAssignment && targetSection &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -281,6 +281,10 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (isNewStrip) {
+            if (!targetSection) {
+                console.log(`No section found for flight ${callsign}`)
+                return { flight }
+            }
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
@@ -390,7 +394,7 @@ class FlightStore {
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
 
-        const sectionChanged = currentAssignment &&
+        const sectionChanged = currentAssignment && targetSection &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -399,6 +403,10 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (!currentAssignment) {
+            if (!targetSection) {
+                console.log(`No section found for flight ${callsign}`)
+                return { flight }
+            }
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
