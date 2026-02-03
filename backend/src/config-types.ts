@@ -3,7 +3,7 @@
  * These types define the structure of section mapping, action, delete, and move rules.
  */
 
-import type { EfsConfig } from "@vatefs/common"
+import type { EfsLayout } from "@vatefs/common"
 import type { GroundState } from "./types.js"
 
 /**
@@ -205,7 +205,7 @@ export interface EfsStaticConfig {
     fieldElevation: number
 
     /** Bay/section layout configuration */
-    layout: EfsConfig
+    layout: EfsLayout
 
     /** Section mapping rules - evaluated in priority order */
     sectionRules: SectionRule[]

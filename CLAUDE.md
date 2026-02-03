@@ -146,7 +146,7 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 
 ### Common Structure
 - `src/index.ts` - Main exports
-- `src/types.ts` - FlightStrip, Section, Bay, Gap, EfsConfig types
+- `src/types.ts` - FlightStrip, Section, Bay, Gap, EfsLayout types
 - `src/messages.ts` - WebSocket message types and type guards
 - `src/gap-utils.ts` - Shared gap management utilities
 - `src/constants.ts` - Version constant

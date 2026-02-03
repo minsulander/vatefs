@@ -5,6 +5,7 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
   - Verkar inte gå att hämta controller från radar target correlated flight plan... (kanske pga observer?)
   - Verkar inte komma flight strip pushed meddelanden... (def pga observer)
 
+  Kan kanske labba i Sweatbox också... för att komma runt observer-problematik men inte behöva sitta online.
   Om det inte går att ta reda på free, backuplösning för CTR DEP -> delete (> 20nm från flygplats eller nåt?)
 
 - Nödlösning för cleared to land i observer mode... "på banan"
@@ -70,6 +71,7 @@ Vidare i livet:
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 
-Tekniskt:
+Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad
 - Nåt sätt att ladda config osv.
+- Smidig paketering.

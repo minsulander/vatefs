@@ -70,6 +70,6 @@ export interface Bay {
     sections: Section[]
 }
 
-export interface EfsConfig {
+export interface EfsLayout {
     bays: Bay[]
 }

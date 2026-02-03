@@ -1,12 +1,12 @@
 // WebSocket API message types
 
-import type { EfsConfig, FlightStrip, Gap, Section } from "./types.js"
+import type { EfsLayout, FlightStrip, Gap, Section } from "./types.js"
 
 // Server -> Client messages
 
-export interface ConfigMessage {
-    type: 'config'
-    config: EfsConfig
+export interface LayoutMessage {
+    type: 'layout'
+    layout: EfsLayout
 }
 
 export interface StripMessage {
@@ -37,13 +37,13 @@ export interface SectionMessage {
     section: Section
 }
 
-export type ServerMessage = ConfigMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage
 
 // Client -> Server messages
 
 export interface RequestMessage {
     type: 'request'
-    request: 'config' | 'strips'
+    request: 'layout' | 'strips'
 }
 
 export interface MoveStripMessage {
@@ -85,7 +85,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'config' || type === 'strip' || type === 'stripDelete' ||
+    return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section'
 }
 

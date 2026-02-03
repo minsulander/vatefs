@@ -6,6 +6,6 @@ export type {
     FlightStrip,
     Section,
     Bay,
-    EfsConfig,
+    EfsLayout,
     Gap
 } from "@vatefs/common"

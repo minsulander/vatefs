@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsConfig, Gap, Section, ClientMessage } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -8,7 +8,7 @@ export const useEfsStore = defineStore("efs", () => {
     let socket: WebSocket | undefined = undefined
 
     const connected = ref(false)
-    const config = ref<EfsConfig>({ bays: [] })
+    const layout = ref<EfsLayout>({ bays: [] })
     const strips = ref<Map<string, FlightStrip>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
 
@@ -42,7 +42,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Send a typed request to the server
-    function sendRequest(request: 'config' | 'strips') {
+    function sendRequest(request: 'layout' | 'strips') {
         sendMessage({ type: 'request', request })
     }
 
@@ -52,8 +52,8 @@ export const useEfsStore = defineStore("efs", () => {
             const message = JSON.parse(data)
             if (isServerMessage(message)) {
                 switch (message.type) {
-                    case 'config':
-                        handleConfigMessage(message.config)
+                    case 'layout':
+                        handleLayoutMessage(message.layout)
                         break
                     case 'strip':
                         handleStripMessage(message.strip)
@@ -81,10 +81,10 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
-    // Handle config message from server
-    function handleConfigMessage(newConfig: EfsConfig) {
-        console.log("received config:", newConfig)
-        config.value = newConfig
+    // Handle layout message from server
+    function handleLayoutMessage(newLayout: EfsLayout) {
+        console.log("received layout:", newLayout)
+        layout.value = newLayout
     }
 
     // Handle strip message from server
@@ -114,7 +114,7 @@ export const useEfsStore = defineStore("efs", () => {
     // Handle section message from server
     function handleSectionMessage(bayId: string, section: Section) {
         console.log("received section:", section.id, section.height)
-        const bay = config.value.bays.find(b => b.id === bayId)
+        const bay = layout.value.bays.find(b => b.id === bayId)
         if (bay) {
             const existingIndex = bay.sections.findIndex(s => s.id === section.id)
             if (existingIndex !== -1) {
@@ -128,7 +128,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Computed getters
-    const getBays = computed(() => config.value.bays)
+    const getBays = computed(() => layout.value.bays)
 
     // Get top-attached strips (scrollable area) - computed from strips Map
     function getTopStrips(bayId: string, sectionId: string): FlightStrip[] {
@@ -390,7 +390,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function setSectionHeight(bayId: string, sectionId: string, height: number, broadcast: boolean = true) {
-        const bay = config.value.bays.find(b => b.id === bayId)
+        const bay = layout.value.bays.find(b => b.id === bayId)
         const section = bay?.sections.find(s => s.id === sectionId)
         if (section) {
             section.height = Math.max(80, height) // Enforce min height
@@ -409,7 +409,7 @@ export const useEfsStore = defineStore("efs", () => {
 
     // Batch send section heights (called at end of resize)
     function broadcastSectionHeights(bayId: string) {
-        const bay = config.value.bays.find(b => b.id === bayId)
+        const bay = layout.value.bays.find(b => b.id === bayId)
         if (!bay) return
 
         bay.sections.forEach(section => {
@@ -451,7 +451,7 @@ export const useEfsStore = defineStore("efs", () => {
     return {
         connected,
         getBays,
-        config,
+        layout,
         strips,
         gaps,
         getStripsBySection,

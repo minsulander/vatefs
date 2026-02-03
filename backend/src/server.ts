@@ -7,7 +7,7 @@ import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 
 import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
-import type { ConfigMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
+import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
@@ -143,14 +143,14 @@ function broadcastSection(bayId: string, section: Section, exclude?: WebSocket) 
     broadcast(message, exclude)
 }
 
-// Send config to a client
-function sendConfig(socket: WebSocket) {
-    const message: ConfigMessage = {
-        type: 'config',
-        config: store.getConfig()
+// Send layout to a client
+function sendLayout(socket: WebSocket) {
+    const message: LayoutMessage = {
+        type: 'layout',
+        layout: store.getLayout()
     }
     sendMessage(socket, message)
-    console.log("Sent config to client")
+    console.log("Sent layout to client")
 }
 
 // Send all strips to a client
@@ -189,8 +189,8 @@ function handleClientMessage(socket: WebSocket, text: string) {
     } catch {
         // Not a JSON message, check for legacy "?" request
         if (text === '?') {
-            // Legacy request: send config, strips, and gaps
-            sendConfig(socket)
+            // Legacy request: send layout, strips, and gaps
+            sendLayout(socket)
             sendStrips(socket)
             sendGaps(socket)
         } else {
@@ -205,8 +205,8 @@ function handleClientMessage(socket: WebSocket, text: string) {
 function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
     switch (message.type) {
         case 'request':
-            if (message.request === 'config') {
-                sendConfig(socket)
+            if (message.request === 'layout') {
+                sendLayout(socket)
             } else if (message.request === 'strips') {
                 sendStrips(socket)
                 sendGaps(socket)
@@ -313,7 +313,7 @@ wsServer.on("connection", (socket) => {
     wsClients.add(socket)
 
     // Send initial state immediately on connect
-    sendConfig(socket)
+    sendLayout(socket)
     sendStrips(socket)
     sendGaps(socket)
 
@@ -330,6 +330,40 @@ wsServer.on("connection", (socket) => {
 
 const app = express()
 app.use(logRequests("dev"))
+
+// REST API endpoints
+app.get("/api/flights", (req, res) => {
+    const flights = flightStore.getAllFlights()
+    res.json(flights)
+})
+
+app.get("/api/flight/:callsign", (req, res) => {
+    const flight = flightStore.getFlight(req.params.callsign)
+    if (flight) {
+        res.json(flight)
+    } else {
+        res.status(404).json({ error: "Flight not found" })
+    }
+})
+
+app.get("/api/config", (req, res) => {
+    res.json(staticConfig)
+})
+
+app.get("/api/strips", (req, res) => {
+    const strips = store.getAllStrips()
+    res.json(strips)
+})
+
+app.get("/api/strip/:callsign", (req, res) => {
+    const strip = store.getStrip(req.params.callsign)
+    if (strip) {
+        res.json(strip)
+    } else {
+        res.status(404).json({ error: "Strip not found" })
+    }
+})
+
 app.use(serveStatic(path.resolve(__dirname, "../public")))
 app.get("/*splat", (req, res) => res.sendFile(path.resolve(__dirname, "../public") + "/index.html"))
 const server = app.listen(port, () => console.log(`EFS backend ${constants.version} listening at http://127.0.0.1:${port}`))

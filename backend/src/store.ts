@@ -1,4 +1,4 @@
-import type { EfsConfig, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
+import type { EfsLayout, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
 import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
 import { flightStore } from "./flightStore.js"
@@ -18,13 +18,13 @@ export interface SetGapResult {
 }
 
 class EfsStore {
-    private config: EfsConfig
+    private layout: EfsLayout
     private strips: Map<string, FlightStrip>
     private deletedStrips: Map<string, FlightStrip>  // Soft-deleted strips (hidden but recoverable)
     private gaps: Map<string, Gap>  // key: bayId:sectionId:index
 
     constructor() {
-        this.config = { bays: [] }
+        this.layout = { bays: [] }
         this.strips = new Map()
         this.deletedStrips = new Map()
         this.gaps = new Map()
@@ -32,8 +32,8 @@ class EfsStore {
 
     // Initialize store, optionally with mock data
     loadMockData(useMocks: boolean = false) {
-        // Load config from static config
-        this.config = JSON.parse(JSON.stringify(staticConfig.layout))
+        // Load layout from static config
+        this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
 
         // Clear existing data
         this.strips.clear()
@@ -61,9 +61,9 @@ class EfsStore {
                 }
             }
 
-            console.log(`Store loaded with mock data: ${this.strips.size} strips, ${this.config.bays.length} bays`)
+            console.log(`Store loaded with mock data: ${this.strips.size} strips, ${this.layout.bays.length} bays`)
         } else {
-            console.log(`Store initialized: ${this.config.bays.length} bays (no mock data)`)
+            console.log(`Store initialized: ${this.layout.bays.length} bays (no mock data)`)
         }
     }
 
@@ -164,9 +164,9 @@ class EfsStore {
         return null
     }
 
-    // Get full config (for sending to clients)
-    getConfig(): EfsConfig {
-        return this.config
+    // Get layout (for sending to clients)
+    getLayout(): EfsLayout {
+        return this.layout
     }
 
     // Get all strips as array
@@ -208,7 +208,7 @@ class EfsStore {
 
     // Find a bay by ID
     private findBay(bayId: string): Bay | undefined {
-        return this.config.bays.find(b => b.id === bayId)
+        return this.layout.bays.find(b => b.id === bayId)
     }
 
     // Find a section by bay and section ID
