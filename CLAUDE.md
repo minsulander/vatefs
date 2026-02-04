@@ -64,8 +64,8 @@ The backend:
 - Sends UDP messages on port 17772 (to EuroScope)
 
 Command-line arguments:
-- `--airport ICAO[,ICAO2,...]` - Set airport code(s), comma-separated for multi-airport (default: ESGG)
-- `--callsign CALLSIGN` - Set the controller callsign
+- `--config FILE` - Load configuration from YAML file (default: `data/config/ESGG.yml`)
+- `--callsign CALLSIGN` - Override controller callsign (normally comes from EuroScope myselfUpdate)
 - `--record FILE` - Record UDP messages to file for playback
 - `--mock` - Load mock flight data for testing without EuroScope
 
@@ -139,7 +139,8 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - `src/types.ts` - Plugin message types and Flight interface
 - `src/config.ts` - Re-exports from split configuration modules
 - `src/config-types.ts` - Type definitions for rules (SectionRule, ActionRule, etc.)
-- `src/static-config.ts` - Static configuration: layout, rules, airport settings
+- `src/static-config.ts` - Runtime configuration state (loaded from YAML)
+- `src/config-loader.ts` - YAML configuration file loader
 - `src/rules-engine.ts` - Rule evaluation functions for sections, actions, deletes, moves
 - `src/geo-utils.ts` - Geographic utility functions (Haversine distance, range checks)
 - `src/airport-data.ts` - Airport data loading from CSV (coordinates, elevation)
@@ -150,6 +151,55 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 ### Data Files
 - `data/airports.csv` - Airport database with ICAO codes, coordinates, elevations
 - `data/runways.csv` - Runway database with headings, dimensions, thresholds
+- `data/config/ESGG.yml` - Default configuration for ESGG (Gothenburg)
+
+### Configuration Files (YAML)
+
+Configuration is loaded from YAML files in `data/config/`. The default is `ESGG.yml`.
+
+```yaml
+airports:
+  - ESGG          # List of airports to track
+
+radarRange: 25    # Radar range in nm for strip filtering
+
+layout:
+  bays:
+    bay1:         # Bay ID as key
+      sections:
+        inbound:  # Section ID as key
+          title: INBOUND
+          addFromTop: true  # Optional, default true
+
+sectionRules:
+  rule_name:      # Rule ID as key
+    sectionId: inbound
+    bayId: bay1
+    direction: arrival  # departure/arrival/either
+    groundstates: [ARR, '']
+    controller: not_myself  # myself/not_myself/any
+    priority: 70
+
+actionRules:
+  assume_inbound:
+    action: ASSUME
+    sectionId: inbound
+    priority: 100
+
+deleteRules:
+  delete_parked:
+    direction: arrival
+    groundstates: [PARK]
+    priority: 100
+
+moveRules:
+  pending_to_cleared:
+    fromSectionId: pending_clr
+    toSectionId: cleared
+    command:
+      type: setClearance
+      value: true
+```
 
 ### Common Structure
 - `src/index.ts` - Main exports

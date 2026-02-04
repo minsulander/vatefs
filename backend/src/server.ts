@@ -12,11 +12,12 @@ import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDe
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, staticConfig, determineMoveAction } from "./config.js"
+import { setMyCallsign, staticConfig, determineMoveAction, applyConfig } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
 import { loadRunways, getRunwayCount } from "./runway-data.js"
+import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -30,13 +31,13 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { airport?: string; callsign?: string; recordFile?: string; mock?: boolean } {
+function parseArgs(): { config?: string; callsign?: string; recordFile?: string; mock?: boolean } {
     const args = process.argv.slice(2)
-    const result: { airport?: string; callsign?: string; recordFile?: string; mock?: boolean } = {}
+    const result: { config?: string; callsign?: string; recordFile?: string; mock?: boolean } = {}
 
     for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--airport' && args[i + 1]) {
-            result.airport = args[++i]
+        if (args[i] === '--config' && args[i + 1]) {
+            result.config = args[++i]
         } else if (args[i] === '--callsign' && args[i + 1]) {
             result.callsign = args[++i]
         } else if (args[i] === '--record' && args[i + 1]) {
@@ -50,6 +51,16 @@ function parseArgs(): { airport?: string; callsign?: string; recordFile?: string
 }
 
 const cliArgs = parseArgs()
+
+// Load configuration from YAML file
+const configFile = cliArgs.config ?? getDefaultConfigPath(dataDir)
+try {
+    const config = loadConfig(configFile)
+    applyConfig(config)
+} catch (err) {
+    console.error(`Failed to load config: ${err instanceof Error ? err.message : err}`)
+    process.exit(1)
+}
 
 // Load airport and runway data
 const airportsFile = path.join(dataDir, "airports.csv")
@@ -67,15 +78,9 @@ if (fs.existsSync(runwaysFile)) {
     console.warn(`Runway data file not found: ${runwaysFile}`)
 }
 
-// Apply command-line config overrides
-if (cliArgs.airport) {
-    // Support comma-separated airport codes
-    const airports = cliArgs.airport.split(',').map(a => a.trim().toUpperCase())
-    staticConfig.myAirports = airports
-    console.log(`Airports set to: ${airports.join(', ')}`)
-}
+// Apply command-line callsign override
 if (cliArgs.callsign) {
-    staticConfig.myCallsign = cliArgs.callsign
+    setMyCallsign(cliArgs.callsign)
     console.log(`Callsign set to: ${cliArgs.callsign}`)
 }
 
