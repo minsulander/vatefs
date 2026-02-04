@@ -4,7 +4,9 @@
       "Bash(npm run build:*)",
       "Bash(wc:*)",
       "Bash(npm run type-check:*)",
-      "Bash(npm run build:only:*)"
+      "Bash(npm run build:only:*)",
+      "Bash(head:*)",
+      "Bash(timeout 3 npm start)"
     ]
   }
 }

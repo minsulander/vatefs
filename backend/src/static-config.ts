@@ -12,9 +12,9 @@ import type { EfsStaticConfig } from "./config-types.js"
  * Static configuration - will be loaded from file or server later
  */
 export const staticConfig: EfsStaticConfig = {
-    ourAirport: 'ESGG',
+    myAirports: ['ESGG'],
     myCallsign: 'ESGG_TWR', // Mock - will be updated from myselfUpdate
-    fieldElevation: 500, // Default field elevation in feet
+    radarRangeNm: 25, // Default radar range for strip filtering
 
     layout: {
         bays: [

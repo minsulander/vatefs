@@ -5,7 +5,12 @@
  * without a live connection. Enable with the --mock command-line flag.
  */
 
-import type { PluginMessage, FlightPlanDataUpdateMessage, ControllerAssignedDataUpdateMessage, GroundState } from "./types.js"
+import type { PluginMessage, FlightPlanDataUpdateMessage, ControllerAssignedDataUpdateMessage, RadarTargetPositionUpdateMessage, GroundState } from "./types.js"
+
+// ESGG (Gothenburg) airport coordinates
+const ESGG_LAT = 57.6628
+const ESGG_LON = 12.2798
+const ESGG_ELEV = 59 // feet
 
 // Helper to create a flight plan update
 function fpUpdate(
@@ -33,6 +38,24 @@ function ctrUpdate(
     return {
         type: 'controllerAssignedDataUpdate',
         callsign,
+        ...opts
+    }
+}
+
+// Helper to create a radar target position update
+function radarUpdate(
+    callsign: string,
+    altitude: number,
+    latitude: number = ESGG_LAT,
+    longitude: number = ESGG_LON,
+    opts: Partial<RadarTargetPositionUpdateMessage> = {}
+): RadarTargetPositionUpdateMessage {
+    return {
+        type: 'radarTargetPositionUpdate',
+        callsign,
+        altitude,
+        latitude,
+        longitude,
         ...opts
     }
 }
@@ -261,7 +284,41 @@ export const mockPluginMessages: PluginMessage[] = [
         groundstate: 'DE-ICE',
         clearance: true,
         stand: '7'
-    })
+    }),
+
+    // === RADAR POSITION UPDATES ===
+    // Required for strip creation (flights must have position data)
+
+    // INBOUND arrivals - approaching from various directions
+    radarUpdate('SAS911', 8000, 57.85, 12.10),    // NW of ESGG, descending
+    radarUpdate('DLH432', 5000, 57.55, 12.50),    // SE of ESGG, on approach
+
+    // CTR ARR arrivals - closer in, assumed by tower
+    radarUpdate('KLM1142', 3000, 57.70, 12.35),   // Final approach
+    radarUpdate('THY18A', 4000, 57.75, 12.25),    // Downwind/base
+
+    // RUNWAY - on or near runway
+    radarUpdate('NAX254', ESGG_ELEV, ESGG_LAT, ESGG_LON),      // Lined up on runway
+    radarUpdate('BAW791G', ESGG_ELEV + 50, ESGG_LAT - 0.01, ESGG_LON), // Departure roll
+
+    // CTR DEP - airborne, climbing out
+    radarUpdate('BRA841', 2500, 57.60, 12.20),    // Just departed, climbing
+
+    // TAXI - on ground at airport
+    radarUpdate('AFR1234', ESGG_ELEV, ESGG_LAT + 0.002, ESGG_LON + 0.003), // Taxiway
+    radarUpdate('FIN842', ESGG_ELEV, ESGG_LAT - 0.001, ESGG_LON + 0.005),  // Taxiing in
+
+    // PENDING CLR - at stands
+    radarUpdate('SAS462', ESGG_ELEV, ESGG_LAT + 0.003, ESGG_LON - 0.002),
+    radarUpdate('EZY8821', ESGG_ELEV, ESGG_LAT + 0.001, ESGG_LON - 0.004),
+
+    // CLEARED - at stands
+    radarUpdate('RYR123', ESGG_ELEV, ESGG_LAT + 0.002, ESGG_LON - 0.001),
+    radarUpdate('IBE3456', ESGG_ELEV, ESGG_LAT - 0.002, ESGG_LON - 0.003),
+
+    // START&PUSH - pushing/de-icing
+    radarUpdate('WZZ7890', ESGG_ELEV, ESGG_LAT + 0.001, ESGG_LON + 0.001),
+    radarUpdate('SAS999', ESGG_ELEV, ESGG_LAT - 0.003, ESGG_LON + 0.002)
 ]
 
 /**

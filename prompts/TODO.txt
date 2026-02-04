@@ -49,9 +49,9 @@ kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
   kolla Ground Radar plugin Developer Guide, testa runt...
 
 Start with se-men-inte-röra:
-- Filter on my airport (origin=, destination=, alternate= or on airport location)
-- Filter prefiles
-- Filter on distance - sometimes departures end up in dep strips when they've landed at their destination
+-12- Filter on my airport (origin=, destination=, alternate= or on airport location)
+-12- Filter prefiles
+-12- Filter on distance - sometimes departures end up in dep strips when they've landed at their destination
 - Rules for ARR CTR -> RUNWAY besides CTL? Maybe check geographically against runway polygon?
 - Rules for RUNWAY -> DEP CTR? Maybe past runway end / outside of runway polygon? Maybe altitude?
 - Delete departure strip when? Transferred/freed = no longer assumed?
@@ -69,9 +69,10 @@ Actions:
 - Sätta RMK/OPTEXT2
 
 Vidare i livet:
-- Top bar med lite status, flygplats, callsign, layout, z-tid
+- Överflygare, "local VFR", helikopter
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
+- Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 
 Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad

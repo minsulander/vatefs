@@ -15,24 +15,79 @@ import type {
     StripAction,
     EuroscopeCommand
 } from "./config-types.js"
+import { getAirportElevation, getAirportCoords } from "./airport-data.js"
+import { findNearestAirport } from "./geo-utils.js"
 
 /**
- * Check if a flight is at our airport in the given direction
+ * Check if a flight is at one of our airports in the given direction
  */
 export function isAtOurAirport(
     flight: Flight,
     config: EfsStaticConfig,
     direction: FlightDirection
 ): boolean {
-    const ourAirport = config.ourAirport
+    const myAirports = config.myAirports
     switch (direction) {
         case 'departure':
-            return flight.origin === ourAirport
+            return flight.origin !== undefined && myAirports.includes(flight.origin)
         case 'arrival':
-            return flight.destination === ourAirport
+            return flight.destination !== undefined && myAirports.includes(flight.destination)
         case 'either':
-            return flight.origin === ourAirport || flight.destination === ourAirport
+            return (flight.origin !== undefined && myAirports.includes(flight.origin)) ||
+                   (flight.destination !== undefined && myAirports.includes(flight.destination))
     }
+}
+
+/**
+ * Get the field elevation for a flight based on its nearest myAirport.
+ * Falls back to the first myAirport's elevation, then to 500ft.
+ */
+export function getFieldElevationForFlight(
+    flight: Flight,
+    config: EfsStaticConfig
+): number {
+    const DEFAULT_ELEVATION = 500
+
+    // If the flight has a known position, find the nearest airport
+    if (flight.latitude !== undefined && flight.longitude !== undefined) {
+        const nearest = findNearestAirport(
+            flight.latitude,
+            flight.longitude,
+            config.myAirports,
+            getAirportCoords
+        )
+        if (nearest) {
+            const elevation = getAirportElevation(nearest)
+            if (elevation !== undefined) {
+                return elevation
+            }
+        }
+    }
+
+    // Fall back: check departure airport first (for departures), then arrival
+    if (flight.origin && config.myAirports.includes(flight.origin)) {
+        const elevation = getAirportElevation(flight.origin)
+        if (elevation !== undefined) {
+            return elevation
+        }
+    }
+
+    if (flight.destination && config.myAirports.includes(flight.destination)) {
+        const elevation = getAirportElevation(flight.destination)
+        if (elevation !== undefined) {
+            return elevation
+        }
+    }
+
+    // Fall back to first airport in the list
+    if (config.myAirports.length > 0) {
+        const elevation = getAirportElevation(config.myAirports[0])
+        if (elevation !== undefined) {
+            return elevation
+        }
+    }
+
+    return DEFAULT_ELEVATION
 }
 
 /**
@@ -255,7 +310,8 @@ function evaluateDeleteRule(
         if (currentAltitude === undefined) {
             return false // No altitude data, can't evaluate
         }
-        const altitudeAboveField = currentAltitude - config.fieldElevation
+        const fieldElevation = getFieldElevationForFlight(flight, config)
+        const altitudeAboveField = currentAltitude - fieldElevation
         if (altitudeAboveField < rule.minAltitudeAboveField) {
             return false
         }

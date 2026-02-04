@@ -195,14 +195,14 @@ export interface MoveRule {
  * Static configuration for the EFS backend
  */
 export interface EfsStaticConfig {
-    /** ICAO code of "our" airport - used for filtering and rules */
-    ourAirport: string
+    /** ICAO codes of "my" airports - used for filtering and rules */
+    myAirports: string[]
 
     /** My controller callsign (will be updated from myselfUpdate) */
     myCallsign?: string
 
-    /** Field elevation in feet (default: 500) */
-    fieldElevation: number
+    /** Radar range in nautical miles for strip filtering (default: 25) */
+    radarRangeNm: number
 
     /** Bay/section layout configuration */
     layout: EfsLayout

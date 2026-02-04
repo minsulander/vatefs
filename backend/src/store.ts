@@ -318,6 +318,17 @@ class EfsStore {
         return null
     }
 
+    // Clear all data (called on refresh/reconnect)
+    clear() {
+        this.strips.clear()
+        this.deletedStrips.clear()
+        this.gaps.clear()
+        flightStore.clear()
+        // Reload layout from config
+        this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
+        console.log('Store cleared')
+    }
+
     // Clean up trailing gaps - returns deleted keys
     private cleanupGaps(bayId: string, sectionId: string): string[] {
         const strips = this.getStripsForSection(bayId, sectionId, false)

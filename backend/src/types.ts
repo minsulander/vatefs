@@ -16,6 +16,7 @@ export interface Flight {
     // Flight plan data (from flightPlanDataUpdate)
     origin?: string           // ADEP - departure aerodrome
     destination?: string      // ADES - destination aerodrome
+    alternate?: string        // ALTN - alternate aerodrome
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z
@@ -50,6 +51,8 @@ export interface Flight {
 
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
+    latitude?: number         // Current latitude from radar
+    longitude?: number        // Current longitude from radar
 
     // Timestamps
     firstSeen?: number        // When flight was first seen (Date.now())
@@ -75,6 +78,7 @@ export interface FlightPlanDataUpdateMessage {
     // Core flight plan data
     origin?: string           // ADEP
     destination?: string      // ADES
+    alternate?: string        // ALTN
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z

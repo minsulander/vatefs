@@ -29,5 +29,6 @@ export {
     determineSectionForFlight,
     determineActionForFlight,
     shouldDeleteFlight,
-    determineMoveAction
+    determineMoveAction,
+    getFieldElevationForFlight
 } from "./rules-engine.js"

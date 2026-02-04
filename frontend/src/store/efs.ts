@@ -12,6 +12,10 @@ export const useEfsStore = defineStore("efs", () => {
     const strips = ref<Map<string, FlightStrip>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
 
+    // Controller status
+    const myCallsign = ref('')
+    const myAirports = ref<string[]>([])
+
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
         socket = new WebSocket(`ws://${location.hostname}:17770`)
@@ -70,6 +74,13 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'section':
                         handleSectionMessage(message.bayId, message.section)
                         break
+                    case 'refresh':
+                        console.log('Server requested refresh:', message.reason ?? 'no reason given')
+                        refresh()
+                        break
+                    case 'status':
+                        handleStatusMessage(message.callsign, message.airports)
+                        break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
                 }
@@ -126,6 +137,32 @@ export const useEfsStore = defineStore("efs", () => {
             }
         }
     }
+
+    // Refresh all data from server
+    function refresh() {
+        console.log("Refreshing all data from server")
+        // Clear local state
+        layout.value = { bays: [] }
+        strips.value.clear()
+        gaps.value.clear()
+
+        // Request fresh data from server
+        sendRequest('layout')
+        sendRequest('strips')
+    }
+
+    // Handle status message from server
+    function handleStatusMessage(callsign: string, airports: string[]) {
+        console.log("received status:", callsign, airports)
+        myCallsign.value = callsign
+        myAirports.value = airports
+    }
+
+    // Computed: airports that are not part of the callsign (for display)
+    const displayAirports = computed(() => {
+        const callsign = myCallsign.value.toUpperCase()
+        return myAirports.value.filter(airport => !callsign.includes(airport))
+    })
 
     // Computed getters
     const getBays = computed(() => layout.value.bays)
@@ -454,6 +491,9 @@ export const useEfsStore = defineStore("efs", () => {
         layout,
         strips,
         gaps,
+        myCallsign,
+        myAirports,
+        displayAirports,
         getStripsBySection,
         getTopStrips,
         getBottomStrips,
@@ -468,6 +508,7 @@ export const useEfsStore = defineStore("efs", () => {
         sendStripAction,
         GAP_BUFFER,
         sendRequest,
-        connect
+        connect,
+        refresh
     }
 })

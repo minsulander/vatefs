@@ -7,8 +7,10 @@ import type {
     RadarTargetPositionUpdateMessage
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
+import { getAirportCoords } from "./airport-data.js"
+import { isWithinRangeOfAnyAirport } from "./geo-utils.js"
 
 /**
  * Result of processing a plugin message
@@ -85,6 +87,40 @@ class FlightStore {
     }
 
     /**
+     * Check if a flight is eligible to have a strip created.
+     * Requirements:
+     * 1. Flight has a radar position (lat/lon)
+     * 2. Flight's origin, destination, or alternate is in myAirports
+     * 3. Flight is within radarRangeNm of any myAirport
+     */
+    isEligibleForStrip(flight: Flight): boolean {
+        // Must have radar position
+        if (flight.latitude === undefined || flight.longitude === undefined) {
+            return false
+        }
+
+        // Must have origin, destination, or alternate at one of our airports
+        const myAirports = this.config.myAirports
+        const hasRelevantAirport =
+            (flight.origin !== undefined && myAirports.includes(flight.origin)) ||
+            (flight.destination !== undefined && myAirports.includes(flight.destination)) ||
+            (flight.alternate !== undefined && myAirports.includes(flight.alternate))
+
+        if (!hasRelevantAirport) {
+            return false
+        }
+
+        // Must be within radar range of any of our airports
+        return isWithinRangeOfAnyAirport(
+            flight.latitude,
+            flight.longitude,
+            myAirports,
+            this.config.radarRangeNm,
+            getAirportCoords
+        )
+    }
+
+    /**
      * Process an incoming plugin message and return the result
      */
     processMessage(message: PluginMessage): ProcessMessageResult {
@@ -133,6 +169,7 @@ class FlightStore {
         // Update flight data
         if (message.origin !== undefined) flight.origin = message.origin
         if (message.destination !== undefined) flight.destination = message.destination
+        if (message.alternate !== undefined) flight.alternate = message.alternate
         if (message.aircraftType !== undefined) flight.aircraftType = message.aircraftType
         if (message.wakeTurbulence !== undefined) flight.wakeTurbulence = message.wakeTurbulence
         if (message.flightRules !== undefined) flight.flightRules = message.flightRules
@@ -147,6 +184,11 @@ class FlightStore {
         // Check if we should create/update a strip
         const hasRequiredData = flightHasRequiredData(flight)
         if (!hasRequiredData) {
+            return { flight }
+        }
+
+        // Check if eligible for strip (position + airport + range)
+        if (!this.isEligibleForStrip(flight)) {
             return { flight }
         }
 
@@ -266,6 +308,11 @@ class FlightStore {
             return { flight, softDeleted: flight.deleted }
         }
 
+        // Check if eligible for strip (position + airport + range)
+        if (!this.isEligibleForStrip(flight)) {
+            return { flight }
+        }
+
         // Determine section based on rules
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
@@ -342,7 +389,7 @@ class FlightStore {
 
     /**
      * Handle radarTargetPositionUpdate message
-     * Updates altitude and checks for airborne status / delete conditions
+     * Updates altitude/position and checks for airborne status / delete conditions
      */
     private handleRadarTargetPositionUpdate(message: RadarTargetPositionUpdateMessage): ProcessMessageResult {
         const callsign = message.callsign
@@ -355,16 +402,19 @@ class FlightStore {
 
         // Update radar data
         flight.currentAltitude = message.altitude
+        if (message.latitude !== undefined) flight.latitude = message.latitude
+        if (message.longitude !== undefined) flight.longitude = message.longitude
         flight.lastUpdate = Date.now()
 
         // Check for airborne status (departures only)
         // Aircraft is airborne if altitude > field elevation + 300ft
-        const airborneThreshold = this.config.fieldElevation + 300
+        const fieldElevation = getFieldElevationForFlight(flight, this.config)
+        const airborneThreshold = fieldElevation + 300
         const wasAirborne = flight.airborne ?? false
         const isNowAirborne = message.altitude > airborneThreshold
 
-        // Only set airborne for departures (origin is our airport)
-        const isDeparture = flight.origin === this.config.ourAirport
+        // Only set airborne for departures (origin is at one of our airports)
+        const isDeparture = flight.origin !== undefined && this.config.myAirports.includes(flight.origin)
         if (isDeparture && !wasAirborne && isNowAirborne) {
             flight.airborne = true
             console.log(`Flight ${callsign} is now airborne (alt: ${message.altitude}ft)`)
@@ -388,6 +438,11 @@ class FlightStore {
         // Check if we should create/update a strip
         if (!flightHasRequiredData(flight) || flight.deleted) {
             return { flight, softDeleted: flight.deleted }
+        }
+
+        // Check if eligible for strip (position + airport + range)
+        if (!this.isEligibleForStrip(flight)) {
+            return { flight }
         }
 
         // Determine section based on rules (airborne flag may have changed)
@@ -598,27 +653,30 @@ class FlightStore {
      * Determine strip type based on flight data
      */
     private determineStripType(flight: Flight): StripType {
-        const ourAirport = this.config.ourAirport
+        const myAirports = this.config.myAirports
 
-        // Local flight (same origin and destination at our airport)
-        if (flight.origin === ourAirport && flight.destination === ourAirport) {
+        const originIsOurs = flight.origin !== undefined && myAirports.includes(flight.origin)
+        const destIsOurs = flight.destination !== undefined && myAirports.includes(flight.destination)
+
+        // Local flight (same origin and destination at one of our airports)
+        if (originIsOurs && destIsOurs) {
             return 'local'
         }
 
         // VFR (would need flight rules info, defaulting based on other factors for now)
         // This would need flightRules field from the plugin
 
-        // Departure from our airport
-        if (flight.origin === ourAirport) {
+        // Departure from one of our airports
+        if (originIsOurs) {
             return 'departure'
         }
 
-        // Arrival to our airport
-        if (flight.destination === ourAirport) {
+        // Arrival to one of our airports
+        if (destIsOurs) {
             return 'arrival'
         }
 
-        // Transit (neither origin nor destination at our airport)
+        // Transit (neither origin nor destination at our airports) or alternate-only
         return 'arrival' // Default to arrival for transits
     }
 

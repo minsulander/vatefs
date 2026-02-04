@@ -1,21 +1,28 @@
 import express from "express"
 import path from "path"
 import fs from "fs"
+import { fileURLToPath } from "url"
 import logRequests from "morgan"
 import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 
 import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
-import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, ServerMessage, ClientMessage } from "@vatefs/common"
+import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, RefreshMessage, StatusMessage, ServerMessage, ClientMessage } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
 import { setMyCallsign, staticConfig, determineMoveAction } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
+import { loadAirports, getAirportCount } from "./airport-data.js"
+import { loadRunways, getRunwayCount } from "./runway-data.js"
 
+const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+
+// Data directory path (relative to backend root when running from src/)
+const dataDir = path.resolve(__dirname, "../../data")
 
 const port = 17770
 const udpInPort = 17771
@@ -44,10 +51,28 @@ function parseArgs(): { airport?: string; callsign?: string; recordFile?: string
 
 const cliArgs = parseArgs()
 
+// Load airport and runway data
+const airportsFile = path.join(dataDir, "airports.csv")
+const runwaysFile = path.join(dataDir, "runways.csv")
+
+if (fs.existsSync(airportsFile)) {
+    loadAirports(airportsFile)
+} else {
+    console.warn(`Airport data file not found: ${airportsFile}`)
+}
+
+if (fs.existsSync(runwaysFile)) {
+    loadRunways(runwaysFile)
+} else {
+    console.warn(`Runway data file not found: ${runwaysFile}`)
+}
+
 // Apply command-line config overrides
 if (cliArgs.airport) {
-    staticConfig.ourAirport = cliArgs.airport
-    console.log(`Airport set to: ${cliArgs.airport}`)
+    // Support comma-separated airport codes
+    const airports = cliArgs.airport.split(',').map(a => a.trim().toUpperCase())
+    staticConfig.myAirports = airports
+    console.log(`Airports set to: ${airports.join(', ')}`)
 }
 if (cliArgs.callsign) {
     staticConfig.myCallsign = cliArgs.callsign
@@ -141,6 +166,33 @@ function broadcastGapDelete(bayId: string, sectionId: string, index: number, exc
 function broadcastSection(bayId: string, section: Section, exclude?: WebSocket) {
     const message: SectionMessage = { type: 'section', bayId, section }
     broadcast(message, exclude)
+}
+
+// Broadcast a refresh request to all clients
+function broadcastRefresh(reason?: string) {
+    const message: RefreshMessage = { type: 'refresh', reason }
+    broadcast(message)
+    console.log(`Broadcast refresh to all clients: ${reason ?? 'no reason'}`)
+}
+
+// Send status (callsign + airports) to a client
+function sendStatus(socket: WebSocket) {
+    const message: StatusMessage = {
+        type: 'status',
+        callsign: staticConfig.myCallsign ?? '',
+        airports: staticConfig.myAirports
+    }
+    sendMessage(socket, message)
+}
+
+// Broadcast status to all clients
+function broadcastStatus() {
+    const message: StatusMessage = {
+        type: 'status',
+        callsign: staticConfig.myCallsign ?? '',
+        airports: staticConfig.myAirports
+    }
+    broadcast(message)
 }
 
 // Send layout to a client
@@ -316,6 +368,7 @@ wsServer.on("connection", (socket) => {
     sendLayout(socket)
     sendStrips(socket)
     sendGaps(socket)
+    sendStatus(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -397,8 +450,22 @@ udpIn.on("message", (msg, rinfo) => {
         // Handle myselfUpdate to set our callsign
         if (data.type === 'myselfUpdate') {
             const msg = data as MyselfUpdateMessage
+            const previousCallsign = staticConfig.myCallsign
+            const callsignChanged = previousCallsign !== msg.callsign
+
             setMyCallsign(msg.callsign)
             console.log(`My callsign set to: ${msg.callsign}`)
+
+            // Broadcast updated status to all clients
+            broadcastStatus()
+
+            // If callsign changed, clear store and tell clients to refresh
+            if (callsignChanged && previousCallsign) {
+                console.log(`Callsign changed from ${previousCallsign} to ${msg.callsign}, clearing store`)
+                store.clear()
+                broadcastRefresh(`Callsign changed to ${msg.callsign}`)
+            }
+
             // Forward to clients
             wsClients.forEach((client) => {
                 if (client.readyState === WebSocket.OPEN) {

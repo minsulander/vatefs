@@ -64,7 +64,7 @@ The backend:
 - Sends UDP messages on port 17772 (to EuroScope)
 
 Command-line arguments:
-- `--airport ICAO` - Set the airport code (default: ESGG)
+- `--airport ICAO[,ICAO2,...]` - Set airport code(s), comma-separated for multi-airport (default: ESGG)
 - `--callsign CALLSIGN` - Set the controller callsign
 - `--record FILE` - Record UDP messages to file for playback
 - `--mock` - Load mock flight data for testing without EuroScope
@@ -135,14 +135,21 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 ### Backend Structure
 - `src/server.ts` - Main server: Express, WebSocket, and UDP handlers
 - `src/store.ts` - EfsStore: strip and gap management, plugin message processing
-- `src/flightStore.ts` - FlightStore: flight data management, strip creation
+- `src/flightStore.ts` - FlightStore: flight data management, strip creation, eligibility filtering
 - `src/types.ts` - Plugin message types and Flight interface
 - `src/config.ts` - Re-exports from split configuration modules
 - `src/config-types.ts` - Type definitions for rules (SectionRule, ActionRule, etc.)
 - `src/static-config.ts` - Static configuration: layout, rules, airport settings
 - `src/rules-engine.ts` - Rule evaluation functions for sections, actions, deletes, moves
+- `src/geo-utils.ts` - Geographic utility functions (Haversine distance, range checks)
+- `src/airport-data.ts` - Airport data loading from CSV (coordinates, elevation)
+- `src/runway-data.ts` - Runway data loading from CSV
 - `src/mockPluginMessages.ts` - Mock data for testing (empty by default)
 - `src/playback.ts` - Utility script for replaying recorded UDP messages
+
+### Data Files
+- `data/airports.csv` - Airport database with ICAO codes, coordinates, elevations
+- `data/runways.csv` - Runway database with headings, dimensions, thresholds
 
 ### Common Structure
 - `src/index.ts` - Main exports
@@ -222,3 +229,17 @@ Valid ground state values from EuroScope:
 
 ### Strip Positioning
 Sections can be configured with `addFromTop: true` (default) which adds new strips at position 0 and shifts existing strips down, or `addFromTop: false` to add at the bottom.
+
+### Strip Eligibility Filtering
+Strips are only created for flights that meet all of these criteria:
+1. **Radar position required**: Flight must have latitude/longitude from radar updates
+2. **Relevant airport**: Flight's origin, destination, or alternate must be in `myAirports`
+3. **Within range**: Flight must be within `radarRangeNm` (default 25nm) of any `myAirport`
+
+This filtering ensures strips only appear for flights that are relevant to the controller's position and within their radar coverage area.
+
+### Multi-Airport Support
+The backend supports controlling multiple airports simultaneously:
+- Configure via `--airport ESGG,ESSA` (comma-separated)
+- Field elevation is dynamically determined from the nearest configured airport
+- Strips appear for flights to/from any configured airport within radar range

@@ -37,7 +37,18 @@ export interface SectionMessage {
     section: Section
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage
+export interface RefreshMessage {
+    type: 'refresh'
+    reason?: string  // Optional reason for logging/debugging
+}
+
+export interface StatusMessage {
+    type: 'status'
+    callsign: string      // Controller callsign (e.g., 'ESGG_TWR')
+    airports: string[]    // Configured airports (e.g., ['ESGG', 'ESGT'])
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage
 
 // Client -> Server messages
 
@@ -86,7 +97,8 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     }
     const type = (data as { type: unknown }).type
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
-           type === 'gap' || type === 'gapDelete' || type === 'section'
+           type === 'gap' || type === 'gapDelete' || type === 'section' ||
+           type === 'refresh' || type === 'status'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {

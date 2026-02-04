@@ -20,6 +20,8 @@ export type {
     GapMessage,
     GapDeleteMessage,
     SectionMessage,
+    RefreshMessage,
+    StatusMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,

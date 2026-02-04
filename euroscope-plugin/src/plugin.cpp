@@ -112,6 +112,8 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (origin && strlen(origin) < 10) SetJsonIfValidUtf8(message, "origin", origin);
         const char *destination = fpData.GetDestination();
         if (destination && strlen(destination) < 10) SetJsonIfValidUtf8(message, "destination", destination);
+        const char *alternate = fpData.GetAlternate();
+        if (alternate && strlen(alternate) < 10) SetJsonIfValidUtf8(message, "alternate", alternate);
         SetJsonIfValidUtf8(message, "flightRules", fpData.GetPlanType());
         SetJsonIfValidUtf8(message, "communicationType", (std::string("") + fpData.GetCommunicationType()).c_str());
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
@@ -417,11 +419,11 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         message["latitude"] = position.GetPosition().m_Latitude;
         message["longitude"] = position.GetPosition().m_Longitude;
         message["altitude"] = position.GetPressureAltitude();
-        message["headingMagnetic"] = position.GetReportedHeading();
-        message["headingTrue"] = position.GetReportedHeadingTrueNorth();
+        // message["headingMagnetic"] = position.GetReportedHeading();
+        message["heading"] = position.GetReportedHeadingTrueNorth();
         SetJsonIfValidUtf8(message, "squawk", position.GetSquawk());
-        message["transponderC"] = position.GetTransponderC();
-        message["transponderI"] = position.GetTransponderI();
+        //message["modec"] = position.GetTransponderC();
+        //message["ident"] = position.GetTransponderI();
     }
     auto fp = RadarTarget.GetCorrelatedFlightPlan();
     if (fp.IsValid()) {

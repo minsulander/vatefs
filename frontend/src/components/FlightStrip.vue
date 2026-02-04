@@ -805,8 +805,8 @@ function onStripClick() {
 }
 
 .takeoff-triangle polygon {
-  fill: #2e8b2e;
-  stroke: #1a5c1a;
+  fill: #31bb31;
+  stroke: #2e8b2e;
   stroke-width: 1;
 }
 </style>
