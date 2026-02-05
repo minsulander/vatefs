@@ -10,6 +10,8 @@
 namespace VatEFS
 {
 
+class DummyRadarScreen;
+
 class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
 {
     public:
@@ -23,12 +25,19 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void OnControllerPositionUpdate (EuroScopePlugIn::CController Controller);
     void OnControllerDisconnect (EuroScopePlugIn::CController Controller);
     void OnRadarTargetPositionUpdate (EuroScopePlugIn::CRadarTarget RadarTarget);
+    EuroScopePlugIn::CRadarScreen *OnRadarScreenCreated ( const char * sDisplayName,
+        bool NeedRadarContent,
+        bool GeoReferenced,
+        bool CanBeSaved,
+        bool CanBeCreated );
 
     bool OnCompileCommand(const char *commandLine);
     void OnTimer(int counter);
 
 
     private:
+    friend class DummyRadarScreen;
+
     void UpdateMyself();
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
@@ -40,6 +49,7 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void* udpReceiveSocket; // SOCKET (using void* to avoid including winsock2.h in header)
     bool winsockInitialized;
     std::string connectionError;
+    std::vector<DummyRadarScreen *> dummyRadarScreens;
 
     void InitializeWinsock();
     void CleanupWinsock();
@@ -51,4 +61,18 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     static bool IsValidUtf8(const char* str);
     void SetJsonIfValidUtf8(nlohmann::json& j, const char* key, const char* value);
 };
+
+class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen
+{
+    public:
+    DummyRadarScreen(VatEFSPlugin *plugin);
+
+    void OnAsrContentToBeClosed ( void );
+    void DoStuff();
+    void AllocateSSR(const char *callsign);
+
+    private:
+    VatEFSPlugin *plugin;
+};
+
 } // namespace VatEFS

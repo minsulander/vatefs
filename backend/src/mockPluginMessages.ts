@@ -305,7 +305,7 @@ export const mockPluginMessages: PluginMessage[] = [
     radarUpdate('BRA841', 2500, 57.60, 12.20),    // Just departed, climbing
 
     // TAXI - on ground at airport
-    radarUpdate('AFR1234', ESGG_ELEV, ESGG_LAT + 0.002, ESGG_LON + 0.003), // Taxiway
+    radarUpdate('AFR1234', ESGG_ELEV, ESGG_LAT - 0.004, ESGG_LON + 0.005), // Taxiway
     radarUpdate('FIN842', ESGG_ELEV, ESGG_LAT - 0.001, ESGG_LON + 0.005),  // Taxiing in
 
     // PENDING CLR - at stands
@@ -313,11 +313,11 @@ export const mockPluginMessages: PluginMessage[] = [
     radarUpdate('EZY8821', ESGG_ELEV, ESGG_LAT + 0.001, ESGG_LON - 0.004),
 
     // CLEARED - at stands
-    radarUpdate('RYR123', ESGG_ELEV, ESGG_LAT + 0.002, ESGG_LON - 0.001),
-    radarUpdate('IBE3456', ESGG_ELEV, ESGG_LAT - 0.002, ESGG_LON - 0.003),
+    radarUpdate('RYR123', ESGG_ELEV, ESGG_LAT - 0.002, ESGG_LON + 0.001),
+    radarUpdate('IBE3456', ESGG_ELEV, ESGG_LAT - 0.002, ESGG_LON + 0.003),
 
     // START&PUSH - pushing/de-icing
-    radarUpdate('WZZ7890', ESGG_ELEV, ESGG_LAT + 0.001, ESGG_LON + 0.001),
+    radarUpdate('WZZ7890', ESGG_ELEV, ESGG_LAT - 0.001, ESGG_LON + 0.001),
     radarUpdate('SAS999', ESGG_ELEV, ESGG_LAT - 0.003, ESGG_LON + 0.002)
 ]
 

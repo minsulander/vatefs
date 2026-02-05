@@ -435,6 +435,14 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     PostJson(message, "OnRadarTargetPositionUpdate");
 }
 
+EuroScopePlugIn::CRadarScreen *VatEFSPlugin::OnRadarScreenCreated(const char *sDisplayName, bool NeedRadarContent, bool GeoReferenced, bool CanBeSaved, bool CanBeCreated)
+{
+    DebugMessage("RadarScreenCreated " + std::string(sDisplayName));
+    auto dummyRadarScreen = new DummyRadarScreen(this);
+    dummyRadarScreens.push_back(dummyRadarScreen);
+    return dummyRadarScreen;
+}
+
 bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 {
     std::string command = commandLine;
@@ -551,6 +559,30 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         else
             DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
+    } else if (subcommand == "ssr") {
+        if (dummyRadarScreens.size() > 0) dummyRadarScreens[0]->DoStuff();
+        else DisplayMessage("DummyRadarScreen not created");
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign = remainder;
+        std::string::size_type space = remainder.find(' ');
+        if (space != std::string::npos) callsign = remainder.substr(0, space);
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
+        if (callsign.empty()) {
+            DisplayMessage("Usage: .efs ssr CALLSIGN");
+            return false;
+        }
+        // auto fp = FlightPlanSelect(callsign.c_str());
+        // if (!fp.IsValid()) {
+        //     DisplayMessage("Flight plan not found: " + callsign);
+        //     return false;
+        // }
+        if (dummyRadarScreens.size() > 0) {
+            dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
+        } else {
+            DisplayMessage("DummyRadarScreen not created");
+        }
+        return true;
     }
     return false;
 }
@@ -583,8 +615,7 @@ void VatEFSPlugin::OnTimer(int counter)
         ReceiveUdpMessages();
 
         if (std::time(NULL) - enabledTime < 10) return;
-        // TODO temporarily disabled
-        // if (counter % 5 == 0) UpdateMyself();
+        if (counter % 5 == 0) UpdateMyself();
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnTimer exception: ") + e.what());
     } catch (...) {
@@ -957,6 +988,33 @@ void VatEFSPlugin::PostJson(const nlohmann::json &jsonData, const char *whereabo
     if (!connectionError.empty()) {
         DisplayMessage(std::string("PostJson: ") + connectionError);
     }
+}
+
+
+DummyRadarScreen::DummyRadarScreen(VatEFSPlugin *plugin)
+: CRadarScreen()
+{
+    this->plugin = plugin;
+}
+
+void DummyRadarScreen::OnAsrContentToBeClosed()
+{
+    plugin->dummyRadarScreens.erase(std::remove(plugin->dummyRadarScreens.begin(), plugin->dummyRadarScreens.end(), this), plugin->dummyRadarScreens.end());
+    delete this;
+}
+
+void DummyRadarScreen::DoStuff()
+{
+    plugin->DebugMessage("DummyRadarScreen::DoStuff");
+}
+
+void DummyRadarScreen::AllocateSSR(const char *callsign)
+{
+    plugin->DebugMessage("DummyRadarScreen::AllocateSSR " + std::string(callsign));
+    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign));  // make sure the correct aircraft is selected before calling 'StartTagFunction'
+    StartTagFunction(callsign, NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN, callsign, "TopSky plugin", 667, POINT(), RECT());
+    plugin->DebugMessage("did it work?");
+    //StartTagFunction("TopSky", 667, ssrCallsign.c_str());
 }
 
 } // namespace VatEFS

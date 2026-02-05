@@ -78,6 +78,12 @@ export interface SectionRule {
      * Airborne flag must match this value
      */
     airborne?: boolean
+
+    /**
+     * Aircraft must be on a runway (geographically within runway surface and low altitude)
+     * Checks all runways at myAirports
+     */
+    onRunway?: boolean
 }
 
 /**

@@ -17,6 +17,7 @@ import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
 import { loadRunways, getRunwayCount } from "./runway-data.js"
+import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -420,6 +421,25 @@ app.get("/api/strip/:callsign", (req, res) => {
     } else {
         res.status(404).json({ error: "Strip not found" })
     }
+})
+
+app.get("/api/onrunway", (req, res) => {
+    const lat = parseFloat(req.query.lat as string)
+    const lon = parseFloat(req.query.lon as string)
+    const alt = parseFloat(req.query.alt as string)
+    const airport = req.query.airport as string
+    const runway = req.query.runway as string | undefined
+
+    if (isNaN(lat) || isNaN(lon) || isNaN(alt) || !airport) {
+        res.status(400).json({
+            error: "Missing or invalid parameters",
+            usage: "/api/onrunway?lat=<lat>&lon=<lon>&alt=<alt>&airport=<ICAO>&runway=<optional>"
+        })
+        return
+    }
+
+    const result = isOnRunway(lat, lon, alt, airport, runway)
+    res.json(result)
 })
 
 app.use(serveStatic(path.resolve(__dirname, "../public")))

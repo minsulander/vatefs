@@ -17,6 +17,7 @@ import type {
 } from "./config-types.js"
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport } from "./geo-utils.js"
+import { isOnAnyRunway } from "./runway-detection.js"
 
 /**
  * Check if a flight is at one of our airports in the given direction
@@ -154,6 +155,33 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         const isAirborne = flight.airborne ?? false
         if (isAirborne !== rule.airborne) {
             return false
+        }
+    }
+
+    // Check onRunway condition
+    if (rule.onRunway !== undefined) {
+        // Need position and altitude data to check runway
+        if (
+            flight.latitude === undefined ||
+            flight.longitude === undefined ||
+            flight.currentAltitude === undefined
+        ) {
+            // Can't evaluate runway condition without position data
+            if (rule.onRunway === true) {
+                return false // Need to be on runway but can't verify
+            }
+            // If rule.onRunway === false, we can't verify so skip this condition
+        } else {
+            const runwayResult = isOnAnyRunway(
+                flight.latitude,
+                flight.longitude,
+                flight.currentAltitude,
+                config.myAirports
+            )
+            const isOnRunway = runwayResult !== undefined && runwayResult.onRunway
+            if (isOnRunway !== rule.onRunway) {
+                return false
+            }
         }
     }
 

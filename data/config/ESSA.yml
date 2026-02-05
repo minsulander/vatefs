@@ -1,7 +1,7 @@
 # VatEFS Configuration for ESGG (Gothenburg)
 
 airports:
-  - ESGG
+  - ESSA
 
 radarRange: 25  # nm
 

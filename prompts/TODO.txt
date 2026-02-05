@@ -1,3 +1,25 @@
+Testning på ESSA 2026-02-05:
+
+- DE-ICE = REA
+- .efs refresh - Behövs refresh funktion för att ladda om alla flightplans i ES och publicera till backend - när man startar om saker..
+- Backend watch inte ladda om när jag ändrar i TODO.txt
+
+- BAW785 hamna på TAXI - satte inte (avsiktigt) groundstate=DEPA, går inte att flytta - behövs section rule ej airborne för alla på marken
+
+- Free = uppdateras inte, ligger kvar i CTR DEP, verkar kunna använda controller="" i radartargetupdate
+- Delete strip oavsett states när de kommer utanför radarRange
+- Manuell delete strip funktion
+
+- Inte airport i config? Bara layout, lista ut airports från myself.
+- Skilja på DEP RWY, ARR RWY i ESSA layout
+
+- START&PUSH -> PUSH&START, under TAXI
+- PENDING CLR -> PENDING DEP
+
+- Backend log skriver ut alla radarTargetPositionUpdate, 
+  inte "Strip SAS2901 updated" och "Shifted 3 strips" om den inte faktiskt ändrat ngt
+- "Section pending_clr height set to 314.345223px" trots att jag inte rör något... frontend inte skicka meddelande om inte tillräckligt stor ändring?
+
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 
@@ -12,34 +34,34 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - Hur sätta squawk? - verkar gå att trigga TopSky xpdr code assignment! Kolla Developer Guide!
 
-It is possible to trigger a transponder code assignment from another plugin, using “StartTagFunction” with
-the following parameters:
-  o sFunctionPlugInName TopSky plugin
-  o functionID 667
-  o sItemString Callsign of the aircraft
-The “sCallsign” parameter is not used by the plugin, but as StartTagFunction will set that text string (case
-sensitive!) as the ASEL callsign, it is recommended to set a reasonable value to it – for example the current
-ASEL callsign, the same as sItemString, or an empty string. NULL will cause an exception.
-The function will trigger an automatic assignment if all the following conditions are met (otherwise the
-function will do nothing):
-  o SSR menu is not open
-  o A code assignment is currently not in progress
-  o At least 2 seconds have elapsed from the previous call to this function
-  o Both a valid CFlightPlan and a CRadarTarget are found for the requested callsign
-  o You are a controller
-  o The aircraft is not tracked by someone else
+    It is possible to trigger a transponder code assignment from another plugin, using “StartTagFunction” with
+    the following parameters:
+      o sFunctionPlugInName TopSky plugin
+      o functionID 667
+      o sItemString Callsign of the aircraft
+    The “sCallsign” parameter is not used by the plugin, but as StartTagFunction will set that text string (case
+    sensitive!) as the ASEL callsign, it is recommended to set a reasonable value to it – for example the current
+    ASEL callsign, the same as sItemString, or an empty string. NULL will cause an exception.
+    The function will trigger an automatic assignment if all the following conditions are met (otherwise the
+    function will do nothing):
+      o SSR menu is not open
+      o A code assignment is currently not in progress
+      o At least 2 seconds have elapsed from the previous call to this function
+      o Both a valid CFlightPlan and a CRadarTarget are found for the requested callsign
+      o You are a controller
+      o The aircraft is not tracked by someone else
 
-Testa i plugin!
+    Testa i plugin! ...men då behöver man en CRadarScreen... suck.
 
 
 - Hur sätta clearance flag?
-Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
+    Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
 
-https://github.com/KingfuChan/Departure-List-Sequencing-PlugIn-for-EuroScope
-använder assigned speed/mach/rate för att "synka"...
-man kan ju synka med scratchpad som alla andra...
+    https://github.com/KingfuChan/Departure-List-Sequencing-PlugIn-for-EuroScope
+    använder assigned speed/mach/rate för att "synka"...
+    man kan ju synka med scratchpad som alla andra...
 
-kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
+    kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
 
 
 
