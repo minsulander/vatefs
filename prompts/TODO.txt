@@ -5,9 +5,11 @@ Testning på ESSA 2026-02-05:
 
 
 
-- Free = uppdateras inte, ligger kvar i CTR DEP, verkar kunna använda controller="" i radartargetupdate
+-15? Free = uppdateras inte, ligger kvar i CTR DEP, verkar kunna använda controller="" i radartargetupdate
 
 - Skilja på DEP RWY, ARR RWY i ESSA layout
+
+- konstant för topsky anropet i pluginen
 
 
 
@@ -58,9 +60,7 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - DCL/PDC - gå direkt på hoppie? 
 
-Start with se-men-inte-röra:
-- EOBT
-- ETA
+Start with se-men-inte-röra.
 
 
 Actions:
@@ -84,3 +84,8 @@ Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad
 - Nåt sätt att ladda config osv.
 - Smidig paketering.
+
+
+CTR gränser från eCharts som geojson:
+https://daim.lfv.se/geoserver/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=mais:CTR&outputFormat=application/json&srsName=EPSG:3857
+

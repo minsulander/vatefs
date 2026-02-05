@@ -54,6 +54,9 @@ export interface Flight {
     noSectionFound?: boolean  // No section rule matched this flight (logged once)
     deletedByBeyondRange?: boolean // Deleted by beyond-range rule (arrivals auto-restore when in range)
 
+    // Rule tracking
+    lastSectionRule?: string  // ID of the last section rule that matched, or 'manual' for manual drag, 'default' for default section
+
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
     latitude?: number         // Current latitude from radar

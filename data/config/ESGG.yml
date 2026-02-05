@@ -82,7 +82,7 @@ sectionRules:
     direction: arrival
     groundstates: ['', NSTS, ARR]
     maxAltitudeAboveField: 1500
-    priority: 25
+    priority: 75
 
   # INBOUND: Arrivals not yet assumed (ARR groundstate or just arriving)
   inbound_arr_groundstate:

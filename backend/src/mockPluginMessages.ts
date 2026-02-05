@@ -5,7 +5,7 @@
  * without a live connection. Enable with the --mock command-line flag.
  */
 
-import type { PluginMessage, FlightPlanDataUpdateMessage, ControllerAssignedDataUpdateMessage, RadarTargetPositionUpdateMessage, GroundState } from "./types.js"
+import type { PluginMessage, FlightPlanDataUpdateMessage, ControllerAssignedDataUpdateMessage, RadarTargetPositionUpdateMessage, MyselfUpdateMessage, GroundState } from "./types.js"
 
 // ESGG (Gothenburg) airport coordinates
 const ESGG_LAT = 57.6628
@@ -336,3 +336,23 @@ export const mockBackendStateUpdates: BackendStateUpdate[] = [
     // BRA841 is airborne (in CTR DEP section)
     { callsign: 'BRA841', airborne: true }
 ]
+
+/**
+ * Mock myselfUpdate message - simulates being logged in as ESGG_TWR
+ */
+export const mockMyselfUpdate: MyselfUpdateMessage = {
+    type: 'myselfUpdate',
+    callsign: 'ESGG_TWR',
+    name: 'Mock Controller',
+    frequency: 118.600,
+    rating: 5,
+    facility: 4, // Tower
+    sector: '',
+    controller: true,
+    pluginVersion: 'mock',
+    rwyconfig: {
+        ESGG: {
+            '21': { arr: true, dep: true }
+        }
+    }
+}

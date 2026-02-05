@@ -85,6 +85,11 @@ class FlightStore {
      */
     setStripAssignment(callsign: string, bayId: string, sectionId: string, position: number, bottom: boolean) {
         this.stripAssignments.set(callsign, { bayId, sectionId, position, bottom })
+        // Mark as manually moved
+        const flight = this.flights.get(callsign)
+        if (flight) {
+            flight.lastSectionRule = 'manual'
+        }
     }
 
     /**
@@ -235,6 +240,9 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
+        // Store the rule that matched
+        const ruleSource = targetSection.ruleId ?? 'default'
+
         if (isNewStrip) {
             // New strip - assign position based on section config
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
@@ -245,6 +253,8 @@ class FlightStore {
                 position,
                 bottom
             })
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, new strip)`)
         } else if (sectionChanged) {
             // Section changed - move to new section
             previousSection = {
@@ -259,6 +269,9 @@ class FlightStore {
                 position,
                 bottom
             })
+            const previousRule = flight.lastSectionRule ?? 'unknown'
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} ${previousSection.sectionId} -> ${targetSection.sectionId} (rule: ${ruleSource}, was: ${previousRule})`)
         } else {
             // Keep current assignment
             position = currentAssignment!.position
@@ -385,6 +398,9 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
+        // Store the rule that matched
+        const ruleSource = targetSection.ruleId ?? 'default'
+
         if (isNewStrip) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
@@ -394,6 +410,8 @@ class FlightStore {
                 position,
                 bottom
             })
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, new strip)`)
         } else if (sectionChanged) {
             previousSection = {
                 bayId: currentAssignment!.bayId,
@@ -407,6 +425,9 @@ class FlightStore {
                 position,
                 bottom
             })
+            const previousRule = flight.lastSectionRule ?? 'unknown'
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} ${previousSection.sectionId} -> ${targetSection.sectionId} (rule: ${ruleSource}, was: ${previousRule})`)
         } else {
             position = currentAssignment!.position
             bottom = currentAssignment!.bottom
@@ -548,6 +569,9 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
+        // Store the rule that matched
+        const ruleSource = targetSection.ruleId ?? 'default'
+
         if (!currentAssignment) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
@@ -557,6 +581,8 @@ class FlightStore {
                 position,
                 bottom
             })
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, new strip)`)
         } else if (sectionChanged) {
             previousSection = {
                 bayId: currentAssignment.bayId,
@@ -570,6 +596,9 @@ class FlightStore {
                 position,
                 bottom
             })
+            const previousRule = flight.lastSectionRule ?? 'unknown'
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} ${previousSection.sectionId} -> ${targetSection.sectionId} (rule: ${ruleSource}, was: ${previousRule})`)
         } else {
             position = currentAssignment.position
             bottom = currentAssignment.bottom
@@ -865,6 +894,9 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
+        // Store the rule that matched
+        const ruleSource = targetSection.ruleId ?? 'default'
+
         if (!currentAssignment) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
@@ -874,6 +906,8 @@ class FlightStore {
                 position,
                 bottom
             })
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, backend flags)`)
         } else if (sectionChanged) {
             previousSection = {
                 bayId: currentAssignment.bayId,
@@ -887,6 +921,9 @@ class FlightStore {
                 position,
                 bottom
             })
+            const previousRule = flight.lastSectionRule ?? 'unknown'
+            flight.lastSectionRule = ruleSource
+            console.log(`[RULE] ${callsign} ${previousSection.sectionId} -> ${targetSection.sectionId} (rule: ${ruleSource}, was: ${previousRule}, backend flags)`)
         } else {
             position = currentAssignment.position
             bottom = currentAssignment.bottom

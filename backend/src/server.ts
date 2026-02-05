@@ -19,6 +19,7 @@ import { loadAirports, getAirportCount } from "./airport-data.js"
 import { loadRunways, getRunwayCount } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
+import { mockMyselfUpdate } from "./mockPluginMessages.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -136,10 +137,16 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
 }
 
 // Initialize store (with mock data if --mock flag is set)
-store.loadMockData(cliArgs.mock ?? false)
 if (cliArgs.mock) {
-    console.log('Mock data enabled')
+    // Apply mock myselfUpdate to set callsign and airports
+    setMyCallsign(mockMyselfUpdate.callsign)
+    const mockAirports = Object.keys(mockMyselfUpdate.rwyconfig)
+    if (mockAirports.length > 0) {
+        setMyAirports(mockAirports)
+    }
+    console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(', ')})`)
 }
+store.loadMockData(cliArgs.mock ?? false)
 
 // Helper to send a message to a WebSocket client
 function sendMessage(socket: WebSocket, message: ServerMessage) {
