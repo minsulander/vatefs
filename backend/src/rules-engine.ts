@@ -185,6 +185,19 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
+    // Check maxAltitudeAboveField condition
+    if (rule.maxAltitudeAboveField !== undefined) {
+        const currentAltitude = flight.currentAltitude
+        if (currentAltitude === undefined) {
+            return false // No altitude data, can't evaluate
+        }
+        const fieldElevation = getFieldElevationForFlight(flight, config)
+        const altitudeAboveField = currentAltitude - fieldElevation
+        if (altitudeAboveField > rule.maxAltitudeAboveField) {
+            return false // Aircraft is above the maximum altitude threshold
+        }
+    }
+
     return true
 }
 
@@ -194,7 +207,7 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
 export function determineSectionForFlight(
     flight: Flight,
     config: EfsStaticConfig
-): { bayId: string; sectionId: string; ruleId?: string } {
+): { bayId: string; sectionId: string; ruleId?: string } | undefined {
     // Sort rules by priority (highest first)
     const sortedRules = [...config.sectionRules].sort(
         (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
@@ -203,16 +216,28 @@ export function determineSectionForFlight(
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateSectionRule(flight, rule, config)) {
+            const bayId = config.sectionToBay.get(rule.sectionId)
+            if (!bayId) {
+                console.error(`Section "${rule.sectionId}" from rule "${rule.id}" not found in layout`)
+                continue
+            }
             return {
-                bayId: rule.bayId,
+                bayId,
                 sectionId: rule.sectionId,
                 ruleId: rule.id
             }
         }
     }
 
-    // No rule matched, use default
-    return config.defaultSection ?? undefined!
+    // No rule matched, use default if configured
+    if (config.defaultSection) {
+        const bayId = config.sectionToBay.get(config.defaultSection)
+        if (bayId) {
+            return { bayId, sectionId: config.defaultSection }
+        }
+    }
+
+    return undefined
 }
 
 /**

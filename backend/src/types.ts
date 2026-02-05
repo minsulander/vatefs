@@ -50,6 +50,7 @@ export interface Flight {
     deleted?: boolean         // Strip is soft-deleted (hidden from user)
     manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)
     noSectionFound?: boolean  // No section rule matched this flight (logged once)
+    deletedByBeyondRange?: boolean // Deleted by beyond-range rule (arrivals auto-restore when in range)
 
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
@@ -157,6 +158,7 @@ export interface MyselfUpdateMessage {
 export interface RadarTargetPositionUpdateMessage {
     type: 'radarTargetPositionUpdate'
     callsign: string
+    controller?: string
     altitude: number      // Current altitude in feet
     groundSpeed?: number  // Ground speed in knots (optional)
     heading?: number      // Track heading in degrees (optional)

@@ -12,6 +12,7 @@ const defaultConfig: EfsStaticConfig = {
     myAirports: [],
     radarRangeNm: 25,
     layout: { bays: [] },
+    sectionToBay: new Map(),
     sectionRules: [],
     actionRules: [],
     deleteRules: [],
@@ -35,7 +36,9 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.myAirports = config.myAirports
     staticConfig.radarRangeNm = config.radarRangeNm
     staticConfig.layout = config.layout
+    staticConfig.sectionToBay = config.sectionToBay
     staticConfig.sectionRules = config.sectionRules
+    staticConfig.defaultSection = config.defaultSection
     staticConfig.actionRules = config.actionRules
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules

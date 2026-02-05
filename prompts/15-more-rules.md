@@ -20,3 +20,7 @@ Getting repeated messages "No section found for flight SAS62J". That's for an ar
 there's no controller online to set PARK state... so it's correct that this flight should not have a strip. Let's
 avoid the repeated message by creating a deleted strip. So, we want the backend to output the log message once,
 then publish a deleted strip (if that means first publishing a strip and then deleting it that's fine).
+
+...
+
+I accidentally moved the push_start section to bay 3 without updating the "bayId" property in the config, resulting in no strip as the strip had sectionId=push_start and bayId=4. If we assume section id:s are unique, we shouldn't need to specify bayId in strips as that is given by the section. We also shouldn't need to specify bayId in the config sectionRules as we already have specified the bay/section structure above it. Implement the necessary functionality looking up bayId from the bay/section structure and modify both the config and strip messaging so that sectionId is the only thing specified, and the bay/section relation is specified in one place (the layout).

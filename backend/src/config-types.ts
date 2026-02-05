@@ -28,11 +28,8 @@ export interface SectionRule {
     /** Rule identifier for debugging */
     id: string
 
-    /** Target section ID when rule matches */
+    /** Target section ID when rule matches (bayId is auto-resolved from layout) */
     sectionId: string
-
-    /** Target bay ID when rule matches */
-    bayId: string
 
     /**
      * Rule priority - higher priority rules are evaluated first
@@ -84,6 +81,13 @@ export interface SectionRule {
      * Checks all runways at myAirports
      */
     onRunway?: boolean
+
+    /**
+     * Maximum altitude above field elevation (in feet) for this rule to match.
+     * Aircraft must be at or below this altitude relative to field elevation.
+     * Requires radar position data.
+     */
+    maxAltitudeAboveField?: number
 }
 
 /**
@@ -219,14 +223,14 @@ export interface EfsStaticConfig {
     /** Bay/section layout configuration */
     layout: EfsLayout
 
+    /** Lookup map: sectionId -> bayId (built from layout) */
+    sectionToBay: Map<string, string>
+
     /** Section mapping rules - evaluated in priority order */
     sectionRules: SectionRule[]
 
     /** Default section for flights that don't match any rule (optional) */
-    defaultSection?: {
-        bayId: string
-        sectionId: string
-    }
+    defaultSection?: string  // sectionId only, bayId is looked up
 
     /** Action rules - determines default action for strips */
     actionRules: ActionRule[]

@@ -210,9 +210,20 @@ class FlightStore {
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
 
+        // If no section matches, handle appropriately
+        if (!targetSection) {
+            return this.handleNoSectionFound(flight)
+        }
+
+        // Clear noSectionFound if a section is now found
+        if (flight.noSectionFound) {
+            flight.noSectionFound = false
+            flight.deleted = false
+        }
+
         // Check if this is a new strip or section changed
         const isNewStrip = !hadRequiredData || !currentAssignment
-        const sectionChanged = currentAssignment && targetSection &&
+        const sectionChanged = currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -222,14 +233,6 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (isNewStrip) {
-            if (!targetSection) {
-                return this.handleNoSectionFound(flight)
-            }
-            // Clear noSectionFound if a section is now found
-            if (flight.noSectionFound) {
-                flight.noSectionFound = false
-                flight.deleted = false
-            }
             // New strip - assign position based on section config
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
@@ -313,12 +316,34 @@ class FlightStore {
 
         if (deleteResult.shouldDelete && !wasDeleted) {
             flight.deleted = true
+            // Track if deleted by beyond-range rule (arrivals can be restored when in range)
+            if (deleteResult.ruleId === 'delete_beyond_range') {
+                flight.deletedByBeyondRange = true
+            }
             console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
             return { flight, softDeleted: true }
-        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted && !flight.noSectionFound) {
-            // Only auto-restore if not manually deleted and not due to no section found
-            flight.deleted = false
-            console.log(`Flight ${callsign} restored from soft-delete`)
+        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted) {
+            // Re-check if a section can now be found (conditions may have changed)
+            if (flight.noSectionFound) {
+                const targetSection = determineSectionForFlight(flight, this.config)
+                if (targetSection) {
+                    flight.noSectionFound = false
+                    flight.deleted = false
+                    console.log(`Flight ${callsign} restored - section now found: ${targetSection.sectionId}`)
+                }
+            } else {
+                flight.deleted = false
+                flight.deletedByBeyondRange = false
+                console.log(`Flight ${callsign} restored from soft-delete`)
+            }
+        } else if (wasDeleted && flight.deletedByBeyondRange && !flight.manuallyDeleted) {
+            // Special case: arrival deleted by beyond-range, check if now within range
+            const isArrival = flight.destination !== undefined && this.config.myAirports.includes(flight.destination)
+            if (isArrival && this.isEligibleForStrip(flight)) {
+                flight.deleted = false
+                flight.deletedByBeyondRange = false
+                console.log(`Flight ${callsign} (arrival) restored - now within range`)
+            }
         }
 
         // Check if we should create/update a strip
@@ -336,9 +361,20 @@ class FlightStore {
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
 
+        // If no section matches, handle appropriately
+        if (!targetSection) {
+            return this.handleNoSectionFound(flight)
+        }
+
+        // Clear noSectionFound if a section is now found
+        if (flight.noSectionFound) {
+            flight.noSectionFound = false
+            flight.deleted = false
+        }
+
         // Check if section changed due to groundstate change
         const isNewStrip = !hadRequiredData || !currentAssignment
-        const sectionChanged = currentAssignment && targetSection &&
+        const sectionChanged = currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -347,14 +383,6 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         if (isNewStrip) {
-            if (!targetSection) {
-                return this.handleNoSectionFound(flight)
-            }
-            // Clear noSectionFound if a section is now found
-            if (flight.noSectionFound) {
-                flight.noSectionFound = false
-                flight.deleted = false
-            }
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {
@@ -430,18 +458,20 @@ class FlightStore {
         if (message.longitude !== undefined) flight.longitude = message.longitude
         flight.lastUpdate = Date.now()
 
-        // Check for airborne status (departures only)
+        // Check for airborne status
         // Aircraft is airborne if altitude > field elevation + 300ft
         const fieldElevation = getFieldElevationForFlight(flight, this.config)
         const airborneThreshold = fieldElevation + 300
         const wasAirborne = flight.airborne ?? false
         const isNowAirborne = message.altitude > airborneThreshold
 
-        // Only set airborne for departures (origin is at one of our airports)
-        const isDeparture = flight.origin !== undefined && this.config.myAirports.includes(flight.origin)
-        if (isDeparture && !wasAirborne && isNowAirborne) {
+        // Set airborne flag for both departures and arrivals
+        if (!wasAirborne && isNowAirborne) {
             flight.airborne = true
             console.log(`Flight ${callsign} is now airborne (alt: ${message.altitude}ft)`)
+        } else if (wasAirborne && !isNowAirborne) {
+            // Aircraft has landed
+            flight.airborne = false
         }
 
         // Check delete rules
@@ -451,12 +481,34 @@ class FlightStore {
         if (deleteResult.shouldDelete && !wasDeleted) {
             // Soft-delete the flight
             flight.deleted = true
+            // Track if deleted by beyond-range rule (arrivals can be restored when in range)
+            if (deleteResult.ruleId === 'delete_beyond_range') {
+                flight.deletedByBeyondRange = true
+            }
             console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
             return { flight, softDeleted: true }
-        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted && !flight.noSectionFound) {
-            // Restore the flight (only if not manually deleted and not due to no section found)
-            flight.deleted = false
-            console.log(`Flight ${callsign} restored from soft-delete`)
+        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted) {
+            // Re-check if a section can now be found (conditions may have changed)
+            if (flight.noSectionFound) {
+                const targetSection = determineSectionForFlight(flight, this.config)
+                if (targetSection) {
+                    flight.noSectionFound = false
+                    flight.deleted = false
+                    console.log(`Flight ${callsign} restored - section now found: ${targetSection.sectionId}`)
+                }
+            } else {
+                flight.deleted = false
+                flight.deletedByBeyondRange = false
+                console.log(`Flight ${callsign} restored from soft-delete`)
+            }
+        } else if (wasDeleted && flight.deletedByBeyondRange && !flight.manuallyDeleted) {
+            // Special case: arrival deleted by beyond-range, check if now within range
+            const isArrival = flight.destination !== undefined && this.config.myAirports.includes(flight.destination)
+            if (isArrival && this.isEligibleForStrip(flight)) {
+                flight.deleted = false
+                flight.deletedByBeyondRange = false
+                console.log(`Flight ${callsign} (arrival) restored - now within range`)
+            }
         }
 
         // Check if we should create/update a strip
@@ -473,7 +525,18 @@ class FlightStore {
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
 
-        const sectionChanged = currentAssignment && targetSection &&
+        // If no section matches, handle appropriately
+        if (!targetSection) {
+            return this.handleNoSectionFound(flight)
+        }
+
+        // Clear noSectionFound if a section is now found
+        if (flight.noSectionFound) {
+            flight.noSectionFound = false
+            flight.deleted = false
+        }
+
+        const sectionChanged = currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
 
@@ -481,14 +544,7 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
-        if (!targetSection) {
-            return this.handleNoSectionFound(flight)
-        } else if (!currentAssignment) {
-            // Clear noSectionFound if a section is now found
-            if (flight.noSectionFound) {
-                flight.noSectionFound = false
-                flight.deleted = false
-            }
+        if (!currentAssignment) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
             this.stripAssignments.set(callsign, {

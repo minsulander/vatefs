@@ -59,12 +59,6 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 - DCL/PDC - gå direkt på hoppie? 
 
 Start with se-men-inte-röra:
--12- Filter on my airport (origin=, destination=, alternate= or on airport location)
--12- Filter prefiles
--12- Filter on distance - sometimes departures end up in dep strips when they've landed at their destination
-- Rules for ARR CTR -> RUNWAY besides CTL? Maybe check geographically against runway polygon?
-- Rules for RUNWAY -> DEP CTR? Maybe past runway end / outside of runway polygon? Maybe altitude?
-- Delete departure strip when? Transferred/freed = no longer assumed?
 - EOBT
 - ETA
 
@@ -84,6 +78,7 @@ Vidare i livet:
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
+- OBS mode skulle kunna betrakta CFL=CA (1) eller VA (2) som cleared to land
 
 Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad

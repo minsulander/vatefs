@@ -25,14 +25,22 @@ interface YamlConfig {
 
 /**
  * Transform YAML layout (key-based) to internal format (id-based)
+ * Also builds sectionToBay lookup map
  */
-function transformLayout(yamlLayout: YamlConfig['layout']): EfsLayout {
+function transformLayout(yamlLayout: YamlConfig['layout']): { layout: EfsLayout; sectionToBay: Map<string, string> } {
     const bays: Bay[] = []
+    const sectionToBay = new Map<string, string>()
 
     for (const [bayId, bayData] of Object.entries(yamlLayout.bays)) {
         const sections: Section[] = []
 
         for (const [sectionId, sectionData] of Object.entries(bayData.sections)) {
+            // Check for duplicate section IDs
+            if (sectionToBay.has(sectionId)) {
+                throw new Error(`Duplicate section ID "${sectionId}" found in bay "${bayId}" (already exists in bay "${sectionToBay.get(sectionId)}")`)
+            }
+            sectionToBay.set(sectionId, bayId)
+
             sections.push({
                 id: sectionId,
                 title: sectionData.title,
@@ -47,7 +55,7 @@ function transformLayout(yamlLayout: YamlConfig['layout']): EfsLayout {
         })
     }
 
-    return { bays }
+    return { layout: { bays }, sectionToBay }
 }
 
 /**
@@ -84,29 +92,59 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         throw new Error('Configuration must specify layout.bays')
     }
 
-    // Transform to internal format
+    // Transform layout and build sectionToBay lookup
+    const { layout, sectionToBay } = transformLayout(yamlConfig.layout)
+
+    // Transform rules
+    const sectionRules = yamlConfig.sectionRules
+        ? transformRules<SectionRule>(yamlConfig.sectionRules)
+        : []
+    const actionRules = yamlConfig.actionRules
+        ? transformRules<ActionRule>(yamlConfig.actionRules)
+        : []
+    const deleteRules = yamlConfig.deleteRules
+        ? transformRules<DeleteRule>(yamlConfig.deleteRules)
+        : []
+    const moveRules = yamlConfig.moveRules
+        ? transformRules<MoveRule>(yamlConfig.moveRules)
+        : []
+
+    // Validate that all sectionIds in rules exist in the layout
+    for (const rule of sectionRules) {
+        if (!sectionToBay.has(rule.sectionId)) {
+            throw new Error(`Section rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+        }
+    }
+    for (const rule of actionRules) {
+        if (rule.sectionId && !sectionToBay.has(rule.sectionId)) {
+            throw new Error(`Action rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+        }
+    }
+    for (const rule of moveRules) {
+        if (!sectionToBay.has(rule.fromSectionId)) {
+            throw new Error(`Move rule "${rule.id}" references unknown fromSection "${rule.fromSectionId}"`)
+        }
+        if (!sectionToBay.has(rule.toSectionId)) {
+            throw new Error(`Move rule "${rule.id}" references unknown toSection "${rule.toSectionId}"`)
+        }
+    }
+
     // Note: myAirports is set at runtime from myselfUpdate or CLI args, not from config
     const config: EfsStaticConfig = {
         myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
-        layout: transformLayout(yamlConfig.layout),
-        sectionRules: yamlConfig.sectionRules
-            ? transformRules<SectionRule>(yamlConfig.sectionRules)
-            : [],
-        actionRules: yamlConfig.actionRules
-            ? transformRules<ActionRule>(yamlConfig.actionRules)
-            : [],
-        deleteRules: yamlConfig.deleteRules
-            ? transformRules<DeleteRule>(yamlConfig.deleteRules)
-            : [],
-        moveRules: yamlConfig.moveRules
-            ? transformRules<MoveRule>(yamlConfig.moveRules)
-            : []
+        layout,
+        sectionToBay,
+        sectionRules,
+        actionRules,
+        deleteRules,
+        moveRules
     }
 
     console.log(`Loaded config from ${configPath}:`)
     console.log(`  Radar range: ${config.radarRangeNm}nm`)
     console.log(`  Bays: ${config.layout.bays.length}`)
+    console.log(`  Sections: ${sectionToBay.size}`)
     console.log(`  Section rules: ${config.sectionRules.length}`)
     console.log(`  Action rules: ${config.actionRules.length}`)
     console.log(`  Delete rules: ${config.deleteRules.length}`)

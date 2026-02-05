@@ -41,7 +41,6 @@ sectionRules:
   # This overrides all other section rules
   on_runway_geographic:
     sectionId: runway
-    bayId: bay2
     onRunway: true
     priority: 200
 
@@ -50,7 +49,6 @@ sectionRules:
   # CTR DEP: Airborne departures (groundstate DEPA + airborne flag)
   ctr_dep_airborne:
     sectionId: ctr_dep
-    bayId: bay2
     direction: departure
     groundstates: ['', NSTS, DEPA]
     airborne: true
@@ -59,7 +57,6 @@ sectionRules:
   # RUNWAY: Cleared to land arrivals
   runway_cleared_to_land:
     sectionId: runway
-    bayId: bay2
     direction: arrival
     clearedToLand: true
     groundstates: ['', NSTS, ARR]
@@ -68,23 +65,28 @@ sectionRules:
   # RUNWAY: Lineup and departure roll
   runway_lineup_depa:
     sectionId: runway
-    bayId: bay2
     groundstates: [LINEUP, DEPA]
     priority: 90
 
   # CTR ARR: Arrivals assumed by me
   ctr_arr_assumed:
     sectionId: ctr_arr
-    bayId: bay2
     direction: arrival
     controller: myself
     groundstates: ['', NSTS, ARR]
     priority: 80
 
+  # CTR ARR: Arrivals below 1500ft AGL (inside CTR vertical boundary)
+  ctr_arr_low_altitude:
+    sectionId: ctr_arr
+    direction: arrival
+    groundstates: ['', NSTS, ARR]
+    maxAltitudeAboveField: 1500
+    priority: 25
+
   # INBOUND: Arrivals not yet assumed (ARR groundstate or just arriving)
   inbound_arr_groundstate:
     sectionId: inbound
-    bayId: bay1
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]
@@ -96,7 +98,6 @@ sectionRules:
   # PUSH&START: Departures with DE-ICE (=READY) or STUP or PUSH
   push_start:
     sectionId: push_start
-    bayId: bay3
     direction: departure
     airborne: false
     groundstates: [DE-ICE, STUP, PUSH]
@@ -105,7 +106,6 @@ sectionRules:
   # CLEARED: Departures with clearance flag
   cleared:
     sectionId: cleared
-    bayId: bay4
     direction: departure
     airborne: false
     clearance: true
@@ -115,7 +115,6 @@ sectionRules:
   # PENDING DEP: Departures without clearance (no groundstate or ONFREQ)
   pending_dep:
     sectionId: pending_dep
-    bayId: bay4
     direction: departure
     airborne: false
     groundstates: ['', ONFREQ, NSTS]
@@ -127,7 +126,6 @@ sectionRules:
   # TAXI: Departures taxiing (after pushback, before lineup)
   taxi_dep:
     sectionId: taxi
-    bayId: bay3
     direction: departure
     airborne: false
     groundstates: [TAXI, TXIN]
@@ -136,7 +134,6 @@ sectionRules:
   # TAXI: Arrivals taxiing in (after vacating runway)
   taxi_arr:
     sectionId: taxi
-    bayId: bay3
     direction: arrival
     airborne: false
     groundstates: [TAXI, TXIN]
@@ -147,7 +144,6 @@ sectionRules:
   # Catch-all for arrivals at our airport
   fallback_arrival:
     sectionId: inbound
-    bayId: bay1
     direction: arrival
     airborne: true
     priority: 5
@@ -155,7 +151,6 @@ sectionRules:
   # Catch-all for departures at our airport
   fallback_departure:
     sectionId: pending_dep
-    bayId: bay4
     direction: departure
     priority: 5
 

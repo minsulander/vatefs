@@ -509,13 +509,9 @@ udpIn.on("message", (msg, rinfo) => {
             // Extract airports from rwyconfig - any airport with arr or dep set
             if (msg.rwyconfig) {
                 const discoveredAirports: string[] = []
-                for (const [icao, runways] of Object.entries(msg.rwyconfig)) {
-                    // Check if any runway has arr or dep enabled
-                    const hasActiveRunway = Object.values(runways).some(
-                        rwy => rwy.arr === true || rwy.dep === true
-                    )
-                    if (hasActiveRunway) {
-                        discoveredAirports.push(icao)
+                for (const airport of Object.keys(msg.rwyconfig)) {
+                    if (msg.rwyconfig[airport].arr || msg.rwyconfig[airport].dep) {
+                        discoveredAirports.push(airport)
                     }
                 }
                 if (discoveredAirports.length > 0) {
