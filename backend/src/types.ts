@@ -21,6 +21,8 @@ export interface Flight {
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z
     route?: string
+    eobt?: string              // Estimated Off Block Time (HHmm)
+    ete?: number               // Estimated Time Enroute (seconds)
 
     // Route assignments
     sid?: string              // Standard Instrument Departure
@@ -86,6 +88,8 @@ export interface FlightPlanDataUpdateMessage {
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z
     route?: string
+    eobt?: string              // Estimated Off Block Time (HHmm)
+    ete?: number               // Estimated Time Enroute (seconds)
     rfl?: number              // Requested flight level (feet)
     // Route data from UpdateRoute()
     arrRwy?: string
@@ -159,6 +163,7 @@ export interface RadarTargetPositionUpdateMessage {
     type: 'radarTargetPositionUpdate'
     callsign: string
     controller?: string
+    ete?: number
     altitude: number      // Current altitude in feet
     groundSpeed?: number  // Ground speed in knots (optional)
     heading?: number      // Track heading in degrees (optional)

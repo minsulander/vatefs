@@ -46,7 +46,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Send a typed request to the server
-    function sendRequest(request: 'layout' | 'strips') {
+    function sendRequest(request: 'layout' | 'strips' | 'refresh') {
         sendMessage({ type: 'request', request })
     }
 
@@ -76,7 +76,7 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'refresh':
                         console.log('Server requested refresh:', message.reason ?? 'no reason given')
-                        refresh()
+                        refresh(true)
                         break
                     case 'status':
                         handleStatusMessage(message.callsign, message.airports)
@@ -139,7 +139,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Refresh all data from server
-    function refresh() {
+    function refresh(serverRequested: boolean = false) {
         console.log("Refreshing all data from server")
         // Clear local state
         layout.value = { bays: [] }
@@ -149,6 +149,7 @@ export const useEfsStore = defineStore("efs", () => {
         // Request fresh data from server
         sendRequest('layout')
         sendRequest('strips')
+        if (!serverRequested) sendRequest('refresh')
     }
 
     // Handle status message from server

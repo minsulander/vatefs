@@ -111,11 +111,14 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char *origin = fpData.GetOrigin();
         if (origin && strlen(origin) < 10) SetJsonIfValidUtf8(message, "origin", origin);
         const char *destination = fpData.GetDestination();
-        if (destination && strlen(destination) < 10) SetJsonIfValidUtf8(message, "destination", destination);
+        if (destination && strlen(destination) < 10)
+            SetJsonIfValidUtf8(message, "destination", destination);
         const char *alternate = fpData.GetAlternate();
-        if (alternate && strlen(alternate) < 10) SetJsonIfValidUtf8(message, "alternate", alternate);
+        if (alternate && strlen(alternate) < 10)
+            SetJsonIfValidUtf8(message, "alternate", alternate);
         SetJsonIfValidUtf8(message, "flightRules", fpData.GetPlanType());
-        SetJsonIfValidUtf8(message, "communicationType", (std::string("") + fpData.GetCommunicationType()).c_str());
+        SetJsonIfValidUtf8(message, "communicationType",
+                           (std::string("") + fpData.GetCommunicationType()).c_str());
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
@@ -126,16 +129,23 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char *sidName = fpData.GetSidName();
 
         if (arrRwy && *arrRwy && strlen(arrRwy) < 5) SetJsonIfValidUtf8(message, "arrRwy", arrRwy);
-        if (starName && *starName && strlen(starName) < 10) SetJsonIfValidUtf8(message, "star", starName);
+        if (starName && *starName && strlen(starName) < 10)
+            SetJsonIfValidUtf8(message, "star", starName);
         if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
-        if (sidName && *sidName && strlen(sidName) < 10) SetJsonIfValidUtf8(message, "sid", sidName);
+        if (sidName && *sidName && strlen(sidName) < 10)
+            SetJsonIfValidUtf8(message, "sid", sidName);
 
+        const char *eobt = fpDa.GetEstimatedDepartureTime();
+        if (eobt && strlen(eobt) == 4) { // Valid EOBT is always 4 digits
+            out << " eobt " << eobt;
+            message["eobt"] = eobt;
+        }
 
-        // int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
-        // if (ete >= 0 && ete <= 1000) { // Reasonable ETE range
-        //     out << " ete " << ete;
-        // }
-
+        int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
+        if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
+            out << " ete " << ete;
+            message["ete"] = ete;
+        }
 
         DebugMessage(out.str());
         PostJson(message, "OnFlightPlanFlightPlanDataUpdate");
@@ -422,8 +432,8 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         // message["headingMagnetic"] = position.GetReportedHeading();
         message["heading"] = position.GetReportedHeadingTrueNorth();
         SetJsonIfValidUtf8(message, "squawk", position.GetSquawk());
-        //message["modec"] = position.GetTransponderC();
-        //message["ident"] = position.GetTransponderI();
+        // message["modec"] = position.GetTransponderC();
+        // message["ident"] = position.GetTransponderI();
     }
     auto fp = RadarTarget.GetCorrelatedFlightPlan();
     if (fp.IsValid()) {
@@ -439,11 +449,19 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         if (nextController && strlen(nextController) < 20) {
             SetJsonIfValidUtf8(message, "nextController", nextController);
         }
+        int ete = fp.GetPositionPredictions().GetPointsNumber();
+        if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
+            message["ete"] = ete;
+        }
     }
     PostJson(message, "OnRadarTargetPositionUpdate");
 }
 
-EuroScopePlugIn::CRadarScreen *VatEFSPlugin::OnRadarScreenCreated(const char *sDisplayName, bool NeedRadarContent, bool GeoReferenced, bool CanBeSaved, bool CanBeCreated)
+EuroScopePlugIn::CRadarScreen *VatEFSPlugin::OnRadarScreenCreated(const char *sDisplayName,
+                                                                  bool NeedRadarContent,
+                                                                  bool GeoReferenced,
+                                                                  bool CanBeSaved,
+                                                                  bool CanBeCreated)
 {
     DebugMessage("RadarScreenCreated " + std::string(sDisplayName));
     auto dummyRadarScreen = new DummyRadarScreen(this);
@@ -544,32 +562,18 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             callsign = remainder.substr(0, callEnd);
             content = remainder.substr(callEnd + 1);
         }
-        for (auto &c : callsign)
-            c = (char)std::toupper((unsigned char)c);
-        auto fp = FlightPlanSelect(callsign.c_str());
-        if (!fp.IsValid()) {
-            DisplayMessage("Flight plan not found: " + callsign);
-            return false;
-        }
         bool resetAfterSet = (subcommand == "scratmp");
-        std::string originalScratch;
-        if (resetAfterSet) {
-            const char *p = fp.GetControllerAssignedData().GetScratchPadString();
-            originalScratch = p ? p : "";
-        }
-        bool success = fp.GetControllerAssignedData().SetScratchPadString(content.c_str());
-        if (success && resetAfterSet) {
-            success = fp.GetControllerAssignedData().SetScratchPadString(originalScratch.c_str());
-            if (!success) DisplayMessage("Failed to reset scratch pad for " + callsign);
-        }
+        UpdateScratchPad(callsign, content, resetAfterSet);
         if (!success)
             DisplayMessage("Failed to set scratch pad for " + callsign);
         else
             DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
     } else if (subcommand == "ssr") {
-        if (dummyRadarScreens.size() > 0) dummyRadarScreens[0]->DoStuff();
-        else DisplayMessage("DummyRadarScreen not created");
+        if (dummyRadarScreens.size() > 0)
+            dummyRadarScreens[0]->DoStuff();
+        else
+            DisplayMessage("DummyRadarScreen not created");
         std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         std::string callsign = remainder;
         std::string::size_type space = remainder.find(' ');
@@ -592,12 +596,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         }
         return true;
     } else if (subcommand == "refresh") {
-		for ( EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid(); FlightPlan = FlightPlanSelectNext(FlightPlan)) {
-            OnFlightPlanFlightPlanDataUpdate(FlightPlan);
-        }
-        for ( EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst(); RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
-            OnRadarTargetPositionUpdate(RadarTarget);
-        }
+        Refresh();
         DisplayMessage("Refreshed all flight plans and radar targets");
         return true;
     }
@@ -615,11 +614,18 @@ void VatEFSPlugin::OnTimer(int counter)
             // Initialize Winsock and UDP receive socket
             InitializeWinsock();
             InitializeUdpReceiveSocket();
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "connectionTypeUpdate";
+            message["connectionType"] = GetConnectionType();
+            PostJson(message, "OnTimer");
         } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT &&
                    GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK) {
             disabled = true;
             DebugMessage("EFS updates disabled");
-
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "connectionTypeUpdate";
+            message["connectionType"] = GetConnectionType();
+            PostJson(message, "OnTimer");
             // Cleanup UDP receive socket
             CleanupUdpReceiveSocket();
             CleanupWinsock();
@@ -738,6 +744,47 @@ void VatEFSPlugin::UpdateMyself()
         DisplayMessage(std::string("UpdateMyself exception: ") + e.what());
     } catch (...) {
         DisplayMessage("UpdateMyself: Unknown exception");
+    }
+}
+
+void VatEFSPlugin::UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet)
+{
+    try {
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("Flight plan not found: " + callsign);
+            return false;
+        }
+        std::string originalScratch;
+        if (resetAfterSet) {
+            const char *p = fp.GetControllerAssignedData().GetScratchPadString();
+            originalScratch = p ? p : "";
+        }
+        bool success = fp.GetControllerAssignedData().SetScratchPadString(content.c_str());
+        if (success && resetAfterSet) {
+            success = fp.GetControllerAssignedData().SetScratchPadString(originalScratch.c_str());
+            if (!success) DisplayMessage("Failed to reset scratch pad for " + callsign);
+        }
+        return success;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("UpdateScratchPadAndReset exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("UpdateScratchPadAndReset: Unknown exception");
+    }
+    return false;
+}
+
+void VatEFSPlugin::Refresh()
+{
+    for (EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid();
+         FlightPlan = FlightPlanSelectNext(FlightPlan)) {
+        OnFlightPlanFlightPlanDataUpdate(FlightPlan);
+    }
+    for (EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst();
+         RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
+        OnRadarTargetPositionUpdate(RadarTarget);
     }
 }
 
@@ -883,13 +930,22 @@ void VatEFSPlugin::ReceiveUdpMessages()
         }
 
         if (recvResult > 0) {
-            // Null-terminate the received data
             buffer[recvResult] = '\0';
 
-            // Display the received message
-            std::string message = "UDP received: ";
-            message += std::string(buffer, recvResult);
-            DisplayMessage(message);
+            if (buffer[0] == '{') {
+                nlohmann::json message = nlohmann::json::parse(buffer);
+                if (message["type"] == "setGroundState") {
+                    const char *callsign = message["callsign"].get<std::string>().c_str();
+                    const char *groundState = message["groundState"].get<std::string>().c_str();
+                    UpdateScratchPadAndReset(callsign, groundState);
+                } else if (message["type"] == "refresh") {
+                    Refresh();
+                } else {
+                    DisplayMessage("Unknown UDP message type: " + message["type"].get<std::string>());
+                }
+            } else {
+                DisplayMessage("UDP received: " + std::string(buffer));
+            }
         }
     } catch (const std::exception &e) {
         DisplayMessage(std::string("ReceiveUdpMessages exception: ") + e.what());
@@ -904,8 +960,7 @@ bool VatEFSPlugin::IsValidUtf8(const char *str)
     const unsigned char *p = reinterpret_cast<const unsigned char *>(str);
     while (*p) {
         unsigned char c = *p++;
-        if (c <= 0x7F)
-            continue;
+        if (c <= 0x7F) continue;
         if (c >= 0xC2 && c <= 0xDF) {
             if ((*p++ & 0xC0) != 0x80) return false;
             continue;
@@ -951,7 +1006,8 @@ std::string VatEFSPlugin::SanitizeUtf8(const char *str)
                 }
                 continue;
             }
-            for (size_t i = 0; i < seq.size(); i++) result += '?';
+            for (size_t i = 0; i < seq.size(); i++)
+                result += '?';
             seq.clear();
             expectedContinuations = 0;
             if (!c) break;
@@ -984,7 +1040,8 @@ std::string VatEFSPlugin::SanitizeUtf8(const char *str)
         result += '?';
         p++;
     }
-    for (size_t i = 0; i < seq.size(); i++) result += '?';
+    for (size_t i = 0; i < seq.size(); i++)
+        result += '?';
     return result;
 }
 
@@ -1074,15 +1131,16 @@ void VatEFSPlugin::PostJson(const nlohmann::json &jsonData, const char *whereabo
 }
 
 
-DummyRadarScreen::DummyRadarScreen(VatEFSPlugin *plugin)
-: CRadarScreen()
+DummyRadarScreen::DummyRadarScreen(VatEFSPlugin *plugin) : CRadarScreen()
 {
     this->plugin = plugin;
 }
 
 void DummyRadarScreen::OnAsrContentToBeClosed()
 {
-    plugin->dummyRadarScreens.erase(std::remove(plugin->dummyRadarScreens.begin(), plugin->dummyRadarScreens.end(), this), plugin->dummyRadarScreens.end());
+    plugin->dummyRadarScreens.erase(std::remove(plugin->dummyRadarScreens.begin(),
+                                                plugin->dummyRadarScreens.end(), this),
+                                    plugin->dummyRadarScreens.end());
     delete this;
 }
 
@@ -1094,10 +1152,12 @@ void DummyRadarScreen::DoStuff()
 void DummyRadarScreen::AllocateSSR(const char *callsign)
 {
     plugin->DebugMessage("DummyRadarScreen::AllocateSSR " + std::string(callsign));
-    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign));  // make sure the correct aircraft is selected before calling 'StartTagFunction'
-    StartTagFunction(callsign, NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN, callsign, "TopSky plugin", 667, POINT(), RECT());
+    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(
+    callsign)); // make sure the correct aircraft is selected before calling 'StartTagFunction'
+    StartTagFunction(callsign, NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN, callsign,
+                     "TopSky plugin", 667, POINT(), RECT());
     plugin->DebugMessage("did it work?");
-    //StartTagFunction("TopSky", 667, ssrCallsign.c_str());
+    // StartTagFunction("TopSky", 667, ssrCallsign.c_str());
 }
 
 } // namespace VatEFS

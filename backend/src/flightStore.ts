@@ -11,6 +11,7 @@ import { staticConfig, determineSectionForFlight, determineActionForFlight, setM
 import type { EfsStaticConfig } from "./config.js"
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport } from "./geo-utils.js"
+import moment from "moment"
 
 /**
  * Result of processing a plugin message
@@ -188,6 +189,8 @@ class FlightStore {
         if (message.wakeTurbulence !== undefined) flight.wakeTurbulence = message.wakeTurbulence
         if (message.flightRules !== undefined) flight.flightRules = message.flightRules
         if (message.route !== undefined) flight.route = message.route
+        if (message.eobt !== undefined) flight.eobt = message.eobt
+        if (message.ete !== undefined) flight.ete = message.ete
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.arrRwy !== undefined) flight.arrRwy = message.arrRwy
         if (message.star !== undefined) flight.star = message.star
@@ -453,6 +456,7 @@ class FlightStore {
 
         // Update radar data
         flight.currentAltitude = message.altitude
+        if (message.ete !== undefined) flight.ete = message.ete
         if (message.controller !== undefined) flight.controller = message.controller
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
@@ -461,7 +465,7 @@ class FlightStore {
         // Check for airborne status
         // Aircraft is airborne if altitude > field elevation + 300ft
         const fieldElevation = getFieldElevationForFlight(flight, this.config)
-        const airborneThreshold = fieldElevation + 300
+        const airborneThreshold = fieldElevation + 100
         const wasAirborne = flight.airborne ?? false
         const isNowAirborne = message.altitude > airborneThreshold
 
@@ -714,6 +718,8 @@ class FlightStore {
             adep: flight.origin ?? '????',
             ades: flight.destination ?? '????',
             route: flight.route,
+            eobt: flight.eobt,
+            eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
             sid: flight.sid,
             rfl,
             squawk: flight.squawk,

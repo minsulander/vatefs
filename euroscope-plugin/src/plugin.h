@@ -41,6 +41,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void UpdateMyself();
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
+    bool UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet = false);
+    void Refresh();
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
 
     bool disabled;

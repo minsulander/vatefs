@@ -281,6 +281,8 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             } else if (message.request === 'strips') {
                 sendStrips(socket)
                 sendGaps(socket)
+            } else if (message.request === 'refresh') {
+                sendUdp(JSON.stringify({ type: 'refresh' }))
             }
             break
 
@@ -385,6 +387,7 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
     }
 }
 
@@ -494,6 +497,17 @@ udpIn.on("message", (msg, rinfo) => {
     recordMessage(text)
     try {
         const data = JSON.parse(text)
+
+        // Handle connectionTypeUpdate - connection type 0 means logged off
+        if (data.type === 'connectionTypeUpdate' && data.connectionType === 0) {
+            console.log('Connection lost (connectionType 0), clearing stores')
+            store.clear()
+            setMyCallsign('')
+            setMyAirports([])
+            broadcastStatus()
+            broadcastRefresh('Connection lost')
+            return
+        }
 
         // Handle myselfUpdate to set our callsign and discover airports
         if (data.type === 'myselfUpdate') {

@@ -2,6 +2,8 @@ to_backend() {
     echo "$1" | nc -4u -w0 localhost 17771
 }
 
+to_backend '{ "type": "myselfUpdate", "callsign": "ESGG_TWR", "rwyconfig": { "ESGG": { "arr": true, "dep": true } } }'
+
 ## Random other aircraft (shouldn't be visible)
 to_backend '{ "type": "flightPlanDataUpdate", "callsign": "RYR123", "origin": "ESOK", "destination": "GCLP" }'
 
@@ -11,6 +13,7 @@ to_backend '{ "type": "flightPlanDataUpdate", "callsign": "023", "origin": "ESGG
 
 ## Departure sequence
 # Initially in PENDING CLR
+to_backend '{ "type": "radarTargetPositionUpdate", "callsign": "SAS123", "altitude": "500", "latitude": "57.668253", "longitude": "12.289773" }'
 to_backend '{ "type": "flightPlanDataUpdate", "callsign": "SAS123", "origin": "ESGG", "destination": "ESSA" }'
 # Clearance given -> CLEARED
 to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "clearance": true }'

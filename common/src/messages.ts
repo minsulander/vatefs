@@ -54,7 +54,7 @@ export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | 
 
 export interface RequestMessage {
     type: 'request'
-    request: 'layout' | 'strips'
+    request: 'layout' | 'strips' | 'refresh'
 }
 
 export interface MoveStripMessage {

@@ -102,7 +102,8 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate('KLM1142', 'EHAM', 'ESGG', 'B738', {
         rfl: 34000,
         arrRwy: '21',
-        star: 'OSNAK1B'
+        star: 'OSNAK1B',
+        ete: 10
     }),
     ctrUpdate('KLM1142', {
         squawk: '5612',
@@ -294,7 +295,7 @@ export const mockPluginMessages: PluginMessage[] = [
     radarUpdate('DLH432', 5000, 57.55, 12.50),    // SE of ESGG, on approach
 
     // CTR ARR arrivals - closer in, assumed by tower
-    radarUpdate('KLM1142', 3000, 57.70, 12.35),   // Final approach
+    radarUpdate('KLM1142', 1500, 57.629326, 12.250700),   // Final approach
     radarUpdate('THY18A', 4000, 57.75, 12.25),    // Downwind/base
 
     // RUNWAY - on or near runway
