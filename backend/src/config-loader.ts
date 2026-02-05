@@ -11,8 +11,7 @@ import type { EfsLayout, Bay, Section } from "@vatefs/common"
  * Raw YAML config structure (before transformation)
  */
 interface YamlConfig {
-    airports: string[]
-    radarRange: number
+    radarRange?: number
     layout: {
         bays: Record<string, {
             sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
@@ -81,16 +80,14 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     const yamlConfig = yaml.load(content) as YamlConfig
 
     // Validate required fields
-    if (!yamlConfig.airports || !Array.isArray(yamlConfig.airports)) {
-        throw new Error('Configuration must specify airports array')
-    }
     if (!yamlConfig.layout?.bays) {
         throw new Error('Configuration must specify layout.bays')
     }
 
     // Transform to internal format
+    // Note: myAirports is set at runtime from myselfUpdate or CLI args, not from config
     const config: EfsStaticConfig = {
-        myAirports: yamlConfig.airports,
+        myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
         layout: transformLayout(yamlConfig.layout),
         sectionRules: yamlConfig.sectionRules
@@ -108,7 +105,6 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     }
 
     console.log(`Loaded config from ${configPath}:`)
-    console.log(`  Airports: ${config.myAirports.join(', ')}`)
     console.log(`  Radar range: ${config.radarRangeNm}nm`)
     console.log(`  Bays: ${config.layout.bays.length}`)
     console.log(`  Section rules: ${config.sectionRules.length}`)

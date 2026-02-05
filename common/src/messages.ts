@@ -87,7 +87,12 @@ export interface StripActionMessage {
     action: string             // e.g., "ASSUME", "CTL", "CTO"
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage
+export interface DeleteStripMessage {
+    type: 'deleteStrip'
+    stripId: string
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | DeleteStripMessage
 
 // Type guards for message parsing
 
@@ -106,5 +111,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'deleteStrip'
 }

@@ -1,24 +1,15 @@
 Testning på ESSA 2026-02-05:
 
-- DE-ICE = REA
-- .efs refresh - Behövs refresh funktion för att ladda om alla flightplans i ES och publicera till backend - när man startar om saker..
-- Backend watch inte ladda om när jag ändrar i TODO.txt
+- Skapa flight för radar targets utan flightplan som är på flygplatsen
 
-- BAW785 hamna på TAXI - satte inte (avsiktigt) groundstate=DEPA, går inte att flytta - behövs section rule ej airborne för alla på marken
+
+
 
 - Free = uppdateras inte, ligger kvar i CTR DEP, verkar kunna använda controller="" i radartargetupdate
-- Delete strip oavsett states när de kommer utanför radarRange
-- Manuell delete strip funktion
 
-- Inte airport i config? Bara layout, lista ut airports från myself.
 - Skilja på DEP RWY, ARR RWY i ESSA layout
 
-- START&PUSH -> PUSH&START, under TAXI
-- PENDING CLR -> PENDING DEP
 
-- Backend log skriver ut alla radarTargetPositionUpdate, 
-  inte "Strip SAS2901 updated" och "Shifted 3 strips" om den inte faktiskt ändrat ngt
-- "Section pending_clr height set to 314.345223px" trots att jag inte rör något... frontend inte skicka meddelande om inte tillräckligt stor ändring?
 
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
@@ -67,9 +58,6 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - DCL/PDC - gå direkt på hoppie? 
 
-- Verifiera att DE-ICE är S/U och uppdatera konstanter etc, CLAUDE.md med att DE-ICE == startup approved.
-  kolla Ground Radar plugin Developer Guide, testa runt...
-
 Start with se-men-inte-röra:
 -12- Filter on my airport (origin=, destination=, alternate= or on airport location)
 -12- Filter prefiles
@@ -95,6 +83,7 @@ Vidare i livet:
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
+- "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 
 Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad

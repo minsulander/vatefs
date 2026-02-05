@@ -48,6 +48,8 @@ export interface Flight {
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
     airborne?: boolean        // Aircraft is airborne after departure
     deleted?: boolean         // Strip is soft-deleted (hidden from user)
+    manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)
+    noSectionFound?: boolean  // No section rule matched this flight (logged once)
 
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet

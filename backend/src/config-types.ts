@@ -155,6 +155,12 @@ export interface DeleteRule {
      * Only applies when radarTargetPositionUpdate provides altitude data
      */
     minAltitudeAboveField?: number
+
+    /**
+     * Delete if aircraft is beyond radar range of all configured airports.
+     * When true, flight must be outside radarRangeNm to match.
+     */
+    beyondRange?: boolean
 }
 
 /**

@@ -1,7 +1,6 @@
 # VatEFS Configuration for ESGG (Gothenburg)
-
-airports:
-  - ESGG
+# Note: Airports are discovered at runtime from EuroScope's rwyconfig
+# or can be set via --airport CLI argument
 
 radarRange: 25  # nm
 
@@ -25,15 +24,15 @@ layout:
       sections:
         taxi:
           title: TAXI
+        push_start:
+          title: PUSH&START
 
     bay4:
       sections:
-        pending_clr:
-          title: PENDING CLR
+        pending_dep:
+          title: PENDING DEP
         cleared:
           title: CLEARED
-        start_push:
-          title: START&PUSH
 
 sectionRules:
   # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
@@ -53,7 +52,7 @@ sectionRules:
     sectionId: ctr_dep
     bayId: bay2
     direction: departure
-    groundstates: [DEPA]
+    groundstates: ['', NSTS, DEPA]
     airborne: true
     priority: 100
 
@@ -67,17 +66,10 @@ sectionRules:
     priority: 95
 
   # RUNWAY: Lineup and departure roll
-  runway_lineup:
+  runway_lineup_depa:
     sectionId: runway
     bayId: bay2
-    groundstates: [LINEUP]
-    priority: 90
-
-  runway_depa:
-    sectionId: runway
-    bayId: bay2
-    groundstates: [DEPA]
-    airborne: false  # Still on runway, not yet airborne
+    groundstates: [LINEUP, DEPA]
     priority: 90
 
   # CTR ARR: Arrivals assumed by me
@@ -94,33 +86,20 @@ sectionRules:
     sectionId: inbound
     bayId: bay1
     direction: arrival
-    groundstates: [ARR]
-    controller: not_myself
-    priority: 70
-
-  inbound_no_groundstate:
-    sectionId: inbound
-    bayId: bay1
-    direction: arrival
-    groundstates: ['']
+    airborne: true
+    groundstates: ['', NSTS, ARR]
     controller: not_myself
     priority: 70
 
   # === DEPARTURE FLOW ===
 
-  # START&PUSH: Departures with DE-ICE or PUSH
-  start_push_deice:
-    sectionId: start_push
-    bayId: bay4
+  # PUSH&START: Departures with DE-ICE (=READY) or STUP or PUSH
+  push_start:
+    sectionId: push_start
+    bayId: bay3
     direction: departure
-    groundstates: [DE-ICE]
-    priority: 60
-
-  start_push_push:
-    sectionId: start_push
-    bayId: bay4
-    direction: departure
-    groundstates: [PUSH]
+    airborne: false
+    groundstates: [DE-ICE, STUP, PUSH]
     priority: 60
 
   # CLEARED: Departures with clearance flag
@@ -128,15 +107,17 @@ sectionRules:
     sectionId: cleared
     bayId: bay4
     direction: departure
+    airborne: false
     clearance: true
     groundstates: ['', ONFREQ, NSTS]  # Not yet pushing
     priority: 50
 
-  # PENDING CLR: Departures without clearance (no groundstate or ONFREQ)
-  pending_clr:
-    sectionId: pending_clr
+  # PENDING DEP: Departures without clearance (no groundstate or ONFREQ)
+  pending_dep:
+    sectionId: pending_dep
     bayId: bay4
     direction: departure
+    airborne: false
     groundstates: ['', ONFREQ, NSTS]
     clearance: false
     priority: 40
@@ -148,7 +129,8 @@ sectionRules:
     sectionId: taxi
     bayId: bay3
     direction: departure
-    groundstates: [TAXI]
+    airborne: false
+    groundstates: [TAXI, TXIN]
     priority: 30
 
   # TAXI: Arrivals taxiing in (after vacating runway)
@@ -156,7 +138,8 @@ sectionRules:
     sectionId: taxi
     bayId: bay3
     direction: arrival
-    groundstates: [TXIN]
+    airborne: false
+    groundstates: [TAXI, TXIN]
     priority: 30
 
   # === FALLBACKS ===
@@ -166,11 +149,12 @@ sectionRules:
     sectionId: inbound
     bayId: bay1
     direction: arrival
+    airborne: true
     priority: 5
 
   # Catch-all for departures at our airport
   fallback_departure:
-    sectionId: pending_clr
+    sectionId: pending_dep
     bayId: bay4
     direction: departure
     priority: 5
@@ -233,30 +217,36 @@ deleteRules:
     groundstates: [PARK]
     priority: 100
 
+  # Fallback: Delete any aircraft that moves beyond radar range
+  # This catches cases where other rules didn't trigger
+  delete_beyond_range:
+    beyondRange: true
+    priority: 10
+
 moveRules:
   # === DEPARTURE FLOW ===
 
-  # PENDING CLR -> CLEARED: Set clearance flag
+  # PENDING DEP -> CLEARED: Set clearance flag
   move_pending_to_cleared:
-    fromSectionId: pending_clr
+    fromSectionId: pending_dep
     toSectionId: cleared
     direction: departure
     command:
       type: setClearance
       value: true
 
-  # CLEARED -> START&PUSH: Set groundstate to PUSH
+  # CLEARED -> PUSH&START: Set groundstate to PUSH
   move_cleared_to_push:
     fromSectionId: cleared
-    toSectionId: start_push
+    toSectionId: push_start
     direction: departure
     command:
       type: setGroundstate
       value: PUSH
 
-  # START&PUSH -> TAXI: Set groundstate to TAXI
+  # PUSH&START -> TAXI: Set groundstate to TAXI
   move_push_to_taxi:
-    fromSectionId: start_push
+    fromSectionId: push_start
     toSectionId: taxi
     direction: departure
     command:

@@ -6,6 +6,43 @@ import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessage
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
 
+/**
+ * Compare two strips for equality
+ * Returns true if strips are equal (no change needed)
+ */
+function stripsEqual(a: FlightStrip, b: FlightStrip): boolean {
+    return (
+        a.id === b.id &&
+        a.callsign === b.callsign &&
+        a.aircraftType === b.aircraftType &&
+        a.wakeTurbulence === b.wakeTurbulence &&
+        a.flightRules === b.flightRules &&
+        a.adep === b.adep &&
+        a.ades === b.ades &&
+        a.route === b.route &&
+        a.sid === b.sid &&
+        a.rfl === b.rfl &&
+        a.squawk === b.squawk &&
+        a.clearedAltitude === b.clearedAltitude &&
+        a.assignedHeading === b.assignedHeading &&
+        a.assignedSpeed === b.assignedSpeed &&
+        a.eobt === b.eobt &&
+        a.eta === b.eta &&
+        a.atd === b.atd &&
+        a.ata === b.ata &&
+        a.stand === b.stand &&
+        a.runway === b.runway &&
+        a.remarks === b.remarks &&
+        a.stripType === b.stripType &&
+        a.bayId === b.bayId &&
+        a.sectionId === b.sectionId &&
+        a.position === b.position &&
+        a.bottom === b.bottom &&
+        a.defaultAction === b.defaultAction &&
+        a.clearedForTakeoff === b.clearedForTakeoff
+    )
+}
+
 export interface MoveStripResult {
     strip: FlightStrip
     affectedGaps: Gap[]
@@ -73,6 +110,7 @@ class EfsStore {
     processPluginMessage(message: PluginMessage): {
         strip?: FlightStrip
         deleteStripId?: string
+        isNew?: boolean
         sectionChanged?: boolean
         previousSection?: { bayId: string; sectionId: string }
         softDeleted?: boolean
@@ -96,7 +134,6 @@ class EfsStore {
             if (existingStrip) {
                 this.deletedStrips.set(stripId, existingStrip)
                 this.strips.delete(stripId)
-                console.log(`Strip ${stripId} moved to deleted store`)
                 return { deleteStripId: stripId, softDeleted: true }
             }
             return { softDeleted: true }
@@ -105,10 +142,20 @@ class EfsStore {
         // Handle restore: move strip back from deletedStrips
         if (result.restored && result.strip) {
             this.deletedStrips.delete(result.strip.id)
-            console.log(`Strip ${result.strip.id} restored from deleted store`)
         }
 
         if (result.strip) {
+            const existingStrip = this.strips.get(result.strip.id)
+            const isNew = !existingStrip
+
+            // Check if anything actually changed
+            const stripChanged = isNew || !stripsEqual(existingStrip, result.strip)
+
+            // If nothing changed and no section change, skip the update
+            if (!stripChanged && !result.sectionChanged && !result.restored) {
+                return {}
+            }
+
             // If section changed, we need to recompute positions in both old and new sections
             if (result.sectionChanged && result.previousSection) {
                 this.recomputePositions(
@@ -121,10 +168,11 @@ class EfsStore {
             this.strips.set(result.strip.id, result.strip)
 
             // Handle shifted strips and gaps (from add-from-top)
+            // Only shift when it's a NEW strip (not updates to existing strips)
             let shiftedStrips: FlightStrip[] | undefined
             let shiftedGaps: Gap[] | undefined
             let deletedGapKeys: string[] | undefined
-            if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+            if (isNew && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
                 shiftedStrips = []
                 for (const callsign of result.shiftedCallsigns) {
                     const regeneratedStrip = flightStore.regenerateStrip(callsign)
@@ -142,6 +190,7 @@ class EfsStore {
 
             return {
                 strip: result.strip,
+                isNew,
                 sectionChanged: result.sectionChanged,
                 previousSection: result.previousSection,
                 restored: result.restored,
@@ -308,14 +357,20 @@ class EfsStore {
         return this.gaps.get(gapKey(bayId, sectionId, index))
     }
 
-    // Set section height - returns the section
-    setSectionHeight(bayId: string, sectionId: string, height: number): Section | null {
+    // Set section height - returns section and whether it changed
+    setSectionHeight(bayId: string, sectionId: string, height: number): { section: Section; changed: boolean } | null {
         const section = this.findSection(bayId, sectionId)
-        if (section) {
-            section.height = Math.max(80, height)
-            return section
+        if (!section) return null
+
+        const newHeight = Math.max(80, Math.round(height))
+        const oldHeight = section.height ?? 0
+        const changed = Math.abs(newHeight - oldHeight) >= 3 // 3px threshold
+
+        if (changed) {
+            section.height = newHeight
         }
-        return null
+
+        return { section, changed }
     }
 
     // Clear all data (called on refresh/reconnect)
@@ -327,6 +382,29 @@ class EfsStore {
         // Reload layout from config
         this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
         console.log('Store cleared')
+    }
+
+    /**
+     * Manually delete a strip (user-initiated from context menu)
+     * Returns the strip ID if successfully deleted, undefined otherwise
+     */
+    manualDeleteStrip(stripId: string): string | undefined {
+        const strip = this.strips.get(stripId)
+        if (!strip) return undefined
+
+        // Move strip to deleted store
+        this.deletedStrips.set(stripId, strip)
+        this.strips.delete(stripId)
+
+        // Mark the flight as manually deleted so it won't be auto-restored
+        const flight = flightStore.getFlight(strip.callsign)
+        if (flight) {
+            flight.deleted = true
+            flight.manuallyDeleted = true
+        }
+
+        console.log(`Strip ${stripId} manually deleted by user`)
+        return stripId
     }
 
     // Clean up trailing gaps - returns deleted keys

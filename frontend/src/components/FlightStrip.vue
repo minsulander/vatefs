@@ -1,4 +1,17 @@
 <template>
+  <v-menu
+    v-model="menuOpen"
+    :target="menuPosition"
+    location="end"
+    :close-on-content-click="true"
+  >
+    <v-list density="compact" class="strip-context-menu">
+      <v-list-item @click="onDeleteClick">
+        <v-list-item-title>Delete</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
   <div
     ref="stripElement"
     class="flight-strip"
@@ -12,7 +25,7 @@
       @touchmove.prevent="onDragAreaTouchMove"
       @touchend="onDragAreaTouchEnd"
       @touchcancel="onDragAreaTouchCancel"
-    @contextmenu.prevent
+    @contextmenu.prevent="onContextMenu"
     @click="onStripClick"
   >
     <!-- Color indicator bar on left -->
@@ -116,6 +129,10 @@ const props = defineProps<{
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
+
+// Context menu state
+const menuOpen = ref(false)
+const menuPosition = ref<[number, number]>([0, 0])
 
 // Touch drag state
 let touchStarted = false
@@ -484,6 +501,16 @@ function onActionTouch(event: TouchEvent) {
 function onStripClick() {
   // Future: open strip detail/edit modal
 }
+
+function onContextMenu(event: MouseEvent) {
+  menuPosition.value = [event.clientX, event.clientY]
+  menuOpen.value = true
+}
+
+function onDeleteClick() {
+  store.deleteStrip(props.strip.id)
+  menuOpen.value = false
+}
 </script>
 
 <style scoped>
@@ -808,5 +835,15 @@ function onStripClick() {
   fill: #31bb31;
   stroke: #2e8b2e;
   stroke-width: 1;
+}
+
+/* Context menu styling */
+.strip-context-menu {
+  min-width: 100px;
+  font-size: 12px;
+}
+
+.strip-context-menu .v-list-item {
+  min-height: 32px;
 }
 </style>

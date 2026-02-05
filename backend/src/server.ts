@@ -12,7 +12,7 @@ import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDe
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, staticConfig, determineMoveAction, applyConfig } from "./config.js"
+import { setMyCallsign, setMyAirports, staticConfig, determineMoveAction, applyConfig } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
@@ -32,15 +32,18 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { config?: string; callsign?: string; recordFile?: string; mock?: boolean } {
+function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } {
     const args = process.argv.slice(2)
-    const result: { config?: string; callsign?: string; recordFile?: string; mock?: boolean } = {}
+    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } = {}
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--config' && args[i + 1]) {
             result.config = args[++i]
         } else if (args[i] === '--callsign' && args[i + 1]) {
             result.callsign = args[++i]
+        } else if (args[i] === '--airport' && args[i + 1]) {
+            // Support comma-separated airports: --airport ESGG,ESSA
+            result.airports = args[++i].split(',').map(a => a.trim().toUpperCase())
         } else if (args[i] === '--record' && args[i + 1]) {
             result.recordFile = args[++i]
         } else if (args[i] === '--mock') {
@@ -83,6 +86,16 @@ if (fs.existsSync(runwaysFile)) {
 if (cliArgs.callsign) {
     setMyCallsign(cliArgs.callsign)
     console.log(`Callsign set to: ${cliArgs.callsign}`)
+}
+
+// Apply command-line airports or mock default
+if (cliArgs.airports && cliArgs.airports.length > 0) {
+    setMyAirports(cliArgs.airports)
+    console.log(`Airports set to: ${cliArgs.airports.join(', ')}`)
+} else if (cliArgs.mock) {
+    // Default to ESGG for mock mode
+    setMyAirports(['ESGG'])
+    console.log(`Airports set to: ESGG (mock default)`)
 }
 
 // Recording state
@@ -338,10 +351,10 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case 'setSectionHeight': {
-            const section = store.setSectionHeight(message.bayId, message.sectionId, message.height)
-            if (section) {
-                broadcastSection(message.bayId, section, socket)
-                console.log(`Section ${message.sectionId} height set to ${message.height}px`)
+            const result = store.setSectionHeight(message.bayId, message.sectionId, message.height)
+            if (result && result.changed) {
+                broadcastSection(message.bayId, result.section, socket)
+                console.log(`Section ${message.sectionId} height set to ${result.section.height}px`)
             }
             break
         }
@@ -358,6 +371,17 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 // sendUdp(JSON.stringify({ type: 'action', callsign: strip.callsign, action: message.action }))
             } else {
                 console.log(`[ACTION] ${message.action} on unknown strip ${message.stripId}`)
+            }
+            break
+        }
+
+        case 'deleteStrip': {
+            const deletedId = store.manualDeleteStrip(message.stripId)
+            if (deletedId) {
+                broadcastStripDelete(deletedId, socket)
+                console.log(`[DELETE] Strip ${message.stripId} manually deleted`)
+            } else {
+                console.log(`[DELETE] Strip ${message.stripId} not found`)
             }
             break
         }
@@ -465,21 +489,50 @@ function sendUdp(udpString: string) {
 const udpIn = dgram.createSocket("udp4")
 udpIn.on("message", (msg, rinfo) => {
     const text = msg.toString("utf8").trim()
-    console.log("UDP:", text)
 
     // Record the message if recording is enabled
     recordMessage(text)
     try {
         const data = JSON.parse(text)
 
-        // Handle myselfUpdate to set our callsign
+        // Handle myselfUpdate to set our callsign and discover airports
         if (data.type === 'myselfUpdate') {
             const msg = data as MyselfUpdateMessage
             const previousCallsign = staticConfig.myCallsign
             const callsignChanged = previousCallsign !== msg.callsign
 
-            setMyCallsign(msg.callsign)
-            console.log(`My callsign set to: ${msg.callsign}`)
+            if (callsignChanged) {
+                setMyCallsign(msg.callsign)
+                console.log(`My callsign set to: ${msg.callsign}`)
+            }
+
+            // Extract airports from rwyconfig - any airport with arr or dep set
+            if (msg.rwyconfig) {
+                const discoveredAirports: string[] = []
+                for (const [icao, runways] of Object.entries(msg.rwyconfig)) {
+                    // Check if any runway has arr or dep enabled
+                    const hasActiveRunway = Object.values(runways).some(
+                        rwy => rwy.arr === true || rwy.dep === true
+                    )
+                    if (hasActiveRunway) {
+                        discoveredAirports.push(icao)
+                    }
+                }
+                if (discoveredAirports.length > 0) {
+                    const previousAirports = [...staticConfig.myAirports]
+                    const airportsChanged = JSON.stringify(previousAirports.sort()) !== JSON.stringify(discoveredAirports.sort())
+
+                    setMyAirports(discoveredAirports)
+                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${discoveredAirports.join(', ')}`)
+
+                    // If airports changed, we need to refresh
+                    if (airportsChanged && previousAirports.length > 0) {
+                        console.log(`Airports changed, clearing store`)
+                        store.clear()
+                        broadcastRefresh(`Airports changed to ${discoveredAirports.join(', ')}`)
+                    }
+                }
+            }
 
             // Broadcast updated status to all clients
             broadcastStatus()
@@ -504,30 +557,34 @@ udpIn.on("message", (msg, rinfo) => {
         const result = store.tryProcessPluginMessage(data)
 
         if (result) {
-            // Plugin message was processed
+            // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.deleteStripId) {
                 broadcastStripDelete(result.deleteStripId)
                 if (result.softDeleted) {
-                    console.log(`UDP: Flight ${result.deleteStripId} soft-deleted`)
+                    console.log(`Strip ${result.deleteStripId} soft-deleted`)
                 } else {
-                    console.log(`UDP: Flight ${result.deleteStripId} disconnected`)
+                    console.log(`Strip ${result.deleteStripId} disconnected`)
                 }
             } else if (result.strip) {
                 broadcastStrip(result.strip)
+
+                // Log based on what kind of change occurred
                 if (result.restored) {
-                    console.log(`UDP: Strip ${result.strip.callsign} restored and in ${result.strip.sectionId}`)
+                    console.log(`Strip ${result.strip.callsign} restored -> ${result.strip.sectionId}`)
+                } else if (result.isNew) {
+                    console.log(`Strip ${result.strip.callsign} created -> ${result.strip.sectionId}`)
                 } else if (result.sectionChanged) {
-                    console.log(`UDP: Strip ${result.strip.callsign} moved to ${result.strip.sectionId}`)
+                    console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
                 } else {
-                    console.log(`UDP: Strip ${result.strip.callsign} updated`)
+                    console.log(`Strip ${result.strip.callsign} updated`)
                 }
 
-                // Broadcast shifted strips (from add-from-top)
+                // Broadcast shifted strips (from add-from-top) - only happens for new strips
                 if (result.shiftedStrips && result.shiftedStrips.length > 0) {
                     for (const shiftedStrip of result.shiftedStrips) {
                         broadcastStrip(shiftedStrip)
                     }
-                    console.log(`UDP: Shifted ${result.shiftedStrips.length} strips in ${result.strip.sectionId}`)
+                    console.log(`  Shifted ${result.shiftedStrips.length} strips in ${result.strip.sectionId}`)
                 }
 
                 // Broadcast gap deletes first, then shifted gaps (from add-from-top)
@@ -543,9 +600,9 @@ udpIn.on("message", (msg, rinfo) => {
                     for (const shiftedGap of result.shiftedGaps) {
                         broadcastGap(shiftedGap)
                     }
-                    console.log(`UDP: Shifted ${result.shiftedGaps.length} gaps in ${result.strip.sectionId}`)
                 }
             }
+            // If result is empty (no strip, no delete), nothing changed - don't log
         } else {
             // Not a flight-related plugin message, forward raw JSON to clients
             // (e.g., controllerPositionUpdate, myselfUpdate)

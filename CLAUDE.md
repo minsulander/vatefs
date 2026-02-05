@@ -266,15 +266,15 @@ The frontend store automatically attempts to reconnect every 3 seconds if the We
 Valid ground state values from EuroScope:
 - Empty string `''` - No ground state set
 - `NSTS` - No status
+- `ONFREQ` - On frequency
+- `DE-ICE` - De-icing (meaning Ready in swedish setup)
 - `STUP` - Startup approved
 - `PUSH` - Pushback approved
 - `TAXI` - Taxiing (departure)
-- `TXIN` - Taxiing in (arrival)
-- `DEPA` - Departure roll / airborne
-- `ARR` - Arrival
 - `LINEUP` - Lined up on runway
-- `ONFREQ` - On frequency
-- `DE-ICE` - De-icing
+- `DEPA` - Departure roll / cleared for takeoff
+- `ARR` - Arrival
+- `TXIN` - Taxiing in (arrival)
 - `PARK` - Parked
 
 ### Strip Positioning

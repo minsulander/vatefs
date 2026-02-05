@@ -52,3 +52,10 @@ export function applyConfig(config: EfsStaticConfig) {
 export function setMyCallsign(callsign: string) {
     staticConfig.myCallsign = callsign
 }
+
+/**
+ * Update my airports (called when myselfUpdate is received or from CLI)
+ */
+export function setMyAirports(airports: string[]) {
+    staticConfig.myAirports = airports
+}

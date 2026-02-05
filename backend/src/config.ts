@@ -20,8 +20,8 @@ export type {
     EfsStaticConfig
 } from "./config-types.js"
 
-// Re-export config and setMyCallsign
-export { staticConfig, setMyCallsign, applyConfig } from "./static-config.js"
+// Re-export config and setter functions
+export { staticConfig, setMyCallsign, setMyAirports, applyConfig } from "./static-config.js"
 
 // Re-export rules engine functions
 export {

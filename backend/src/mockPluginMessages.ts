@@ -67,7 +67,7 @@ function radarUpdate(
  * - Bay 1: INBOUND (arrivals not assumed by me)
  * - Bay 2: CTR ARR (arrivals assumed by me), RUNWAY (lineup/departing/cleared to land), CTR DEP (airborne)
  * - Bay 3: TAXI (all taxiing aircraft)
- * - Bay 4: PENDING CLR (no clearance), CLEARED (has clearance), START&PUSH (de-ice/push)
+ * - Bay 4: PENDING CLR (no clearance), CLEARED (has clearance), START&PUSH (de-ice/stup/push)
  */
 export const mockPluginMessages: PluginMessage[] = [
     // === INBOUND: Arrivals not yet assumed ===
@@ -258,7 +258,7 @@ export const mockPluginMessages: PluginMessage[] = [
         stand: '31'
     }),
 
-    // === START&PUSH: De-ice or push ===
+    // === START&PUSH: De-ice or stup or push ===
 
     // WZZ7890 - Departure to Budapest, pushing back
     fpUpdate('WZZ7890', 'ESGG', 'LHBP', 'A321', {

@@ -12,6 +12,21 @@ cd ../frontend
 npm start
 ```
 
+Some other options:
+```sh
+# Online mode - airports discovered from EuroScope's rwyconfig
+npm start
+
+# Mock mode - defaults to ESGG
+npm start -- --mock
+
+# Offline mode with specific airport(s)
+npm start -- --airport ESGG
+npm start -- --airport ESGG,ESSA,ESMS
+
+# Combined with other options
+npm start -- --mock --airport ESSA --callsign ESSA_TWR
+```
 
 Run backend with recording:
 

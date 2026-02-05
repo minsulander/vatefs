@@ -378,7 +378,7 @@ void VatEFSPlugin::OnControllerPositionUpdate(EuroScopePlugIn::CController Contr
     message["type"] = "controllerPositionUpdate";
     SetJsonIfValidUtf8(message, "callsign", Controller.GetCallsign());
     SetJsonIfValidUtf8(message, "position", Controller.GetPositionId());
-    SetJsonIfValidUtf8(message, "name", Controller.GetFullName());
+    SetJsonWithUtf8Replace(message, "name", Controller.GetFullName());
     message["frequency"] = Controller.GetPrimaryFrequency();
     message["rating"] = Controller.GetRating();
     message["facility"] = Controller.GetFacility();
@@ -430,6 +430,14 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         const char *trackingCallsign = fp.GetTrackingControllerCallsign();
         if (trackingCallsign && strlen(trackingCallsign) < 20) {
             SetJsonIfValidUtf8(message, "controller", trackingCallsign);
+        }
+        const char *handoffTargetController = fp.GetHandoffTargetControllerCallsign();
+        if (handoffTargetController && strlen(handoffTargetController) < 20) {
+            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
+        }
+        const char *nextController = fp.GetCoordinatedNextController();
+        if (nextController && strlen(nextController) < 20) {
+            SetJsonIfValidUtf8(message, "nextController", nextController);
         }
     }
     PostJson(message, "OnRadarTargetPositionUpdate");
@@ -583,6 +591,15 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             DisplayMessage("DummyRadarScreen not created");
         }
         return true;
+    } else if (subcommand == "refresh") {
+		for ( EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid(); FlightPlan = FlightPlanSelectNext(FlightPlan)) {
+            OnFlightPlanFlightPlanDataUpdate(FlightPlan);
+        }
+        for ( EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst(); RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
+            OnRadarTargetPositionUpdate(RadarTarget);
+        }
+        DisplayMessage("Refreshed all flight plans and radar targets");
+        return true;
     }
     return false;
 }
@@ -641,7 +658,7 @@ void VatEFSPlugin::UpdateMyself()
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "myselfUpdate";
         SetJsonIfValidUtf8(message, "callsign", callsign.c_str());
-        SetJsonIfValidUtf8(message, "name", me.GetFullName());
+        SetJsonWithUtf8Replace(message, "name", me.GetFullName());
         message["frequency"] = me.GetPrimaryFrequency();
         message["rating"] = me.GetRating();
         message["facility"] = me.GetFacility();
@@ -912,6 +929,65 @@ bool VatEFSPlugin::IsValidUtf8(const char *str)
     return true;
 }
 
+std::string VatEFSPlugin::SanitizeUtf8(const char *str)
+{
+    if (!str) return "";
+    std::string result;
+    result.reserve(static_cast<size_t>(strlen(str)));
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(str);
+    std::string seq;
+    int expectedContinuations = 0;
+
+    while (true) {
+        unsigned char c = *p;
+        if (expectedContinuations > 0) {
+            if (c && (c & 0xC0) == 0x80) {
+                seq += static_cast<char>(c);
+                p++;
+                expectedContinuations--;
+                if (expectedContinuations == 0) {
+                    result += seq;
+                    seq.clear();
+                }
+                continue;
+            }
+            for (size_t i = 0; i < seq.size(); i++) result += '?';
+            seq.clear();
+            expectedContinuations = 0;
+            if (!c) break;
+            continue;
+        }
+        if (!c) break;
+        if (c <= 0x7F) {
+            result += static_cast<char>(c);
+            p++;
+            continue;
+        }
+        if (c >= 0xC2 && c <= 0xDF) {
+            seq = static_cast<char>(c);
+            expectedContinuations = 1;
+            p++;
+            continue;
+        }
+        if (c >= 0xE0 && c <= 0xEF) {
+            seq = static_cast<char>(c);
+            expectedContinuations = 2;
+            p++;
+            continue;
+        }
+        if (c >= 0xF0 && c <= 0xF4) {
+            seq = static_cast<char>(c);
+            expectedContinuations = 3;
+            p++;
+            continue;
+        }
+        result += '?';
+        p++;
+    }
+    for (size_t i = 0; i < seq.size(); i++) result += '?';
+    return result;
+}
+
 void VatEFSPlugin::SetJsonIfValidUtf8(nlohmann::json &j, const char *key, const char *value)
 {
     if (value) {
@@ -920,6 +996,13 @@ void VatEFSPlugin::SetJsonIfValidUtf8(nlohmann::json &j, const char *key, const 
         } else {
             DebugMessage("SetJsonIfValidUtf8: Invalid UTF-8 string in key " + std::string(key));
         }
+    }
+}
+
+void VatEFSPlugin::SetJsonWithUtf8Replace(nlohmann::json &j, const char *key, const char *value)
+{
+    if (value) {
+        j[key] = SanitizeUtf8(value);
     }
 }
 

@@ -426,20 +426,31 @@ export const useEfsStore = defineStore("efs", () => {
         cleanupGaps(bayId, sectionId)
     }
 
+    // Threshold for broadcasting height changes (in pixels)
+    const HEIGHT_CHANGE_THRESHOLD = 3
+
     function setSectionHeight(bayId: string, sectionId: string, height: number, broadcast: boolean = true) {
         const bay = layout.value.bays.find(b => b.id === bayId)
         const section = bay?.sections.find(s => s.id === sectionId)
-        if (section) {
-            section.height = Math.max(80, height) // Enforce min height
+        if (!section) return
+
+        const newHeight = Math.max(80, height)
+        const oldHeight = section.height ?? 0
+
+        // Only update if height actually changed
+        if (Math.abs(newHeight - oldHeight) < 1) {
+            return
         }
 
-        // Send update to server (only if requested - during resize we send after completion)
-        if (broadcast) {
+        section.height = newHeight
+
+        // Send update to server only if change exceeds threshold
+        if (broadcast && Math.abs(newHeight - oldHeight) >= HEIGHT_CHANGE_THRESHOLD) {
             sendMessage({
                 type: 'setSectionHeight',
                 bayId,
                 sectionId,
-                height: Math.max(80, height)
+                height: Math.round(newHeight) // Round to avoid floating point noise
             })
         }
     }
@@ -455,7 +466,7 @@ export const useEfsStore = defineStore("efs", () => {
                     type: 'setSectionHeight',
                     bayId,
                     sectionId: section.id,
-                    height: section.height
+                    height: Math.round(section.height)
                 })
             }
         })
@@ -466,6 +477,17 @@ export const useEfsStore = defineStore("efs", () => {
             type: 'stripAction',
             stripId,
             action
+        })
+    }
+
+    function deleteStrip(stripId: string) {
+        // Optimistically remove from local state
+        strips.value.delete(stripId)
+
+        // Send delete request to server
+        sendMessage({
+            type: 'deleteStrip',
+            stripId
         })
     }
 
@@ -506,6 +528,7 @@ export const useEfsStore = defineStore("efs", () => {
         setSectionHeight,
         broadcastSectionHeights,
         sendStripAction,
+        deleteStrip,
         GAP_BUFFER,
         sendRequest,
         connect,

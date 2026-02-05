@@ -17,7 +17,7 @@ to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "cle
 # State update (no change)
 to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "groundstate": "ONFREQ" }'
 # Startup -> START&PUSH
-to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "groundstate": "DE-ICE" }'
+to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "groundstate": "STUP" }'
 # Push -> START&PUSH
 to_backend '{ "type": "controllerAssignedDataUpdate", "callsign": "SAS123", "groundstate": "PUSH" }'
 # Taxi -> TAXI

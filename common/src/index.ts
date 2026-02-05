@@ -28,6 +28,7 @@ export type {
     SetGapMessage,
     SetSectionHeightMessage,
     StripActionMessage,
+    DeleteStripMessage,
     ClientMessage
 } from "./messages.js"
 

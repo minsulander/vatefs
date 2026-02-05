@@ -59,7 +59,9 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void PostJson(const nlohmann::json& jsonData, const char *whereaboutsInDaCode);
 
     static bool IsValidUtf8(const char* str);
+    static std::string SanitizeUtf8(const char* str);
     void SetJsonIfValidUtf8(nlohmann::json& j, const char* key, const char* value);
+    void SetJsonWithUtf8Replace(nlohmann::json& j, const char* key, const char* value);
 };
 
 class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen

@@ -121,6 +121,20 @@ class FlightStore {
     }
 
     /**
+     * Handle case where no section rule matches a flight.
+     * Logs once per flight and marks it as soft-deleted.
+     */
+    private handleNoSectionFound(flight: Flight): ProcessMessageResult {
+        // Only log if we haven't already logged for this flight
+        if (!flight.noSectionFound) {
+            console.log(`No section found for flight ${flight.callsign}`)
+            flight.noSectionFound = true
+            flight.deleted = true
+        }
+        return { flight, softDeleted: true }
+    }
+
+    /**
      * Process an incoming plugin message and return the result
      */
     processMessage(message: PluginMessage): ProcessMessageResult {
@@ -209,8 +223,12 @@ class FlightStore {
 
         if (isNewStrip) {
             if (!targetSection) {
-                console.log(`No section found for flight ${callsign}`)
-                return { flight }
+                return this.handleNoSectionFound(flight)
+            }
+            // Clear noSectionFound if a section is now found
+            if (flight.noSectionFound) {
+                flight.noSectionFound = false
+                flight.deleted = false
             }
             // New strip - assign position based on section config
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
@@ -297,7 +315,8 @@ class FlightStore {
             flight.deleted = true
             console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
             return { flight, softDeleted: true }
-        } else if (!deleteResult.shouldDelete && wasDeleted) {
+        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted && !flight.noSectionFound) {
+            // Only auto-restore if not manually deleted and not due to no section found
             flight.deleted = false
             console.log(`Flight ${callsign} restored from soft-delete`)
         }
@@ -329,8 +348,12 @@ class FlightStore {
 
         if (isNewStrip) {
             if (!targetSection) {
-                console.log(`No section found for flight ${callsign}`)
-                return { flight }
+                return this.handleNoSectionFound(flight)
+            }
+            // Clear noSectionFound if a section is now found
+            if (flight.noSectionFound) {
+                flight.noSectionFound = false
+                flight.deleted = false
             }
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
@@ -402,6 +425,7 @@ class FlightStore {
 
         // Update radar data
         flight.currentAltitude = message.altitude
+        if (message.controller !== undefined) flight.controller = message.controller
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
         flight.lastUpdate = Date.now()
@@ -429,8 +453,8 @@ class FlightStore {
             flight.deleted = true
             console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
             return { flight, softDeleted: true }
-        } else if (!deleteResult.shouldDelete && wasDeleted) {
-            // Restore the flight
+        } else if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted && !flight.noSectionFound) {
+            // Restore the flight (only if not manually deleted and not due to no section found)
             flight.deleted = false
             console.log(`Flight ${callsign} restored from soft-delete`)
         }
@@ -457,10 +481,13 @@ class FlightStore {
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
-        if (!currentAssignment) {
-            if (!targetSection) {
-                console.log(`No section found for flight ${callsign}`)
-                return { flight }
+        if (!targetSection) {
+            return this.handleNoSectionFound(flight)
+        } else if (!currentAssignment) {
+            // Clear noSectionFound if a section is now found
+            if (flight.noSectionFound) {
+                flight.noSectionFound = false
+                flight.deleted = false
             }
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
             bottom = false
