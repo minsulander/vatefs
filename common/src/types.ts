@@ -44,11 +44,12 @@ export interface FlightStrip {
     position: number
     bottom: boolean            // Whether strip is in bottom zone (pinned)
 
-    // Default action (if any) - shown as button text
-    defaultAction?: string     // e.g., "ASSUME", "CTL", "CTO"
+    // Actions (if any) - shown as button(s)
+    actions?: string[]         // e.g., ["ASSUME"], ["LU", "CTO"]
 
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
+    clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)
 }
 
 export interface Section {

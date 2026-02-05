@@ -4,7 +4,8 @@ import type {
     PluginMessage,
     FlightPlanDataUpdateMessage,
     ControllerAssignedDataUpdateMessage,
-    RadarTargetPositionUpdateMessage
+    RadarTargetPositionUpdateMessage,
+    GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
 import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight } from "./config.js"
@@ -312,6 +313,7 @@ class FlightStore {
 
         // Update flight data
         if (message.controller !== undefined) flight.controller = message.controller
+        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
         if (message.squawk !== undefined) flight.squawk = message.squawk
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.cfl !== undefined) flight.cfl = message.cfl
@@ -479,6 +481,7 @@ class FlightStore {
         flight.currentAltitude = message.altitude
         if (message.ete !== undefined) flight.ete = message.ete
         if (message.controller !== undefined) flight.controller = message.controller
+        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
         flight.lastUpdate = Date.now()
@@ -730,13 +733,39 @@ class FlightStore {
             ? this.formatFlightLevel(flight.cfl)
             : undefined
 
-        // Determine default action
-        const defaultAction = determineActionForFlight(flight, sectionId, this.config)
-
         // Cleared for takeoff: departure with DEPA groundstate, not yet airborne
         const clearedForTakeoff = stripType === 'departure' &&
             flight.groundstate === 'DEPA' &&
             !flight.airborne
+
+        // Cleared to land: arrival with clearedToLand flag set
+        const clearedToLand = (stripType === 'arrival' || stripType === 'local') &&
+            flight.clearedToLand === true
+
+        // Determine actions based on controller status
+        let actions: string[] | undefined
+        const myCallsign = this.config.myCallsign
+        const isTrackedByMe = flight.controller === myCallsign
+        const isUntracked = !flight.controller || flight.controller === ''
+        const isHandoffToMe = flight.handoffTargetController === myCallsign
+
+        if (!clearedForTakeoff && !clearedToLand) {
+            if (isTrackedByMe) {
+                // We're the tracking controller - show normal actions
+                if (stripType === 'departure' && flight.groundstate === 'TAXI') {
+                    actions = ['LU', 'CTO']
+                } else {
+                    const defaultAction = determineActionForFlight(flight, sectionId, this.config)
+                    if (defaultAction) {
+                        actions = [defaultAction]
+                    }
+                }
+            } else if (isUntracked || isHandoffToMe) {
+                // Untracked or being handed off to us - show ASSUME
+                actions = ['ASSUME']
+            }
+            // If tracked by someone else (not us, not handoff to us) - no actions
+        }
 
         return {
             id: flight.callsign, // Use callsign as strip ID
@@ -762,8 +791,9 @@ class FlightStore {
             sectionId,
             position,
             bottom,
-            defaultAction: clearedForTakeoff ? undefined : defaultAction, // No action when cleared for takeoff
-            clearedForTakeoff
+            actions,
+            clearedForTakeoff,
+            clearedToLand
         }
     }
 
@@ -862,12 +892,12 @@ class FlightStore {
     }
 
     /**
-     * Set backend-managed flags on a flight (clearedToLand, airborne)
+     * Set backend-managed flags on a flight (clearedToLand, airborne, groundstate)
      * Returns the updated strip if the flight exists and has required data
      */
     setBackendFlags(
         callsign: string,
-        flags: { clearedToLand?: boolean; airborne?: boolean }
+        flags: { clearedToLand?: boolean; airborne?: boolean; groundstate?: GroundState }
     ): { flight?: Flight; strip?: FlightStrip; sectionChanged?: boolean; previousSection?: { bayId: string; sectionId: string }; shiftedCallsigns?: string[] } {
         const flight = this.flights.get(callsign)
         if (!flight) return {}
@@ -875,6 +905,7 @@ class FlightStore {
         // Update flags
         if (flags.clearedToLand !== undefined) flight.clearedToLand = flags.clearedToLand
         if (flags.airborne !== undefined) flight.airborne = flags.airborne
+        if (flags.groundstate !== undefined) flight.groundstate = flags.groundstate
         flight.lastUpdate = Date.now()
 
         // Check if we should create/update a strip

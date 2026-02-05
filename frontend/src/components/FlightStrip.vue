@@ -38,12 +38,15 @@
       <div class="callsign">{{ strip.callsign }}</div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
-        <span class="aircraft-type">{{ strip.aircraftType }}{{ strip.wakeTurbulence }}</span>
+        <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
       </div>
-      <div class="squawk" v-if="strip.squawk">{{ strip.squawk }}</div>
+      <div class="squawk-stand-row" v-if="strip.squawk || strip.stand">
+        <span class="squawk">{{ strip.squawk }}</span>
+        <span class="stand" v-if="strip.stand">{{ strip.stand }}</span>
+      </div>
     </div>
 
-    <!-- Middle section (horizontally scrollable) -->
+    <!-- Middle section (truncatable) -->
     <div class="strip-middle">
       <div class="strip-middle-content">
         <!-- Time section -->
@@ -78,37 +81,37 @@
 
         <div class="strip-divider"></div>
 
-        <!-- Route & RFL section -->
+        <!-- Route & RFL section (this one truncates) -->
         <div class="strip-section strip-route">
           <div class="route-text">{{ strip.route || '' }}</div>
           <div class="rfl" v-if="strip.rfl">{{ strip.rfl }}</div>
         </div>
-
-        <div class="strip-divider"></div>
-
-        <!-- Stand/Remarks section -->
-        <div class="strip-section strip-stand">
-          <div class="stand-value" v-if="strip.stand">{{ strip.stand }}</div>
-          <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
-        </div>
       </div>
     </div>
 
-    <!-- Right section: Action button or status indicator -->
-    <div v-if="strip.clearedForTakeoff" class="strip-right">
-      <div class="takeoff-indicator">
-        <svg viewBox="0 0 24 24" class="takeoff-triangle">
-          <polygon points="12,4 22,20 2,20" />
-        </svg>
-      </div>
+    <!-- Runway section (always visible, right-aligned) -->
+    <div class="strip-runway-fixed" v-if="strip.runway || strip.clearedForTakeoff || strip.clearedToLand">
+      <!-- Takeoff triangle (pointing up) -->
+      <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
+        <polygon points="12,4 22,20 2,20" />
+      </svg>
+      <!-- Landing triangle (pointing down) -->
+      <svg v-else-if="strip.clearedToLand" viewBox="0 0 24 24" class="clearance-triangle landing">
+        <polygon points="12,20 22,4 2,4" />
+      </svg>
+      <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
     </div>
-    <div v-else-if="strip.defaultAction" class="strip-right">
+
+    <!-- Right section: Action button(s) -->
+    <div v-if="strip.actions && strip.actions.length > 0" class="strip-right" :class="{ 'multi-action': strip.actions.length > 1 }">
       <button
+        v-for="action in strip.actions"
+        :key="action"
         class="action-button"
-        @click.stop="onActionClick"
-        @touchend.stop="onActionTouch"
+        @click.stop="() => onActionClick(action)"
+        @touchend.stop="(e) => onActionTouch(e, action)"
       >
-        <span class="action-text">{{ strip.defaultAction }}</span>
+        <span class="action-text">{{ action }}</span>
       </button>
     </div>
   </div>
@@ -485,17 +488,13 @@ function onDragAreaTouchCancel() {
 }
 
 // Action button handlers
-function onActionClick() {
-  if (props.strip.defaultAction) {
-    store.sendStripAction(props.strip.id, props.strip.defaultAction)
-  }
+function onActionClick(action: string) {
+  store.sendStripAction(props.strip.id, action)
 }
 
-function onActionTouch(event: TouchEvent) {
+function onActionTouch(event: TouchEvent, action: string) {
   event.preventDefault()
-  if (props.strip.defaultAction) {
-    store.sendStripAction(props.strip.id, props.strip.defaultAction)
-  }
+  store.sendStripAction(props.strip.id, action)
 }
 
 function onStripClick() {
@@ -516,7 +515,7 @@ function onDeleteClick() {
 <style scoped>
 .flight-strip {
   display: grid;
-  grid-template-columns: 10px auto 1fr auto;
+  grid-template-columns: 10px auto minmax(0, 1fr) auto auto;
   background: #f0ebe0;
   border: 1px solid #888;
   margin: 2px 4px;
@@ -606,32 +605,35 @@ function onDeleteClick() {
   color: #666;
 }
 
-.squawk {
-  font-size: 10px;
-  color: #444;
-  font-weight: 500;
+.squawk-stand-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-top: 1px;
 }
 
-/* Middle section - horizontally scrollable */
-.strip-middle {
-  /*touch-action: pan-x; 
-  overflow-x: auto;*/
-  overflow-x: hidden;
-  overflow-y: hidden;
-  background: #f5f2ea;
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE/Edge */
+.squawk-stand-row .squawk {
+  font-size: 10px;
+  color: #444;
+  font-weight: 500;
 }
 
-.strip-middle::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
+.squawk-stand-row .stand {
+  font-size: 10px;
+  color: #333;
+  font-weight: bold;
+}
+
+/* Middle section - truncatable */
+.strip-middle {
+  overflow: hidden;
+  background: #f5f2ea;
+  min-width: 0; /* Allow shrinking below content size */
 }
 
 .strip-middle-content {
   display: flex;
   align-items: stretch;
-  min-width: max-content;
   height: 100%;
 }
 
@@ -647,10 +649,11 @@ function onDeleteClick() {
   flex-shrink: 0;
 }
 
-/* Time section */
+/* Time section - fixed width, important info */
 .strip-time {
   width: 42px;
   min-width: 42px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -674,17 +677,22 @@ function onDeleteClick() {
 /* SID/Clearance section */
 .strip-sid {
   width: 65px;
-  min-width: 65px;
+  min-width: 50px;
+  flex-shrink: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
   padding: 2px 4px;
+  overflow: hidden;
 }
 
 .sid-value {
   font-weight: 600;
   font-size: 10px;
   color: #0055aa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cleared-data {
@@ -703,10 +711,11 @@ function onDeleteClick() {
   color: #666;
 }
 
-/* Airports section */
+/* Airports section - important, try to keep visible */
 .strip-airports {
   width: 80px;
-  min-width: 80px;
+  min-width: 45px;
+  flex-shrink: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -732,20 +741,23 @@ function onDeleteClick() {
   letter-spacing: 0.3px;
 }
 
-/* Route section */
+/* Route section - truncates when space is limited */
 .strip-route {
-  width: 100px;
-  min-width: 100px;
+  min-width: 60px;
+  flex: 1 1 100px; /* Can grow and shrink */
   display: flex;
   flex-direction: column;
   justify-content: center;
   padding: 2px 4px;
+  overflow: hidden;
 }
 
 .route-text {
   font-size: 9px;
   color: #555;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rfl {
@@ -755,35 +767,63 @@ function onDeleteClick() {
   margin-top: 1px;
 }
 
-/* Stand section */
-.strip-stand {
-  width: 40px;
-  min-width: 40px;
+/* Runway section - fixed on right, always visible */
+.strip-runway-fixed {
+  min-width: 32px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   justify-content: center;
   align-items: center;
-  padding: 2px;
+  gap: 2px;
+  padding: 2px 4px;
   background: #e8e4d8;
+  border-left: 1px solid #aaa;
 }
 
-.stand-value {
+.strip-runway-fixed .runway-value {
   font-weight: bold;
   font-size: 12px;
   color: #333;
 }
 
-.runway-value {
-  font-size: 9px;
-  color: #666;
-  font-weight: 500;
+/* Clearance triangles (takeoff/landing) */
+.clearance-triangle {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
-/* Right section - Action button */
+.clearance-triangle.takeoff polygon {
+  fill: #31bb31;
+  stroke: #2e8b2e;
+  stroke-width: 1;
+}
+
+.clearance-triangle.landing polygon {
+  fill: #31bb31;
+  stroke: #2e8b2e;
+  stroke-width: 1;
+}
+
+/* Right section - Action button(s) */
 .strip-right {
   display: flex;
   align-items: stretch;
   border-left: 1px solid #999;
+}
+
+/* Multiple actions: stack vertically */
+.strip-right.multi-action {
+  flex-direction: column;
+}
+
+.strip-right.multi-action .action-button {
+  flex: 1;
+  border-bottom: 1px solid #999;
+}
+
+.strip-right.multi-action .action-button:last-child {
+  border-bottom: none;
 }
 
 .action-button {
@@ -813,28 +853,6 @@ function onDeleteClick() {
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
-}
-
-/* Takeoff indicator - green triangle */
-.takeoff-indicator {
-  min-width: 36px;
-  width: auto;
-  padding: 0 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f5f2ea;
-}
-
-.takeoff-triangle {
-  width: 20px;
-  height: 20px;
-}
-
-.takeoff-triangle polygon {
-  fill: #31bb31;
-  stroke: #2e8b2e;
-  stroke-width: 1;
 }
 
 /* Context menu styling */

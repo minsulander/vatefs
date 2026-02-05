@@ -233,6 +233,11 @@ class EfsStore {
         return this.strips.get(stripId)
     }
 
+    // Update a strip (used when backend flags change)
+    updateStripFromFlight(strip: FlightStrip): void {
+        this.strips.set(strip.id, strip)
+    }
+
     // Get strips for a specific section and zone
     getStripsForSection(bayId: string, sectionId: string, bottom: boolean): FlightStrip[] {
         const result: FlightStrip[] = []

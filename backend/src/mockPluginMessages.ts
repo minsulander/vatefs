@@ -81,7 +81,7 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate('SAS911', {
         squawk: '1234',
         groundstate: '',
-        controller: 'ESMM_CTR' // Controlled by someone else
+        controller: 'ESMM_CTR', // Controlled by someone else
     }),
 
     // DLH432 - Arrival from Frankfurt, ARR groundstate but not assumed
@@ -93,7 +93,8 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate('DLH432', {
         squawk: '2341',
         groundstate: 'ARR',
-        controller: 'ESGG_APP' // Approach, not tower
+        controller: 'ESGG_APP', // Approach, not tower
+        handoffTargetController: 'ESGG_TWR'
     }),
 
     // === CTR ARR: Arrivals assumed by me ===
@@ -243,7 +244,8 @@ export const mockPluginMessages: PluginMessage[] = [
         squawk: '5544',
         groundstate: '',
         clearance: true,
-        stand: '8'
+        stand: '8',
+        controller: 'ESGG_TWR',
     }),
 
     // IBE3456 - Departure to Madrid, has clearance, ONFREQ
@@ -256,7 +258,8 @@ export const mockPluginMessages: PluginMessage[] = [
         squawk: '6622',
         groundstate: 'ONFREQ',
         clearance: true,
-        stand: '31'
+        stand: '31',
+        controller: 'ESGG_TWR',
     }),
 
     // === START&PUSH: De-ice or stup or push ===
@@ -265,13 +268,14 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate('WZZ7890', 'ESGG', 'LHBP', 'A321', {
         rfl: 37000,
         depRwy: '21',
-        sid: 'KAJAN1D'
+        sid: 'KAJAN1D',
     }),
     ctrUpdate('WZZ7890', {
         squawk: '3344',
         groundstate: 'PUSH',
         clearance: true,
-        stand: '55'
+        stand: '55',
+        controller: 'ESGG_TWR',
     }),
 
     // SAS999 - Departure to Copenhagen, de-icing
@@ -284,7 +288,8 @@ export const mockPluginMessages: PluginMessage[] = [
         squawk: '7711',
         groundstate: 'DE-ICE',
         clearance: true,
-        stand: '7'
+        stand: '7',
+        controller: 'ESGG_TWR',
     }),
 
     // === RADAR POSITION UPDATES ===

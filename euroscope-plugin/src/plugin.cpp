@@ -238,6 +238,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             // Safe string comparisons
             if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
                 SetJsonIfValidUtf8(message, "groundstate", scratch.c_str());
+            } else if (scratch == "/EFS/CTL") {
+                message["clearedToLand"] = true;
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
                 SetJsonIfValidUtf8(message, "stand", scratch.substr(6).c_str());
@@ -769,9 +771,9 @@ void VatEFSPlugin::UpdateScratchPad(const std::string &callsign, const std::stri
         }
         return success;
     } catch (const std::exception &e) {
-        DisplayMessage(std::string("UpdateScratchPadAndReset exception: ") + e.what());
+        DisplayMessage(std::string("UpdateScratchPad exception: ") + e.what());
     } catch (...) {
-        DisplayMessage("UpdateScratchPadAndReset: Unknown exception");
+        DisplayMessage("UpdateScratchPad: Unknown exception");
     }
     return false;
 }
@@ -936,16 +938,52 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 nlohmann::json message = nlohmann::json::parse(buffer);
                 if (message["type"] == "setGroundState") {
                     const char *callsign = message["callsign"].get<std::string>().c_str();
-                    const char *groundState = message["groundState"].get<std::string>().c_str();
-                    UpdateScratchPadAndReset(callsign, groundState);
+                    const char *state = message["state"].get<std::string>().c_str();
+                    if (callsign && state) {
+                        UpdateScratchPad(callsign, state, true);
+                    } else {
+                        DisplayMessage("setGroundState: Invalid callsign or state");
+                    }
+                } else if (message["type"] == "setClearedToLand") {
+                    const char *callsign = message["callsign"].get<std::string>().c_str();
+                    if (callsign) {
+                        UpdateScratchPad(callsign, "/EFS/CTL", true);
+                    } else {
+                        DisplayMessage("setClearedToLand: Invalid callsign");
+                    }
                 } else if (message["type"] == "refresh") {
                     Refresh();
-                } else {
-                    DisplayMessage("Unknown UDP message type: " + message["type"].get<std::string>());
+                } else if (message["type"] == "assume") {
+                    std::string callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (!callsign.empty()) {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (fp.IsValid()) {
+                            const char *handoffTarget = fp.GetHandoffTargetControllerCallsign();
+                            const char *trackingCallsign = fp.GetTrackingControllerCallsign();
+                            bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
+                                               strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
+                            bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
+                            if (handoffToMe) {
+                                fp.AcceptHandoff();
+                                DebugMessage("Accepted handoff for " + callsign);
+                            } else if (untracked) {
+                                bool ok = fp.StartTracking();
+                                if (ok)
+                                    DebugMessage("Started tracking " + callsign);
+                                else
+                                    DisplayMessage("Failed to start tracking " + callsign);
+                            } else {
+                                DebugMessage(callsign + " already tracked by " + std::string(trackingCallsign));
+                            }
+                        } else {
+                            DisplayMessage("assume: Flight plan not found: " + callsign);
+                        }
+                    } else {
+                        DisplayMessage("assume: Invalid callsign");
+                    }
                 }
-            } else {
-                DisplayMessage("UDP received: " + std::string(buffer));
-            }
         }
     } catch (const std::exception &e) {
         DisplayMessage(std::string("ReceiveUdpMessages exception: ") + e.what());
