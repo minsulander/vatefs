@@ -33,6 +33,7 @@ export interface Flight {
     // Controller assigned data (from controllerAssignedDataUpdate)
     controller?: string       // Tracking controller callsign
     handoffTargetController?: string  // Controller receiving handoff (if any)
+    nextController?: string       // Next controller callsign
     squawk?: string
     rfl?: number              // Requested/Final flight level (feet)
     cfl?: number              // Cleared flight level (feet), 0=use RFL, 1=ILS, 2=visual
@@ -57,6 +58,7 @@ export interface Flight {
 
     // Rule tracking
     lastSectionRule?: string  // ID of the last section rule that matched, or 'manual' for manual drag, 'default' for default section
+    lastDeleteRule?: string   // ID of the delete rule that caused soft-deletion
 
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
@@ -100,13 +102,15 @@ export interface FlightPlanDataUpdateMessage {
     star?: string
     depRwy?: string
     sid?: string
+    controller?: string
+    handoffTargetController?: string
+    nextController?: string
 }
 
 export interface ControllerAssignedDataUpdateMessage {
     type: 'controllerAssignedDataUpdate'
     callsign: string
     controller?: string
-    handoffTargetController?: string
     squawk?: string
     rfl?: number
     cfl?: number
@@ -169,12 +173,14 @@ export interface RadarTargetPositionUpdateMessage {
     callsign: string
     controller?: string
     handoffTargetController?: string
+    nextController?: string
     ete?: number
     altitude: number      // Current altitude in feet
     groundSpeed?: number  // Ground speed in knots (optional)
     heading?: number      // Track heading in degrees (optional)
     latitude?: number     // Position latitude (optional)
     longitude?: number    // Position longitude (optional)
+    squawk?: string       // Transponder code (optional)
 }
 
 export type PluginMessage =

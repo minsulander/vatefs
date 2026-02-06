@@ -47,6 +47,9 @@ export interface FlightStrip {
     // Actions (if any) - shown as button(s)
     actions?: string[]         // e.g., ["ASSUME"], ["LU", "CTO"]
 
+    // Interactive flags
+    canResetSquawk?: boolean     // Whether the squawk reset button is available
+
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)

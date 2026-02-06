@@ -1,15 +1,18 @@
-Testning på ESSA 2026-02-05:
+- Hämta stands från GRPlugin filen, populera avgående
+- OBS-mode fakea PARK state när arrival kommer till stand
 
-- Skapa flight för radar targets utan flightplan som är på flygplatsen
+- Hantera flera FL positioner:
+  - XFER istför LU/CTO om jag är GND
+  - XFER istför TXI om jag är TWR+ och GND online
+  - READY istför PUSH om jag är DEL (DE-ICE + XFER)
+  - inte CTL om jag är GND
+  - inte ASSUME om jag är GND och airborne
+  - inte ASSUME om jag är GND, DEL online och groundstate < DE-ICE
 
 
-
-
--15? Free = uppdateras inte, ligger kvar i CTR DEP, verkar kunna använda controller="" i radartargetupdate
 
 - Skilja på DEP RWY, ARR RWY i ESSA layout
 
-- konstant för topsky anropet i pluginen
 
 
 
@@ -25,28 +28,6 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - Nödlösning för cleared to land i observer mode... "på banan"
 
-- Hur sätta squawk? - verkar gå att trigga TopSky xpdr code assignment! Kolla Developer Guide!
-
-    It is possible to trigger a transponder code assignment from another plugin, using “StartTagFunction” with
-    the following parameters:
-      o sFunctionPlugInName TopSky plugin
-      o functionID 667
-      o sItemString Callsign of the aircraft
-    The “sCallsign” parameter is not used by the plugin, but as StartTagFunction will set that text string (case
-    sensitive!) as the ASEL callsign, it is recommended to set a reasonable value to it – for example the current
-    ASEL callsign, the same as sItemString, or an empty string. NULL will cause an exception.
-    The function will trigger an automatic assignment if all the following conditions are met (otherwise the
-    function will do nothing):
-      o SSR menu is not open
-      o A code assignment is currently not in progress
-      o At least 2 seconds have elapsed from the previous call to this function
-      o Both a valid CFlightPlan and a CRadarTarget are found for the requested callsign
-      o You are a controller
-      o The aircraft is not tracked by someone else
-
-    Testa i plugin! ...men då behöver man en CRadarScreen... suck.
-
-
 - Hur sätta clearance flag?
     Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
 
@@ -60,14 +41,11 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - DCL/PDC - gå direkt på hoppie? 
 
-Start with se-men-inte-röra.
 
 
 Actions:
 - Assume and transfer based on my callsign
 - If no coordinated next controller, free instead of transfer
-- Implement actions
-- Drag-and-drop actions
 - Ändra SID (SA bana 08, prop/slow)
 - Ändra CFL
 - Sätta RMK/OPTEXT2
@@ -79,6 +57,8 @@ Vidare i livet:
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - OBS mode skulle kunna betrakta CFL=CA (1) eller VA (2) som cleared to land
+- (låg prio / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
+
 
 Tekniskt / icke-funktionellt:
 - Visa nånting i frontend när backend inte är uppkopplad

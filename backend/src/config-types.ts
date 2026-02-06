@@ -9,7 +9,7 @@ import type { GroundState } from "./types.js"
 /**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI'
 
 /**
  * Flight direction relative to our airport
@@ -128,6 +128,11 @@ export interface ActionRule {
 
     /** Airborne flag must match */
     airborne?: boolean
+
+    /**
+     * Aircraft must be on a runway (geographically within runway surface and low altitude)
+     */
+    onRunway?: boolean
 }
 
 /**
@@ -216,6 +221,9 @@ export interface EfsStaticConfig {
 
     /** My controller callsign (will be updated from myselfUpdate) */
     myCallsign?: string
+
+    /** Whether we are logged in as a controller (false = observer mode) */
+    isController?: boolean
 
     /** Radar range in nautical miles for strip filtering (default: 25) */
     radarRangeNm: number

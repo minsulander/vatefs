@@ -88,17 +88,18 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
         if (trackingController && strlen(trackingController) < 20) {
-            out << " controller " << trackingController;
+            if (strlen(trackingController) > 0) out << " controller " << trackingController;
             SetJsonIfValidUtf8(message, "controller", trackingController);
         }
         const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
         if (handoffTargetController && strlen(handoffTargetController) < 20) {
-            out << " handoffTargetController " << handoffTargetController;
+            if (strlen(handoffTargetController) > 0)
+                out << " handoffTargetController " << handoffTargetController;
             SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
         }
         const char *nextController = FlightPlan.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
-            out << " nextController " << nextController;
+            if (strlen(nextController) > 0) out << " nextController " << nextController;
             SetJsonIfValidUtf8(message, "nextController", nextController);
         }
 
@@ -135,7 +136,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (sidName && *sidName && strlen(sidName) < 10)
             SetJsonIfValidUtf8(message, "sid", sidName);
 
-        const char *eobt = fpDa.GetEstimatedDepartureTime();
+        const char *eobt = fpData.GetEstimatedDepartureTime();
         if (eobt && strlen(eobt) == 4) { // Valid EOBT is always 4 digits
             out << " eobt " << eobt;
             message["eobt"] = eobt;
@@ -433,7 +434,10 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         message["altitude"] = position.GetPressureAltitude();
         // message["headingMagnetic"] = position.GetReportedHeading();
         message["heading"] = position.GetReportedHeadingTrueNorth();
-        SetJsonIfValidUtf8(message, "squawk", position.GetSquawk());
+        const char *squawk = position.GetSquawk();
+        if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
+            SetJsonIfValidUtf8(message, "squawk", squawk);
+        }
         // message["modec"] = position.GetTransponderC();
         // message["ident"] = position.GetTransponderI();
     }
@@ -565,32 +569,21 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             content = remainder.substr(callEnd + 1);
         }
         bool resetAfterSet = (subcommand == "scratmp");
-        UpdateScratchPad(callsign, content, resetAfterSet);
+        bool success = UpdateScratchPad(callsign, content, resetAfterSet);
         if (!success)
             DisplayMessage("Failed to set scratch pad for " + callsign);
         else
             DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
     } else if (subcommand == "ssr") {
-        if (dummyRadarScreens.size() > 0)
-            dummyRadarScreens[0]->DoStuff();
-        else
-            DisplayMessage("DummyRadarScreen not created");
         std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         std::string callsign = remainder;
         std::string::size_type space = remainder.find(' ');
         if (space != std::string::npos) callsign = remainder.substr(0, space);
-        for (auto &c : callsign)
-            c = (char)std::toupper((unsigned char)c);
         if (callsign.empty()) {
             DisplayMessage("Usage: .efs ssr CALLSIGN");
             return false;
         }
-        // auto fp = FlightPlanSelect(callsign.c_str());
-        // if (!fp.IsValid()) {
-        //     DisplayMessage("Flight plan not found: " + callsign);
-        //     return false;
-        // }
         if (dummyRadarScreens.size() > 0) {
             dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
         } else {
@@ -749,9 +742,10 @@ void VatEFSPlugin::UpdateMyself()
     }
 }
 
-void VatEFSPlugin::UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet)
+bool VatEFSPlugin::UpdateScratchPad(const std::string &inCallsign, const std::string &content, const bool resetAfterSet)
 {
     try {
+        std::string callsign = inCallsign;
         for (auto &c : callsign)
             c = (char)std::toupper((unsigned char)c);
         auto fp = FlightPlanSelect(callsign.c_str());
@@ -783,6 +777,28 @@ void VatEFSPlugin::Refresh()
     for (EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid();
          FlightPlan = FlightPlanSelectNext(FlightPlan)) {
         OnFlightPlanFlightPlanDataUpdate(FlightPlan);
+
+        auto ctrData = FlightPlan.GetControllerAssignedData();
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
+        const char *squawk = ctrData.GetSquawk();
+        if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
+            SetJsonIfValidUtf8(message, "squawk", squawk);
+        }
+        int rfl = ctrData.GetFinalAltitude();
+        if (rfl >= 0 && rfl <= 100000) { // Reasonable altitude range
+            message["rfl"] = rfl;
+        }
+        int cfl = ctrData.GetClearedAltitude();
+        message["cfl"] = cfl;
+        if (cfl == 1 || cfl == 2) {
+            message["ahdg"] = 0;
+            message["direct"] = "";
+        }
+        // TODO scratch pad
+        SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
+        PostJson(message, "Refresh");
     }
     for (EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst();
          RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
@@ -962,8 +978,9 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         if (fp.IsValid()) {
                             const char *handoffTarget = fp.GetHandoffTargetControllerCallsign();
                             const char *trackingCallsign = fp.GetTrackingControllerCallsign();
-                            bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
-                                               strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
+                            bool handoffToMe =
+                            handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
+                            strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
                             bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
                             if (handoffToMe) {
                                 fp.AcceptHandoff();
@@ -981,9 +998,48 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             DisplayMessage("assume: Flight plan not found: " + callsign);
                         }
                     } else {
-                        DisplayMessage("assume: Invalid callsign");
+                        DisplayMessage("assume: Empty callsign");
+                    }
+                } else if (message["type"] == "transfer") {
+                    std::string callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (!callsign.empty()) {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (fp.IsValid()) {
+                            const char *nextCtr = fp.GetCoordinatedNextController();
+                            bool hasNext = nextCtr && nextCtr[0] != '\0';
+                            if (hasNext) {
+                                bool ok = fp.InitiateHandoff(nextCtr);
+                                if (ok)
+                                    DebugMessage("Handoff initiated to " + std::string(nextCtr) + " for " + callsign);
+                                else
+                                    DisplayMessage("Failed to initiate handoff for " + callsign);
+                            } else {
+                                bool ok = fp.EndTracking();
+                                if (ok)
+                                    DebugMessage("Ended tracking " + callsign);
+                                else
+                                    DisplayMessage("Failed to end tracking " + callsign);
+                            }
+                        } else {
+                            DisplayMessage("transfer: Flight plan not found: " + callsign);
+                        }
+                    } else {
+                        DisplayMessage("transfer: Empty callsign");
+                    }
+                } else if (message["type"] == "resetSquawk") {
+                    const char *callsign = message["callsign"].get<std::string>().c_str();
+                    if (dummyRadarScreens.size() > 0) {
+                        dummyRadarScreens[0]->AllocateSSR(callsign);
+                    } else {
+                        DisplayMessage(
+                        "To reset squawk the EFS plugin must be allowed to draw on radar screen.");
+                        DisplayMessage(
+                        "Please press the left arrows in OTHER SET / Plug-ins ... menu.");
                     }
                 }
+            }
         }
     } catch (const std::exception &e) {
         DisplayMessage(std::string("ReceiveUdpMessages exception: ") + e.what());
@@ -1187,15 +1243,15 @@ void DummyRadarScreen::DoStuff()
     plugin->DebugMessage("DummyRadarScreen::DoStuff");
 }
 
-void DummyRadarScreen::AllocateSSR(const char *callsign)
+void DummyRadarScreen::AllocateSSR(const char *inCallsign)
 {
-    plugin->DebugMessage("DummyRadarScreen::AllocateSSR " + std::string(callsign));
-    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(
-    callsign)); // make sure the correct aircraft is selected before calling 'StartTagFunction'
-    StartTagFunction(callsign, NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN, callsign,
-                     "TopSky plugin", 667, POINT(), RECT());
-    plugin->DebugMessage("did it work?");
-    // StartTagFunction("TopSky", 667, ssrCallsign.c_str());
+    std::string callsign = inCallsign;
+    for (auto &c : callsign)
+        c = (char)std::toupper((unsigned char)c);
+    // Make sure the correct aircraft is selected before calling 'StartTagFunction'
+    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign.c_str()));
+    StartTagFunction(callsign.c_str(), NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN,
+                     callsign.c_str(), TOPSKY_PLUGIN_NAME, TOPSKY_SSR_FUNCTION_ID, POINT(), RECT());
 }
 
 } // namespace VatEFS

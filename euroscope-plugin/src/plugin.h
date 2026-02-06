@@ -10,6 +10,10 @@
 namespace VatEFS
 {
 
+constexpr const char *TOPSKY_PLUGIN_NAME = "TopSky plugin";
+constexpr const int TOPSKY_SSR_FUNCTION_ID = 667;
+
+// Dummy radar screen class because we need it to access TopSky functions
 class DummyRadarScreen;
 
 class VatEFSPlugin : public EuroScopePlugIn::CPlugIn

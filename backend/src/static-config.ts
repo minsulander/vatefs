@@ -62,3 +62,10 @@ export function setMyCallsign(callsign: string) {
 export function setMyAirports(airports: string[]) {
     staticConfig.myAirports = airports
 }
+
+/**
+ * Update controller mode (called when myselfUpdate is received)
+ */
+export function setIsController(isController: boolean) {
+    staticConfig.isController = isController
+}

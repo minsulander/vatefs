@@ -38,9 +38,21 @@ function stripsEqual(a: FlightStrip, b: FlightStrip): boolean {
         a.sectionId === b.sectionId &&
         a.position === b.position &&
         a.bottom === b.bottom &&
-        a.defaultAction === b.defaultAction &&
-        a.clearedForTakeoff === b.clearedForTakeoff
+        a.canResetSquawk === b.canResetSquawk &&
+        a.clearedForTakeoff === b.clearedForTakeoff &&
+        a.clearedToLand === b.clearedToLand &&
+        actionsEqual(a.actions, b.actions)
     )
+}
+
+function actionsEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+    if (a === b) return true
+    if (!a || !b) return false
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false
+    }
+    return true
 }
 
 export interface MoveStripResult {
@@ -406,6 +418,7 @@ class EfsStore {
         if (flight) {
             flight.deleted = true
             flight.manuallyDeleted = true
+            flight.lastDeleteRule = 'manual'
         }
 
         console.log(`Strip ${stripId} manually deleted by user`)

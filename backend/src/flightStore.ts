@@ -313,7 +313,6 @@ class FlightStore {
 
         // Update flight data
         if (message.controller !== undefined) flight.controller = message.controller
-        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
         if (message.squawk !== undefined) flight.squawk = message.squawk
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.cfl !== undefined) flight.cfl = message.cfl
@@ -334,6 +333,7 @@ class FlightStore {
 
         if (deleteResult.shouldDelete && !wasDeleted) {
             flight.deleted = true
+            flight.lastDeleteRule = deleteResult.ruleId
             // Track if deleted by beyond-range rule (arrivals can be restored when in range)
             if (deleteResult.ruleId === 'delete_beyond_range') {
                 flight.deletedByBeyondRange = true
@@ -347,11 +347,13 @@ class FlightStore {
                 if (targetSection) {
                     flight.noSectionFound = false
                     flight.deleted = false
+                    flight.lastDeleteRule = undefined
                     console.log(`Flight ${callsign} restored - section now found: ${targetSection.sectionId}`)
                 }
             } else {
                 flight.deleted = false
                 flight.deletedByBeyondRange = false
+                flight.lastDeleteRule = undefined
                 console.log(`Flight ${callsign} restored from soft-delete`)
             }
         } else if (wasDeleted && flight.deletedByBeyondRange && !flight.manuallyDeleted) {
@@ -360,6 +362,7 @@ class FlightStore {
             if (isArrival && this.isEligibleForStrip(flight)) {
                 flight.deleted = false
                 flight.deletedByBeyondRange = false
+                flight.lastDeleteRule = undefined
                 console.log(`Flight ${callsign} (arrival) restored - now within range`)
             }
         }
@@ -482,8 +485,11 @@ class FlightStore {
         if (message.ete !== undefined) flight.ete = message.ete
         if (message.controller !== undefined) flight.controller = message.controller
         if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
+        if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
+        // radar target squawk is not the same as the assigned squawk
+        //if (message.squawk !== undefined) flight.squawk = message.squawk
         flight.lastUpdate = Date.now()
 
         // Check for airborne status
@@ -509,6 +515,7 @@ class FlightStore {
         if (deleteResult.shouldDelete && !wasDeleted) {
             // Soft-delete the flight
             flight.deleted = true
+            flight.lastDeleteRule = deleteResult.ruleId
             // Track if deleted by beyond-range rule (arrivals can be restored when in range)
             if (deleteResult.ruleId === 'delete_beyond_range') {
                 flight.deletedByBeyondRange = true
@@ -522,11 +529,13 @@ class FlightStore {
                 if (targetSection) {
                     flight.noSectionFound = false
                     flight.deleted = false
+                    flight.lastDeleteRule = undefined
                     console.log(`Flight ${callsign} restored - section now found: ${targetSection.sectionId}`)
                 }
             } else {
                 flight.deleted = false
                 flight.deletedByBeyondRange = false
+                flight.lastDeleteRule = undefined
                 console.log(`Flight ${callsign} restored from soft-delete`)
             }
         } else if (wasDeleted && flight.deletedByBeyondRange && !flight.manuallyDeleted) {
@@ -535,6 +544,7 @@ class FlightStore {
             if (isArrival && this.isEligibleForStrip(flight)) {
                 flight.deleted = false
                 flight.deletedByBeyondRange = false
+                flight.lastDeleteRule = undefined
                 console.log(`Flight ${callsign} (arrival) restored - now within range`)
             }
         }
@@ -760,12 +770,15 @@ class FlightStore {
                         actions = [defaultAction]
                     }
                 }
-            } else if (isUntracked || isHandoffToMe) {
-                // Untracked or being handed off to us - show ASSUME
+            } else if ((isUntracked || isHandoffToMe) && this.config.isController) {
+                // Untracked or being handed off to us - show ASSUME (only in controller mode)
                 actions = ['ASSUME']
             }
             // If tracked by someone else (not us, not handoff to us) - no actions
         }
+
+        // Can reset squawk if we're a controller and we track the flight (or it's untracked)
+        const canResetSquawk = this.config.isController === true && (isTrackedByMe || isUntracked)
 
         return {
             id: flight.callsign, // Use callsign as strip ID
@@ -792,6 +805,7 @@ class FlightStore {
             position,
             bottom,
             actions,
+            canResetSquawk: canResetSquawk || undefined,
             clearedForTakeoff,
             clearedToLand
         }

@@ -44,23 +44,41 @@ sectionRules:
     onRunway: true
     priority: 200
 
-  # === ARRIVAL FLOW ===
+  # === DEPARTURE FLOW ===
 
-  # CTR DEP: Airborne departures (groundstate DEPA + airborne flag)
-  ctr_dep_airborne:
-    sectionId: ctr_dep
+  # PENDING DEP: Departures without clearance (no groundstate or ONFREQ)
+  pending_dep:
+    sectionId: pending_dep
     direction: departure
-    groundstates: ['', NSTS, DEPA]
-    airborne: true
-    priority: 100
+    airborne: false
+    groundstates: ['', NSTS, ONFREQ]
+    clearance: false
+    priority: 40
 
-  # RUNWAY: Cleared to land arrivals
-  runway_cleared_to_land:
-    sectionId: runway
-    direction: arrival
-    clearedToLand: true
-    groundstates: ['', NSTS, ARR]
-    priority: 95
+  # CLEARED: Departures with clearance flag
+  cleared:
+    sectionId: cleared
+    direction: departure
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ]  # Not yet pushing
+    priority: 50
+
+  # PUSH&START: Departures with DE-ICE (=READY) or STUP or PUSH
+  push_start:
+    sectionId: push_start
+    direction: departure
+    airborne: false
+    groundstates: [DE-ICE, STUP, PUSH]
+    priority: 60
+
+  # TAXI: Departures taxiing (after pushback, before lineup)
+  taxi_dep:
+    sectionId: taxi
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    priority: 30
 
   # RUNWAY: Lineup and departure roll
   runway_lineup_depa:
@@ -68,21 +86,14 @@ sectionRules:
     groundstates: [LINEUP, DEPA]
     priority: 90
 
-  # CTR ARR: Arrivals assumed by me
-  ctr_arr_assumed:
-    sectionId: ctr_arr
-    direction: arrival
-    controller: myself
-    groundstates: ['', NSTS, ARR]
-    priority: 80
+  # CTR DEP: Airborne departures (groundstate DEPA + airborne flag)
+  ctr_dep_airborne:
+    sectionId: ctr_dep
+    direction: departure
+    airborne: true
+    priority: 100
 
-  # CTR ARR: Arrivals below 1500ft AGL (inside CTR vertical boundary)
-  ctr_arr_low_altitude:
-    sectionId: ctr_arr
-    direction: arrival
-    groundstates: ['', NSTS, ARR]
-    maxAltitudeAboveField: 1500
-    priority: 75
+  # === ARRIVAL FLOW ===
 
   # INBOUND: Arrivals not yet assumed (ARR groundstate or just arriving)
   inbound_arr_groundstate:
@@ -93,50 +104,39 @@ sectionRules:
     controller: not_myself
     priority: 70
 
-  # === DEPARTURE FLOW ===
+  # CTR ARR: Arrivals assumed by me
+  ctr_arr_assumed:
+    sectionId: ctr_arr
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 80
 
-  # PUSH&START: Departures with DE-ICE (=READY) or STUP or PUSH
-  push_start:
-    sectionId: push_start
-    direction: departure
-    airborne: false
-    groundstates: [DE-ICE, STUP, PUSH]
-    priority: 60
+  # CTR ARR: Arrivals below 1500ft AGL (inside CTR vertical boundary)
+  ctr_arr_low_altitude:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    maxAltitudeAboveField: 1500
+    priority: 75
 
-  # CLEARED: Departures with clearance flag
-  cleared:
-    sectionId: cleared
-    direction: departure
-    airborne: false
-    clearance: true
-    groundstates: ['', ONFREQ, NSTS]  # Not yet pushing
-    priority: 50
-
-  # PENDING DEP: Departures without clearance (no groundstate or ONFREQ)
-  pending_dep:
-    sectionId: pending_dep
-    direction: departure
-    airborne: false
-    groundstates: ['', ONFREQ, NSTS]
-    clearance: false
-    priority: 40
-
-  # === TAXI ===
-
-  # TAXI: Departures taxiing (after pushback, before lineup)
-  taxi_dep:
-    sectionId: taxi
-    direction: departure
-    airborne: false
-    groundstates: [TAXI, TXIN]
-    priority: 30
+  # RUNWAY: Cleared to land arrivals
+  runway_cleared_to_land:
+    sectionId: runway
+    direction: arrival
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
 
   # TAXI: Arrivals taxiing in (after vacating runway)
   taxi_arr:
     sectionId: taxi
     direction: arrival
     airborne: false
-    groundstates: [TAXI, TXIN]
+    groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
 
   # === FALLBACKS ===
@@ -188,6 +188,23 @@ actionRules:
     airborne: true
     priority: 80
 
+  # Arrivals on ground (not airborne, not on runway): TXI (taxi in)
+  txi_arr:
+    action: TXI
+    direction: arrival
+    groundstates: ['', NSTS, ARR]
+    airborne: false
+    onRunway: false
+    priority: 76
+
+  # PUSH&START departures with PUSH groundstate: TXO (taxi out)
+  txo_push:
+    action: TXO
+    sectionId: push_start
+    direction: departure
+    groundstates: [PUSH]
+    priority: 75
+
   # CLEARED departures: PUSH (approve startup/pushback)
   push_cleared:
     action: PUSH
@@ -203,7 +220,7 @@ deleteRules:
   delete_dep_high_transferred:
     direction: departure
     controller: not_myself
-    minAltitudeAboveField: 1500
+    minAltitudeAboveField: 2500
     priority: 100
 
   # Arrivals: Delete when parked

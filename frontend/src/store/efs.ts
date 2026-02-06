@@ -85,7 +85,12 @@ export const useEfsStore = defineStore("efs", () => {
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
                 }
             } else {
-                console.log(`received ${message.type ?? 'unknown'} message:`, message)
+                switch (message.type) {
+                    case 'myselfUpdate':
+                        break
+                    default:
+                        console.log(`received ${message.type ?? 'unknown'} message:`, message)
+                }
             }
         } catch (err) {
             console.log("received non-JSON message:", data)
@@ -154,7 +159,6 @@ export const useEfsStore = defineStore("efs", () => {
 
     // Handle status message from server
     function handleStatusMessage(callsign: string, airports: string[]) {
-        console.log("received status:", callsign, airports)
         myCallsign.value = callsign
         myAirports.value = airports
     }

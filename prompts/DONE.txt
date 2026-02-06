@@ -1,0 +1,22 @@
+
+- Hur sätta squawk? - verkar gå att trigga TopSky xpdr code assignment! Kolla Developer Guide!
+
+    It is possible to trigger a transponder code assignment from another plugin, using “StartTagFunction” with
+    the following parameters:
+      o sFunctionPlugInName TopSky plugin
+      o functionID 667
+      o sItemString Callsign of the aircraft
+    The “sCallsign” parameter is not used by the plugin, but as StartTagFunction will set that text string (case
+    sensitive!) as the ASEL callsign, it is recommended to set a reasonable value to it – for example the current
+    ASEL callsign, the same as sItemString, or an empty string. NULL will cause an exception.
+    The function will trigger an automatic assignment if all the following conditions are met (otherwise the
+    function will do nothing):
+      o SSR menu is not open
+      o A code assignment is currently not in progress
+      o At least 2 seconds have elapsed from the previous call to this function
+      o Both a valid CFlightPlan and a CRadarTarget are found for the requested callsign
+      o You are a controller
+      o The aircraft is not tracked by someone else
+
+    Testa i plugin! ...men då behöver man en CRadarScreen... suck.
+

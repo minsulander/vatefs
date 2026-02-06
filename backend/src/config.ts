@@ -21,7 +21,7 @@ export type {
 } from "./config-types.js"
 
 // Re-export config and setter functions
-export { staticConfig, setMyCallsign, setMyAirports, applyConfig } from "./static-config.js"
+export { staticConfig, setMyCallsign, setMyAirports, setIsController, applyConfig } from "./static-config.js"
 
 // Re-export rules engine functions
 export {

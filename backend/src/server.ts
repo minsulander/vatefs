@@ -12,7 +12,7 @@ import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDe
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, staticConfig, determineMoveAction, applyConfig } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, staticConfig, determineMoveAction, applyConfig } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
@@ -144,6 +144,7 @@ if (cliArgs.mock) {
     if (mockAirports.length > 0) {
         setMyAirports(mockAirports)
     }
+    setIsController(mockMyselfUpdate.controller)
     console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(', ')})`)
 }
 store.loadMockData(cliArgs.mock ?? false)
@@ -431,9 +432,29 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'LINEUP' }))
                         break
                     }
+                    case 'TXO': {
+                        // Taxi out - set groundstate to TAXI
+                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'TAXI' }))
+                        break
+                    }
+                    case 'TXI': {
+                        // Taxi in - set groundstate to TXIN
+                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'TXIN' }))
+                        break
+                    }
+                    case 'XFER': {
+                        // Transfer to next controller
+                        sendUdp(JSON.stringify({ type: 'transfer', callsign: strip.callsign }))
+                        break
+                    }
                     case 'ASSUME': {
                         // Assume control of the flight
                         sendUdp(JSON.stringify({ type: 'assume', callsign: strip.callsign }))
+                        break
+                    }
+                    case 'resetSquawk': {
+                        // Reset squawk (allocate new SSR code via TopSky)
+                        sendUdp(JSON.stringify({ type: 'resetSquawk', callsign: strip.callsign }))
                         break
                     }
                     default:
@@ -573,6 +594,7 @@ udpIn.on("message", (msg, rinfo) => {
             store.clear()
             setMyCallsign('')
             setMyAirports([])
+            setIsController(false)
             broadcastStatus()
             broadcastRefresh('Connection lost')
             return
@@ -588,6 +610,8 @@ udpIn.on("message", (msg, rinfo) => {
                 setMyCallsign(msg.callsign)
                 console.log(`My callsign set to: ${msg.callsign}`)
             }
+
+            setIsController(msg.controller)
 
             // Extract airports from rwyconfig - any airport with arr or dep set
             if (msg.rwyconfig) {

@@ -300,6 +300,30 @@ function evaluateActionRule(
         }
     }
 
+    // Check onRunway condition
+    if (rule.onRunway !== undefined) {
+        if (
+            flight.latitude === undefined ||
+            flight.longitude === undefined ||
+            flight.currentAltitude === undefined
+        ) {
+            if (rule.onRunway === true) {
+                return false
+            }
+        } else {
+            const runwayResult = isOnAnyRunway(
+                flight.latitude,
+                flight.longitude,
+                flight.currentAltitude,
+                config.myAirports
+            )
+            const onRunway = runwayResult !== undefined && runwayResult.onRunway
+            if (onRunway !== rule.onRunway) {
+                return false
+            }
+        }
+    }
+
     return true
 }
 
@@ -372,7 +396,10 @@ function evaluateDeleteRule(
 
     // Check beyond range condition
     if (rule.beyondRange === true) {
-        // Need position data to check range
+        // Can't evaluate without airports or position data
+        if (config.myAirports.length === 0) {
+            return false
+        }
         if (flight.latitude === undefined || flight.longitude === undefined) {
             return false // Can't evaluate without position
         }

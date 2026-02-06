@@ -1,10 +1,5 @@
 <template>
-  <v-menu
-    v-model="menuOpen"
-    :target="menuPosition"
-    location="end"
-    :close-on-content-click="true"
-  >
+  <v-menu v-model="menuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu">
       <v-list-item @click="onDeleteClick">
         <v-list-item-title>Delete</v-list-item-title>
@@ -12,36 +7,25 @@
     </v-list>
   </v-menu>
 
-  <div
-    ref="stripElement"
-    class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom }]"
-    :style="stripStyle"
-    :data-strip-id="strip.id"
-    draggable="true"
-    @dragstart="onDragStart"
-    @dragend="onDragEnd"
-    @touchstart="onDragAreaTouchStart"
-      @touchmove.prevent="onDragAreaTouchMove"
-      @touchend="onDragAreaTouchEnd"
-      @touchcancel="onDragAreaTouchCancel"
-    @contextmenu.prevent="onContextMenu"
-    @click="onStripClick"
-  >
+  <div ref="stripElement" class="flight-strip"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom }]" :style="stripStyle"
+    :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
+    @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
+    @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
     <!-- Color indicator bar on left -->
     <div class="strip-indicator"></div>
 
     <!-- Left section: Callsign block (always visible) -->
-    <div
-      class="strip-left"
-    >
+    <div class="strip-left">
       <div class="callsign">{{ strip.callsign }}</div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
       </div>
-      <div class="squawk-stand-row" v-if="strip.squawk || strip.stand">
-        <span class="squawk">{{ strip.squawk }}</span>
+      <div class="squawk-stand-row">
+        <span class="squawk" v-if="strip.squawk">{{ strip.squawk }}</span>
+        <span class="squawk" :class="{ 'squawk-empty': strip.canResetSquawk }" v-else
+          @click.stop="strip.canResetSquawk && onResetSquawk()">----</span>
         <span class="stand" v-if="strip.stand">{{ strip.stand }}</span>
       </div>
     </div>
@@ -91,6 +75,11 @@
 
     <!-- Runway section (always visible, right-aligned) -->
     <div class="strip-runway-fixed" v-if="strip.runway || strip.clearedForTakeoff || strip.clearedToLand">
+      <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
+    </div>
+
+    <!-- Right section: Takeoff/landing triangle or action button(s) -->
+    <div v-if="strip.clearedForTakeoff || strip.clearedToLand" class="strip-right">
       <!-- Takeoff triangle (pointing up) -->
       <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
         <polygon points="12,4 22,20 2,20" />
@@ -99,18 +88,11 @@
       <svg v-else-if="strip.clearedToLand" viewBox="0 0 24 24" class="clearance-triangle landing">
         <polygon points="12,20 22,4 2,4" />
       </svg>
-      <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
     </div>
-
-    <!-- Right section: Action button(s) -->
-    <div v-if="strip.actions && strip.actions.length > 0" class="strip-right" :class="{ 'multi-action': strip.actions.length > 1 }">
-      <button
-        v-for="action in strip.actions"
-        :key="action"
-        class="action-button"
-        @click.stop="() => onActionClick(action)"
-        @touchend.stop="(e) => onActionTouch(e, action)"
-      >
+    <div v-else-if="strip.actions && strip.actions.length > 0" class="strip-right"
+      :class="{ 'multi-action': strip.actions.length > 1 }">
+      <button v-for="action in strip.actions" :key="action" class="action-button"
+        @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
         <span class="action-text">{{ action }}</span>
       </button>
     </div>
@@ -497,6 +479,10 @@ function onActionTouch(event: TouchEvent, action: string) {
   store.sendStripAction(props.strip.id, action)
 }
 
+function onResetSquawk() {
+  store.sendStripAction(props.strip.id, 'resetSquawk')
+}
+
 function onStripClick() {
   // Future: open strip detail/edit modal
 }
@@ -618,6 +604,15 @@ function onDeleteClick() {
   font-weight: 500;
 }
 
+.squawk-stand-row .squawk-empty {
+  cursor: pointer;
+  color: #444;
+}
+
+.squawk-stand-row .squawk-empty:hover {
+  color: #0055aa;
+}
+
 .squawk-stand-row .stand {
   font-size: 10px;
   color: #333;
@@ -628,7 +623,8 @@ function onDeleteClick() {
 .strip-middle {
   overflow: hidden;
   background: #f5f2ea;
-  min-width: 0; /* Allow shrinking below content size */
+  min-width: 0;
+  /* Allow shrinking below content size */
 }
 
 .strip-middle-content {
@@ -744,7 +740,8 @@ function onDeleteClick() {
 /* Route section - truncates when space is limited */
 .strip-route {
   min-width: 60px;
-  flex: 1 1 100px; /* Can grow and shrink */
+  flex: 1 1 100px;
+  /* Can grow and shrink */
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -788,9 +785,6 @@ function onDeleteClick() {
 
 /* Clearance triangles (takeoff/landing) */
 .clearance-triangle {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
 }
 
 .clearance-triangle.takeoff polygon {
@@ -807,6 +801,7 @@ function onDeleteClick() {
 
 /* Right section - Action button(s) */
 .strip-right {
+  width: 40px;
   display: flex;
   align-items: stretch;
   border-left: 1px solid #999;
