@@ -136,7 +136,7 @@ sectionRules:
     sectionId: taxi
     direction: arrival
     airborne: false
-    groundstates: ['', NSTS, ARR, TAXI, TXIN]
+    groundstates: ['', NSTS, TAXI, TXIN]
     priority: 30
 
   # === FALLBACKS ===

@@ -495,7 +495,7 @@ class FlightStore {
         // Check for airborne status
         // Aircraft is airborne if altitude > field elevation + 300ft
         const fieldElevation = getFieldElevationForFlight(flight, this.config)
-        const airborneThreshold = fieldElevation + 100
+        const airborneThreshold = fieldElevation + 50
         const wasAirborne = flight.airborne ?? false
         const isNowAirborne = message.altitude > airborneThreshold
 
