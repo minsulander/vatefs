@@ -576,16 +576,25 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
     } else if (subcommand == "ssr") {
-        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
-        std::string callsign = remainder;
-        std::string::size_type space = remainder.find(' ');
-        if (space != std::string::npos) callsign = remainder.substr(0, space);
+        std::string callsign = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
         if (callsign.empty()) {
             DisplayMessage("Usage: .efs ssr CALLSIGN");
             return false;
         }
         if (dummyRadarScreens.size() > 0) {
             dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
+        } else {
+            DisplayMessage("DummyRadarScreen not created");
+        }
+        return true;
+    } else if (subcommand == "clr") {
+        std::string callsign = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        if (callsign.empty()) {
+            DisplayMessage("Usage: .efs clr CALLSIGN");
+            return false;
+        }
+        if (dummyRadarScreens.size() > 0) {
+            dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
         } else {
             DisplayMessage("DummyRadarScreen not created");
         }
@@ -602,6 +611,7 @@ void VatEFSPlugin::OnTimer(int counter)
 {
     try {
         if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT ||
+                         GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX ||
                          GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK)) {
             disabled = false;
             DebugMessage("EFS updates enabled");
@@ -614,7 +624,8 @@ void VatEFSPlugin::OnTimer(int counter)
             message["connectionType"] = GetConnectionType();
             PostJson(message, "OnTimer");
         } else if (!disabled && GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_DIRECT &&
-                   GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK) {
+                   GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK &&
+                   GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX) {
             disabled = true;
             DebugMessage("EFS updates disabled");
             nlohmann::json message = nlohmann::json::object();
@@ -796,8 +807,31 @@ void VatEFSPlugin::Refresh()
             message["ahdg"] = 0;
             message["direct"] = "";
         }
-        // TODO scratch pad
+        SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
+        message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+        int speed = ctrData.GetAssignedSpeed();
+        if (speed >= 0 && speed <= 1500) { // Reasonable speed range
+            message["asp"] = speed;
+        }
+        double mach = ctrData.GetAssignedMach();
+        if (mach >= 0.0 && mach <= 10.0) { // Reasonable mach range
+            message["mach"] = mach;
+        }
+        int rate = ctrData.GetAssignedRate();
+        if (rate >= -50000 && rate <= 50000) { // Reasonable rate range
+            message["arc"] = rate;
+        }
+        int heading = ctrData.GetAssignedHeading();
+        if (heading >= 0 && heading <= 360) { // Valid heading range
+            message["ahdg"] = heading;
+            message["direct"] = "";
+        }
+        const char *directTo = ctrData.GetDirectToPointName();
+        if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
+            SetJsonIfValidUtf8(message, "direct", directTo);
+            if (strlen(directTo) > 0) message["ahdg"] = 0;
+        }
         PostJson(message, "Refresh");
     }
     for (EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst();
@@ -953,16 +987,17 @@ void VatEFSPlugin::ReceiveUdpMessages()
             if (buffer[0] == '{') {
                 nlohmann::json message = nlohmann::json::parse(buffer);
                 if (message["type"] == "setGroundState") {
-                    const char *callsign = message["callsign"].get<std::string>().c_str();
-                    const char *state = message["state"].get<std::string>().c_str();
-                    if (callsign && state) {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto state = message["state"].get<std::string>();
+                    DebugMessage("setGroundState: " + callsign + " " + state);
+                    if (!callsign.empty() && !state.empty()) {
                         UpdateScratchPad(callsign, state, true);
                     } else {
                         DisplayMessage("setGroundState: Invalid callsign or state");
                     }
                 } else if (message["type"] == "setClearedToLand") {
-                    const char *callsign = message["callsign"].get<std::string>().c_str();
-                    if (callsign) {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!callsign.empty()) {
                         UpdateScratchPad(callsign, "/EFS/CTL", true);
                     } else {
                         DisplayMessage("setClearedToLand: Invalid callsign");
@@ -970,7 +1005,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 } else if (message["type"] == "refresh") {
                     Refresh();
                 } else if (message["type"] == "assume") {
-                    std::string callsign = message["callsign"].get<std::string>();
+                    auto callsign = message["callsign"].get<std::string>();
                     for (auto &c : callsign)
                         c = (char)std::toupper((unsigned char)c);
                     if (!callsign.empty()) {
@@ -987,9 +1022,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                 DebugMessage("Accepted handoff for " + callsign);
                             } else if (untracked) {
                                 bool ok = fp.StartTracking();
-                                if (ok)
+                                if (ok) {
                                     DebugMessage("Started tracking " + callsign);
-                                else
+                                    OnFlightPlanFlightPlanDataUpdate(fp);
+                                } else
                                     DisplayMessage("Failed to start tracking " + callsign);
                             } else {
                                 DebugMessage(callsign + " already tracked by " + std::string(trackingCallsign));
@@ -1001,7 +1037,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         DisplayMessage("assume: Empty callsign");
                     }
                 } else if (message["type"] == "transfer") {
-                    std::string callsign = message["callsign"].get<std::string>();
+                    auto callsign = message["callsign"].get<std::string>();
                     for (auto &c : callsign)
                         c = (char)std::toupper((unsigned char)c);
                     if (!callsign.empty()) {
@@ -1029,15 +1065,26 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         DisplayMessage("transfer: Empty callsign");
                     }
                 } else if (message["type"] == "resetSquawk") {
-                    const char *callsign = message["callsign"].get<std::string>().c_str();
-                    if (dummyRadarScreens.size() > 0) {
-                        dummyRadarScreens[0]->AllocateSSR(callsign);
+                    auto callsign = message["callsign"].get<std::string>();
+                    DebugMessage("resetSquawk: " + callsign);
+                    if (dummyRadarScreens.size() > 0) { 
+                        dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
                     } else {
                         DisplayMessage(
                         "To reset squawk the EFS plugin must be allowed to draw on radar screen.");
-                        DisplayMessage(
-                        "Please press the left arrows in OTHER SET / Plug-ins ... menu.");
+                        DisplayMessage("Please allow it in OTHER SET / Plug-ins ... menu.");
                     }
+                } else if (message["type"] == "toggleClearanceFlag") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (dummyRadarScreens.size() > 0) {
+                        dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
+                    } else {
+                        DisplayMessage("To toggle clearance flag, the EFS plugin must be allowed "
+                                       "to draw on radar screen.");
+                        DisplayMessage("Please allow it in OTHER SET / Plug-ins ... menu.");
+                    }
+                } else {
+                    DisplayMessage("Unknown message type: " + message["type"].get<std::string>());
                 }
             }
         }
@@ -1238,11 +1285,6 @@ void DummyRadarScreen::OnAsrContentToBeClosed()
     delete this;
 }
 
-void DummyRadarScreen::DoStuff()
-{
-    plugin->DebugMessage("DummyRadarScreen::DoStuff");
-}
-
 void DummyRadarScreen::AllocateSSR(const char *inCallsign)
 {
     std::string callsign = inCallsign;
@@ -1252,6 +1294,16 @@ void DummyRadarScreen::AllocateSSR(const char *inCallsign)
     plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign.c_str()));
     StartTagFunction(callsign.c_str(), NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CALLSIGN,
                      callsign.c_str(), TOPSKY_PLUGIN_NAME, TOPSKY_SSR_FUNCTION_ID, POINT(), RECT());
+}
+
+void DummyRadarScreen::ToggleClearanceFlag(const char *inCallsign)
+{
+    std::string callsign = inCallsign;
+    for (auto &c : callsign)
+        c = (char)std::toupper((unsigned char)c);
+    plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign.c_str()));
+    StartTagFunction(callsign.c_str(), NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CLEARENCE, "1", NULL,
+                     EuroScopePlugIn::TAG_ITEM_FUNCTION_SET_CLEARED_FLAG, POINT(), RECT());
 }
 
 } // namespace VatEFS

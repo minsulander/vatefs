@@ -136,7 +136,7 @@ sectionRules:
     sectionId: taxi
     direction: arrival
     airborne: false
-    groundstates: ['', NSTS, TAXI, TXIN]
+    groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
 
   # === FALLBACKS ===
@@ -186,15 +186,23 @@ actionRules:
     sectionId: ctr_dep
     direction: departure
     airborne: true
+    handoffInitiated: false
     priority: 80
+
+  # Taxiing arrivals: PARK (set parked)
+  park_arr:
+    action: PARK
+    direction: arrival
+    groundstates: [TXIN]
+    priority: 77
 
   # Arrivals on ground (not airborne, not on runway): TXI (taxi in)
   txi_arr:
     action: TXI
     direction: arrival
     groundstates: ['', NSTS, ARR]
+    clearedToLand: false
     airborne: false
-    onRunway: false
     priority: 76
 
   # PUSH&START departures with PUSH groundstate: TXO (taxi out)
@@ -204,6 +212,14 @@ actionRules:
     direction: departure
     groundstates: [PUSH]
     priority: 75
+
+  # PENDING DEP departures without clearance: CLNC (open clearance dialog)
+  clnc_pending_dep:
+    action: CLNC
+    sectionId: pending_dep
+    direction: departure
+    clearance: false
+    priority: 65
 
   # CLEARED departures: PUSH (approve startup/pushback)
   push_cleared:

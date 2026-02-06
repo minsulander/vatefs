@@ -20,3 +20,17 @@
 
     Testa i plugin! ...men då behöver man en CRadarScreen... suck.
 
+- Hur ta reda på free? 
+  - Verkar inte gå att hämta controller från radar target correlated flight plan... (kanske pga observer?)
+  - Verkar inte komma flight strip pushed meddelanden... (def pga observer)
+
+  Kan kanske labba i Sweatbox också... för att komma runt observer-problematik men inte behöva sitta online.
+  Om det inte går att ta reda på free, backuplösning för CTR DEP -> delete (> 20nm från flygplats eller nåt?)
+
+- Nödlösning för cleared to land i observer mode... "på banan"
+
+- Hur sätta clearance flag?
+    Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
+    man kan ju synka med scratchpad som alla andra...
+    kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE) - test pågår!
+

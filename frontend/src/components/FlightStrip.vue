@@ -1,4 +1,21 @@
 <template>
+  <v-dialog v-model="clncDialogOpen" max-width="280" content-class="clnc-dialog-wrapper">
+    <div class="clnc-dialog">
+      <div class="clnc-header">{{ strip.callsign }}</div>
+      <div class="clnc-fields">
+        <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value">{{ strip.runway || '---' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value">{{ strip.sid || '---' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value">{{ strip.clearedAltitude || '---' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onClncResetSquawk">{{ strip.squawk || '----' }}</span></div>
+      </div>
+      <div class="clnc-actions">
+        <button class="clnc-btn clnc-btn-cancel" @click="onClncCancel">Cancel</button>
+        <button class="clnc-btn clnc-btn-ok" :disabled="clncOkDisabled" @click="onClncOk">OK</button>
+      </div>
+    </div>
+  </v-dialog>
+
   <v-menu v-model="menuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu">
       <v-list-item @click="onDeleteClick">
@@ -119,6 +136,9 @@ const isDragging = ref(false)
 const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
 
+// CLNC dialog state
+const clncDialogOpen = ref(false)
+
 // Touch drag state
 let touchStarted = false
 let longPressTimer: number | null = null
@@ -139,6 +159,10 @@ const displayTime = computed(() => {
   }
   return props.strip.eta || ''
 })
+
+const isUnassumed = computed(() => props.strip.actions?.includes('ASSUME') ?? false)
+
+const clncOkDisabled = computed(() => !props.strip.clearance && isUnassumed.value)
 
 // Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
@@ -471,12 +495,38 @@ function onDragAreaTouchCancel() {
 
 // Action button handlers
 function onActionClick(action: string) {
+  if (action === 'CLNC') {
+    clncDialogOpen.value = true
+    return
+  }
   store.sendStripAction(props.strip.id, action)
 }
 
 function onActionTouch(event: TouchEvent, action: string) {
   event.preventDefault()
+  if (action === 'CLNC') {
+    clncDialogOpen.value = true
+    return
+  }
   store.sendStripAction(props.strip.id, action)
+}
+
+function onClncOk() {
+  if (!props.strip.clearance) {
+    store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+  }
+  clncDialogOpen.value = false
+}
+
+function onClncCancel() {
+  if (props.strip.clearance) {
+    store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+  }
+  clncDialogOpen.value = false
+}
+
+function onClncResetSquawk() {
+  store.sendStripAction(props.strip.id, 'resetSquawk')
 }
 
 function onResetSquawk() {
@@ -858,5 +908,111 @@ function onDeleteClick() {
 
 .strip-context-menu .v-list-item {
   min-height: 32px;
+}
+
+
+</style>
+
+<style>
+/* CLNC Dialog - unscoped because v-dialog teleports content outside component */
+.clnc-dialog-wrapper {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+.clnc-dialog {
+  background: #2a2a2e;
+  border: 2px solid #555;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  padding: 0;
+}
+
+.clnc-header {
+  background: #3b7dd8;
+  color: #fff;
+  font-size: 15px;
+  font-weight: bold;
+  padding: 6px 12px;
+  letter-spacing: 0.5px;
+}
+
+.clnc-fields {
+  padding: 8px 12px;
+}
+
+.clnc-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid #444;
+}
+
+.clnc-row:last-child {
+  border-bottom: none;
+}
+
+.clnc-label {
+  color: #aaa;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 48px;
+}
+
+.clnc-value {
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: bold;
+  text-align: right;
+}
+
+.clnc-clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.clnc-clickable:hover {
+  color: #64b5f6;
+}
+
+.clnc-actions {
+  display: flex;
+  border-top: 1px solid #555;
+}
+
+.clnc-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+
+.clnc-btn-cancel {
+  background: #555;
+  color: #ccc;
+  border-right: 1px solid #666;
+}
+
+.clnc-btn-cancel:hover {
+  background: #666;
+}
+
+.clnc-btn-ok {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.clnc-btn-ok:hover:not(:disabled) {
+  background: #388e3c;
+}
+
+.clnc-btn-ok:disabled {
+  background: #3a3a3a;
+  color: #666;
+  cursor: not-allowed;
 }
 </style>

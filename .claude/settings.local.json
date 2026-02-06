@@ -8,7 +8,8 @@
       "Bash(head:*)",
       "Bash(timeout 3 npm start)",
       "Bash(npx tsc:*)",
-      "Bash(npx tsx:*)"
+      "Bash(npx tsx:*)",
+      "Bash(npx vue-tsc:*)"
     ]
   }
 }

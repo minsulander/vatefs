@@ -50,6 +50,10 @@ export interface FlightStrip {
     // Interactive flags
     canResetSquawk?: boolean     // Whether the squawk reset button is available
 
+    // Clearance dialog data
+    direct?: string              // Direct-to waypoint (for AHDG display in dialog)
+    clearance?: boolean          // Clearance flag (for dialog OK/Cancel behavior)
+
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)

@@ -442,6 +442,11 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'TXIN' }))
                         break
                     }
+                    case 'PARK': {
+                        // Parked - set groundstate to PARK
+                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'PARK' }))
+                        break
+                    }
                     case 'XFER': {
                         // Transfer to next controller
                         sendUdp(JSON.stringify({ type: 'transfer', callsign: strip.callsign }))
@@ -450,6 +455,11 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     case 'ASSUME': {
                         // Assume control of the flight
                         sendUdp(JSON.stringify({ type: 'assume', callsign: strip.callsign }))
+                        break
+                    }
+                    case 'toggleClearanceFlag': {
+                        // Toggle clearance flag in EuroScope
+                        sendUdp(JSON.stringify({ type: 'toggleClearanceFlag', callsign: strip.callsign }))
                         break
                     }
                     case 'resetSquawk': {
@@ -618,7 +628,13 @@ udpIn.on("message", (msg, rinfo) => {
                 const discoveredAirports: string[] = []
                 for (const airport of Object.keys(msg.rwyconfig)) {
                     if (msg.rwyconfig[airport].arr || msg.rwyconfig[airport].dep) {
-                        discoveredAirports.push(airport)
+                        // Match airports with active runway set
+                        for (const rwy of Object.keys(msg.rwyconfig[airport])) {
+                            if (msg.rwyconfig[airport][rwy].arr || msg.rwyconfig[airport][rwy].dep) {
+                                discoveredAirports.push(airport)
+                                break
+                            }
+                        }
                     }
                 }
                 if (discoveredAirports.length > 0) {

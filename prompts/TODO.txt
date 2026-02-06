@@ -1,3 +1,4 @@
+- Context menu kunna backa states
 - Hämta stands från GRPlugin filen, populera avgående
 - OBS-mode fakea PARK state när arrival kommer till stand
 
@@ -13,39 +14,21 @@
 
 - Skilja på DEP RWY, ARR RWY i ESSA layout
 
+- Inte visa ASSUME på avgående i CTR DEP efter XFER
 
+- Visa frekvens på XFER
+
+- Om arrRwy eller depRwy inte är satt, visa den som är aktiv i rwyconfig
 
 
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
+- Hur hitta rätt CFL utifrån SID som TopSky gör?
 
-- Hur ta reda på free? 
-  - Verkar inte gå att hämta controller från radar target correlated flight plan... (kanske pga observer?)
-  - Verkar inte komma flight strip pushed meddelanden... (def pga observer)
-
-  Kan kanske labba i Sweatbox också... för att komma runt observer-problematik men inte behöva sitta online.
-  Om det inte går att ta reda på free, backuplösning för CTR DEP -> delete (> 20nm från flygplats eller nåt?)
-
-- Nödlösning för cleared to land i observer mode... "på banan"
-
-- Hur sätta clearance flag?
-    Kan ju iofs hanteras som internt state (som clearedToLand) men ändå...
-
-    https://github.com/KingfuChan/Departure-List-Sequencing-PlugIn-for-EuroScope
-    använder assigned speed/mach/rate för att "synka"...
-    man kan ju synka med scratchpad som alla andra...
-
-    kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE)
-
-
-
-- DCL/PDC - gå direkt på hoppie? 
-
-
+- DCL/PDC - gå direkt på hoppie? Ja förmodligen.
+  Inspiration: https://github.com/pierr3/vSMR
 
 Actions:
-- Assume and transfer based on my callsign
-- If no coordinated next controller, free instead of transfer
 - Ändra SID (SA bana 08, prop/slow)
 - Ändra CFL
 - Sätta RMK/OPTEXT2
@@ -56,12 +39,10 @@ Vidare i livet:
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
-- OBS mode skulle kunna betrakta CFL=CA (1) eller VA (2) som cleared to land
 - (låg prio / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
 
 
 Tekniskt / icke-funktionellt:
-- Visa nånting i frontend när backend inte är uppkopplad
 - Nåt sätt att ladda config osv.
 - Smidig paketering.
 

@@ -2,7 +2,10 @@
 
 Work in progress...
 
-Is gonna be Electronic Flight Strip application for VATSIM. And it's gon be fantastic.
+This is a highly vibe-coded project, mainly using Claude.
+You'll find most/some of the prompts used under `prompts/` for whatever that's worth... it's kinda like a new form of source code in this era I reckon.
+
+## Building & Running
 
 Run with mock data:
 ```sh
@@ -46,3 +49,7 @@ Playback:
 ```sh
 npm run playback -- ./logs/esgg.log --speed 2.0
 ```
+
+## Contributing
+
+Heck yeah, if you wanna help, go for it... make issues or pull requests or whatever you fancy.

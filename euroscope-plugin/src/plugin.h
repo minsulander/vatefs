@@ -76,8 +76,8 @@ class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen
     DummyRadarScreen(VatEFSPlugin *plugin);
 
     void OnAsrContentToBeClosed ( void );
-    void DoStuff();
     void AllocateSSR(const char *callsign);
+    void ToggleClearanceFlag(const char *callsign);
 
     private:
     VatEFSPlugin *plugin;

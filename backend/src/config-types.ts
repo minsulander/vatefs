@@ -9,7 +9,7 @@ import type { GroundState } from "./types.js"
 /**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC'
 
 /**
  * Flight direction relative to our airport
@@ -133,6 +133,11 @@ export interface ActionRule {
      * Aircraft must be on a runway (geographically within runway surface and low altitude)
      */
     onRunway?: boolean
+
+    /**
+     * Whether a handoff has been initiated (handoffTargetController is non-empty)
+     */
+    handoffInitiated?: boolean
 }
 
 /**

@@ -39,6 +39,8 @@ function stripsEqual(a: FlightStrip, b: FlightStrip): boolean {
         a.position === b.position &&
         a.bottom === b.bottom &&
         a.canResetSquawk === b.canResetSquawk &&
+        a.direct === b.direct &&
+        a.clearance === b.clearance &&
         a.clearedForTakeoff === b.clearedForTakeoff &&
         a.clearedToLand === b.clearedToLand &&
         actionsEqual(a.actions, b.actions)

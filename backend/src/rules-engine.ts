@@ -324,6 +324,14 @@ function evaluateActionRule(
         }
     }
 
+    // Check handoff initiated condition
+    if (rule.handoffInitiated !== undefined) {
+        const hasHandoff = !!flight.handoffTargetController && flight.handoffTargetController !== ''
+        if (hasHandoff !== rule.handoffInitiated) {
+            return false
+        }
+    }
+
     return true
 }
 

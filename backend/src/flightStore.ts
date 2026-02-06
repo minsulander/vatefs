@@ -202,6 +202,9 @@ class FlightStore {
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
         if (message.sid !== undefined) flight.sid = message.sid
+        if (message.controller !== undefined) flight.controller = message.controller
+        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
+        if (message.nextController !== undefined) flight.nextController = message.nextController
         flight.lastUpdate = Date.now()
 
         // Check if we should create/update a strip
@@ -748,9 +751,10 @@ class FlightStore {
             flight.groundstate === 'DEPA' &&
             !flight.airborne
 
-        // Cleared to land: arrival with clearedToLand flag set
+        // Cleared to land: arrival with clearedToLand flag set, still airborne
         const clearedToLand = (stripType === 'arrival' || stripType === 'local') &&
-            flight.clearedToLand === true
+            flight.clearedToLand === true &&
+            flight.airborne !== false
 
         // Determine actions based on controller status
         let actions: string[] | undefined
@@ -772,7 +776,13 @@ class FlightStore {
                 }
             } else if ((isUntracked || isHandoffToMe) && this.config.isController) {
                 // Untracked or being handed off to us - show ASSUME (only in controller mode)
-                actions = ['ASSUME']
+                // Also check action rules for actions like CLNC that apply before assuming
+                const preAssumeAction = determineActionForFlight(flight, sectionId, this.config)
+                if (preAssumeAction && preAssumeAction !== 'ASSUME') {
+                    actions = [preAssumeAction, 'ASSUME']
+                } else {
+                    actions = ['ASSUME']
+                }
             }
             // If tracked by someone else (not us, not handoff to us) - no actions
         }
@@ -806,6 +816,8 @@ class FlightStore {
             bottom,
             actions,
             canResetSquawk: canResetSquawk || undefined,
+            direct: flight.direct || undefined,
+            clearance: flight.clearance ?? undefined,
             clearedForTakeoff,
             clearedToLand
         }

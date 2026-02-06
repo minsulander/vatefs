@@ -256,8 +256,7 @@ export function isOnRunway(
             runwayLengthFt: 0,
             runwayWidthFt: 0,
             altitudeAboveFieldFt: altitudeAboveField,
-            fieldElevationFt: fieldElevation,
-            waddup: bufferFt
+            fieldElevationFt: fieldElevation
         }
     }
 }
