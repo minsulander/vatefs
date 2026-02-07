@@ -64,6 +64,7 @@ export interface Flight {
     currentAltitude?: number  // Current altitude from radar in feet
     latitude?: number         // Current latitude from radar
     longitude?: number        // Current longitude from radar
+    groundSpeed?: number      // Ground speed in knots from radar
 
     // Timestamps
     firstSeen?: number        // When flight was first seen (Date.now())

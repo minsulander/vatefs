@@ -18,6 +18,7 @@ import type {
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
+import { isWithinCtr } from "./ctr-data.js"
 
 /**
  * Check if a flight is at one of our airports in the given direction
@@ -195,6 +196,20 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         const altitudeAboveField = currentAltitude - fieldElevation
         if (altitudeAboveField > rule.maxAltitudeAboveField) {
             return false // Aircraft is above the maximum altitude threshold
+        }
+    }
+
+    // Check withinCtr condition (real CTR/TIZ boundary data from LFV)
+    if (rule.withinCtr !== undefined) {
+        if (flight.latitude === undefined || flight.longitude === undefined || flight.currentAltitude === undefined) {
+            return false // No position/altitude data, can't evaluate
+        }
+        const ctrResult = isWithinCtr(config.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
+        if (ctrResult === undefined) {
+            return false // No CTR data available, fail to allow fallback rules
+        }
+        if (ctrResult !== rule.withinCtr) {
+            return false
         }
     }
 
@@ -421,6 +436,20 @@ function evaluateDeleteRule(
         )
         if (withinRange) {
             return false // Flight is within range, don't delete
+        }
+    }
+
+    // Check withinCtr condition (real CTR/TIZ boundary data from LFV)
+    if (rule.withinCtr !== undefined) {
+        if (flight.latitude === undefined || flight.longitude === undefined || flight.currentAltitude === undefined) {
+            return false
+        }
+        const ctrResult = isWithinCtr(config.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
+        if (ctrResult === undefined) {
+            return false // No CTR data available
+        }
+        if (ctrResult !== rule.withinCtr) {
+            return false
         }
     }
 

@@ -113,7 +113,16 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 80
 
-  # CTR ARR: Arrivals below 1500ft AGL (inside CTR vertical boundary)
+  # CTR ARR: Arrivals inside CTR boundary (real LFV data)
+  ctr_arr_within_ctr:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    priority: 76
+
+  # CTR ARR: Fallback - arrivals below 1500ft AGL (when CTR data unavailable)
   ctr_arr_low_altitude:
     sectionId: ctr_arr
     direction: arrival

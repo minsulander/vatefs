@@ -11,7 +11,8 @@ import { flightHasRequiredData } from "./types.js"
 import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
 import { getAirportCoords } from "./airport-data.js"
-import { isWithinRangeOfAnyAirport } from "./geo-utils.js"
+import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
+import { findStandForPosition } from "./stand-data.js"
 import moment from "moment"
 
 /**
@@ -91,6 +92,69 @@ class FlightStore {
         if (flight) {
             flight.lastSectionRule = 'manual'
         }
+    }
+
+    /**
+     * Try to auto-detect stand from the aircraft's position.
+     * Only sets stand if:
+     * - flight.stand is not already set
+     * - flight has a radar position
+     * - aircraft is in a pre-movement ground state
+     */
+    private trySetStandFromPosition(flight: Flight) {
+        if (flight.stand && flight.stand !== '') return
+        if (flight.latitude === undefined || flight.longitude === undefined) return
+
+        // Only look up stand for aircraft in pre-movement states
+        const preMovementStates: (GroundState | undefined)[] = ['', 'NSTS', 'ONFREQ', 'DE-ICE', 'STUP', 'PARK', undefined]
+        if (!preMovementStates.includes(flight.groundstate)) return
+
+        const nearestAirport = findNearestAirport(
+            flight.latitude,
+            flight.longitude,
+            this.config.myAirports,
+            getAirportCoords
+        )
+        if (!nearestAirport) return
+
+        const stand = findStandForPosition(nearestAirport, flight.latitude, flight.longitude)
+        if (stand) {
+            flight.stand = stand
+            console.log(`Stand ${stand} detected for ${flight.callsign}`)
+        }
+    }
+
+    /**
+     * Auto-set groundstate to PARK for uncontrolled arrivals that are
+     * stationary at a stand. Supports observer mode where no controller
+     * is setting groundstates via EuroScope.
+     *
+     * Conditions:
+     * - Flight is an arrival at one of our airports
+     * - No controller is tracking the flight
+     * - Flight has a stand assigned
+     * - Aircraft is stationary (ground speed <= 2 knots)
+     * - Groundstate is not already set to a meaningful value
+     */
+    private tryAutoSetParked(flight: Flight) {
+        // Must be an arrival at our airport
+        if (!flight.destination || !this.config.myAirports.includes(flight.destination)) return
+
+        // Must be uncontrolled
+        if (flight.controller && flight.controller !== '') return
+
+        // Must have a stand
+        if (!flight.stand || flight.stand === '') return
+
+        // Must be stationary
+        if (flight.groundSpeed === undefined || flight.groundSpeed > 2) return
+
+        // Only set if groundstate is empty/unset (don't override meaningful states)
+        const gs = flight.groundstate ?? ''
+        if (gs !== '' && gs !== 'NSTS' && gs !== 'ARR') return
+
+        flight.groundstate = 'PARK'
+        console.log(`Auto-PARK: ${flight.callsign} stationary at stand ${flight.stand} (observer mode)`)
     }
 
     /**
@@ -330,6 +394,9 @@ class FlightStore {
         if (message.direct !== undefined) flight.direct = message.direct
         flight.lastUpdate = Date.now()
 
+        // Auto-detect stand from position if not already set
+        this.trySetStandFromPosition(flight)
+
         // Check delete rules (e.g., PARK for arrivals)
         const wasDeleted = flight.deleted ?? false
         const deleteResult = shouldDeleteFlight(flight, this.config)
@@ -491,9 +558,16 @@ class FlightStore {
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
+        if (message.groundSpeed !== undefined) flight.groundSpeed = message.groundSpeed
         // radar target squawk is not the same as the assigned squawk
         //if (message.squawk !== undefined) flight.squawk = message.squawk
         flight.lastUpdate = Date.now()
+
+        // Auto-detect stand from position if not already set
+        this.trySetStandFromPosition(flight)
+
+        // Auto-set PARK for uncontrolled arrivals stationary at a stand (observer mode support)
+        this.tryAutoSetParked(flight)
 
         // Check for airborne status
         // Aircraft is airborne if altitude > field elevation + 300ft

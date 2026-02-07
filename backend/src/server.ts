@@ -19,6 +19,9 @@ import { loadAirports, getAirportCount } from "./airport-data.js"
 import { loadRunways, getRunwayCount } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
+import { loadStands } from "./stand-data.js"
+import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
+import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -82,6 +85,24 @@ if (fs.existsSync(runwaysFile)) {
 } else {
     console.warn(`Runway data file not found: ${runwaysFile}`)
 }
+
+// Load EuroScope data (stands, SIDs)
+const EUROSCOPE_DIR = path.join(process.env.APPDATA || '', 'EuroScope')
+try {
+    loadStands(EUROSCOPE_DIR)
+} catch (err) {
+    console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
+}
+try {
+    loadSidData(EUROSCOPE_DIR)
+} catch (err) {
+    console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
+}
+
+// Load CTR/TIZ boundary data from LFV (async, non-fatal)
+loadCtrData().catch(err => {
+    console.warn(`Failed to load CTR data: ${err instanceof Error ? err.message : err}`)
+})
 
 // Apply command-line callsign override
 if (cliArgs.callsign) {
@@ -567,6 +588,52 @@ app.get("/api/onrunway", (req, res) => {
 
     const result = isOnRunway(lat, lon, alt, airport, runway)
     res.json(result)
+})
+
+app.get("/api/sids", (req, res) => {
+    const airport = req.query.airport as string
+    const runway = req.query.runway as string
+
+    if (!airport || !runway) {
+        res.status(400).json({ error: "Missing parameters", usage: "/api/sids?airport=ESGG&runway=21" })
+        return
+    }
+
+    res.json(getSidsForRunway(airport, runway))
+})
+
+app.get("/api/sidalt", (req, res) => {
+    const airport = req.query.airport as string
+    const sid = req.query.sid as string
+
+    if (!airport || !sid) {
+        res.status(400).json({ error: "Missing parameters", usage: "/api/sidalt?airport=ESGG&sid=LABAN4J" })
+        return
+    }
+
+    const altitude = getSidAltitude(airport, sid)
+    res.json({ altitude: altitude ?? null })
+})
+
+app.get("/api/withinctr", (req, res) => {
+    const lat = parseFloat(req.query.lat as string)
+    const lon = parseFloat(req.query.lon as string)
+    const alt = parseFloat(req.query.alt as string)
+
+    if (isNaN(lat) || isNaN(lon) || isNaN(alt)) {
+        res.status(400).json({
+            error: "Missing or invalid parameters",
+            usage: "/api/withinctr?lat=<lat>&lon=<lon>&alt=<altMsl>"
+        })
+        return
+    }
+
+    const result = checkCtrAtPosition(lat, lon, alt)
+    if (result) {
+        res.json(result)
+    } else {
+        res.json({ airport: null, within: false, message: "No CTR/TIZ zone found at this position" })
+    }
 })
 
 app.use(serveStatic(path.resolve(__dirname, "../public")))

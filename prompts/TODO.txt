@@ -1,6 +1,4 @@
 - Context menu kunna backa states
-- Hämta stands från GRPlugin filen, populera avgående
-- OBS-mode fakea PARK state när arrival kommer till stand
 
 - Hantera flera FL positioner:
   - XFER istför LU/CTO om jag är GND
@@ -23,8 +21,6 @@
 
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
-- Hur hitta rätt CFL utifrån SID som TopSky gör?
-
 - DCL/PDC - gå direkt på hoppie? Ja förmodligen.
   Inspiration: https://github.com/pierr3/vSMR
 
@@ -46,7 +42,4 @@ Tekniskt / icke-funktionellt:
 - Nåt sätt att ladda config osv.
 - Smidig paketering.
 
-
-CTR gränser från eCharts som geojson:
-https://daim.lfv.se/geoserver/wfs?service=WFS&version=1.1.0&request=GetFeature&typename=mais:CTR&outputFormat=application/json&srsName=EPSG:3857
 

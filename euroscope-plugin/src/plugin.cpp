@@ -838,6 +838,10 @@ void VatEFSPlugin::Refresh()
          RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
         OnRadarTargetPositionUpdate(RadarTarget);
     }
+    for (EuroScopePlugIn::CController Controller = ControllerSelectFirst(); Controller.IsValid();
+         Controller = ControllerSelectNext(Controller)) {
+        OnControllerPositionUpdate(Controller);
+    }
 }
 
 void VatEFSPlugin::DebugMessage(const std::string &message, const std::string &sender)
@@ -1067,7 +1071,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 } else if (message["type"] == "resetSquawk") {
                     auto callsign = message["callsign"].get<std::string>();
                     DebugMessage("resetSquawk: " + callsign);
-                    if (dummyRadarScreens.size() > 0) { 
+                    if (dummyRadarScreens.size() > 0) {
                         dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
                     } else {
                         DisplayMessage(

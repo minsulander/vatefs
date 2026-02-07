@@ -88,6 +88,14 @@ export interface SectionRule {
      * Requires radar position data.
      */
     maxAltitudeAboveField?: number
+
+    /**
+     * Whether the aircraft must be within (true) or outside (false) a CTR/TIZ zone.
+     * Uses real boundary data from LFV (polygon + upper altitude limit).
+     * If CTR data is not available, this condition fails (rule does not match),
+     * allowing lower-priority fallback rules to take over.
+     */
+    withinCtr?: boolean
 }
 
 /**
@@ -175,6 +183,12 @@ export interface DeleteRule {
      * When true, flight must be outside radarRangeNm to match.
      */
     beyondRange?: boolean
+
+    /**
+     * Whether the aircraft must be within (true) or outside (false) a CTR/TIZ zone.
+     * If CTR data is not available, this condition fails (rule does not match).
+     */
+    withinCtr?: boolean
 }
 
 /**

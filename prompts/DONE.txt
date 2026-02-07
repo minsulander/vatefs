@@ -34,3 +34,5 @@
     man kan ju synka med scratchpad som alla andra...
     kanske StartTagFunction(callsign, NULL, TAG_ITEM_TYPE_CLEARENCE) - test pågår!
 
+- Hur hitta rätt CFL utifrån SID som TopSky gör? ESE-filen COPX
+

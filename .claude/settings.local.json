@@ -9,7 +9,10 @@
       "Bash(timeout 3 npm start)",
       "Bash(npx tsc:*)",
       "Bash(npx tsx:*)",
-      "Bash(npx vue-tsc:*)"
+      "Bash(npx vue-tsc:*)",
+      "Bash(iconv:*)",
+      "Bash(npx esbuild:*)",
+      "WebFetch(domain:daim.lfv.se)"
     ]
   }
 }
