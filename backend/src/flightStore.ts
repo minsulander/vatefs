@@ -764,25 +764,26 @@ class FlightStore {
         const isHandoffToMe = flight.handoffTargetController === myCallsign
 
         if (!clearedForTakeoff && !clearedToLand) {
-            if (isTrackedByMe) {
-                // We're the tracking controller - show normal actions
-                if (stripType === 'departure' && flight.groundstate === 'TAXI') {
-                    actions = ['LU', 'CTO']
-                } else {
-                    const defaultAction = determineActionForFlight(flight, sectionId, this.config)
-                    if (defaultAction) {
-                        actions = [defaultAction]
-                    }
+            if (isTrackedByMe && stripType === 'departure' && flight.groundstate === 'TAXI') {
+                // Special case: TAXI departures get LU+CTO
+                actions = ['LU', 'CTO']
+            } else if (isTrackedByMe) {
+                // We're the tracking controller - show action from rules
+                const defaultAction = determineActionForFlight(flight, sectionId, this.config)
+                if (defaultAction) {
+                    actions = [defaultAction]
                 }
             } else if ((isUntracked || isHandoffToMe) && this.config.isController) {
-                // Untracked or being handed off to us - show ASSUME (only in controller mode)
-                // Also check action rules for actions like CLNC that apply before assuming
-                const preAssumeAction = determineActionForFlight(flight, sectionId, this.config)
-                if (preAssumeAction && preAssumeAction !== 'ASSUME') {
-                    actions = [preAssumeAction, 'ASSUME']
-                } else {
+                // Untracked or being handed off to us - let action rules decide
+                // Rules with controller:myself won't match; rules with controller:not_myself or
+                // no controller condition will match (ASSUME, CLNC, etc.)
+                const action = determineActionForFlight(flight, sectionId, this.config)
+                if (action === 'ASSUME') {
                     actions = ['ASSUME']
+                } else if (action) {
+                    actions = [action, 'ASSUME']
                 }
+                // No matching rule → no actions (e.g., transferred departures in CTR DEP)
             }
             // If tracked by someone else (not us, not handoff to us) - no actions
         }

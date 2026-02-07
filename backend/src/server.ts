@@ -624,16 +624,22 @@ udpIn.on("message", (msg, rinfo) => {
             setIsController(msg.controller)
 
             // Extract airports from rwyconfig - any airport with arr or dep set
+            // Checks both airport-level flags and runway-level flags
             if (msg.rwyconfig) {
                 const discoveredAirports: string[] = []
                 for (const airport of Object.keys(msg.rwyconfig)) {
-                    if (msg.rwyconfig[airport].arr || msg.rwyconfig[airport].dep) {
-                        // Match airports with active runway set
-                        for (const rwy of Object.keys(msg.rwyconfig[airport])) {
-                            if (msg.rwyconfig[airport][rwy].arr || msg.rwyconfig[airport][rwy].dep) {
-                                discoveredAirports.push(airport)
-                                break
-                            }
+                    const airportData = msg.rwyconfig[airport]
+                    // Check airport-level flags first
+                    if (airportData.arr || airportData.dep) {
+                        discoveredAirports.push(airport)
+                        continue
+                    }
+                    // Fall back to checking runway-level flags
+                    for (const key of Object.keys(airportData)) {
+                        const val = airportData[key]
+                        if (typeof val === 'object' && val !== null && (val.arr || val.dep)) {
+                            discoveredAirports.push(airport)
+                            break
                         }
                     }
                 }

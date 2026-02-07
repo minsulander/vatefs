@@ -177,6 +177,7 @@ actionRules:
     action: CTO
     sectionId: runway
     direction: departure
+    controller: myself
     groundstates: [LINEUP]
     priority: 90
 
@@ -185,6 +186,7 @@ actionRules:
     action: XFER
     sectionId: ctr_dep
     direction: departure
+    controller: myself
     airborne: true
     handoffInitiated: false
     priority: 80
@@ -193,6 +195,7 @@ actionRules:
   park_arr:
     action: PARK
     direction: arrival
+    controller: myself
     groundstates: [TXIN]
     priority: 77
 
@@ -200,6 +203,7 @@ actionRules:
   txi_arr:
     action: TXI
     direction: arrival
+    controller: myself
     groundstates: ['', NSTS, ARR]
     clearedToLand: false
     airborne: false
@@ -210,6 +214,7 @@ actionRules:
     action: TXO
     sectionId: push_start
     direction: departure
+    controller: myself
     groundstates: [PUSH]
     priority: 75
 
@@ -226,9 +231,27 @@ actionRules:
     action: PUSH
     sectionId: cleared
     direction: departure
+    controller: myself
     clearance: true
     groundstates: ['', ONFREQ, STUP, NSTS]
     priority: 70
+
+  # === CATCH-ALL ASSUME RULES ===
+
+  # Assume any untracked departure on the ground
+  assume_departure_ground:
+    action: ASSUME
+    direction: departure
+    controller: not_myself
+    airborne: false
+    priority: 10
+
+  # Assume any untracked arrival
+  assume_arrival:
+    action: ASSUME
+    direction: arrival
+    controller: not_myself
+    priority: 10
 
 deleteRules:
   # Departures: Delete when high enough and transferred/freed
