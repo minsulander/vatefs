@@ -157,6 +157,43 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
     }
 }
 
+type OutboundPluginCommand =
+    | { type: 'setClearedToLand'; callsign: string }
+    | { type: 'setGroundState'; callsign: string; state: string }
+    | { type: 'transfer'; callsign: string }
+    | { type: 'assume'; callsign: string }
+    | { type: 'toggleClearanceFlag'; callsign: string }
+    | { type: 'resetSquawk'; callsign: string }
+
+function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
+    switch (action) {
+        case 'CTL':
+            return { type: 'setClearedToLand', callsign }
+        case 'CTO':
+            return { type: 'setGroundState', callsign, state: 'DEPA' }
+        case 'PUSH':
+            return { type: 'setGroundState', callsign, state: 'PUSH' }
+        case 'LU':
+            return { type: 'setGroundState', callsign, state: 'LINEUP' }
+        case 'TXO':
+            return { type: 'setGroundState', callsign, state: 'TAXI' }
+        case 'TXI':
+            return { type: 'setGroundState', callsign, state: 'TXIN' }
+        case 'PARK':
+            return { type: 'setGroundState', callsign, state: 'PARK' }
+        case 'XFER':
+            return { type: 'transfer', callsign }
+        case 'ASSUME':
+            return { type: 'assume', callsign }
+        case 'toggleClearanceFlag':
+            return { type: 'toggleClearanceFlag', callsign }
+        case 'resetSquawk':
+            return { type: 'resetSquawk', callsign }
+        default:
+            return null
+    }
+}
+
 // Initialize store (with mock data if --mock flag is set)
 if (cliArgs.mock) {
     // Apply mock myselfUpdate to set callsign and airports
@@ -399,98 +436,11 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const strip = store.getStrip(message.stripId)
             if (strip) {
                 console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
-
-                // TODO this shouldn't be needed when we round-trip with euroscope...
-
-                // Helper to handle result from setBackendFlags and broadcast updates
-                // function handleFlagResult(result: ReturnType<typeof flightStore.setBackendFlags>, actionDesc: string) {
-                //     if (result.strip) {
-                //         store.updateStripFromFlight(result.strip)
-                //         broadcastStrip(result.strip)
-                //         console.log(`  ${result.strip.callsign} ${actionDesc}`)
-
-                //         // Broadcast shifted strips (when strip moved to new section)
-                //         if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
-                //             for (const callsign of result.shiftedCallsigns) {
-                //                 const shiftedStrip = flightStore.regenerateStrip(callsign)
-                //                 if (shiftedStrip) {
-                //                     store.updateStripFromFlight(shiftedStrip)
-                //                     broadcastStrip(shiftedStrip)
-                //                 }
-                //             }
-                //             console.log(`  Shifted ${result.shiftedCallsigns.length} strips`)
-                //         }
-                //     }
-                // }
-
-                // Handle specific actions
-                switch (message.action) {
-                    case 'CTL': {
-                        // Cleared To Land - set flag and notify plugin
-                        // const result = flightStore.setBackendFlags(strip.callsign, { clearedToLand: true })
-                        // handleFlagResult(result, 'cleared to land')
-                        sendUdp(JSON.stringify({ type: 'setClearedToLand', callsign: strip.callsign }))
-                        break
-                    }
-                    case 'CTO': {
-                        // Cleared for Takeoff - set groundstate to DEPA
-                        // const result = flightStore.setBackendFlags(strip.callsign, { groundstate: 'DEPA' })
-                        // handleFlagResult(result, 'cleared for takeoff')
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'DEPA' }))
-                        break
-                    }
-                    case 'PUSH': {
-                        // Pushback approved - set groundstate to PUSH
-                        // const result = flightStore.setBackendFlags(strip.callsign, { groundstate: 'PUSH' })
-                        // handleFlagResult(result, 'pushback approved')
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'PUSH' }))
-                        break
-                    }
-                    case 'LU': {
-                        // Line up - set groundstate to LINEUP
-                        // const result = flightStore.setBackendFlags(strip.callsign, { groundstate: 'LINEUP' })
-                        // handleFlagResult(result, 'line up')
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'LINEUP' }))
-                        break
-                    }
-                    case 'TXO': {
-                        // Taxi out - set groundstate to TAXI
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'TAXI' }))
-                        break
-                    }
-                    case 'TXI': {
-                        // Taxi in - set groundstate to TXIN
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'TXIN' }))
-                        break
-                    }
-                    case 'PARK': {
-                        // Parked - set groundstate to PARK
-                        sendUdp(JSON.stringify({ type: 'setGroundState', callsign: strip.callsign, state: 'PARK' }))
-                        break
-                    }
-                    case 'XFER': {
-                        // Transfer to next controller
-                        sendUdp(JSON.stringify({ type: 'transfer', callsign: strip.callsign }))
-                        break
-                    }
-                    case 'ASSUME': {
-                        // Assume control of the flight
-                        sendUdp(JSON.stringify({ type: 'assume', callsign: strip.callsign }))
-                        break
-                    }
-                    case 'toggleClearanceFlag': {
-                        // Toggle clearance flag in EuroScope
-                        sendUdp(JSON.stringify({ type: 'toggleClearanceFlag', callsign: strip.callsign }))
-                        break
-                    }
-                    case 'resetSquawk': {
-                        // Reset squawk (allocate new SSR code via TopSky)
-                        sendUdp(JSON.stringify({ type: 'resetSquawk', callsign: strip.callsign }))
-                        break
-                    }
-                    default:
-                        console.log(`  Unhandled action: ${message.action}`)
-                        break
+                const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
+                if (pluginCommand) {
+                    sendUdp(JSON.stringify(pluginCommand))
+                } else {
+                    console.log(`  Unhandled action: ${message.action}`)
                 }
             } else {
                 console.log(`[ACTION] ${message.action} on unknown strip ${message.stripId}`)

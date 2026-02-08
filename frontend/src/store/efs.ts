@@ -172,37 +172,43 @@ export const useEfsStore = defineStore("efs", () => {
     // Computed getters
     const getBays = computed(() => layout.value.bays)
 
-    // Get top-attached strips (scrollable area) - computed from strips Map
-    function getTopStrips(bayId: string, sectionId: string): FlightStrip[] {
-        const result: FlightStrip[] = []
-        strips.value.forEach(strip => {
-            if (strip.bayId === bayId && strip.sectionId === sectionId && !strip.bottom) {
-                result.push(strip)
-            }
-        })
-        return result.sort((a, b) => a.position - b.position)
-    }
-
-    // Get bottom-attached strips (pinned at bottom) - computed from strips Map
-    function getBottomStrips(bayId: string, sectionId: string): FlightStrip[] {
-        const result: FlightStrip[] = []
-        strips.value.forEach(strip => {
-            if (strip.bayId === bayId && strip.sectionId === sectionId && strip.bottom) {
-                result.push(strip)
-            }
-        })
-        return result.sort((a, b) => a.position - b.position)
-    }
-
-    // Get all strips for a section (both top and bottom)
-    function getStripsBySection(bayId: string, sectionId: string): FlightStrip[] {
+    function getSectionStrips(bayId: string, sectionId: string, bottom?: boolean): FlightStrip[] {
         const sectionStrips: FlightStrip[] = []
         strips.value.forEach((strip) => {
-            if (strip.bayId === bayId && strip.sectionId === sectionId) {
+            const matchesZone = bottom === undefined || strip.bottom === bottom
+            if (strip.bayId === bayId && strip.sectionId === sectionId && matchesZone) {
                 sectionStrips.push(strip)
             }
         })
         return sectionStrips.sort((a, b) => a.position - b.position)
+    }
+
+    // Get top-attached strips (scrollable area) - computed from strips Map
+    function getTopStrips(bayId: string, sectionId: string): FlightStrip[] {
+        return getSectionStrips(bayId, sectionId, false)
+    }
+
+    // Get bottom-attached strips (pinned at bottom) - computed from strips Map
+    function getBottomStrips(bayId: string, sectionId: string): FlightStrip[] {
+        return getSectionStrips(bayId, sectionId, true)
+    }
+
+    // Get all strips for a section (both top and bottom)
+    function getStripsBySection(bayId: string, sectionId: string): FlightStrip[] {
+        return getSectionStrips(bayId, sectionId)
+    }
+
+    function reindexStrips(sectionStrips: FlightStrip[]) {
+        sectionStrips.forEach((s, index) => {
+            s.position = index
+        })
+    }
+
+    function resolveTargetPosition(position: number | undefined, stripCount: number): number {
+        if (position !== undefined && position >= 0 && position <= stripCount) {
+            return position
+        }
+        return stripCount
     }
 
     // Get gaps for a section as a Record (for backwards compatibility)
@@ -241,9 +247,7 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Get target strips count (excluding the moving strip)
         const targetStrips = getTopStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
-        const targetPosition = (position !== undefined && position >= 0 && position <= targetStrips.length)
-            ? position
-            : targetStrips.length
+        const targetPosition = resolveTargetPosition(position, targetStrips.length)
 
         // Handle gaps for same-zone moves
         if (isSameZone) {
@@ -258,9 +262,7 @@ export const useEfsStore = defineStore("efs", () => {
         // Insert strip at target position and recompute all positions
         // targetStrips is already sorted and excludes the moving strip
         targetStrips.splice(targetPosition, 0, strip)
-        targetStrips.forEach((s, index) => {
-            s.position = index
-        })
+        reindexStrips(targetStrips)
 
         // Recompute old section if moved from different zone
         if (!isSameZone) {
@@ -301,9 +303,7 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Get target bottom strips count (excluding the moving strip)
         const targetStrips = getBottomStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
-        const targetPosition = (position !== undefined && position >= 0 && position <= targetStrips.length)
-            ? position
-            : targetStrips.length
+        const targetPosition = resolveTargetPosition(position, targetStrips.length)
 
         // Update strip location
         strip.bayId = targetBayId
@@ -313,9 +313,7 @@ export const useEfsStore = defineStore("efs", () => {
         // Insert strip at target position and recompute all positions
         // targetStrips is already sorted and excludes the moving strip
         targetStrips.splice(targetPosition, 0, strip)
-        targetStrips.forEach((s, index) => {
-            s.position = index
-        })
+        reindexStrips(targetStrips)
 
         // Recompute old section if moved from different zone
         if (oldBayId !== targetBayId || oldSectionId !== targetSectionId || !oldBottom) {

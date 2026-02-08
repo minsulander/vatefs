@@ -20,6 +20,21 @@ import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 
+type PrioritizedRule = { priority?: number }
+type CommonRuleConditions = {
+    direction?: FlightDirection
+    groundstates?: string[]
+    controller?: ControllerCondition
+    clearance?: boolean
+    clearedToLand?: boolean
+    airborne?: boolean
+    onRunway?: boolean
+}
+
+function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
+    return [...rules].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+}
+
 /**
  * Check if a flight is at one of our airports in the given direction
  */
@@ -109,18 +124,38 @@ function checkControllerCondition(
     return true
 }
 
-/**
- * Evaluate a single section rule against a flight
- */
-function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStaticConfig): boolean {
-    // Check direction condition
-    if (rule.direction !== undefined) {
-        if (!isAtOurAirport(flight, config, rule.direction)) {
-            return false
-        }
+function evaluateOnRunwayCondition(
+    flight: Flight,
+    config: EfsStaticConfig,
+    expectedOnRunway: boolean
+): boolean {
+    if (
+        flight.latitude === undefined ||
+        flight.longitude === undefined ||
+        flight.currentAltitude === undefined
+    ) {
+        return expectedOnRunway === false
     }
 
-    // Check groundstate condition
+    const runwayResult = isOnAnyRunway(
+        flight.latitude,
+        flight.longitude,
+        flight.currentAltitude,
+        config.myAirports
+    )
+    const isOnRunway = runwayResult !== undefined && runwayResult.onRunway
+    return isOnRunway === expectedOnRunway
+}
+
+function evaluateCommonConditions(
+    flight: Flight,
+    rule: CommonRuleConditions,
+    config: EfsStaticConfig
+): boolean {
+    if (rule.direction !== undefined && !isAtOurAirport(flight, config, rule.direction)) {
+        return false
+    }
+
     if (rule.groundstates !== undefined) {
         const flightGroundstate = flight.groundstate ?? ''
         if (!rule.groundstates.includes(flightGroundstate)) {
@@ -128,14 +163,10 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
-    // Check controller condition
-    if (rule.controller !== undefined) {
-        if (!checkControllerCondition(flight, rule.controller, config)) {
-            return false
-        }
+    if (rule.controller !== undefined && !checkControllerCondition(flight, rule.controller, config)) {
+        return false
     }
 
-    // Check clearance flag
     if (rule.clearance !== undefined) {
         const hasClearance = flight.clearance ?? false
         if (hasClearance !== rule.clearance) {
@@ -143,7 +174,6 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
-    // Check cleared to land flag
     if (rule.clearedToLand !== undefined) {
         const isClearedToLand = flight.clearedToLand ?? false
         if (isClearedToLand !== rule.clearedToLand) {
@@ -151,7 +181,6 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
-    // Check airborne flag
     if (rule.airborne !== undefined) {
         const isAirborne = flight.airborne ?? false
         if (isAirborne !== rule.airborne) {
@@ -159,31 +188,19 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
-    // Check onRunway condition
-    if (rule.onRunway !== undefined) {
-        // Need position and altitude data to check runway
-        if (
-            flight.latitude === undefined ||
-            flight.longitude === undefined ||
-            flight.currentAltitude === undefined
-        ) {
-            // Can't evaluate runway condition without position data
-            if (rule.onRunway === true) {
-                return false // Need to be on runway but can't verify
-            }
-            // If rule.onRunway === false, we can't verify so skip this condition
-        } else {
-            const runwayResult = isOnAnyRunway(
-                flight.latitude,
-                flight.longitude,
-                flight.currentAltitude,
-                config.myAirports
-            )
-            const isOnRunway = runwayResult !== undefined && runwayResult.onRunway
-            if (isOnRunway !== rule.onRunway) {
-                return false
-            }
-        }
+    if (rule.onRunway !== undefined && !evaluateOnRunwayCondition(flight, config, rule.onRunway)) {
+        return false
+    }
+
+    return true
+}
+
+/**
+ * Evaluate a single section rule against a flight
+ */
+function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStaticConfig): boolean {
+    if (!evaluateCommonConditions(flight, rule, config)) {
+        return false
     }
 
     // Check maxAltitudeAboveField condition
@@ -223,10 +240,7 @@ export function determineSectionForFlight(
     flight: Flight,
     config: EfsStaticConfig
 ): { bayId: string; sectionId: string; ruleId?: string } | undefined {
-    // Sort rules by priority (highest first)
-    const sortedRules = [...config.sectionRules].sort(
-        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
-    )
+    const sortedRules = sortByPriorityDesc(config.sectionRules)
 
     // Find first matching rule
     for (const rule of sortedRules) {
@@ -269,74 +283,8 @@ function evaluateActionRule(
         return false
     }
 
-    // Check direction condition
-    if (rule.direction !== undefined) {
-        if (!isAtOurAirport(flight, config, rule.direction)) {
-            return false
-        }
-    }
-
-    // Check groundstate condition
-    if (rule.groundstates !== undefined) {
-        const flightGroundstate = flight.groundstate ?? ''
-        if (!rule.groundstates.includes(flightGroundstate)) {
-            return false
-        }
-    }
-
-    // Check controller condition
-    if (rule.controller !== undefined) {
-        if (!checkControllerCondition(flight, rule.controller, config)) {
-            return false
-        }
-    }
-
-    // Check clearance flag
-    if (rule.clearance !== undefined) {
-        const hasClearance = flight.clearance ?? false
-        if (hasClearance !== rule.clearance) {
-            return false
-        }
-    }
-
-    // Check cleared to land flag
-    if (rule.clearedToLand !== undefined) {
-        const isClearedToLand = flight.clearedToLand ?? false
-        if (isClearedToLand !== rule.clearedToLand) {
-            return false
-        }
-    }
-
-    // Check airborne flag
-    if (rule.airborne !== undefined) {
-        const isAirborne = flight.airborne ?? false
-        if (isAirborne !== rule.airborne) {
-            return false
-        }
-    }
-
-    // Check onRunway condition
-    if (rule.onRunway !== undefined) {
-        if (
-            flight.latitude === undefined ||
-            flight.longitude === undefined ||
-            flight.currentAltitude === undefined
-        ) {
-            if (rule.onRunway === true) {
-                return false
-            }
-        } else {
-            const runwayResult = isOnAnyRunway(
-                flight.latitude,
-                flight.longitude,
-                flight.currentAltitude,
-                config.myAirports
-            )
-            const onRunway = runwayResult !== undefined && runwayResult.onRunway
-            if (onRunway !== rule.onRunway) {
-                return false
-            }
-        }
+    if (!evaluateCommonConditions(flight, rule, config)) {
+        return false
     }
 
     // Check handoff initiated condition
@@ -358,10 +306,7 @@ export function determineActionForFlight(
     sectionId: string,
     config: EfsStaticConfig
 ): StripAction | undefined {
-    // Sort rules by priority (highest first)
-    const sortedRules = [...config.actionRules].sort(
-        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
-    )
+    const sortedRules = sortByPriorityDesc(config.actionRules)
 
     // Find first matching rule
     for (const rule of sortedRules) {
@@ -382,26 +327,8 @@ function evaluateDeleteRule(
     rule: DeleteRule,
     config: EfsStaticConfig
 ): boolean {
-    // Check direction condition
-    if (rule.direction !== undefined) {
-        if (!isAtOurAirport(flight, config, rule.direction)) {
-            return false
-        }
-    }
-
-    // Check groundstate condition
-    if (rule.groundstates !== undefined) {
-        const flightGroundstate = flight.groundstate ?? ''
-        if (!rule.groundstates.includes(flightGroundstate)) {
-            return false
-        }
-    }
-
-    // Check controller condition
-    if (rule.controller !== undefined) {
-        if (!checkControllerCondition(flight, rule.controller, config)) {
-            return false
-        }
+    if (!evaluateCommonConditions(flight, rule, config)) {
+        return false
     }
 
     // Check altitude above field elevation
@@ -464,10 +391,7 @@ export function shouldDeleteFlight(
     flight: Flight,
     config: EfsStaticConfig
 ): { shouldDelete: boolean; ruleId?: string } {
-    // Sort rules by priority (highest first)
-    const sortedRules = [...config.deleteRules].sort(
-        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
-    )
+    const sortedRules = sortByPriorityDesc(config.deleteRules)
 
     // Find first matching rule
     for (const rule of sortedRules) {
@@ -517,10 +441,7 @@ export function determineMoveAction(
     toSectionId: string,
     config: EfsStaticConfig
 ): { command: EuroscopeCommand; ruleId: string } | undefined {
-    // Sort rules by priority (highest first)
-    const sortedRules = [...config.moveRules].sort(
-        (a, b) => (b.priority ?? 0) - (a.priority ?? 0)
-    )
+    const sortedRules = sortByPriorityDesc(config.moveRules)
 
     // Find first matching rule
     for (const rule of sortedRules) {

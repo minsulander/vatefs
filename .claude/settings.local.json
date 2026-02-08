@@ -12,7 +12,8 @@
       "Bash(npx vue-tsc:*)",
       "Bash(iconv:*)",
       "Bash(npx esbuild:*)",
-      "WebFetch(domain:daim.lfv.se)"
+      "WebFetch(domain:daim.lfv.se)",
+      "Bash(git stash:*)"
     ]
   }
 }

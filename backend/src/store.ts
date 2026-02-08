@@ -6,45 +6,51 @@ import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessage
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
 
+const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
+    "id",
+    "callsign",
+    "aircraftType",
+    "wakeTurbulence",
+    "flightRules",
+    "adep",
+    "ades",
+    "route",
+    "sid",
+    "rfl",
+    "squawk",
+    "clearedAltitude",
+    "assignedHeading",
+    "assignedSpeed",
+    "eobt",
+    "eta",
+    "atd",
+    "ata",
+    "stand",
+    "runway",
+    "remarks",
+    "stripType",
+    "bayId",
+    "sectionId",
+    "position",
+    "bottom",
+    "canResetSquawk",
+    "direct",
+    "clearance",
+    "clearedForTakeoff",
+    "clearedToLand"
+]
+
 /**
  * Compare two strips for equality
  * Returns true if strips are equal (no change needed)
  */
 function stripsEqual(a: FlightStrip, b: FlightStrip): boolean {
-    return (
-        a.id === b.id &&
-        a.callsign === b.callsign &&
-        a.aircraftType === b.aircraftType &&
-        a.wakeTurbulence === b.wakeTurbulence &&
-        a.flightRules === b.flightRules &&
-        a.adep === b.adep &&
-        a.ades === b.ades &&
-        a.route === b.route &&
-        a.sid === b.sid &&
-        a.rfl === b.rfl &&
-        a.squawk === b.squawk &&
-        a.clearedAltitude === b.clearedAltitude &&
-        a.assignedHeading === b.assignedHeading &&
-        a.assignedSpeed === b.assignedSpeed &&
-        a.eobt === b.eobt &&
-        a.eta === b.eta &&
-        a.atd === b.atd &&
-        a.ata === b.ata &&
-        a.stand === b.stand &&
-        a.runway === b.runway &&
-        a.remarks === b.remarks &&
-        a.stripType === b.stripType &&
-        a.bayId === b.bayId &&
-        a.sectionId === b.sectionId &&
-        a.position === b.position &&
-        a.bottom === b.bottom &&
-        a.canResetSquawk === b.canResetSquawk &&
-        a.direct === b.direct &&
-        a.clearance === b.clearance &&
-        a.clearedForTakeoff === b.clearedForTakeoff &&
-        a.clearedToLand === b.clearedToLand &&
-        actionsEqual(a.actions, b.actions)
-    )
+    for (const field of STRIP_COMPARE_FIELDS) {
+        if (a[field] !== b[field]) {
+            return false
+        }
+    }
+    return actionsEqual(a.actions, b.actions)
 }
 
 function actionsEqual(a: string[] | undefined, b: string[] | undefined): boolean {
