@@ -86,17 +86,58 @@ if (fs.existsSync(runwaysFile)) {
     console.warn(`Runway data file not found: ${runwaysFile}`)
 }
 
-// Load EuroScope data (stands, SIDs)
-const EUROSCOPE_DIR = path.join(process.env.APPDATA || '', 'EuroScope')
-try {
-    loadStands(EUROSCOPE_DIR)
-} catch (err) {
-    console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
+/**
+ * Validate that a directory is a EuroScope install: must contain ESAA subdir and ESAA*.prf file.
+ */
+function isValidEuroscopeDir(dir: string): boolean {
+    try {
+        const esaaPath = path.join(dir, 'ESAA')
+        if (!fs.existsSync(esaaPath) || !fs.statSync(esaaPath).isDirectory()) {
+            return false
+        }
+        const entries = fs.readdirSync(dir)
+        const hasPrf = entries.some((name) => name.startsWith('ESAA') && name.endsWith('.prf'))
+        return hasPrf
+    } catch {
+        return false
+    }
 }
-try {
-    loadSidData(EUROSCOPE_DIR)
-} catch (err) {
-    console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
+
+/**
+ * Find EuroScope directory by trying multiple locations in sequence.
+ * Valid directory must contain ESAA subdir and at least one ESAA*.prf file.
+ */
+function findEuroscopeDir(): string | undefined {
+    const home = process.env.HOME || process.env.USERPROFILE || ''
+    const candidates = [
+        path.join(process.env.APPDATA || '', 'EuroScope'),
+        path.join('C:', 'Program Files (x86)', 'EuroScope'),
+        path.join(home, 'VATSIM', 'drive_c', 'EUROSCOPE'),
+    ]
+    for (const candidate of candidates) {
+        if (candidate && fs.existsSync(candidate) && isValidEuroscopeDir(candidate)) {
+            return candidate
+        }
+    }
+    return undefined
+}
+
+// Load EuroScope data (stands, SIDs)
+const EUROSCOPE_DIR = findEuroscopeDir()
+if (EUROSCOPE_DIR) {
+    console.log(`EuroScope directory: ${EUROSCOPE_DIR}`)
+    try {
+        loadStands(EUROSCOPE_DIR)
+    } catch (err) {
+        console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
+    }
+    try {
+        loadSidData(EUROSCOPE_DIR)
+    } catch (err) {
+        console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
+    }
+} else {
+    console.warn('EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)')
 }
 
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
