@@ -2,6 +2,8 @@
 
 Work in progress...
 
+![teaser](frontend/public/screenshots/teaser.png)
+
 This is a highly vibe-coded project, mainly using Claude.
 You'll find most/some of the prompts used under `prompts/` for whatever that's worth... it's kinda like a new form of source code in this era I reckon.
 
