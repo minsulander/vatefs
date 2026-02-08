@@ -1,8 +1,22 @@
 <template>
   <ClearanceDialog v-model="clncDialogOpen" :strip="strip" />
+  <FlightplanDialog v-model="fplDialogOpen" :strip="strip" />
+
+  <v-dialog v-model="deleteDialogOpen" max-width="300" content-class="delete-dialog-wrapper">
+    <div class="delete-dialog">
+      <div class="delete-dialog-text">Delete strip for flight {{ strip.callsign }}?</div>
+      <div class="delete-dialog-actions">
+        <button class="delete-dialog-btn delete-dialog-cancel" @click="deleteDialogOpen = false">Cancel</button>
+        <button class="delete-dialog-btn delete-dialog-confirm" @click="onDeleteConfirm">DELETE</button>
+      </div>
+    </div>
+  </v-dialog>
 
   <v-menu v-model="menuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu">
+      <v-list-item @click="onFplClick">
+        <v-list-item-title>Flightplan</v-list-item-title>
+      </v-list-item>
       <v-list-item @click="onDeleteClick">
         <v-list-item-title>Delete</v-list-item-title>
       </v-list-item>
@@ -107,6 +121,7 @@ import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 import ClearanceDialog from './ClearanceDialog.vue'
+import FlightplanDialog from './FlightplanDialog.vue'
 
 const props = defineProps<{
   strip: FlightStrip
@@ -122,8 +137,10 @@ const isDragging = ref(false)
 const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
 
-// CLNC dialog state
+// Dialog state
 const clncDialogOpen = ref(false)
+const fplDialogOpen = ref(false)
+const deleteDialogOpen = ref(false)
 
 // Touch drag state
 let touchStarted = false
@@ -506,9 +523,19 @@ function onContextMenu(event: MouseEvent) {
   menuOpen.value = true
 }
 
-function onDeleteClick() {
-  store.deleteStrip(props.strip.id)
+function onFplClick() {
+  fplDialogOpen.value = true
   menuOpen.value = false
+}
+
+function onDeleteClick() {
+  deleteDialogOpen.value = true
+  menuOpen.value = false
+}
+
+function onDeleteConfirm() {
+  store.deleteStrip(props.strip.id)
+  deleteDialogOpen.value = false
 }
 </script>
 
@@ -875,5 +902,62 @@ function onDeleteClick() {
 }
 
 
+</style>
+
+<style>
+/* Delete confirmation dialog - unscoped because v-dialog teleports */
+.delete-dialog-wrapper {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+.delete-dialog {
+  background: #2a2a2e;
+  border: 2px solid #555;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  padding: 0;
+}
+
+.delete-dialog-text {
+  padding: 16px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.delete-dialog-actions {
+  display: flex;
+  border-top: 1px solid #555;
+}
+
+.delete-dialog-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+
+.delete-dialog-cancel {
+  background: #555;
+  color: #ccc;
+  border-right: 1px solid #666;
+}
+
+.delete-dialog-cancel:hover {
+  background: #666;
+}
+
+.delete-dialog-confirm {
+  background: #c62828;
+  color: #fff;
+}
+
+.delete-dialog-confirm:hover {
+  background: #e53935;
+}
 </style>
 

@@ -1,3 +1,16 @@
+Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
+
+- Kolla hur ES/TopSky gör när man 
+  a. bara ändrar bana (clears sid? vad skriver den i route?)
+  b. ändrar SID gällande bana
+  c. ändrar SID och bana
+Implementera motsv funktionalitet som .efs kommandon... testa.
+
+- DCL/PDC - gå direkt på hoppie? Ja förmodligen.
+  Inspiration: https://github.com/pierr3/vSMR
+
+---
+
 - Context menu kunna backa states
 
 - Hantera flera FL positioner:
@@ -19,10 +32,6 @@
 - Om arrRwy eller depRwy inte är satt, visa den som är aktiv i rwyconfig
 
 
-Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
-
-- DCL/PDC - gå direkt på hoppie? Ja förmodligen.
-  Inspiration: https://github.com/pierr3/vSMR
 
 Actions:
 - Ändra SID (SA bana 08, prop/slow)
@@ -30,6 +39,7 @@ Actions:
 - Sätta RMK/OPTEXT2
 
 Vidare i livet:
+- Fyll FPL dialogen med all vettig info
 - Överflygare, "local VFR", helikopter
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
