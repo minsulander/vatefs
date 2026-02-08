@@ -1087,6 +1087,26 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                        "to draw on radar screen.");
                         DisplayMessage("Please allow it in OTHER SET / Plug-ins ... menu.");
                     }
+                } else if (message["type"] == "assignDepartureRunway") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto runway = message["runway"].get<std::string>();
+                    DebugMessage("assignDepartureRunway: " + callsign + " -> " + runway);
+                    // TODO: Implement EuroScope API call to assign departure runway
+                } else if (message["type"] == "assignSid") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto sid = message["sid"].get<std::string>();
+                    DebugMessage("assignSid: " + callsign + " -> " + sid);
+                    // TODO: Implement EuroScope API call to assign SID
+                } else if (message["type"] == "assignHeading") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto heading = message["heading"].get<int>();
+                    DebugMessage("assignHeading: " + callsign + " -> " + std::to_string(heading));
+                    // TODO: Implement EuroScope API call to assign heading
+                } else if (message["type"] == "assignCfl") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto altitude = message["altitude"].get<int>();
+                    DebugMessage("assignCfl: " + callsign + " -> " + std::to_string(altitude));
+                    // TODO: Implement EuroScope API call to assign CFL
                 } else {
                     DisplayMessage("Unknown message type: " + message["type"].get<std::string>());
                 }

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -483,6 +483,15 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function sendAssignment(stripId: string, assignType: AssignmentType, value: string) {
+        sendMessage({
+            type: 'stripAssign',
+            stripId,
+            assignType,
+            value
+        })
+    }
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -531,6 +540,7 @@ export const useEfsStore = defineStore("efs", () => {
         setSectionHeight,
         broadcastSectionHeights,
         sendStripAction,
+        sendAssignment,
         deleteStrip,
         GAP_BUFFER,
         sendRequest,

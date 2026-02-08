@@ -16,7 +16,7 @@ import { setMyCallsign, setMyAirports, setIsController, staticConfig, determineM
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
-import { loadRunways, getRunwayCount } from "./runway-data.js"
+import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
 import { loadStands } from "./stand-data.js"
@@ -205,6 +205,10 @@ type OutboundPluginCommand =
     | { type: 'assume'; callsign: string }
     | { type: 'toggleClearanceFlag'; callsign: string }
     | { type: 'resetSquawk'; callsign: string }
+    | { type: 'assignDepartureRunway'; callsign: string; runway: string }
+    | { type: 'assignSid'; callsign: string; sid: string }
+    | { type: 'assignHeading'; callsign: string; heading: number }
+    | { type: 'assignCfl'; callsign: string; altitude: number }
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
@@ -489,6 +493,34 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case 'stripAssign': {
+            const strip = store.getStrip(message.stripId)
+            if (strip) {
+                console.log(`[ASSIGN] ${message.assignType} = "${message.value}" on ${strip.callsign}`)
+                let pluginCommand: OutboundPluginCommand | null = null
+                switch (message.assignType) {
+                    case 'assignDepartureRunway':
+                        pluginCommand = { type: 'assignDepartureRunway', callsign: strip.callsign, runway: message.value }
+                        break
+                    case 'assignSid':
+                        pluginCommand = { type: 'assignSid', callsign: strip.callsign, sid: message.value }
+                        break
+                    case 'assignHeading':
+                        pluginCommand = { type: 'assignHeading', callsign: strip.callsign, heading: parseInt(message.value, 10) || 0 }
+                        break
+                    case 'assignCfl':
+                        pluginCommand = { type: 'assignCfl', callsign: strip.callsign, altitude: parseInt(message.value, 10) || 0 }
+                        break
+                }
+                if (pluginCommand) {
+                    sendUdp(JSON.stringify(pluginCommand))
+                }
+            } else {
+                console.log(`[ASSIGN] ${message.assignType} on unknown strip ${message.stripId}`)
+            }
+            break
+        }
+
         case 'deleteStrip': {
             const deletedId = store.manualDeleteStrip(message.stripId)
             if (deletedId) {
@@ -579,6 +611,22 @@ app.get("/api/onrunway", (req, res) => {
 
     const result = isOnRunway(lat, lon, alt, airport, runway)
     res.json(result)
+})
+
+app.get("/api/runways", (req, res) => {
+    const airport = req.query.airport as string
+    if (!airport) {
+        res.status(400).json({ error: "Missing parameters", usage: "/api/runways?airport=ESGG" })
+        return
+    }
+    const runways = getRunwaysByAirport(airport)
+    // Extract unique runway identifiers (both ends)
+    const identifiers = new Set<string>()
+    for (const rwy of runways) {
+        if (rwy.le_ident) identifiers.add(rwy.le_ident)
+        if (rwy.he_ident) identifiers.add(rwy.he_ident)
+    }
+    res.json([...identifiers].sort())
 })
 
 app.get("/api/sids", (req, res) => {
