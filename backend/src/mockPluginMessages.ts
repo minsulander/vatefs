@@ -88,13 +88,13 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate('DLH432', 'EDDF', 'ESGG', 'A321', {
         rfl: 36000,
         arrRwy: '21',
-        star: 'OSNAK1B'
+        star: 'OSNAK1B',
+        handoffTargetController: 'ESGG_TWR'
     }),
     ctrUpdate('DLH432', {
         squawk: '2341',
         groundstate: 'ARR',
         controller: 'ESGG_APP', // Approach, not tower
-        handoffTargetController: 'ESGG_TWR'
     }),
 
     // === CTR ARR: Arrivals assumed by me ===

@@ -727,6 +727,9 @@ class FlightStore {
         // Can reset squawk if we're a controller and we track the flight (or it's untracked)
         const canResetSquawk = this.config.isController === true && (isTrackedByMe || isUntracked)
 
+        // Can edit clearance if we're a controller and the flight is tracked by me or untracked
+        const canEditClearance = this.config.isController === true && (isTrackedByMe || isUntracked)
+
         return {
             id: flight.callsign, // Use callsign as strip ID
             callsign: flight.callsign,
@@ -756,7 +759,8 @@ class FlightStore {
             direct: flight.direct || undefined,
             clearance: flight.clearance ?? undefined,
             clearedForTakeoff,
-            clearedToLand
+            clearedToLand,
+            canEditClearance: canEditClearance || undefined
         }
     }
 

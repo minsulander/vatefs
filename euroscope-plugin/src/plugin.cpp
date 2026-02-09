@@ -13,6 +13,23 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+// Convert an ANSI code page string (from EuroScope) to UTF-8 (for JSON).
+// For example, the middle dot '·' is 0xB7 in Windows-1252 but must become 0xC2 0xB7 in UTF-8.
+static std::string AnsiToUtf8(const char *ansi)
+{
+    if (!ansi || !*ansi) return ansi ? "" : "";
+    int wideLen = MultiByteToWideChar(CP_ACP, 0, ansi, -1, NULL, 0);
+    if (wideLen == 0) return ansi;
+    std::wstring wide(wideLen, 0);
+    MultiByteToWideChar(CP_ACP, 0, ansi, -1, &wide[0], wideLen);
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, NULL, 0, NULL, NULL);
+    if (utf8Len == 0) return ansi;
+    std::string utf8(utf8Len, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &utf8[0], utf8Len, NULL, NULL);
+    if (!utf8.empty() && utf8.back() == '\0') utf8.pop_back();
+    return utf8;
+}
+
 namespace VatEFS
 {
 
@@ -124,6 +141,10 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
 
+        const char *route = fpData.GetRoute();
+        if (route && *route && strlen(route) < 1000)
+            message["route"] = AnsiToUtf8(route);
+
         const char *arrRwy = fpData.GetArrivalRwy();
         const char *starName = fpData.GetStarName();
         const char *depRwy = fpData.GetDepartureRwy();
@@ -131,10 +152,10 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         if (arrRwy && *arrRwy && strlen(arrRwy) < 5) SetJsonIfValidUtf8(message, "arrRwy", arrRwy);
         if (starName && *starName && strlen(starName) < 10)
-            SetJsonIfValidUtf8(message, "star", starName);
+            message["star"] = AnsiToUtf8(starName);
         if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
         if (sidName && *sidName && strlen(sidName) < 10)
-            SetJsonIfValidUtf8(message, "sid", sidName);
+            message["sid"] = AnsiToUtf8(sidName);
 
         const char *eobt = fpData.GetEstimatedDepartureTime();
         if (eobt && strlen(eobt) == 4) { // Valid EOBT is always 4 digits
@@ -960,6 +981,37 @@ void VatEFSPlugin::CleanupUdpReceiveSocket()
     }
 }
 
+// Convert a UTF-8 string to the local ANSI code page (e.g., Windows-1252).
+// EuroScope expects ANSI strings, but JSON payloads arrive as UTF-8.
+// For example, the middle dot '·' (U+00B7) is 0xC2 0xB7 in UTF-8 but 0xB7 in Latin-1/Windows-1252.
+static std::string Utf8ToAnsi(const std::string &utf8)
+{
+    if (utf8.empty()) return utf8;
+    int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, NULL, 0);
+    if (wideLen == 0) return utf8;
+    std::wstring wide(wideLen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wide[0], wideLen);
+    int ansiLen = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, NULL, 0, NULL, NULL);
+    if (ansiLen == 0) return utf8;
+    std::string ansi(ansiLen, 0);
+    WideCharToMultiByte(CP_ACP, 0, wide.c_str(), -1, &ansi[0], ansiLen, NULL, NULL);
+    if (!ansi.empty() && ansi.back() == '\0') ansi.pop_back();
+    return ansi;
+}
+
+// Check if a string matches the pilot-filed SID pattern:
+// 5 uppercase letters + 1 digit + 1 uppercase letter (e.g., VADIN3J)
+static bool IsSidPattern(const std::string &s)
+{
+    if (s.length() != 7) return false;
+    for (int i = 0; i < 5; i++) {
+        if (!std::isupper((unsigned char)s[i])) return false;
+    }
+    if (!std::isdigit((unsigned char)s[5])) return false;
+    if (!std::isupper((unsigned char)s[6])) return false;
+    return true;
+}
+
 void VatEFSPlugin::ReceiveUdpMessages()
 {
     if (udpReceiveSocket == nullptr) return;
@@ -1091,22 +1143,122 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     auto callsign = message["callsign"].get<std::string>();
                     auto runway = message["runway"].get<std::string>();
                     DebugMessage("assignDepartureRunway: " + callsign + " -> " + runway);
-                    // TODO: Implement EuroScope API call to assign departure runway
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignDepartureRunway: Flight plan not found: " + callsign);
+                    } else {
+                        auto fpData = fp.GetFlightPlanData();
+                        const char *routeStr = fpData.GetRoute();
+                        std::string route = routeStr ? routeStr : "";
+                        const char *origin = fpData.GetOrigin();
+                        std::string departureAirport = origin ? origin : "";
+                        DisplayMessage("hm: " + departureAirport);
+
+                        std::string firstTerm;
+                        std::string restOfRoute;
+                        auto spacePos = route.find(' ');
+                        if (spacePos != std::string::npos) {
+                            firstTerm = route.substr(0, spacePos);
+                            restOfRoute = route.substr(spacePos + 1);
+                        } else {
+                            firstTerm = route;
+                        }
+
+                        std::string newRoute;
+                        auto slashPos = firstTerm.find('/');
+                        if (slashPos != std::string::npos) {
+                            // Already has SID/rwy or airport/rwy prefix - keep prefix, change runway
+                            newRoute = firstTerm.substr(0, slashPos) + "/" + runway;
+                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                        } else if (IsSidPattern(firstTerm)) {
+                            // Pilot-filed SID - remove it, prepend airport/runway
+                            newRoute = departureAirport + "/" + runway;
+                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                        } else {
+                            // No prefix - prepend airport/runway before the full original route
+                            newRoute = departureAirport + "/" + runway;
+                            if (!route.empty()) newRoute += " " + route;
+                        }
+                        std::string ansiRoute = Utf8ToAnsi(newRoute);
+                        DebugMessage("assignDepartureRunway: new route: " + ansiRoute);
+                        fpData.SetRoute(ansiRoute.c_str());
+                        fpData.AmendFlightPlan();
+                    }
                 } else if (message["type"] == "assignSid") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto sid = message["sid"].get<std::string>();
                     DebugMessage("assignSid: " + callsign + " -> " + sid);
-                    // TODO: Implement EuroScope API call to assign SID
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignSid: Flight plan not found: " + callsign);
+                    } else {
+                        auto fpData = fp.GetFlightPlanData();
+                        const char *routeStr = fpData.GetRoute();
+                        std::string route = routeStr ? routeStr : "";
+                        const char *depRwy = fpData.GetDepartureRwy();
+                        std::string currentRwy = depRwy ? depRwy : "";
+
+                        std::string firstTerm;
+                        std::string restOfRoute;
+                        auto spacePos = route.find(' ');
+                        if (spacePos != std::string::npos) {
+                            firstTerm = route.substr(0, spacePos);
+                            restOfRoute = route.substr(spacePos + 1);
+                        } else {
+                            firstTerm = route;
+                        }
+
+                        std::string newRoute;
+                        auto slashPos = firstTerm.find('/');
+                        if (slashPos != std::string::npos) {
+                            // Already has SID/rwy or airport/rwy prefix - keep runway, change SID
+                            std::string existingRwy = firstTerm.substr(slashPos + 1);
+                            newRoute = sid + "/" + existingRwy;
+                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                        } else if (IsSidPattern(firstTerm)) {
+                            // Pilot-filed SID - replace with new SID/runway
+                            newRoute = sid + "/" + currentRwy;
+                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                        } else {
+                            // No prefix - prepend SID/runway before the full original route
+                            newRoute = sid + "/" + currentRwy;
+                            if (!route.empty()) newRoute += " " + route;
+                        }
+                        std::string ansiRoute = Utf8ToAnsi(newRoute);
+                        DebugMessage("assignSid: new route: " + ansiRoute);
+                        fpData.SetRoute(ansiRoute.c_str());
+                        fpData.AmendFlightPlan();
+                    }
                 } else if (message["type"] == "assignHeading") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto heading = message["heading"].get<int>();
                     DebugMessage("assignHeading: " + callsign + " -> " + std::to_string(heading));
-                    // TODO: Implement EuroScope API call to assign heading
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignHeading: Flight plan not found: " + callsign);
+                    } else {
+                        bool ok = fp.GetControllerAssignedData().SetAssignedHeading(heading);
+                        if (!ok) DisplayMessage("assignHeading: Failed for " + callsign);
+                    }
                 } else if (message["type"] == "assignCfl") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto altitude = message["altitude"].get<int>();
                     DebugMessage("assignCfl: " + callsign + " -> " + std::to_string(altitude));
-                    // TODO: Implement EuroScope API call to assign CFL
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignCfl: Flight plan not found: " + callsign);
+                    } else {
+                        bool ok = fp.GetControllerAssignedData().SetClearedAltitude(altitude);
+                        if (!ok) DisplayMessage("assignCfl: Failed for " + callsign);
+                    }
                 } else {
                     DisplayMessage("Unknown message type: " + message["type"].get<std::string>());
                 }

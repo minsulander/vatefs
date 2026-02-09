@@ -53,8 +53,7 @@ const dialogOpen = computed({
   set: (v: boolean) => emit('update:modelValue', v)
 })
 
-const isUnassumed = computed(() => props.strip.actions?.includes('ASSUME') ?? false)
-const okDisabled = computed(() => !props.strip.clearance && isUnassumed.value)
+const okDisabled = computed(() => !props.strip.canEditClearance)
 
 // Dropdown state
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
@@ -95,11 +94,30 @@ async function fetchSids() {
   }
 }
 
+// Fetch the SID altitude and assign CFL if not already set
+async function applyDefaultCfl() {
+  const airport = props.strip.adep
+  const sid = props.strip.sid
+  if (!airport || !sid || props.strip.clearedAltitude) return
+  try {
+    const res = await fetch(`/api/sidalt?airport=${airport}&sid=${sid}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.altitude) {
+        store.sendAssignment(props.strip.id, 'assignCfl', String(data.altitude))
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // When dialog opens, fetch data
 watch(dialogOpen, (open) => {
   if (open) {
     fetchRunways()
     fetchSids()
+    applyDefaultCfl()
   } else {
     activeDropdown.value = null
   }

@@ -49,6 +49,7 @@ export interface FlightStrip {
 
     // Interactive flags
     canResetSquawk?: boolean     // Whether the squawk reset button is available
+    canEditClearance?: boolean   // Whether the clearance dialog OK button is enabled
 
     // Clearance dialog data
     direct?: string              // Direct-to waypoint (for AHDG display in dialog)

@@ -8,7 +8,18 @@ import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 
 import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
-import type { LayoutMessage, StripMessage, StripDeleteMessage, GapMessage, GapDeleteMessage, SectionMessage, RefreshMessage, StatusMessage, ServerMessage, ClientMessage } from "@vatefs/common"
+import type {
+    LayoutMessage,
+    StripMessage,
+    StripDeleteMessage,
+    GapMessage,
+    GapDeleteMessage,
+    SectionMessage,
+    RefreshMessage,
+    StatusMessage,
+    ServerMessage,
+    ClientMessage,
+} from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
@@ -41,16 +52,16 @@ function parseArgs(): { config?: string; callsign?: string; airports?: string[];
     const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } = {}
 
     for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--config' && args[i + 1]) {
+        if (args[i] === "--config" && args[i + 1]) {
             result.config = args[++i]
-        } else if (args[i] === '--callsign' && args[i + 1]) {
+        } else if (args[i] === "--callsign" && args[i + 1]) {
             result.callsign = args[++i]
-        } else if (args[i] === '--airport' && args[i + 1]) {
+        } else if (args[i] === "--airport" && args[i + 1]) {
             // Support comma-separated airports: --airport ESGG,ESSA
-            result.airports = args[++i].split(',').map(a => a.trim().toUpperCase())
-        } else if (args[i] === '--record' && args[i + 1]) {
+            result.airports = args[++i].split(",").map((a) => a.trim().toUpperCase())
+        } else if (args[i] === "--record" && args[i + 1]) {
             result.recordFile = args[++i]
-        } else if (args[i] === '--mock') {
+        } else if (args[i] === "--mock") {
             result.mock = true
         }
     }
@@ -91,12 +102,12 @@ if (fs.existsSync(runwaysFile)) {
  */
 function isValidEuroscopeDir(dir: string): boolean {
     try {
-        const esaaPath = path.join(dir, 'ESAA')
+        const esaaPath = path.join(dir, "ESAA")
         if (!fs.existsSync(esaaPath) || !fs.statSync(esaaPath).isDirectory()) {
             return false
         }
         const entries = fs.readdirSync(dir)
-        const hasPrf = entries.some((name) => name.startsWith('ESAA') && name.endsWith('.prf'))
+        const hasPrf = entries.some((name) => name.startsWith("ESAA") && name.endsWith(".prf"))
         return hasPrf
     } catch {
         return false
@@ -108,11 +119,11 @@ function isValidEuroscopeDir(dir: string): boolean {
  * Valid directory must contain ESAA subdir and at least one ESAA*.prf file.
  */
 function findEuroscopeDir(): string | undefined {
-    const home = process.env.HOME || process.env.USERPROFILE || ''
+    const home = process.env.HOME || process.env.USERPROFILE || ""
     const candidates = [
-        path.join(process.env.APPDATA || '', 'EuroScope'),
-        path.join('C:', 'Program Files (x86)', 'EuroScope'),
-        path.join(home, 'VATSIM', 'drive_c', 'EUROSCOPE'),
+        path.join(process.env.APPDATA || "", "EuroScope"),
+        path.join("C:", "Program Files (x86)", "EuroScope"),
+        path.join(home, "VATSIM", "drive_c", "EUROSCOPE"),
     ]
     for (const candidate of candidates) {
         if (candidate && fs.existsSync(candidate) && isValidEuroscopeDir(candidate)) {
@@ -137,11 +148,11 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
     }
 } else {
-    console.warn('EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)')
+    console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
 }
 
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
-loadCtrData().catch(err => {
+loadCtrData().catch((err) => {
     console.warn(`Failed to load CTR data: ${err instanceof Error ? err.message : err}`)
 })
 
@@ -154,10 +165,10 @@ if (cliArgs.callsign) {
 // Apply command-line airports or mock default
 if (cliArgs.airports && cliArgs.airports.length > 0) {
     setMyAirports(cliArgs.airports)
-    console.log(`Airports set to: ${cliArgs.airports.join(', ')}`)
+    console.log(`Airports set to: ${cliArgs.airports.join(", ")}`)
 } else if (cliArgs.mock) {
     // Default to ESGG for mock mode
-    setMyAirports(['ESGG'])
+    setMyAirports(["ESGG"])
     console.log(`Airports set to: ESGG (mock default)`)
 }
 
@@ -166,7 +177,7 @@ let recordStream: fs.WriteStream | null = null
 let recordStartTime: number | null = null
 
 if (cliArgs.recordFile) {
-    recordStream = fs.createWriteStream(cliArgs.recordFile, { flags: 'a' })
+    recordStream = fs.createWriteStream(cliArgs.recordFile, { flags: "a" })
     console.log(`Recording UDP messages to: ${cliArgs.recordFile}`)
 }
 
@@ -187,53 +198,53 @@ function recordMessage(message: string) {
  */
 function formatEuroscopeCommand(command: EuroscopeCommand): string {
     switch (command.type) {
-        case 'setClearance':
+        case "setClearance":
             return `setClearance(${command.value})`
-        case 'setGroundstate':
+        case "setGroundstate":
             return `setGroundstate(${command.value})`
-        case 'setClearedToLand':
+        case "setClearedToLand":
             return `setClearedToLand(${command.value})`
-        case 'setClearedForTakeoff':
+        case "setClearedForTakeoff":
             return `setClearedForTakeoff(${command.value})`
     }
 }
 
 type OutboundPluginCommand =
-    | { type: 'setClearedToLand'; callsign: string }
-    | { type: 'setGroundState'; callsign: string; state: string }
-    | { type: 'transfer'; callsign: string }
-    | { type: 'assume'; callsign: string }
-    | { type: 'toggleClearanceFlag'; callsign: string }
-    | { type: 'resetSquawk'; callsign: string }
-    | { type: 'assignDepartureRunway'; callsign: string; runway: string }
-    | { type: 'assignSid'; callsign: string; sid: string }
-    | { type: 'assignHeading'; callsign: string; heading: number }
-    | { type: 'assignCfl'; callsign: string; altitude: number }
+    | { type: "setClearedToLand"; callsign: string }
+    | { type: "setGroundState"; callsign: string; state: string }
+    | { type: "transfer"; callsign: string }
+    | { type: "assume"; callsign: string }
+    | { type: "toggleClearanceFlag"; callsign: string }
+    | { type: "resetSquawk"; callsign: string }
+    | { type: "assignDepartureRunway"; callsign: string; runway: string }
+    | { type: "assignSid"; callsign: string; sid: string }
+    | { type: "assignHeading"; callsign: string; heading: number }
+    | { type: "assignCfl"; callsign: string; altitude: number }
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
-        case 'CTL':
-            return { type: 'setClearedToLand', callsign }
-        case 'CTO':
-            return { type: 'setGroundState', callsign, state: 'DEPA' }
-        case 'PUSH':
-            return { type: 'setGroundState', callsign, state: 'PUSH' }
-        case 'LU':
-            return { type: 'setGroundState', callsign, state: 'LINEUP' }
-        case 'TXO':
-            return { type: 'setGroundState', callsign, state: 'TAXI' }
-        case 'TXI':
-            return { type: 'setGroundState', callsign, state: 'TXIN' }
-        case 'PARK':
-            return { type: 'setGroundState', callsign, state: 'PARK' }
-        case 'XFER':
-            return { type: 'transfer', callsign }
-        case 'ASSUME':
-            return { type: 'assume', callsign }
-        case 'toggleClearanceFlag':
-            return { type: 'toggleClearanceFlag', callsign }
-        case 'resetSquawk':
-            return { type: 'resetSquawk', callsign }
+        case "CTL":
+            return { type: "setClearedToLand", callsign }
+        case "CTO":
+            return { type: "setGroundState", callsign, state: "DEPA" }
+        case "PUSH":
+            return { type: "setGroundState", callsign, state: "PUSH" }
+        case "LU":
+            return { type: "setGroundState", callsign, state: "LINEUP" }
+        case "TXO":
+            return { type: "setGroundState", callsign, state: "TAXI" }
+        case "TXI":
+            return { type: "setGroundState", callsign, state: "TXIN" }
+        case "PARK":
+            return { type: "setGroundState", callsign, state: "PARK" }
+        case "XFER":
+            return { type: "transfer", callsign }
+        case "ASSUME":
+            return { type: "assume", callsign }
+        case "toggleClearanceFlag":
+            return { type: "toggleClearanceFlag", callsign }
+        case "resetSquawk":
+            return { type: "resetSquawk", callsign }
         default:
             return null
     }
@@ -248,7 +259,7 @@ if (cliArgs.mock) {
         setMyAirports(mockAirports)
     }
     setIsController(mockMyselfUpdate.controller)
-    console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(', ')})`)
+    console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(", ")})`)
 }
 store.loadMockData(cliArgs.mock ?? false)
 
@@ -261,7 +272,7 @@ function sendMessage(socket: WebSocket, message: ServerMessage) {
 
 // Broadcast a message to all connected clients except the sender
 function broadcast(message: ServerMessage, exclude?: WebSocket) {
-    wsClients.forEach(client => {
+    wsClients.forEach((client) => {
         if (client !== exclude && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify(message))
         }
@@ -270,47 +281,47 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
 
 // Broadcast a strip update
 function broadcastStrip(strip: FlightStrip, exclude?: WebSocket) {
-    const message: StripMessage = { type: 'strip', strip }
+    const message: StripMessage = { type: "strip", strip }
     broadcast(message, exclude)
 }
 
 // Broadcast a strip delete
 function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
-    const message: StripDeleteMessage = { type: 'stripDelete', stripId }
+    const message: StripDeleteMessage = { type: "stripDelete", stripId }
     broadcast(message, exclude)
 }
 
 // Broadcast a gap update
 function broadcastGap(gap: Gap, exclude?: WebSocket) {
-    const message: GapMessage = { type: 'gap', gap }
+    const message: GapMessage = { type: "gap", gap }
     broadcast(message, exclude)
 }
 
 // Broadcast a gap delete
 function broadcastGapDelete(bayId: string, sectionId: string, index: number, exclude?: WebSocket) {
-    const message: GapDeleteMessage = { type: 'gapDelete', bayId, sectionId, index }
+    const message: GapDeleteMessage = { type: "gapDelete", bayId, sectionId, index }
     broadcast(message, exclude)
 }
 
 // Broadcast a section update
 function broadcastSection(bayId: string, section: Section, exclude?: WebSocket) {
-    const message: SectionMessage = { type: 'section', bayId, section }
+    const message: SectionMessage = { type: "section", bayId, section }
     broadcast(message, exclude)
 }
 
 // Broadcast a refresh request to all clients
 function broadcastRefresh(reason?: string) {
-    const message: RefreshMessage = { type: 'refresh', reason }
+    const message: RefreshMessage = { type: "refresh", reason }
     broadcast(message)
-    console.log(`Broadcast refresh to all clients: ${reason ?? 'no reason'}`)
+    console.log(`Broadcast refresh to all clients: ${reason ?? "no reason"}`)
 }
 
 // Send status (callsign + airports) to a client
 function sendStatus(socket: WebSocket) {
     const message: StatusMessage = {
-        type: 'status',
-        callsign: staticConfig.myCallsign ?? '',
-        airports: staticConfig.myAirports
+        type: "status",
+        callsign: staticConfig.myCallsign ?? "",
+        airports: staticConfig.myAirports,
     }
     sendMessage(socket, message)
 }
@@ -318,9 +329,9 @@ function sendStatus(socket: WebSocket) {
 // Broadcast status to all clients
 function broadcastStatus() {
     const message: StatusMessage = {
-        type: 'status',
-        callsign: staticConfig.myCallsign ?? '',
-        airports: staticConfig.myAirports
+        type: "status",
+        callsign: staticConfig.myCallsign ?? "",
+        airports: staticConfig.myAirports,
     }
     broadcast(message)
 }
@@ -328,8 +339,8 @@ function broadcastStatus() {
 // Send layout to a client
 function sendLayout(socket: WebSocket) {
     const message: LayoutMessage = {
-        type: 'layout',
-        layout: store.getLayout()
+        type: "layout",
+        layout: store.getLayout(),
     }
     sendMessage(socket, message)
     console.log("Sent layout to client")
@@ -340,8 +351,8 @@ function sendStrips(socket: WebSocket) {
     const strips = store.getAllStrips()
     strips.forEach((strip) => {
         const message: StripMessage = {
-            type: 'strip',
-            strip: strip
+            type: "strip",
+            strip: strip,
         }
         sendMessage(socket, message)
     })
@@ -353,8 +364,8 @@ function sendGaps(socket: WebSocket) {
     const gaps = store.getAllGaps()
     gaps.forEach((gap) => {
         const message: GapMessage = {
-            type: 'gap',
-            gap: gap
+            type: "gap",
+            gap: gap,
         }
         sendMessage(socket, message)
     })
@@ -370,7 +381,7 @@ function handleClientMessage(socket: WebSocket, text: string) {
         }
     } catch {
         // Not a JSON message, check for legacy "?" request
-        if (text === '?') {
+        if (text === "?") {
             // Legacy request: send layout, strips, and gaps
             sendLayout(socket)
             sendStrips(socket)
@@ -386,18 +397,18 @@ function handleClientMessage(socket: WebSocket, text: string) {
 // Handle typed client messages
 function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
     switch (message.type) {
-        case 'request':
-            if (message.request === 'layout') {
+        case "request":
+            if (message.request === "layout") {
                 sendLayout(socket)
-            } else if (message.request === 'strips') {
+            } else if (message.request === "strips") {
                 sendStrips(socket)
                 sendGaps(socket)
-            } else if (message.request === 'refresh') {
-                sendUdp(JSON.stringify({ type: 'refresh' }))
+            } else if (message.request === "refresh") {
+                sendUdp(JSON.stringify({ type: "refresh" }))
             }
             break
 
-        case 'moveStrip': {
+        case "moveStrip": {
             // Get the strip before moving to capture source section
             const stripBefore = store.getStrip(message.stripId)
             const fromSectionId = stripBefore?.sectionId
@@ -407,19 +418,19 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 message.targetBayId,
                 message.targetSectionId,
                 message.position,
-                message.isBottom
+                message.isBottom,
             )
             if (result) {
                 // Broadcast the moved strip
                 broadcastStrip(result.strip, socket)
 
                 // Broadcast affected gaps
-                result.affectedGaps.forEach(gap => {
+                result.affectedGaps.forEach((gap) => {
                     broadcastGap(gap, socket)
                 })
 
                 // Broadcast deleted gaps
-                result.deletedGapKeys.forEach(key => {
+                result.deletedGapKeys.forEach((key) => {
                     const parsed = parseGapKey(key)
                     if (parsed) {
                         broadcastGapDelete(parsed.bayId, parsed.sectionId, parsed.index, socket)
@@ -428,22 +439,27 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 // Evaluate move rules if section changed
                 if (fromSectionId && fromSectionId !== message.targetSectionId) {
-                    console.log(`Strip ${message.stripId} dragged from ${fromSectionId} to ${message.targetSectionId} (bottom: ${message.isBottom})`)
+                    console.log(
+                        `Strip ${message.stripId} dragged from ${fromSectionId} to ${message.targetSectionId} (bottom: ${message.isBottom})`,
+                    )
 
                     const flight = flightStore.getFlight(result.strip.callsign)
                     if (flight) {
-                        const moveAction = determineMoveAction(
-                            flight,
-                            fromSectionId,
-                            message.targetSectionId,
-                            staticConfig
-                        )
+                        const moveAction = determineMoveAction(flight, fromSectionId, message.targetSectionId, staticConfig)
                         if (moveAction) {
-                            console.log(`[MOVE ACTION] ${result.strip.callsign}: ${formatEuroscopeCommand(moveAction.command)} (rule: ${moveAction.ruleId})`)
-                            if (moveAction.command.type === 'setGroundstate') {
-                                sendUdp(JSON.stringify({ type: 'setGroundState', callsign: result.strip.callsign, state: moveAction.command.value }))
-                            } else if (moveAction.command.type === 'setClearedToLand') {
-                                sendUdp(JSON.stringify({ type: 'setClearedToLand', callsign: result.strip.callsign }))
+                            console.log(
+                                `[MOVE ACTION] ${result.strip.callsign}: ${formatEuroscopeCommand(moveAction.command)} (rule: ${moveAction.ruleId})`,
+                            )
+                            if (moveAction.command.type === "setGroundstate") {
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "setGroundState",
+                                        callsign: result.strip.callsign,
+                                        state: moveAction.command.value,
+                                    }),
+                                )
+                            } else if (moveAction.command.type === "setClearedToLand") {
+                                sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: result.strip.callsign }))
                             } else {
                                 console.log("Unimplemented move command")
                             }
@@ -456,7 +472,7 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
-        case 'setGap': {
+        case "setGap": {
             const result = store.setGap(message.bayId, message.sectionId, message.index, message.gapSize)
             if (result.deleted) {
                 broadcastGapDelete(message.bayId, message.sectionId, message.index, socket)
@@ -468,7 +484,7 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
-        case 'setSectionHeight': {
+        case "setSectionHeight": {
             const result = store.setSectionHeight(message.bayId, message.sectionId, message.height)
             if (result && result.changed) {
                 broadcastSection(message.bayId, result.section, socket)
@@ -477,7 +493,7 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
-        case 'stripAction': {
+        case "stripAction": {
             const strip = store.getStrip(message.stripId)
             if (strip) {
                 console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
@@ -493,23 +509,30 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
-        case 'stripAssign': {
+        case "stripAssign": {
             const strip = store.getStrip(message.stripId)
             if (strip) {
                 console.log(`[ASSIGN] ${message.assignType} = "${message.value}" on ${strip.callsign}`)
                 let pluginCommand: OutboundPluginCommand | null = null
                 switch (message.assignType) {
-                    case 'assignDepartureRunway':
-                        pluginCommand = { type: 'assignDepartureRunway', callsign: strip.callsign, runway: message.value }
+                    case "assignDepartureRunway":
+                        pluginCommand = { type: "assignDepartureRunway", callsign: strip.callsign, runway: message.value }
                         break
-                    case 'assignSid':
-                        pluginCommand = { type: 'assignSid', callsign: strip.callsign, sid: message.value }
+                    case "assignSid":
+                        if (message.value) {
+                            pluginCommand = { type: "assignSid", callsign: strip.callsign, sid: message.value }
+                            const sidAlt = getSidAltitude(strip.adep, message.value)
+                            if (sidAlt !== undefined) {
+                                sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
+                                console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
+                            }
+                        }
                         break
-                    case 'assignHeading':
-                        pluginCommand = { type: 'assignHeading', callsign: strip.callsign, heading: parseInt(message.value, 10) || 0 }
+                    case "assignHeading":
+                        pluginCommand = { type: "assignHeading", callsign: strip.callsign, heading: parseInt(message.value, 10) || 0 }
                         break
-                    case 'assignCfl':
-                        pluginCommand = { type: 'assignCfl', callsign: strip.callsign, altitude: parseInt(message.value, 10) || 0 }
+                    case "assignCfl":
+                        pluginCommand = { type: "assignCfl", callsign: strip.callsign, altitude: parseInt(message.value, 10) || 0 }
                         break
                 }
                 if (pluginCommand) {
@@ -521,7 +544,7 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
-        case 'deleteStrip': {
+        case "deleteStrip": {
             const deletedId = store.manualDeleteStrip(message.stripId)
             if (deletedId) {
                 broadcastStripDelete(deletedId, socket)
@@ -531,7 +554,6 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
-
     }
 }
 
@@ -604,7 +626,7 @@ app.get("/api/onrunway", (req, res) => {
     if (isNaN(lat) || isNaN(lon) || isNaN(alt) || !airport) {
         res.status(400).json({
             error: "Missing or invalid parameters",
-            usage: "/api/onrunway?lat=<lat>&lon=<lon>&alt=<alt>&airport=<ICAO>&runway=<optional>"
+            usage: "/api/onrunway?lat=<lat>&lon=<lon>&alt=<alt>&airport=<ICAO>&runway=<optional>",
         })
         return
     }
@@ -662,7 +684,7 @@ app.get("/api/withinctr", (req, res) => {
     if (isNaN(lat) || isNaN(lon) || isNaN(alt)) {
         res.status(400).json({
             error: "Missing or invalid parameters",
-            usage: "/api/withinctr?lat=<lat>&lon=<lon>&alt=<altMsl>"
+            usage: "/api/withinctr?lat=<lat>&lon=<lon>&alt=<altMsl>",
         })
         return
     }
@@ -705,19 +727,19 @@ udpIn.on("message", (msg, rinfo) => {
         const data = JSON.parse(text)
 
         // Handle connectionTypeUpdate - connection type 0 means logged off
-        if (data.type === 'connectionTypeUpdate' && data.connectionType === 0) {
-            console.log('Connection lost (connectionType 0), clearing stores')
+        if (data.type === "connectionTypeUpdate" && data.connectionType === 0) {
+            console.log("Connection lost (connectionType 0), clearing stores")
             store.clear()
-            setMyCallsign('')
+            setMyCallsign("")
             setMyAirports([])
             setIsController(false)
             broadcastStatus()
-            broadcastRefresh('Connection lost')
+            broadcastRefresh("Connection lost")
             return
         }
 
         // Handle myselfUpdate to set our callsign and discover airports
-        if (data.type === 'myselfUpdate') {
+        if (data.type === "myselfUpdate") {
             const msg = data as MyselfUpdateMessage
             const previousCallsign = staticConfig.myCallsign
             const callsignChanged = previousCallsign !== msg.callsign
@@ -733,19 +755,23 @@ udpIn.on("message", (msg, rinfo) => {
             // Checks both airport-level flags and runway-level flags
             if (msg.rwyconfig) {
                 const discoveredAirports: string[] = []
+                // Check airport-level flags first
                 for (const airport of Object.keys(msg.rwyconfig)) {
                     const airportData = msg.rwyconfig[airport]
-                    // Check airport-level flags first
                     if (airportData.arr || airportData.dep) {
                         discoveredAirports.push(airport)
-                        continue
                     }
-                    // Fall back to checking runway-level flags
-                    for (const key of Object.keys(airportData)) {
-                        const val = airportData[key]
-                        if (typeof val === 'object' && val !== null && (val.arr || val.dep)) {
-                            discoveredAirports.push(airport)
-                            break
+                }
+                // Fall back to checking runway-level flags
+                if (discoveredAirports.length == 0) {
+                    for (const airport of Object.keys(msg.rwyconfig)) {
+                        const airportData = msg.rwyconfig[airport]
+                        for (const key of Object.keys(airportData)) {
+                            const val = airportData[key]
+                            if (typeof val === "object" && val !== null && (val.arr || val.dep)) {
+                                discoveredAirports.push(airport)
+                                break
+                            }
                         }
                     }
                 }
@@ -754,13 +780,13 @@ udpIn.on("message", (msg, rinfo) => {
                     const airportsChanged = JSON.stringify(previousAirports.sort()) !== JSON.stringify(discoveredAirports.sort())
 
                     setMyAirports(discoveredAirports)
-                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${discoveredAirports.join(', ')}`)
+                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${discoveredAirports.join(", ")}`)
 
                     // If airports changed, we need to refresh
                     if (airportsChanged && previousAirports.length > 0) {
                         console.log(`Airports changed, clearing store`)
                         store.clear()
-                        broadcastRefresh(`Airports changed to ${discoveredAirports.join(', ')}`)
+                        broadcastRefresh(`Airports changed to ${discoveredAirports.join(", ")}`)
                     }
                 }
             }

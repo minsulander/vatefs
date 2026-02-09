@@ -1,17 +1,13 @@
 Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
-- Kolla hur ES/TopSky gör när man 
-  a. bara ändrar bana (clears sid? vad skriver den i route?)
-  b. ändrar SID gällande bana
-  c. ändrar SID och bana
-Implementera motsv funktionalitet som .efs kommandon... testa.
-
 - DCL/PDC - gå direkt på hoppie? Ja förmodligen.
   Inspiration: https://github.com/pierr3/vSMR
 
 ---
 
-- Context menu kunna backa states
+- Context menu kunna backa states (onödigt? kan ju flytta)
+
+- Fler move actions (se ovan mm)
 
 - Hantera flera FL positioner:
   - XFER istför LU/CTO om jag är GND
