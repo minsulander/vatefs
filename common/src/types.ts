@@ -60,6 +60,9 @@ export interface FlightStrip {
     dclMessage?: string           // Original pilot request text
     dclClearance?: string         // Filled-out clearance template for preview
 
+    // Transfer frequency (shown on XFER button when handoff target matches next controller)
+    xferFrequency?: string
+
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)

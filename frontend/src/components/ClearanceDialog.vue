@@ -39,9 +39,13 @@
       </div>
 
       <div class="clnc-actions" v-if="strip.dclStatus === 'REQUEST'">
+        <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
         <button class="clnc-btn clnc-btn-reject" @click="onReject">Reject</button>
-        <button class="clnc-btn clnc-btn-ok" :disabled="okDisabled" @click="onOk">OK</button>
         <button class="clnc-btn clnc-btn-send" :disabled="!canSendDcl" @click="onSend">Send</button>
+      </div>
+      <div class="clnc-actions" v-else-if="strip.dclStatus === 'SENT'">
+        <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
+        <button class="clnc-btn clnc-btn-reject" @click="onReject">Reject</button>
       </div>
       <div class="clnc-actions" v-else>
         <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>

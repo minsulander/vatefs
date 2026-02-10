@@ -415,6 +415,7 @@ class FlightStore {
         if (message.controller !== undefined) flight.controller = message.controller
         if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
         if (message.nextController !== undefined) flight.nextController = message.nextController
+        if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         flight.lastUpdate = Date.now()
 
         // Check if we should create/update a strip
@@ -517,6 +518,7 @@ class FlightStore {
         if (message.controller !== undefined) flight.controller = message.controller
         if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
         if (message.nextController !== undefined) flight.nextController = message.nextController
+        if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
         if (message.groundSpeed !== undefined) flight.groundSpeed = message.groundSpeed
@@ -540,7 +542,6 @@ class FlightStore {
         // Set airborne flag for both departures and arrivals
         if (!wasAirborne && isNowAirborne) {
             flight.airborne = true
-            console.log(`Flight ${callsign} is now airborne (alt: ${message.altitude}ft)`)
         } else if (wasAirborne && !isNowAirborne) {
             // Aircraft has landed
             flight.airborne = false
@@ -724,6 +725,13 @@ class FlightStore {
             // If tracked by someone else (not us, not handoff to us) - no actions
         }
 
+        // Transfer frequency: show when handoff target matches next controller
+        let xferFrequency: string | undefined
+        if (flight.nextControllerFrequency && flight.nextController && flight.handoffTargetController &&
+            flight.nextController === flight.handoffTargetController) {
+            xferFrequency = flight.nextControllerFrequency.toFixed(3)
+        }
+
         // Can reset squawk if we're a controller and we track the flight (or it's untracked)
         const canResetSquawk = this.config.isController === true && (isTrackedByMe || isUntracked)
 
@@ -761,6 +769,7 @@ class FlightStore {
             clearedForTakeoff,
             clearedToLand,
             canEditClearance: canEditClearance || undefined,
+            xferFrequency,
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance

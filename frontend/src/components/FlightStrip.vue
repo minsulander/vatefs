@@ -111,6 +111,7 @@
         :class="actionButtonClass(action)"
         @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
         <span class="action-text">{{ action }}</span>
+        <span v-if="action === 'XFER' && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
       </button>
     </div>
   </div>
@@ -901,6 +902,19 @@ function onDeleteConfirm() {
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
+}
+
+.action-freq {
+  font-size: 7px;
+  font-weight: 600;
+  color: #555;
+  line-height: 1;
+}
+
+.action-button:has(.action-freq) {
+  flex-direction: column;
+  gap: 0px;
+  padding: 1px 2px;
 }
 
 /* DCL status coloring for CLNC button */

@@ -34,6 +34,7 @@ export interface Flight {
     controller?: string       // Tracking controller callsign
     handoffTargetController?: string  // Controller receiving handoff (if any)
     nextController?: string       // Next controller callsign
+    nextControllerFrequency?: number // Next controller frequency
     squawk?: string
     rfl?: number              // Requested/Final flight level (feet)
     cfl?: number              // Cleared flight level (feet), 0=use RFL, 1=ILS, 2=visual
@@ -113,6 +114,7 @@ export interface FlightPlanDataUpdateMessage {
     controller?: string
     handoffTargetController?: string
     nextController?: string
+    nextControllerFrequency?: number // Next controller frequency
 }
 
 export interface ControllerAssignedDataUpdateMessage {
@@ -182,6 +184,7 @@ export interface RadarTargetPositionUpdateMessage {
     controller?: string
     handoffTargetController?: string
     nextController?: string
+    nextControllerFrequency?: number // Next controller frequency
     ete?: number
     altitude: number      // Current altitude in feet
     groundSpeed?: number  // Ground speed in knots (optional)

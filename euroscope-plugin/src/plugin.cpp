@@ -108,16 +108,21 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             if (strlen(trackingController) > 0) out << " controller " << trackingController;
             SetJsonIfValidUtf8(message, "controller", trackingController);
         }
+        const char *nextController = FlightPlan.GetCoordinatedNextController();
+        if (nextController && strlen(nextController) < 20) {
+            if (strlen(nextController) > 0) out << " nextController " << nextController;
+            SetJsonIfValidUtf8(message, "nextController", nextController);
+            auto nextCon = ControllerSelect(nextController);
+            if (nextCon && nextCon.IsValid())
+                message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
+            else
+                message["nextControllerFrequency"] = 0;
+        }
         const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
         if (handoffTargetController && strlen(handoffTargetController) < 20) {
             if (strlen(handoffTargetController) > 0)
                 out << " handoffTargetController " << handoffTargetController;
             SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
-        }
-        const char *nextController = FlightPlan.GetCoordinatedNextController();
-        if (nextController && strlen(nextController) < 20) {
-            if (strlen(nextController) > 0) out << " nextController " << nextController;
-            SetJsonIfValidUtf8(message, "nextController", nextController);
         }
 
         const char *aircraftType = fpData.GetAircraftFPType();
@@ -468,13 +473,18 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         if (trackingCallsign && strlen(trackingCallsign) < 20) {
             SetJsonIfValidUtf8(message, "controller", trackingCallsign);
         }
-        const char *handoffTargetController = fp.GetHandoffTargetControllerCallsign();
-        if (handoffTargetController && strlen(handoffTargetController) < 20) {
-            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
-        }
         const char *nextController = fp.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
             SetJsonIfValidUtf8(message, "nextController", nextController);
+            auto nextCon = ControllerSelect(nextController);
+            if (nextCon && nextCon.IsValid())
+                message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
+            else
+                message["nextControllerFrequency"] = 0;
+        }
+        const char *handoffTargetController = fp.GetHandoffTargetControllerCallsign();
+        if (handoffTargetController && strlen(handoffTargetController) < 20) {
+            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
         }
         int ete = fp.GetPositionPredictions().GetPointsNumber();
         if (ete >= 0 && ete <= 3600) { // Reasonable ETE range

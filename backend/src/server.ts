@@ -673,6 +673,9 @@ function handleCpdlcResponse(from: string, packet: string) {
         console.log(`[DCL] WILCO from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "DONE"
 
+        // End fast polling since we got the response
+        hoppieService?.endFastPoll()
+
         // Send confirmation
         if (hoppieService) {
             const seq = hoppieService.getNextSeq()
@@ -695,6 +698,9 @@ function handleCpdlcResponse(from: string, packet: string) {
     } else if (response!.toUpperCase() === "UNABLE") {
         console.log(`[DCL] UNABLE from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "UNABLE"
+
+        // End fast polling since we got the response
+        hoppieService?.endFastPoll()
 
         // Regenerate and broadcast strip
         const strip = flightStore.regenerateStrip(flight.callsign)

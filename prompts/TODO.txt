@@ -1,19 +1,15 @@
-Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
-
-- DCL/PDC - gå direkt på hoppie? Ja förmodligen.
-  Inspiration: https://github.com/pierr3/vSMR
-
----
 
 - Context menu kunna backa states (onödigt? kan ju flytta)
 
-- Fler move actions (se ovan mm)
+- Fler move actions (se ovan mm), lista vilka
+
+- Generell automove rule att om jag flyttat en strip manuellt får den inte flytta tillbaka till den jag flyttade från
 
 - Hantera flera FL positioner:
   - XFER istför LU/CTO om jag är GND
   - XFER istför TXI om jag är TWR+ och GND online
   - READY istför PUSH om jag är DEL (DE-ICE + XFER)
-  - inte CTL om jag är GND
+  - inte CTL, LU, CTO om jag är GND/DEL
   - inte ASSUME om jag är GND och airborne
   - inte ASSUME om jag är GND, DEL online och groundstate < DE-ICE
 
@@ -23,15 +19,9 @@ Att utreda hur EFS-pluginen kan göra i EuroScope (potentiella showstoppers!):
 
 - Inte visa ASSUME på avgående i CTR DEP efter XFER
 
-- Visa frekvens på XFER
-
-- Om arrRwy eller depRwy inte är satt, visa den som är aktiv i rwyconfig
-
 
 
 Actions:
-- Ändra SID (SA bana 08, prop/slow)
-- Ändra CFL
 - Sätta RMK/OPTEXT2
 
 Vidare i livet:
@@ -41,7 +31,7 @@ Vidare i livet:
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
-- (låg prio / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
+- (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
 
 
 Tekniskt / icke-funktionellt:

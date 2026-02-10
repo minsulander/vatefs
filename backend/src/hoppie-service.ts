@@ -3,6 +3,9 @@ const HOPPIE_STATUS_URL = "https://www.hoppie.nl/acars/system/status.html"
 const HTTP_TIMEOUT = 15000
 const POLL_MIN_MS = 45000
 const POLL_MAX_MS = 75000
+const FAST_POLL_MIN_MS = 20000
+const FAST_POLL_MAX_MS = 25000
+const FAST_POLL_DURATION_MS = 5 * 60 * 1000 // 5 minutes
 
 export type DclStatus = "available" | "connected" | "error" | "unavailable"
 
@@ -21,6 +24,7 @@ export class HoppieService {
     private pdcCounter = 0
     private onMessage: (from: string, type: string, packet: string) => void
     private onStatusChange: (status: DclStatus, error?: string) => void
+    private fastPollUntil: number = 0 // timestamp when fast polling expires
 
     constructor(
         logonCode: string,
@@ -42,7 +46,8 @@ export class HoppieService {
             if (response.startsWith("ok")) {
                 this.connected = true
                 this.onStatusChange("connected")
-                this.schedulePoll()
+                // Poll immediately to pick up any pending messages
+                this.poll()
                 console.log(`[HOPPIE] Logged in as ${this.callsign}`)
                 return true
             } else {
@@ -84,7 +89,27 @@ export class HoppieService {
 
     async sendMessage(to: string, type: string, packet: string): Promise<string> {
         console.log(`[HOPPIE] Sending ${type} to ${to}: ${packet}`)
-        return this.sendRequest(to, type, packet)
+        const result = await this.sendRequest(to, type, packet)
+
+        // Enable fast polling for messages expecting a response (WILCO/UNABLE)
+        if (type === "cpdlc" && /\/(WU|AN|R)\//.test(packet)) {
+            this.fastPollUntil = Date.now() + FAST_POLL_DURATION_MS
+            console.log(`[HOPPIE] Fast polling enabled for 5 minutes (expecting response)`)
+            // Reschedule with shorter interval
+            this.schedulePoll()
+        }
+
+        return result
+    }
+
+    /**
+     * End fast polling mode (called when expected response is received).
+     */
+    endFastPoll(): void {
+        if (this.fastPollUntil > 0) {
+            this.fastPollUntil = 0
+            console.log(`[HOPPIE] Fast polling ended (response received)`)
+        }
     }
 
     private async sendRequest(to: string, type: string, packet: string): Promise<string> {
@@ -144,7 +169,16 @@ export class HoppieService {
         if (this.pollTimer) {
             clearTimeout(this.pollTimer)
         }
-        const interval = POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS)
+        // Use fast polling if active and not expired
+        const useFast = this.fastPollUntil > Date.now()
+        if (!useFast && this.fastPollUntil > 0) {
+            // Fast poll period expired
+            this.fastPollUntil = 0
+            console.log(`[HOPPIE] Fast polling expired (5 min timeout)`)
+        }
+        const minMs = useFast ? FAST_POLL_MIN_MS : POLL_MIN_MS
+        const maxMs = useFast ? FAST_POLL_MAX_MS : POLL_MAX_MS
+        const interval = minMs + Math.random() * (maxMs - minMs)
         this.pollTimer = setTimeout(() => this.poll(), interval)
     }
 
