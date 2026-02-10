@@ -1,7 +1,6 @@
 import express from "express"
 import path from "path"
 import fs from "fs"
-import { fileURLToPath } from "url"
 import logRequests from "morgan"
 import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
@@ -44,8 +43,7 @@ import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+// __filename and __dirname are provided by esbuild's CJS output
 
 // Data directory path (relative to backend root when running from src/)
 const dataDir = path.resolve(__dirname, "../../data")

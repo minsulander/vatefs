@@ -1,4 +1,4 @@
-# VatEFS Configuration for ESGG (Gothenburg)
+# VatEFS Configuration for single runway, 4 bays, kind like at ESGG (Gothenburg)
 # Note: Airports are discovered at runtime from EuroScope's rwyconfig
 # or can be set via --airport CLI argument
 

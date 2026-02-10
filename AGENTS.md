@@ -64,7 +64,7 @@ The backend:
 - Sends UDP messages on port 17772 (to EuroScope)
 
 Command-line arguments:
-- `--config FILE` - Load configuration from YAML file (default: `data/config/ESGG.yml`)
+- `--config FILE` - Load configuration from YAML file (default: `data/config/singlerwy4bays.yml`)
 - `--callsign CALLSIGN` - Override controller callsign (normally comes from EuroScope myselfUpdate)
 - `--record FILE` - Record UDP messages to file for playback
 - `--mock` - Load mock flight data for testing without EuroScope
@@ -153,11 +153,11 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 ### Data Files
 - `data/airports.csv` - Airport database with ICAO codes, coordinates, elevations
 - `data/runways.csv` - Runway database with headings, dimensions, thresholds
-- `data/config/ESGG.yml` - Default configuration for ESGG (Gothenburg)
+- `data/config/singlerwy4bays.yml` - Default configuration for ESGG (Gothenburg)
 
 ### Configuration Files (YAML)
 
-Configuration is loaded from YAML files in `data/config/`. The default is `ESGG.yml`.
+Configuration is loaded from YAML files in `data/config/`. The default is `singlerwy4bays.yml`.
 
 ```yaml
 airports:

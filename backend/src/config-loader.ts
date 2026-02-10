@@ -157,5 +157,5 @@ export function loadConfig(configPath: string): EfsStaticConfig {
  * Get default config path
  */
 export function getDefaultConfigPath(dataDir: string): string {
-    return `${dataDir}/config/ESGG.yml`
+    return `${dataDir}/config/singlerwy4bays.yml`
 }
