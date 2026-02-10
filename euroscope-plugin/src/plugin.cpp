@@ -113,7 +113,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             if (strlen(nextController) > 0) out << " nextController " << nextController;
             SetJsonIfValidUtf8(message, "nextController", nextController);
             auto nextCon = ControllerSelect(nextController);
-            if (nextCon && nextCon.IsValid())
+            if (nextCon.IsValid())
                 message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
             else
                 message["nextControllerFrequency"] = 0;
@@ -477,7 +477,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         if (nextController && strlen(nextController) < 20) {
             SetJsonIfValidUtf8(message, "nextController", nextController);
             auto nextCon = ControllerSelect(nextController);
-            if (nextCon && nextCon.IsValid())
+            if (nextCon.IsValid())
                 message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
             else
                 message["nextControllerFrequency"] = 0;
@@ -500,7 +500,9 @@ EuroScopePlugIn::CRadarScreen *VatEFSPlugin::OnRadarScreenCreated(const char *sD
                                                                   bool CanBeSaved,
                                                                   bool CanBeCreated)
 {
-    DebugMessage("RadarScreenCreated " + std::string(sDisplayName));
+    std::stringstream out;
+    out << "RadarScreenCreated " << sDisplayName << " " << NeedRadarContent << " " << GeoReferenced << " " << CanBeSaved << " " << CanBeCreated;
+    DebugMessage(out.str());
     auto dummyRadarScreen = new DummyRadarScreen(this);
     dummyRadarScreens.push_back(dummyRadarScreen);
     return dummyRadarScreen;

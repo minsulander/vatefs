@@ -35,7 +35,8 @@ Vidare i livet:
 
 
 Tekniskt / icke-funktionellt:
-- Nåt sätt att ladda config osv.
+- Nåt sätt att välja/ladda config osv.
 - Smidig paketering.
-
+- Refactor plugin, extrahera metoder, ta bort testkommandon
+- Bättre bygge, inte behöva manuellt bygga common först
 

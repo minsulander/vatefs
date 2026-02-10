@@ -48,3 +48,11 @@ Let's make sure the weird characters in the VFR SIDs don't mess up sending fligh
 ...
 
 When opening up the clearance dialog, the default CFL for the default SID should be set if no CFL is set.
+
+Let's update the condition for the OK button in the clearance dialog being disabled. It should be disabled if:
+- the flight is assumed by someone other than me (controller=not myself)
+- I'm not a controller (myself.controller=false)
+
+But it should NOT be disabled if:
+- the flight is free/not assumed (controller="")
+- the flight is assumed by me
