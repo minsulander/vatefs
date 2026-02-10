@@ -9,7 +9,8 @@ export type {
     Section,
     Bay,
     EfsLayout,
-    Gap
+    Gap,
+    AirportAtisInfo
 } from "./types.js"
 
 // WebSocket API messages
@@ -24,6 +25,7 @@ export type {
     StatusMessage,
     DclStatusMessage,
     HoppieMessage,
+    AtisUpdateMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,

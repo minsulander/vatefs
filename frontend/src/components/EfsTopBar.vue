@@ -3,9 +3,25 @@
     <v-app-bar color="#2b2d31" height="25" elevation="0" class="efs-top-bar text-body-2 text-grey">
       <!-- Refresh button -->
       <v-btn variant="text" icon="mdi-refresh" size="small" class="text-grey" @click="efs.refresh()" title="Refresh"></v-btn>
-      <!-- Callsign and airports -->
+      <!-- Callsign -->
       <span class="text-grey ml-1">{{ efs.myCallsign || 'NOT CONNECTED' }}</span>
-      <span v-if="efs.displayAirports.length > 0" class="text-grey-darken-1 ml-2">
+      <!-- ATIS per airport -->
+      <span v-for="info in atisDisplayItems" :key="info.airport" class="ml-3" style="font-family: monospace; letter-spacing: 0.5px;">
+        <span class="text-grey-darken-1">{{ info.airport }}</span>
+        <template v-if="info.split">
+          <span class="text-amber ml-1">{{ info.arrAtis || '-' }}</span>
+          <span class="text-grey-darken-2 ml-1">{{ info.arrRunways }}</span>
+          <span class="text-cyan ml-1">{{ info.depAtis || '-' }}</span>
+          <span class="text-grey-darken-2 ml-1">{{ info.depRunways }}</span>
+        </template>
+        <template v-else>
+          <span class="text-amber ml-1">{{ info.atis || '-' }}</span>
+          <span class="text-grey-darken-2 ml-1">{{ info.runways }}</span>
+        </template>
+        <span class="text-grey ml-1">{{ info.qnh || '-' }}</span>
+      </span>
+      <!-- Fallback: show airports without ATIS data -->
+      <span v-if="atisDisplayItems.length === 0 && efs.displayAirports.length > 0" class="text-grey-darken-1 ml-2">
         {{ efs.displayAirports.join(' ') }}
       </span>
       <v-btn
@@ -40,6 +56,47 @@ import { useEfsStore } from "../store/efs"
 
 const efs = useEfsStore()
 const fullscreen = ref(window.innerHeight == screen.height)
+
+interface AtisDisplayItem {
+  airport: string
+  split: boolean
+  atis?: string
+  arrAtis?: string
+  depAtis?: string
+  runways?: string       // combined arr+dep runways for non-split
+  arrRunways?: string    // arrival runways for split
+  depRunways?: string    // departure runways for split
+  qnh?: string
+}
+
+const atisDisplayItems = computed((): AtisDisplayItem[] => {
+  return efs.atisInfo.map((info) => {
+    const isSplit = !!(info.arrAtis || info.depAtis)
+    const qnh = info.qnh ? String(info.qnh) : undefined
+
+    if (isSplit) {
+      return {
+        airport: info.airport,
+        split: true,
+        arrAtis: info.arrAtis,
+        depAtis: info.depAtis,
+        arrRunways: info.arrRunways.join('/') || '-',
+        depRunways: info.depRunways.join('/') || '-',
+        qnh,
+      }
+    }
+
+    // Combine runways: show dep runways (they typically match arr for single-runway ops)
+    const allRunways = [...new Set([...info.depRunways, ...info.arrRunways])]
+    return {
+      airport: info.airport,
+      split: false,
+      atis: info.atis,
+      runways: allRunways.join('/') || '-',
+      qnh,
+    }
+  })
+})
 
 const dclTooltip = computed(() => {
   switch (efs.dclStatus) {

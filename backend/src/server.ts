@@ -19,13 +19,15 @@ import type {
     StatusMessage,
     DclStatusMessage,
     HoppieMessage,
+    AtisUpdateMessage,
     ServerMessage,
     ClientMessage,
+    AirportAtisInfo,
 } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, staticConfig, determineMoveAction, applyConfig } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
@@ -39,6 +41,7 @@ import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
 import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
+import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
 
 const __filename = fileURLToPath(import.meta.url)
@@ -258,6 +261,9 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
     }
 }
 
+// ATIS polling service (declared early to avoid temporal dead zone in mock init)
+let atisService: AtisService | null = null
+
 // Initialize store (with mock data if --mock flag is set)
 if (cliArgs.mock) {
     // Apply mock myselfUpdate to set callsign and airports
@@ -268,7 +274,17 @@ if (cliArgs.mock) {
     }
     setIsController(mockMyselfUpdate.controller)
     setMyFrequency(mockMyselfUpdate.frequency)
+
+    // Extract active runways from mock rwyconfig
+    if (mockMyselfUpdate.rwyconfig) {
+        const activeRunways = extractActiveRunways(mockMyselfUpdate.rwyconfig as Record<string, Record<string, unknown>>)
+        setActiveRunways(activeRunways)
+    }
+
     console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(", ")})`)
+
+    // Start ATIS polling for mock mode
+    startAtisService()
 }
 store.loadMockData(cliArgs.mock ?? false)
 
@@ -343,6 +359,89 @@ function broadcastStatus() {
         airports: staticConfig.myAirports,
     }
     broadcast(message)
+}
+
+/**
+ * Extract active runway identifiers per airport from rwyconfig.
+ * Each rwyconfig entry like { "21": { arr: true, dep: true } } yields { arr: ["21"], dep: ["21"] }.
+ */
+function extractActiveRunways(rwyconfig: Record<string, Record<string, unknown>>): Record<string, { arr: string[]; dep: string[] }> {
+    const result: Record<string, { arr: string[]; dep: string[] }> = {}
+    for (const airport of Object.keys(rwyconfig)) {
+        const arr: string[] = []
+        const dep: string[] = []
+        const airportData = rwyconfig[airport]
+        for (const key of Object.keys(airportData)) {
+            const val = airportData[key]
+            if (typeof val === "object" && val !== null) {
+                const rwy = val as { arr?: boolean; dep?: boolean }
+                if (rwy.arr) arr.push(key)
+                if (rwy.dep) dep.push(key)
+            }
+        }
+        result[airport] = { arr, dep }
+    }
+    return result
+}
+
+/**
+ * Build AirportAtisInfo array from AtisService cache + activeRunways.
+ */
+function buildAtisInfo(): AirportAtisInfo[] {
+    const airports = staticConfig.myAirports
+    const runways = staticConfig.activeRunways ?? {}
+    const result: AirportAtisInfo[] = []
+
+    for (const airport of airports) {
+        const rwy = runways[airport] ?? { arr: [], dep: [] }
+        if (airport === "ESSA" && atisService) {
+            const essa = atisService.getEssaAtis()
+            result.push({
+                airport,
+                arrAtis: essa.arrLetter,
+                depAtis: essa.depLetter,
+                qnh: essa.qnh,
+                arrRunways: rwy.arr,
+                depRunways: rwy.dep,
+            })
+        } else {
+            const atis = atisService?.getAtis(airport) ?? {}
+            result.push({
+                airport,
+                atis: atis.letter,
+                qnh: atis.qnh,
+                arrRunways: rwy.arr,
+                depRunways: rwy.dep,
+            })
+        }
+    }
+    return result
+}
+
+function sendAtisUpdate(socket: WebSocket) {
+    const message: AtisUpdateMessage = { type: "atisUpdate", airports: buildAtisInfo() }
+    sendMessage(socket, message)
+}
+
+function broadcastAtisUpdate() {
+    const message: AtisUpdateMessage = { type: "atisUpdate", airports: buildAtisInfo() }
+    broadcast(message)
+}
+
+/**
+ * Start (or restart) the ATIS service for the current airports.
+ */
+function startAtisService() {
+    if (atisService) {
+        atisService.stop()
+    }
+    if (staticConfig.myAirports.length === 0) return
+
+    atisService = new AtisService({
+        onUpdate: () => broadcastAtisUpdate(),
+    })
+    atisService.start(staticConfig.myAirports)
+    console.log(`ATIS polling started for: ${staticConfig.myAirports.join(", ")}`)
 }
 
 // Hoppie DCL service state
@@ -437,6 +536,21 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
         }
     }
 
+    // Get real ATIS data for the departure airport
+    let atisStr = "NA"
+    let qnhStr = "NA"
+    if (flight.origin && atisService) {
+        if (flight.origin === "ESSA") {
+            const essa = atisService.getEssaAtis()
+            if (essa.depLetter) atisStr = essa.depLetter
+            if (essa.qnh) qnhStr = String(essa.qnh)
+        } else {
+            const atis = atisService.getAtis(flight.origin)
+            if (atis.letter) atisStr = atis.letter
+            if (atis.qnh) qnhStr = String(atis.qnh)
+        }
+    }
+
     return {
         ades: flight.destination ?? "????",
         drwy: flight.depRwy ?? "---",
@@ -446,8 +560,8 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
         cfl: cflStr,
         freq_own: freqStr,
         freq_next: freqStr, // Same frequency for now
-        atis: "A",          // Hardcoded for now
-        qnh: "1013",        // Hardcoded for now
+        atis: atisStr,
+        qnh: qnhStr,
         rmk: remarks,
     }
 }
@@ -1068,6 +1182,7 @@ wsServer.on("connection", (socket) => {
     sendGaps(socket)
     sendStatus(socket)
     sendDclStatus(socket)
+    sendAtisUpdate(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -1246,6 +1361,12 @@ udpIn.on("message", (msg, rinfo) => {
                 hoppieService = null
             }
             updateDclStatus("unavailable")
+
+            // Stop ATIS polling
+            if (atisService) {
+                atisService.stop()
+                atisService = null
+            }
             return
         }
 
@@ -1305,6 +1426,13 @@ udpIn.on("message", (msg, rinfo) => {
                         broadcastRefresh(`Airports changed to ${discoveredAirports.join(", ")}`)
                     }
                 }
+
+                // Extract active runways per airport
+                const activeRunways = extractActiveRunways(msg.rwyconfig as Record<string, Record<string, unknown>>)
+                setActiveRunways(activeRunways)
+
+                // Start/restart ATIS polling
+                startAtisService()
             }
 
             // Broadcast updated status to all clients

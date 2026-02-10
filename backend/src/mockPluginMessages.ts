@@ -210,7 +210,8 @@ export const mockPluginMessages: PluginMessage[] = [
         rfl: 36000,
         depRwy: '21',
         sid: 'KAJAN1D',
-        route: 'KAJAN L610 SILVA'
+        route: 'KAJAN L610 SILVA',
+        eobt: '1234'
     }),
     ctrUpdate('SAS462', {
         squawk: '1567',

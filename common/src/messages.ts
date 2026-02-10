@@ -1,6 +1,6 @@
 // WebSocket API message types
 
-import type { EfsLayout, FlightStrip, Gap, Section } from "./types.js"
+import type { AirportAtisInfo, EfsLayout, FlightStrip, Gap, Section } from "./types.js"
 
 // Server -> Client messages
 
@@ -61,7 +61,12 @@ export interface HoppieMessage {
     packet: string
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage
+export interface AtisUpdateMessage {
+    type: 'atisUpdate'
+    airports: AirportAtisInfo[]
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage
 
 // Client -> Server messages
 
@@ -142,7 +147,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
-           type === 'hoppieMessage'
+           type === 'hoppieMessage' || type === 'atisUpdate'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {

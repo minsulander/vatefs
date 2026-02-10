@@ -81,3 +81,8 @@ Pressing Cancel does the same as without DCL (clearing the clearance flag if it 
 
 Ok, that's quite a few things. Plan, make a TODO-list, update CLAUDE.md when done. My plan is to test this manually with
 some manual messaging on the Hoppie network.
+
+...
+
+To test the DCL flow without being online in ES... when in --mock mode, when I select rwy, SID, ahdg, CFL, ASSR, the backend needs to    
+locally update (without ES plugin roundtrip) so that we can set the values.                                                               

@@ -87,3 +87,13 @@ export interface Bay {
 export interface EfsLayout {
     bays: Bay[]
 }
+
+export interface AirportAtisInfo {
+    airport: string
+    atis?: string          // ATIS letter (single-ATIS airports)
+    arrAtis?: string       // Arrival ATIS letter (ESSA-style split)
+    depAtis?: string       // Departure ATIS letter (ESSA-style split)
+    qnh?: number           // QNH in hPa
+    arrRunways: string[]   // Active arrival runways
+    depRunways: string[]   // Active departure runways
+}

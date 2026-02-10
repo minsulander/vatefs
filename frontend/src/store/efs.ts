@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -19,6 +19,9 @@ export const useEfsStore = defineStore("efs", () => {
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
     const dclError = ref<string | undefined>(undefined)
+
+    // ATIS info per airport
+    const atisInfo = ref<AirportAtisInfo[]>([])
 
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
@@ -88,6 +91,9 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'dclStatus':
                         dclStatus.value = message.status
                         dclError.value = message.error
+                        break
+                    case 'atisUpdate':
+                        atisInfo.value = message.airports
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -570,6 +576,7 @@ export const useEfsStore = defineStore("efs", () => {
         sendAssignment,
         deleteStrip,
         GAP_BUFFER,
+        atisInfo,
         dclStatus,
         dclError,
         dclLogin,

@@ -270,4 +270,7 @@ export interface EfsStaticConfig {
 
     /** Move rules - determines what command to send when strip is manually moved */
     moveRules: MoveRule[]
+
+    /** Active runways per airport, extracted from rwyconfig */
+    activeRunways?: Record<string, { arr: string[]; dep: string[] }>
 }

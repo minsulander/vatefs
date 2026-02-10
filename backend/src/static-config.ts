@@ -76,3 +76,10 @@ export function setIsController(isController: boolean) {
 export function setMyFrequency(frequency: number) {
     staticConfig.myFrequency = frequency
 }
+
+/**
+ * Update active runways per airport (called when rwyconfig is received)
+ */
+export function setActiveRunways(runways: Record<string, { arr: string[]; dep: string[] }>) {
+    staticConfig.activeRunways = runways
+}
