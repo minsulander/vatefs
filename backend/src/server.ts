@@ -25,7 +25,7 @@ import type {
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, staticConfig, determineMoveAction, applyConfig } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, staticConfig, determineMoveAction, applyConfig } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
@@ -36,7 +36,8 @@ import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
-import { loadHoppieConfig, getLogonCode, getDclAirports } from "./hoppie-config.js"
+import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
+import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import type { DclStatus } from "./hoppie-service.js"
 
@@ -266,6 +267,7 @@ if (cliArgs.mock) {
         setMyAirports(mockAirports)
     }
     setIsController(mockMyselfUpdate.controller)
+    setMyFrequency(mockMyselfUpdate.frequency)
     console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(", ")})`)
 }
 store.loadMockData(cliArgs.mock ?? false)
@@ -402,6 +404,191 @@ function recalculateDclAvailability() {
             updateDclStatus("unavailable")
         }
     })
+}
+
+/**
+ * Format current UTC time and date for CPDLC messages.
+ * Returns { time: 'HHmm', date: 'DDMMYY' }
+ */
+function formatTimestamp(): { time: string; date: string } {
+    const now = new Date()
+    const hh = String(now.getUTCHours()).padStart(2, "0")
+    const mm = String(now.getUTCMinutes()).padStart(2, "0")
+    const dd = String(now.getUTCDate()).padStart(2, "0")
+    const mo = String(now.getUTCMonth() + 1).padStart(2, "0")
+    const yy = String(now.getUTCFullYear()).slice(-2)
+    return { time: `${hh}${mm}`, date: `${dd}${mo}${yy}` }
+}
+
+/**
+ * Build DCL template data from a flight for template filling.
+ */
+function buildDclTemplateData(flight: import("./types.js").Flight, remarks: string): DclTemplateData {
+    const freq = staticConfig.myFrequency
+    const freqStr = freq ? freq.toFixed(3) : "---"
+
+    // Format CFL for template (e.g., "5000" -> "A050", or "FL060")
+    let cflStr = "---"
+    if (flight.cfl && flight.cfl > 2) {
+        if (flight.cfl >= 10000) {
+            cflStr = `FL${Math.round(flight.cfl / 100)}`
+        } else {
+            cflStr = `A${String(Math.round(flight.cfl / 100)).padStart(3, "0")}`
+        }
+    }
+
+    return {
+        ades: flight.destination ?? "????",
+        drwy: flight.depRwy ?? "---",
+        sid: flight.sid ?? "---",
+        assr: flight.squawk ?? "----",
+        eobt: flight.eobt ?? "----",
+        cfl: cflStr,
+        freq_own: freqStr,
+        freq_next: freqStr, // Same frequency for now
+        atis: "A",          // Hardcoded for now
+        qnh: "1013",        // Hardcoded for now
+        rmk: remarks,
+    }
+}
+
+/**
+ * Handle an incoming Hoppie telex (DCL request from pilot).
+ * Parses: REQUEST PREDEP CLEARANCE <callsign> <actype> TO <dest> AT <airport> STAND <stand> ATIS <atis>
+ */
+function handleDclRequest(from: string, packet: string) {
+    const match = packet.match(
+        /^REQUEST PREDEP CLEARANCE\s+(\S+)\s+(\S+)\s+TO\s+(\S+)\s+AT\s+(\S+)\s+STAND\s+(\S+)\s+ATIS\s+(\S+)$/i,
+    )
+    if (!match) {
+        console.log(`[DCL] Could not parse telex from ${from}: ${packet}`)
+        return
+    }
+
+    const [, callsign, , , airport, ,] = match
+    const dclCallsign = getDclCallsign()
+    const { time, date } = formatTimestamp()
+
+    // Validate: is the airport one of ours?
+    if (!staticConfig.myAirports.includes(airport!)) {
+        console.log(`[DCL] Request for wrong airport ${airport} (we have ${staticConfig.myAirports.join(", ")})`)
+        // Send reject
+        if (hoppieService) {
+            const seq = hoppieService.getNextSeq()
+            hoppieService.sendMessage(
+                from,
+                "cpdlc",
+                `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign} @${from}@ RCD REJECTED @REVERT TO VOICE PROCEDURES`,
+            )
+        }
+        return
+    }
+
+    // Find the flight
+    const flight = flightStore.getFlight(callsign!)
+    if (!flight) {
+        console.log(`[DCL] Flight ${callsign} not found in store`)
+        // Send reject
+        if (hoppieService) {
+            const seq = hoppieService.getNextSeq()
+            hoppieService.sendMessage(
+                from,
+                "cpdlc",
+                `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign} @${from}@ RCD REJECTED @REVERT TO VOICE PROCEDURES`,
+            )
+        }
+        return
+    }
+
+    // Valid request
+    console.log(`[DCL] Valid request from ${from} for ${callsign} at ${airport}`)
+    flight.dclStatus = "REQUEST"
+    flight.dclMessage = packet
+
+    // Build clearance preview
+    const templateData = buildDclTemplateData(flight, "")
+    const preview = fillDclTemplate(airport!, templateData)
+    if (preview) {
+        flight.dclClearance = preview
+    }
+
+    // Send ack CPDLC
+    if (hoppieService) {
+        const seq = hoppieService.getNextSeq()
+        hoppieService.sendMessage(
+            from,
+            "cpdlc",
+            `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign} @${from}@ RCD RECEIVED @REQUEST BEING PROCESSED @STANDBY`,
+        )
+    }
+
+    // Regenerate and broadcast strip
+    const strip = flightStore.regenerateStrip(callsign!)
+    if (strip) {
+        store.updateStripFromFlight(strip)
+        broadcastStrip(strip)
+    }
+}
+
+/**
+ * Handle an incoming CPDLC response (WILCO/UNABLE).
+ * Parses: /data2/<pilot_seq>/<our_seq>/N/(WILCO|UNABLE)
+ */
+function handleCpdlcResponse(from: string, packet: string) {
+    const match = packet.match(/^\/data2\/(\d+)\/(\d+)\/\w+\/(WILCO|UNABLE)$/i)
+    if (!match) return
+
+    const [, , ourSeqStr, response] = match
+    const ourSeq = parseInt(ourSeqStr!, 10)
+
+    // Find the flight that this response is for
+    const flights = flightStore.getAllFlights()
+    const flight = flights.find(
+        (f) => f.dclSeqNumber === ourSeq && f.callsign === from,
+    )
+
+    if (!flight) {
+        console.log(`[DCL] CPDLC ${response} from ${from} but no matching flight (seq=${ourSeq})`)
+        return
+    }
+
+    const dclCallsign = getDclCallsign()
+    const { time, date } = formatTimestamp()
+
+    if (response!.toUpperCase() === "WILCO" && flight.dclStatus === "SENT") {
+        console.log(`[DCL] WILCO from ${from} for flight ${flight.callsign}`)
+        flight.dclStatus = "DONE"
+
+        // Send confirmation
+        if (hoppieService) {
+            const seq = hoppieService.getNextSeq()
+            hoppieService.sendMessage(
+                from,
+                "cpdlc",
+                `/data2/${seq}//NE/ATC REQUEST STATUS . . FSM ${time} ${date} ${dclCallsign} @${from}@ CDA RECEIVED @CLEARANCE CONFIRMED`,
+            )
+        }
+
+        // Set clearance flag via EuroScope plugin
+        sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: flight.callsign }))
+
+        // Regenerate and broadcast strip
+        const strip = flightStore.regenerateStrip(flight.callsign)
+        if (strip) {
+            store.updateStripFromFlight(strip)
+            broadcastStrip(strip)
+        }
+    } else if (response!.toUpperCase() === "UNABLE") {
+        console.log(`[DCL] UNABLE from ${from} for flight ${flight.callsign}`)
+        flight.dclStatus = "UNABLE"
+
+        // Regenerate and broadcast strip
+        const strip = flightStore.regenerateStrip(flight.callsign)
+        if (strip) {
+            store.updateStripFromFlight(strip)
+            broadcastStrip(strip)
+        }
+    }
 }
 
 // Send layout to a client
@@ -568,8 +755,75 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                 if (pluginCommand) {
                     sendUdp(JSON.stringify(pluginCommand))
-                } else {
-                    console.log(`  Unhandled action: ${message.action}`)
+                }
+
+                const flight = flightStore.getFlight(strip.callsign)
+
+                // When toggling clearance flag (user pressed OK for voice clearance), clear DCL state
+                if (message.action === "toggleClearanceFlag") {
+                    if (flight && flight.dclStatus) {
+                        console.log(`[DCL] Clearing DCL state for ${strip.callsign} (voice clearance)`)
+                        flight.dclStatus = undefined
+                        flight.dclMessage = undefined
+                        flight.dclClearance = undefined
+                        flight.dclSeqNumber = undefined
+                        flight.dclPdcNumber = undefined
+                    }
+                }
+
+                // In mock mode, apply actions locally since there's no ES plugin roundtrip
+                if (cliArgs.mock && flight) {
+                    switch (message.action) {
+                        case "toggleClearanceFlag":
+                            flight.clearance = !flight.clearance
+                            break
+                        case "ASSUME":
+                            flight.controller = staticConfig.myCallsign
+                            break
+                        case "resetSquawk": {
+                            const sq = String(Math.floor(2000 + Math.random() * 5777)).padStart(4, "0")
+                            flight.squawk = sq
+                            break
+                        }
+                        case "PUSH":
+                            flight.groundstate = "PUSH"
+                            break
+                        case "LU":
+                            flight.groundstate = "LINEUP"
+                            break
+                        case "CTO":
+                            flight.groundstate = "DEPA"
+                            break
+                        case "TXO":
+                            flight.groundstate = "TAXI"
+                            break
+                        case "TXI":
+                            flight.groundstate = "TXIN"
+                            break
+                        case "PARK":
+                            flight.groundstate = "PARK"
+                            break
+                        case "CTL":
+                            flight.clearedToLand = true
+                            break
+                        case "XFER":
+                            flight.controller = ""
+                            flight.handoffTargetController = ""
+                            break
+                    }
+
+                    const updatedStrip = flightStore.regenerateStrip(strip.callsign)
+                    if (updatedStrip) {
+                        store.updateStripFromFlight(updatedStrip)
+                        broadcastStrip(updatedStrip)
+                    }
+                } else if (message.action === "toggleClearanceFlag") {
+                    // Non-mock: still need to broadcast DCL state clear
+                    const updatedStrip = flightStore.regenerateStrip(strip.callsign)
+                    if (updatedStrip) {
+                        store.updateStripFromFlight(updatedStrip)
+                        broadcastStrip(updatedStrip)
+                    }
                 }
             } else {
                 console.log(`[ACTION] ${message.action} on unknown strip ${message.stripId}`)
@@ -582,6 +836,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (strip) {
                 console.log(`[ASSIGN] ${message.assignType} = "${message.value}" on ${strip.callsign}`)
                 let pluginCommand: OutboundPluginCommand | null = null
+                let mockCflAuto: number | undefined
                 switch (message.assignType) {
                     case "assignDepartureRunway":
                         pluginCommand = { type: "assignDepartureRunway", callsign: strip.callsign, runway: message.value }
@@ -593,6 +848,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             if (sidAlt !== undefined) {
                                 sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
                                 console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
+                                mockCflAuto = sidAlt
                             }
                         }
                         break
@@ -605,6 +861,45 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 }
                 if (pluginCommand) {
                     sendUdp(JSON.stringify(pluginCommand))
+                }
+
+                // In mock mode, apply assignments locally since there's no ES plugin roundtrip
+                if (cliArgs.mock) {
+                    const flight = flightStore.getFlight(strip.callsign)
+                    if (flight) {
+                        switch (message.assignType) {
+                            case "assignDepartureRunway":
+                                flight.depRwy = message.value
+                                break
+                            case "assignSid":
+                                flight.sid = message.value || undefined
+                                if (mockCflAuto !== undefined) {
+                                    flight.cfl = mockCflAuto
+                                }
+                                break
+                            case "assignHeading":
+                                flight.ahdg = parseInt(message.value, 10) || 0
+                                break
+                            case "assignCfl":
+                                flight.cfl = parseInt(message.value, 10) || 0
+                                break
+                        }
+
+                        // Update DCL clearance preview if there's an active DCL request
+                        if (flight.dclStatus === "REQUEST" && flight.origin) {
+                            const templateData = buildDclTemplateData(flight, "")
+                            const preview = fillDclTemplate(flight.origin, templateData)
+                            if (preview) {
+                                flight.dclClearance = preview
+                            }
+                        }
+
+                        const updatedStrip = flightStore.regenerateStrip(strip.callsign)
+                        if (updatedStrip) {
+                            store.updateStripFromFlight(updatedStrip)
+                            broadcastStrip(updatedStrip)
+                        }
+                    }
                 }
             } else {
                 console.log(`[ASSIGN] ${message.assignType} on unknown strip ${message.stripId}`)
@@ -644,6 +939,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         console.log(`[HOPPIE] Received: ${from} ${type} ${packet}`)
                         const msg: HoppieMessage = { type: "hoppieMessage", from, messageType: type, packet }
                         broadcast(msg)
+
+                        // Route to DCL handlers
+                        if (type === "telex") {
+                            handleDclRequest(from, packet)
+                        } else if (type === "cpdlc") {
+                            handleCpdlcResponse(from, packet)
+                        }
                     },
                     onStatusChange: (status, error) => {
                         updateDclStatus(status, error)
@@ -657,6 +959,97 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     hoppieService = null
                 }
                 updateDclStatus("available")
+            }
+            break
+        }
+
+        case "dclReject": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip) break
+
+            const flight = flightStore.getFlight(strip.callsign)
+            if (!flight || !flight.dclStatus) break
+
+            console.log(`[DCL] Rejecting DCL for ${strip.callsign}`)
+            flight.dclStatus = "REJECTED"
+
+            // Send reject CPDLC
+            if (hoppieService) {
+                const dclCallsign = getDclCallsign()
+                const { time, date } = formatTimestamp()
+                const seq = hoppieService.getNextSeq()
+                hoppieService.sendMessage(
+                    strip.callsign,
+                    "cpdlc",
+                    `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign} @${strip.callsign}@ RCD REJECTED @REVERT TO VOICE PROCEDURES`,
+                )
+            }
+
+            // Regenerate and broadcast strip
+            const rejStrip = flightStore.regenerateStrip(strip.callsign)
+            if (rejStrip) {
+                store.updateStripFromFlight(rejStrip)
+                broadcastStrip(rejStrip)
+            }
+            break
+        }
+
+        case "dclSend": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip) break
+
+            const flight = flightStore.getFlight(strip.callsign)
+            if (!flight) break
+
+            // Determine the airport for the template
+            const dclAirport = staticConfig.myAirports.find(
+                (a) => a === flight.origin,
+            )
+            if (!dclAirport) {
+                console.log(`[DCL] No DCL airport found for ${strip.callsign}`)
+                break
+            }
+
+            // Build template data
+            const templateData = buildDclTemplateData(flight, message.remarks)
+
+            // Fill template with @ markers for CPDLC
+            const markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+            if (!markerClearance) {
+                console.log(`[DCL] No template found for ${dclAirport}`)
+                break
+            }
+
+            // Fill template with plain values for preview
+            const plainClearance = fillDclTemplate(dclAirport, templateData)
+
+            // Send CPDLC
+            if (hoppieService) {
+                const dclCallsign = getDclCallsign()
+                const { time, date } = formatTimestamp()
+                const seq = hoppieService.getNextSeq()
+                const pdc = hoppieService.getNextPdc()
+                const pdcStr = String(pdc).padStart(3, "0")
+
+                hoppieService.sendMessage(
+                    strip.callsign,
+                    "cpdlc",
+                    `/data2/${seq}//WU/${dclCallsign} PDC ${pdcStr} . . . . . CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} @${strip.callsign}@ ${markerClearance}`,
+                )
+
+                flight.dclStatus = "SENT"
+                flight.dclSeqNumber = seq
+                flight.dclPdcNumber = pdc
+                flight.dclClearance = plainClearance
+
+                console.log(`[DCL] Sent clearance to ${strip.callsign} (seq=${seq}, pdc=${pdcStr})`)
+            }
+
+            // Regenerate and broadcast strip
+            const sendStrip = flightStore.regenerateStrip(strip.callsign)
+            if (sendStrip) {
+                store.updateStripFromFlight(sendStrip)
+                broadcastStrip(sendStrip)
             }
             break
         }
@@ -868,6 +1261,11 @@ udpIn.on("message", (msg, rinfo) => {
             }
 
             setIsController(msg.controller)
+
+            // Store frequency
+            if (msg.frequency) {
+                setMyFrequency(msg.frequency)
+            }
 
             // Extract airports from rwyconfig - any airport with arr or dep set
             // Checks both airport-level flags and runway-level flags

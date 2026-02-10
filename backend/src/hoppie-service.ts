@@ -17,6 +17,8 @@ export class HoppieService {
     private callsign: string
     private pollTimer: ReturnType<typeof setTimeout> | null = null
     private connected = false
+    private messageSeq = 0
+    private pdcCounter = 0
     private onMessage: (from: string, type: string, packet: string) => void
     private onStatusChange: (status: DclStatus, error?: string) => void
 
@@ -70,6 +72,19 @@ export class HoppieService {
 
     isConnected(): boolean {
         return this.connected
+    }
+
+    getNextSeq(): number {
+        return ++this.messageSeq
+    }
+
+    getNextPdc(): number {
+        return ++this.pdcCounter
+    }
+
+    async sendMessage(to: string, type: string, packet: string): Promise<string> {
+        console.log(`[HOPPIE] Sending ${type} to ${to}: ${packet}`)
+        return this.sendRequest(to, type, packet)
     }
 
     private async sendRequest(to: string, type: string, packet: string): Promise<string> {

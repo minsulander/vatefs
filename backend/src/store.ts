@@ -34,10 +34,14 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "position",
     "bottom",
     "canResetSquawk",
+    "canEditClearance",
     "direct",
     "clearance",
     "clearedForTakeoff",
-    "clearedToLand"
+    "clearedToLand",
+    "dclStatus",
+    "dclMessage",
+    "dclClearance"
 ]
 
 /**

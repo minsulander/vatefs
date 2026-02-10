@@ -34,6 +34,8 @@ export type {
     StripAssignMessage,
     DeleteStripMessage,
     DclActionMessage,
+    DclRejectMessage,
+    DclSendMessage,
     ClientMessage
 } from "./messages.js"
 

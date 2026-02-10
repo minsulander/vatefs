@@ -10,6 +10,20 @@
         <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
       </div>
 
+      <!-- DCL section (shown when there's a DCL request) -->
+      <div v-if="strip.dclStatus" class="clnc-dcl-section">
+        <div class="clnc-dcl-header">
+          <span class="clnc-dcl-label">DCL</span>
+          <span class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
+        </div>
+        <div v-if="strip.dclMessage" class="clnc-dcl-message">{{ strip.dclMessage }}</div>
+        <div v-if="strip.dclClearance" class="clnc-dcl-preview">{{ strip.dclClearance }}</div>
+        <div v-if="strip.dclStatus === 'REQUEST'" class="clnc-remarks-row">
+          <span class="clnc-label">RMK</span>
+          <input v-model="remarks" class="clnc-remarks-input" placeholder="Remarks..." />
+        </div>
+      </div>
+
       <!-- Dropdown overlay -->
       <div v-if="activeDropdown" class="clnc-dropdown-overlay" @click="activeDropdown = null">
         <div class="clnc-dropdown" :style="dropdownStyle" @click.stop>
@@ -24,7 +38,12 @@
         </div>
       </div>
 
-      <div class="clnc-actions">
+      <div class="clnc-actions" v-if="strip.dclStatus === 'REQUEST'">
+        <button class="clnc-btn clnc-btn-reject" @click="onReject">Reject</button>
+        <button class="clnc-btn clnc-btn-ok" :disabled="okDisabled" @click="onOk">OK</button>
+        <button class="clnc-btn clnc-btn-send" :disabled="!canSendDcl" @click="onSend">Send</button>
+      </div>
+      <div class="clnc-actions" v-else>
         <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
         <button class="clnc-btn clnc-btn-ok" :disabled="okDisabled" @click="onOk">OK</button>
       </div>
@@ -54,6 +73,30 @@ const dialogOpen = computed({
 })
 
 const okDisabled = computed(() => !props.strip.canEditClearance)
+
+// DCL state
+const remarks = ref('')
+
+const canSendDcl = computed(() => {
+  const s = props.strip
+  // SID must match standard IFR SID format: 5 letters + 1 digit + 1 letter (e.g., VADIN3J)
+  const sidValid = !!s.sid && /^[A-Z]{5}\d[A-Z]$/.test(s.sid)
+  const cflValid = !!s.clearedAltitude
+  const squawkValid = !!s.squawk && s.squawk !== '----'
+  return sidValid && cflValid && squawkValid
+})
+
+const dclStatusClass = computed(() => {
+  switch (props.strip.dclStatus) {
+    case 'REQUEST': return 'dcl-status-request'
+    case 'SENT': return 'dcl-status-sent'
+    case 'DONE': return 'dcl-status-done'
+    case 'INVALID':
+    case 'UNABLE':
+    case 'REJECTED': return 'dcl-status-error'
+    default: return ''
+  }
+})
 
 // Dropdown state
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
@@ -112,12 +155,13 @@ async function applyDefaultCfl() {
   }
 }
 
-// When dialog opens, fetch data
+// When dialog opens, fetch data and reset remarks
 watch(dialogOpen, (open) => {
   if (open) {
     fetchRunways()
     fetchSids()
     applyDefaultCfl()
+    remarks.value = ''
   } else {
     activeDropdown.value = null
   }
@@ -241,6 +285,16 @@ function onCancel() {
   dialogOpen.value = false
 }
 
+function onReject() {
+  store.dclReject(props.strip.id)
+  dialogOpen.value = false
+}
+
+function onSend() {
+  store.dclSend(props.strip.id, remarks.value)
+  dialogOpen.value = false
+}
+
 function onResetSquawk() {
   store.sendStripAction(props.strip.id, 'resetSquawk')
 }
@@ -345,6 +399,125 @@ function onResetSquawk() {
 }
 
 .clnc-btn-ok:disabled {
+  background: #3a3a3a;
+  color: #666;
+  cursor: not-allowed;
+}
+
+/* DCL section */
+.clnc-dcl-section {
+  padding: 8px 12px;
+  border-top: 1px solid #555;
+  background: #1e1e22;
+}
+
+.clnc-dcl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.clnc-dcl-label {
+  color: #aaa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.clnc-dcl-status {
+  font-size: 10px;
+  font-weight: bold;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.dcl-status-request {
+  background: #f9a825;
+  color: #000;
+}
+
+.dcl-status-sent {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.dcl-status-done {
+  background: #1565c0;
+  color: #fff;
+}
+
+.dcl-status-error {
+  background: #c62828;
+  color: #fff;
+}
+
+.clnc-dcl-message {
+  color: #999;
+  font-size: 9px;
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.clnc-dcl-preview {
+  color: #e0e0e0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  background: #2a2a2e;
+  border: 1px solid #444;
+  border-radius: 2px;
+}
+
+.clnc-remarks-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.clnc-remarks-input {
+  flex: 1;
+  background: #333;
+  border: 1px solid #555;
+  color: #e0e0e0;
+  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 2px;
+  outline: none;
+}
+
+.clnc-remarks-input:focus {
+  border-color: #3b7dd8;
+}
+
+.clnc-remarks-input::placeholder {
+  color: #666;
+}
+
+/* Reject and Send buttons */
+.clnc-btn-reject {
+  background: #c62828;
+  color: #fff;
+  border-right: 1px solid #666;
+}
+
+.clnc-btn-reject:hover {
+  background: #e53935;
+}
+
+.clnc-btn-send {
+  background: #1565c0;
+  color: #fff;
+}
+
+.clnc-btn-send:hover:not(:disabled) {
+  background: #1976d2;
+}
+
+.clnc-btn-send:disabled {
   background: #3a3a3a;
   color: #666;
   cursor: not-allowed;

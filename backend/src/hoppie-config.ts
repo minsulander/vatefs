@@ -86,3 +86,64 @@ export function getLogonCode(): string | null {
 export function getDclTemplate(airport: string): string | undefined {
     return dclTemplates.get(airport)
 }
+
+/**
+ * Data needed to fill a DCL template
+ */
+export interface DclTemplateData {
+    ades: string
+    drwy: string
+    sid: string
+    assr: string
+    eobt: string
+    cfl: string
+    freq_own: string
+    freq_next: string
+    atis: string
+    qnh: string
+    rmk: string
+}
+
+/**
+ * Fill a DCL template with plain values (for dialog preview).
+ * Replaces <ades>, <drwy>, etc. with actual values.
+ */
+export function fillDclTemplate(airport: string, data: DclTemplateData): string | undefined {
+    const template = dclTemplates.get(airport)
+    if (!template) return undefined
+
+    return template
+        .replace(/<ades>/g, data.ades)
+        .replace(/<drwy>/g, data.drwy)
+        .replace(/<sid>/g, data.sid)
+        .replace(/<assr>/g, data.assr)
+        .replace(/<eobt>/g, data.eobt)
+        .replace(/<cfl>/g, data.cfl)
+        .replace(/<freq_own>/g, data.freq_own)
+        .replace(/<freq_next>/g, data.freq_next)
+        .replace(/<atis>/g, data.atis)
+        .replace(/<qnh>/g, data.qnh)
+        .replace(/<rmk>/g, data.rmk)
+}
+
+/**
+ * Fill a DCL template with @value@ markers (for CPDLC send).
+ * The @ signs delimit values in the Hoppie CPDLC protocol.
+ */
+export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateData): string | undefined {
+    const template = dclTemplates.get(airport)
+    if (!template) return undefined
+
+    return template
+        .replace(/<ades>/g, `@${data.ades}@`)
+        .replace(/<drwy>/g, `@${data.drwy}@`)
+        .replace(/<sid>/g, `@${data.sid}@`)
+        .replace(/<assr>/g, `@${data.assr}@`)
+        .replace(/<eobt>/g, `@${data.eobt}@`)
+        .replace(/<cfl>/g, `@${data.cfl}@`)
+        .replace(/<freq_own>/g, `@${data.freq_own}@`)
+        .replace(/<freq_next>/g, `@${data.freq_next}@`)
+        .replace(/<atis>/g, `@${data.atis}@`)
+        .replace(/<qnh>/g, `@${data.qnh}@`)
+        .replace(/<rmk>/g, `@${data.rmk}@`)
+}

@@ -244,6 +244,9 @@ export interface EfsStaticConfig {
     /** Whether we are logged in as a controller (false = observer mode) */
     isController?: boolean
 
+    /** My primary frequency in MHz (e.g., 118.505) */
+    myFrequency?: number
+
     /** Radar range in nautical miles for strip filtering (default: 25) */
     radarRangeNm: number
 

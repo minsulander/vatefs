@@ -48,6 +48,13 @@ export interface Flight {
     ahdg?: number             // Assigned heading (0 = no heading)
     direct?: string           // Direct to waypoint (empty = no direct)
 
+    // DCL (Data-Link Clearance) state
+    dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
+    dclMessage?: string           // Original pilot request text
+    dclClearance?: string         // Filled-out clearance template for preview
+    dclSeqNumber?: number         // Our CPDLC sequence number (to match WILCO/UNABLE)
+    dclPdcNumber?: number         // PDC number for this clearance
+
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
     airborne?: boolean        // Aircraft is airborne after departure

@@ -69,3 +69,10 @@ export function setMyAirports(airports: string[]) {
 export function setIsController(isController: boolean) {
     staticConfig.isController = isController
 }
+
+/**
+ * Update my frequency (called when myselfUpdate is received)
+ */
+export function setMyFrequency(frequency: number) {
+    staticConfig.myFrequency = frequency
+}

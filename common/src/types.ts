@@ -55,6 +55,11 @@ export interface FlightStrip {
     direct?: string              // Direct-to waypoint (for AHDG display in dialog)
     clearance?: boolean          // Clearance flag (for dialog OK/Cancel behavior)
 
+    // DCL (Data-Link Clearance) state
+    dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
+    dclMessage?: string           // Original pilot request text
+    dclClearance?: string         // Filled-out clearance template for preview
+
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)

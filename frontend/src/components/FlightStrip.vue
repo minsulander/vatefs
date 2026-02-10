@@ -108,6 +108,7 @@
     <div v-else-if="strip.actions && strip.actions.length > 0" class="strip-right"
       :class="{ 'multi-action': strip.actions.length > 1 }">
       <button v-for="action in strip.actions" :key="action" class="action-button"
+        :class="actionButtonClass(action)"
         @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
         <span class="action-text">{{ action }}</span>
       </button>
@@ -162,6 +163,17 @@ const displayTime = computed(() => {
   }
   return props.strip.eta || ''
 })
+
+// DCL button coloring
+function actionButtonClass(action: string): Record<string, boolean> {
+  if (action !== 'CLNC') return {}
+  const status = props.strip.dclStatus
+  return {
+    'action-dcl-request': status === 'REQUEST',
+    'action-dcl-error': status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED',
+    'action-dcl-sent': status === 'SENT',
+  }
+}
 
 // Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
@@ -889,6 +901,39 @@ function onDeleteConfirm() {
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
+}
+
+/* DCL status coloring for CLNC button */
+.action-dcl-request {
+  background: linear-gradient(to bottom, #fdd835, #f9a825) !important;
+}
+
+.action-dcl-request:hover {
+  background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
+}
+
+.action-dcl-error {
+  background: linear-gradient(to bottom, #ef5350, #c62828) !important;
+}
+
+.action-dcl-error:hover {
+  background: linear-gradient(to bottom, #e57373, #d32f2f) !important;
+}
+
+.action-dcl-error .action-text {
+  color: #fff;
+}
+
+.action-dcl-sent {
+  background: linear-gradient(to bottom, #66bb6a, #2e7d32) !important;
+}
+
+.action-dcl-sent:hover {
+  background: linear-gradient(to bottom, #81c784, #388e3c) !important;
+}
+
+.action-dcl-sent .action-text {
+  color: #fff;
 }
 
 /* Context menu styling */

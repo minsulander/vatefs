@@ -322,6 +322,38 @@ VatEFS integrates with the [Hoppie ACARS network](http://hoppie.nl/acars/system/
 
 **Frontend**: DCL button in top bar — grey (available), green (connected), red (error). Hidden when unavailable.
 
+**DCL Message Flow**:
+1. Pilot sends telex: `REQUEST PREDEP CLEARANCE <callsign> <actype> TO <dest> AT <airport> STAND <stand> ATIS <atis>`
+2. Backend validates (correct airport, flight exists) → sets `dclStatus=REQUEST` on Flight
+3. Backend sends ack CPDLC: `/data2/<seq>//NE/DEPART REQUEST STATUS . FSM <HHmm> <DDMMYY> <airport> @<callsign>@ RCD RECEIVED @REQUEST BEING PROCESSED @STANDBY`
+4. If invalid → sends reject CPDLC with `RCD REJECTED @REVERT TO VOICE PROCEDURES`
+5. Controller reviews in clearance dialog, sets SID/CFL/squawk, clicks Send
+6. Backend fills template with `@` markers, sends CPDLC: `/data2/<seq>//WU/<airport> PDC <pdc> . . . . . CLD <HHmm> <DDMMYY> <airport> PDC <pdc> @<callsign>@ <clearance>`
+7. Pilot responds WILCO → `dclStatus=DONE`, clearance flag set via EuroScope plugin
+8. Pilot responds UNABLE → `dclStatus=UNABLE`
+
+**dclStatus lifecycle on Flight/FlightStrip**:
+- `REQUEST` - Pilot request received, pending controller action (CLNC button yellow)
+- `INVALID` - Request failed validation (CLNC button red)
+- `SENT` - Clearance sent to pilot, awaiting response (CLNC button green)
+- `WILCO` - Pilot accepted (transient, immediately becomes DONE)
+- `UNABLE` - Pilot rejected clearance (CLNC button red)
+- `REJECTED` - Controller rejected request (CLNC button red)
+- `DONE` - Clearance confirmed, clearance flag set
+- `undefined` - No DCL in progress, or cleared by voice (OK button)
+
+**DCL fields on Flight** (backend only): `dclSeqNumber` (CPDLC seq for matching WILCO/UNABLE), `dclPdcNumber` (PDC counter)
+
+**Template variables**: `<ades>`, `<drwy>`, `<sid>`, `<assr>`, `<eobt>`, `<cfl>`, `<freq_own>`, `<freq_next>`, `<atis>`, `<qnh>`, `<rmk>`
+- `fillDclTemplate()` replaces with plain values (for dialog preview)
+- `fillDclTemplateWithMarkers()` replaces with `@value@` (for CPDLC send)
+
+**Frequency storage**: `staticConfig.myFrequency` set from `myselfUpdate.frequency` (or 118.505 in mock mode)
+
+**WebSocket messages** (additional):
+- `dclReject` (client→server) - Reject a DCL request (stripId)
+- `dclSend` (client→server) - Send DCL clearance (stripId, remarks)
+
 ### Refactor Guardrails
 - Prefer editing source files under `frontend/src`, `backend/src`, and `common/src`.
 - Treat `frontend/dist`, `backend/dist`, and `*/node_modules` as generated artifacts; avoid manual edits there.

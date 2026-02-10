@@ -760,7 +760,10 @@ class FlightStore {
             clearance: flight.clearance ?? undefined,
             clearedForTakeoff,
             clearedToLand,
-            canEditClearance: canEditClearance || undefined
+            canEditClearance: canEditClearance || undefined,
+            dclStatus: flight.dclStatus,
+            dclMessage: flight.dclMessage,
+            dclClearance: flight.dclClearance
         }
     }
 

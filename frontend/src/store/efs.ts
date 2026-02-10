@@ -511,6 +511,14 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclAction', action: 'logout' })
     }
 
+    function dclSend(stripId: string, remarks: string) {
+        sendMessage({ type: 'dclSend', stripId, remarks })
+    }
+
+    function dclReject(stripId: string) {
+        sendMessage({ type: 'dclReject', stripId })
+    }
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -566,6 +574,8 @@ export const useEfsStore = defineStore("efs", () => {
         dclError,
         dclLogin,
         dclLogout,
+        dclSend,
+        dclReject,
         sendRequest,
         connect,
         refresh

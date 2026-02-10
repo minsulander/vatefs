@@ -18,7 +18,8 @@
       "WebFetch(domain:hoppie.nl)",
       "WebSearch",
       "WebFetch(domain:www.hoppie.nl)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(grep:*)"
     ]
   }
 }
