@@ -145,6 +145,8 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - `src/geo-utils.ts` - Geographic utility functions (Haversine distance, range checks)
 - `src/airport-data.ts` - Airport data loading from CSV (coordinates, elevation)
 - `src/runway-data.ts` - Runway data loading from CSV
+- `src/hoppie-config.ts` - Hoppie logon code + DCL template loading from EuroScope files
+- `src/hoppie-service.ts` - Hoppie ACARS HTTP client (ping, poll, message parsing)
 - `src/mockPluginMessages.ts` - Mock data for testing (empty by default)
 - `src/playback.ts` - Utility script for replaying recorded UDP messages
 
@@ -293,6 +295,32 @@ The backend supports controlling multiple airports simultaneously:
 - Configure via `--airport ESGG,ESSA` (comma-separated)
 - Field elevation is dynamically determined from the nearest configured airport
 - Strips appear for flights to/from any configured airport within radar range
+
+### Hoppie DCL Integration
+
+VatEFS integrates with the [Hoppie ACARS network](http://hoppie.nl/acars/system/tech.html) for Data-Link Clearance (DCL) delivery.
+
+**Configuration files** (loaded from EuroScope directory):
+- `ESAA/Plugins/TopSkyCPDLChoppieCode.txt` - User's Hoppie logon code (alphanumeric, <40 chars)
+- `ESAA/Plugins/TopSkyCPDLC.txt` - DCL templates in `[DCL]` section (format: `DCL:<airport>:SID:<template>`)
+
+**DCL-capable airports**: ESGG and ESSA (configured via TopSkyCPDLC.txt templates)
+
+**DCL callsign determination**:
+- Exactly one of ESGG/ESSA must be in `myAirports` (exclusive or)
+- If both or neither → DCL unavailable
+- With `--mock` flag → uses callsign `VATEFSTEST`
+
+**Backend files**:
+- `src/hoppie-config.ts` - Loads logon code and DCL templates from EuroScope directory
+- `src/hoppie-service.ts` - HTTP client for Hoppie API (login via ping, polling every 45-75s)
+
+**WebSocket messages**:
+- `dclStatus` (server→client) - DCL status: `unavailable`, `available`, `connected`, `error`
+- `hoppieMessage` (server→client) - Incoming Hoppie message (from, messageType, packet)
+- `dclAction` (client→server) - Login/logout action
+
+**Frontend**: DCL button in top bar — grey (available), green (connected), red (error). Hidden when unavailable.
 
 ### Refactor Guardrails
 - Prefer editing source files under `frontend/src`, `backend/src`, and `common/src`.

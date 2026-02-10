@@ -48,7 +48,20 @@ export interface StatusMessage {
     airports: string[]    // Configured airports (e.g., ['ESGG', 'ESGT'])
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage
+export interface DclStatusMessage {
+    type: 'dclStatus'
+    status: 'available' | 'connected' | 'error' | 'unavailable'
+    error?: string
+}
+
+export interface HoppieMessage {
+    type: 'hoppieMessage'
+    from: string
+    messageType: string  // e.g. 'cpdlc', 'telex'
+    packet: string
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage
 
 // Client -> Server messages
 
@@ -101,7 +114,12 @@ export interface DeleteStripMessage {
     stripId: string
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage
+export interface DclActionMessage {
+    type: 'dclAction'
+    action: 'login' | 'logout'
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage
 
 // Type guards for message parsing
 
@@ -112,7 +130,8 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     const type = (data as { type: unknown }).type
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
-           type === 'refresh' || type === 'status'
+           type === 'refresh' || type === 'status' || type === 'dclStatus' ||
+           type === 'hoppieMessage'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -120,5 +139,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction'
 }

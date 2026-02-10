@@ -17,6 +17,8 @@ import type {
     SectionMessage,
     RefreshMessage,
     StatusMessage,
+    DclStatusMessage,
+    HoppieMessage,
     ServerMessage,
     ClientMessage,
 } from "@vatefs/common"
@@ -34,6 +36,9 @@ import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
+import { loadHoppieConfig, getLogonCode, getDclAirports } from "./hoppie-config.js"
+import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
+import type { DclStatus } from "./hoppie-service.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -147,6 +152,8 @@ if (EUROSCOPE_DIR) {
     } catch (err) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
     }
+    // Load Hoppie config (logon code + DCL templates)
+    loadHoppieConfig(EUROSCOPE_DIR)
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
 }
@@ -336,6 +343,67 @@ function broadcastStatus() {
     broadcast(message)
 }
 
+// Hoppie DCL service state
+let hoppieService: HoppieService | null = null
+let currentDclStatus: DclStatus = "unavailable"
+let currentDclError: string | undefined
+
+/**
+ * Determine the DCL callsign based on configured airports.
+ * Returns the airport ICAO if exactly one DCL-capable airport is active, null otherwise.
+ * In mock mode, returns "VATEFSTEST".
+ */
+function getDclCallsign(): string | null {
+    if (cliArgs.mock) return "VATEFSTEST"
+
+    const dclAirports = getDclAirports()
+    const myDclAirports = staticConfig.myAirports.filter((a) => dclAirports.includes(a))
+
+    if (myDclAirports.length === 1) return myDclAirports[0]
+    return null
+}
+
+function updateDclStatus(status: DclStatus, error?: string) {
+    currentDclStatus = status
+    currentDclError = error
+    const message: DclStatusMessage = { type: "dclStatus", status, error }
+    broadcast(message)
+}
+
+function sendDclStatus(socket: WebSocket) {
+    const message: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError }
+    sendMessage(socket, message)
+}
+
+/**
+ * Recalculate DCL availability. Called when airports change.
+ * If no service is active, set status to available/unavailable based on config
+ * and Hoppie network status.
+ */
+function recalculateDclAvailability() {
+    if (hoppieService) return // Don't change while connected
+
+    const logonCode = getLogonCode()
+    const callsign = getDclCallsign()
+
+    if (!logonCode || !callsign) {
+        updateDclStatus("unavailable")
+        return
+    }
+
+    // Check Hoppie network status asynchronously
+    checkHoppieStatus().then((online) => {
+        // Re-check in case state changed while we were fetching
+        if (hoppieService) return
+
+        if (online) {
+            updateDclStatus("available")
+        } else {
+            updateDclStatus("unavailable")
+        }
+    })
+}
+
 // Send layout to a client
 function sendLayout(socket: WebSocket) {
     const message: LayoutMessage = {
@@ -395,7 +463,7 @@ function handleClientMessage(socket: WebSocket, text: string) {
 }
 
 // Handle typed client messages
-function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
+async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
     switch (message.type) {
         case "request":
             if (message.request === "layout") {
@@ -554,6 +622,44 @@ function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
+        case "dclAction": {
+            if (message.action === "login") {
+                const logonCode = getLogonCode()
+                const callsign = getDclCallsign()
+
+                if (!logonCode || !callsign) {
+                    updateDclStatus("error", "No logon code or DCL airport available")
+                    break
+                }
+
+                // Clean up existing service
+                if (hoppieService) {
+                    hoppieService.logout()
+                    hoppieService = null
+                }
+
+                hoppieService = new HoppieService(logonCode, callsign, {
+                    onMessage: (from, type, packet) => {
+                        console.log(`[HOPPIE] Received: ${from} ${type} ${packet}`)
+                        const msg: HoppieMessage = { type: "hoppieMessage", from, messageType: type, packet }
+                        broadcast(msg)
+                    },
+                    onStatusChange: (status, error) => {
+                        updateDclStatus(status, error)
+                    },
+                })
+
+                await hoppieService.login()
+            } else if (message.action === "logout") {
+                if (hoppieService) {
+                    hoppieService.logout()
+                    hoppieService = null
+                }
+                updateDclStatus("available")
+            }
+            break
+        }
     }
 }
 
@@ -568,6 +674,7 @@ wsServer.on("connection", (socket) => {
     sendStrips(socket)
     sendGaps(socket)
     sendStatus(socket)
+    sendDclStatus(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -697,6 +804,10 @@ app.get("/api/withinctr", (req, res) => {
     }
 })
 
+app.get("/api/dcl/status", (req, res) => {
+    res.json({ status: currentDclStatus, error: currentDclError })
+})
+
 app.use(serveStatic(path.resolve(__dirname, "../public")))
 app.get("/*splat", (req, res) => res.sendFile(path.resolve(__dirname, "../public") + "/index.html"))
 const server = app.listen(port, () => console.log(`EFS backend ${constants.version} listening at http://127.0.0.1:${port}`))
@@ -735,6 +846,13 @@ udpIn.on("message", (msg, rinfo) => {
             setIsController(false)
             broadcastStatus()
             broadcastRefresh("Connection lost")
+
+            // Disconnect Hoppie and reset DCL status
+            if (hoppieService) {
+                hoppieService.logout()
+                hoppieService = null
+            }
+            updateDclStatus("unavailable")
             return
         }
 
@@ -793,6 +911,9 @@ udpIn.on("message", (msg, rinfo) => {
 
             // Broadcast updated status to all clients
             broadcastStatus()
+
+            // Recalculate DCL availability when airports change
+            recalculateDclAvailability()
 
             // If callsign changed, clear store and tell clients to refresh
             if (callsignChanged && previousCallsign) {
@@ -880,3 +1001,6 @@ udpIn.on("error", (err) => {
 udpIn.bind(udpInPort, () => {
     console.log(`UDP listener bound to port ${udpInPort}`)
 })
+
+// Calculate initial DCL availability (must be after hoppieService is declared)
+recalculateDclAvailability()

@@ -16,6 +16,10 @@ export const useEfsStore = defineStore("efs", () => {
     const myCallsign = ref('')
     const myAirports = ref<string[]>([])
 
+    // DCL status
+    const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
+    const dclError = ref<string | undefined>(undefined)
+
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
         socket = new WebSocket(`ws://${location.hostname}:17770`)
@@ -80,6 +84,13 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'status':
                         handleStatusMessage(message.callsign, message.airports)
+                        break
+                    case 'dclStatus':
+                        dclStatus.value = message.status
+                        dclError.value = message.error
+                        break
+                    case 'hoppieMessage':
+                        console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
                         break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
@@ -492,6 +503,14 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function dclLogin() {
+        sendMessage({ type: 'dclAction', action: 'login' })
+    }
+
+    function dclLogout() {
+        sendMessage({ type: 'dclAction', action: 'logout' })
+    }
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -543,6 +562,10 @@ export const useEfsStore = defineStore("efs", () => {
         sendAssignment,
         deleteStrip,
         GAP_BUFFER,
+        dclStatus,
+        dclError,
+        dclLogin,
+        dclLogout,
         sendRequest,
         connect,
         refresh

@@ -1,0 +1,57 @@
+Docs: http://hoppie.nl/acars/system/tech.html
+CPDLC: http://hoppie.nl/acars/system/cpdlc.html
+Messages: http://hoppie.nl/acars/system/log.html
+
+Kolla status: https://www.hoppie.nl/acars/system/status.html
+
+Hämta hoppie logon code och flygplatser från filerna
+/Users/main/VATSIM/drive_c/EUROSCOPE/ESAA/Plugins/TopSkyCPDLC.txt
+/Users/main/VATSIM/drive_c/EUROSCOPE/ESAA/Plugins/TopSkyCPDLChoppieCode.txt
+
+
+curl -i "http://www.hoppie.nl/acars/system/connect.html?logon=$HOPPIECODE&from=VATEFSTEST&to=VATEFSTEST&type=ping"
+
+Skicka meddelande från MITEST till MOTEST genom http://hoppie.nl/acars/system/cpdlc.html
+
+Polla..
+curl -i 'http://www.hoppie.nl/acars/system/connect.html?logon=HOPPIECODE&from=MOTEST&to=MOTEST&type=poll'
+funkar... (/data2/1471//NE/HELLO WORLD)
+
+Prova skicka med curl
+curl -i 'http://www.hoppie.nl/acars/system/connect.html?logon=HOPPIECODE&from=MITEST&to=MOTEST&type=cpdlc&packet=HELLO'
+
+Polla.. funkar (HELLO)
+
+
+
+/data2: ?
+/1471: MIN/message id
+/: MRN (the message id you're replying to)
+/NE: NE=no response, WU=wilco/unable, AN=affirm/negative, R=roger, NE=not required
+
+
+
+P: /data2/0//Y/REQUEST LOGON
+ATC: /data2/31/0/NE/LOGON ACCEPTED
+ATC: 	/data2/32//NE/CURRENT ATC UNIT@_@LONC@_@LONDON CTL
+P (telex): REQUEST PREDEP CLEARANCE BCS98 A306 TO EDDH AT EGNX STAND 103 ATIS NA
+ATC: /data2/34//NE/DEPART REQUEST STATUS . FSM 1300 260210 EGNX @BCS98@ RCD RECEIVED @REQUEST BEING PROCESSED @STANDBY
+ATC: /data2/38//NE/DEPART REQUEST STATUS . FSM 1304 260210 EGNX @BCS98@ RCD REJECTED @REVERT TO VOICE PROCEDURES
+
+
+P (telex): REQUEST PREDEP CLEARANCE BAW811N A320 TO EGLL AT EKCH STAND C27 ATIS C DE-ICING REQUIRED
+ATC: /data2/1//NE/DEPART REQUEST STATUS . FSM 1314 260210 EKCH @BAW811N@ RCD RECEIVED @REQUEST BEING PROCESSED @STANDBY
+ATC: /data2/2//WU/EKCH PDC 001 . . . . . CLD 1314 260210 EKCH PDC 001 @BAW811N@ CLRD TO: @EGLL@ RWY: @22R@ SID: @LANGO2C@ SQK: @1217@ ATIS @C@ NEXT FRQ: @119.805@
+P: /data2/1/2/N/WILCO
+ATC: /data2/3//NE/ATC REQUEST STATUS . . FSM 1316 260210 EKCH @BAW811N@ CDA RECEIVED @CLEARANCE CONFIRMED
+
+REQUEST PREDEP CLEARANCE SAS7243 A319 TO LOWI AT EKCH STAND B6 ATIS G
+/data2/19//NE/DEPART REQUEST STATUS . FSM 1444 260210 EKCH @SAS7243@ RCD RECEIVED @REQUEST BEING PROCESSED @STANDBY
+/data2/20//WU/EKCH PDC 004 . . . . . CLD 1444 260210 EKCH PDC 004 @SAS7243@ CLRD TO: @LOWI@ RWY: @22R@ SID: @SALO1C@ SQK: @2157@ ATIS @G@ NEXT FRQ: @118.105@
+/data2/1/20/N/WILCO
+/data2/22//NE/ATC REQUEST STATUS . . FSM 1447 260210 EKCH @SAS7243@ CDA RECEIVED @CLEARANCE CONFIRMED
+
+
+[DCL]
+DCL:ESGG:SID:CLRD TO <ades> OFF <drwy> VIA <sid> SQUAWK <assr> EOBT <eobt> REQUEST START-UP AND PUSH-BACK FROM <freq_next> <rmk>
+DCL:ESSA:SID:CLRD TO <ades> OFF <drwy> VIA <sid> ALT <cfl> SQUAWK <assr> NEXT FREQ <freq_own> <atis> <qnh> MONITOR <freq_own> AND REPORT READY <rmk>

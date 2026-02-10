@@ -14,7 +14,11 @@
       "Bash(npx esbuild:*)",
       "WebFetch(domain:daim.lfv.se)",
       "Bash(git stash:*)",
-      "Bash(cmake --build:*)"
+      "Bash(cmake --build:*)",
+      "WebFetch(domain:hoppie.nl)",
+      "WebSearch",
+      "WebFetch(domain:www.hoppie.nl)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

@@ -22,6 +22,8 @@ export type {
     SectionMessage,
     RefreshMessage,
     StatusMessage,
+    DclStatusMessage,
+    HoppieMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,
@@ -31,6 +33,7 @@ export type {
     AssignmentType,
     StripAssignMessage,
     DeleteStripMessage,
+    DclActionMessage,
     ClientMessage
 } from "./messages.js"
 
