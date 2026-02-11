@@ -208,13 +208,12 @@ actionRules:
     groundstates: [TXIN]
     priority: 77
 
-  # Arrivals on ground (not airborne, not on runway): TXI (taxi in)
+  # Arrivals on ground (not airborne): TXI (taxi in)
   txi_arr:
     action: TXI
     direction: arrival
     controller: myself
     groundstates: ['', NSTS, ARR]
-    clearedToLand: false
     airborne: false
     priority: 76
 
@@ -224,7 +223,7 @@ actionRules:
     sectionId: push_start
     direction: departure
     controller: myself
-    groundstates: [PUSH]
+    groundstates: [PUSH, STUP]
     priority: 75
 
   # PENDING DEP departures without clearance: CLNC (open clearance dialog)

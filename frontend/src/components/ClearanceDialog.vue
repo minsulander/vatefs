@@ -159,12 +159,20 @@ async function applyDefaultCfl() {
   }
 }
 
+// Auto-assign squawk if empty
+function applyDefaultSquawk() {
+  if (!props.strip.squawk && props.strip.canResetSquawk) {
+    store.sendStripAction(props.strip.id, 'resetSquawk')
+  }
+}
+
 // When dialog opens, fetch data and reset remarks
 watch(dialogOpen, (open) => {
   if (open) {
     fetchRunways()
     fetchSids()
     applyDefaultCfl()
+    applyDefaultSquawk()
     remarks.value = ''
   } else {
     activeDropdown.value = null

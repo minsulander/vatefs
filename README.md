@@ -17,6 +17,11 @@ cd ../frontend
 npm start
 ```
 
+To be able to reach the frontend from another device:
+```sh
+npm start -- --host
+```
+
 Some other options:
 ```sh
 # Online mode - airports discovered from EuroScope's rwyconfig

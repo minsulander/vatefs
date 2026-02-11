@@ -1,7 +1,25 @@
+Att reda ut:
+- Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
 
-- Context menu kunna backa states (onödigt? kan ju flytta)
 
-- Fler move actions (se ovan mm), lista vilka
+Test ESSA 2026-02-11:
+
+- Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
+- Frontend: fullscreen knappen funkar inte på iPad brave
+- Frontend: fula fonter på iPad
+
+Idéer:
+- Highlight QNH när den ändras, kvittera med klick
+- Visa ADES i CLNC dialog (och utskrivet)
+- Highlighta PARK när de når sitt stand?
+- Highlighta XFER när de passerar ut ur CTR ... lätt att glömma
+- Indikera/göm XFER under viss höjd? 
+- DCL funka fint! Dock lätt missa. Ljud? Blink?
+- Indikera SLOW i CLNC dialog
+- CFL (och andra) dropdowns highlight och scroll till det som nu är satt
+
+
+- Fler move actions, lista vilka
 
 - Generell automove rule att om jag flyttat en strip manuellt får den inte flytta tillbaka till den jag flyttade från
 
@@ -17,8 +35,13 @@
 
 - Skilja på DEP RWY, ARR RWY i ESSA layout
 
-- Inte visa ASSUME på avgående i CTR DEP efter XFER
+- Inte ta med massa små okontrollerade flygplatser som ESEB ESEN
 
+- DCL svara FLIGHT PLAN NOT HELD i de fall det är aktuellt
+/data2/1//NE/FSM 2059 260211 ---- DLH5MR RCD REJECTED @FLIGHT PLAN NOT HELD @REVERT TO VOICE PROCEDURES
+
+- DCL om vi inte får wilco/unable efter 10 minuter:
+/data2/24/21/NE/ATC REQUEST STATUS . . FSM 1920 260211 EDDM @DLH1KT@ ACK NOT RECEIVED @CLEARANCE CANCELLED @REVERT TO VOICE PROCEDURES
 
 
 Actions:
@@ -26,13 +49,13 @@ Actions:
 
 Vidare i livet:
 - Fyll FPL dialogen med all vettig info
-- Överflygare, "local VFR", helikopter
+- Överflygare, "local VFR", helikopter, (SELVO GG-scenario)
+- Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
-- Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
-
+- GO-AROUND
 
 Tekniskt / icke-funktionellt:
 - Nåt sätt att välja/ladda config osv.
@@ -40,3 +63,5 @@ Tekniskt / icke-funktionellt:
 - Refactor plugin, extrahera metoder, ta bort testkommandon
 - Bättre bygge, inte behöva manuellt bygga common först
 
+- Plugin starta backend?
+- Visa QR-kod för adressen som man kan scanna med sin iPad

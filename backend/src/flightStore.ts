@@ -45,6 +45,25 @@ export interface ProcessMessageResult {
 }
 
 /**
+ * Extract display SID from a flight. EuroScope's GetSid() doesn't return
+ * special SID names (e.g. "040·330·RESNA" at ESSA, "VFR·HALL" at ESGG),
+ * but they appear as the first term of the route (before the /runway).
+ * Falls back to flight.sid if route doesn't contain a special SID.
+ */
+function extractDisplaySid(flight: Flight): string | undefined {
+    if (flight.route) {
+        const firstTerm = flight.route.split(' ')[0]!
+        const slashIdx = firstTerm.indexOf('/')
+        if (slashIdx < 0) return flight.sid
+        const prefix = firstTerm.substring(0, slashIdx)
+        if (flight.origin && flight.sid && prefix != flight.origin && prefix != flight.sid) {
+            return prefix
+        }
+    }
+    return flight.sid
+}
+
+/**
  * Store for managing Flight objects built from EuroScope plugin messages
  */
 class FlightStore {
@@ -532,17 +551,15 @@ class FlightStore {
         // Auto-set PARK for uncontrolled arrivals stationary at a stand (observer mode support)
         this.tryAutoSetParked(flight)
 
-        // Check for airborne status
-        // Aircraft is airborne if altitude > field elevation + 300ft
-        const fieldElevation = getFieldElevationForFlight(flight, this.config)
-        const airborneThreshold = fieldElevation + 50
         const wasAirborne = flight.airborne ?? false
-        const isNowAirborne = message.altitude > airborneThreshold
+        const fieldElevation = getFieldElevationForFlight(flight, this.config)
+        const airborneThreshold = fieldElevation + 200
+        const groundSpeedThreshold = 35
 
         // Set airborne flag for both departures and arrivals
-        if (!wasAirborne && isNowAirborne) {
+        if (!wasAirborne && message.altitude > airborneThreshold) {
             flight.airborne = true
-        } else if (wasAirborne && !isNowAirborne) {
+        } else if (wasAirborne && message.altitude <= airborneThreshold && message.groundSpeed <= groundSpeedThreshold) {
             // Aircraft has landed
             flight.airborne = false
         }
@@ -725,10 +742,8 @@ class FlightStore {
             // If tracked by someone else (not us, not handoff to us) - no actions
         }
 
-        // Transfer frequency: show when handoff target matches next controller
         let xferFrequency: string | undefined
-        if (flight.nextControllerFrequency && flight.nextController && flight.handoffTargetController &&
-            flight.nextController === flight.handoffTargetController) {
+        if (flight.nextControllerFrequency && flight.nextController) {
             xferFrequency = flight.nextControllerFrequency.toFixed(3)
         }
 
@@ -749,7 +764,7 @@ class FlightStore {
             route: flight.route,
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
-            sid: flight.sid,
+            sid: extractDisplaySid(flight),
             rfl,
             squawk: flight.squawk,
             clearedAltitude,

@@ -203,6 +203,10 @@ function onDragEnd() {
 function onDragAreaTouchStart(event: TouchEvent) {
   if (event.touches.length !== 1) return
 
+  // Don't start drag when touching interactive elements (action buttons, etc.)
+  const target = event.target as HTMLElement
+  if (target.closest('.action-button') || target.closest('.squawk-empty')) return
+
   touchStarted = true
 
   const touch = event.touches[0]

@@ -452,7 +452,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     message["type"] = "radarTargetPositionUpdate";
     SetJsonIfValidUtf8(message, "callsign", RadarTarget.GetCallsign());
     message["verticalSpeed"] = RadarTarget.GetVerticalSpeed();
-    message["gs"] = RadarTarget.GetGS();
+    message["groundSpeed"] = RadarTarget.GetGS();
     auto position = RadarTarget.GetPosition();
     if (position.IsValid()) {
         message["latitude"] = position.GetPosition().m_Latitude;

@@ -121,9 +121,9 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
         .replace(/<cfl>/g, data.cfl)
         .replace(/<freq_own>/g, data.freq_own)
         .replace(/<freq_next>/g, data.freq_next)
-        .replace(/<atis>/g, data.atis)
-        .replace(/<qnh>/g, data.qnh)
-        .replace(/<rmk>/g, data.rmk)
+        .replace(/<atis>/g, `ATIS ${data.atis}`)
+        .replace(/<qnh>/g, `QNH ${data.qnh}`)
+        .replace(/ ?<rmk>/g, data.rmk ? ` ${data.rmk}` : "")
 }
 
 /**
@@ -143,7 +143,7 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
         .replace(/<cfl>/g, `@${data.cfl}@`)
         .replace(/<freq_own>/g, `@${data.freq_own}@`)
         .replace(/<freq_next>/g, `@${data.freq_next}@`)
-        .replace(/<atis>/g, `@${data.atis}@`)
-        .replace(/<qnh>/g, `@${data.qnh}@`)
-        .replace(/<rmk>/g, `@${data.rmk}@`)
+        .replace(/<atis>/g, `ATIS @${data.atis}@`)
+        .replace(/<qnh>/g, `@QNH ${data.qnh}@`)
+        .replace(/ ?<rmk>/g, data.rmk ? ` @${data.rmk}@` : "")
 }

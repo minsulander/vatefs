@@ -1435,8 +1435,10 @@ udpIn.on("message", (msg, rinfo) => {
                 const activeRunways = extractActiveRunways(msg.rwyconfig as Record<string, Record<string, unknown>>)
                 setActiveRunways(activeRunways)
 
-                // Start/restart ATIS polling
-                startAtisService()
+                // Start ATIS polling if not already running
+                if (!atisService) {
+                    startAtisService()
+                }
             }
 
             // Broadcast updated status to all clients
