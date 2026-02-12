@@ -38,7 +38,7 @@ import { flightStore } from "./flightStore.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage } from "./types.js"
-import { loadAirports, getAirportCount } from "./airport-data.js"
+import { loadAirports, getAirportCount, getAirportByIcao } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
@@ -280,7 +280,7 @@ let atisService: AtisService | null = null
 if (cliArgs.mock) {
     // Apply mock myselfUpdate to set callsign and airports
     setMyCallsign(mockMyselfUpdate.callsign)
-    const mockAirports = Object.keys(mockMyselfUpdate.rwyconfig)
+    const mockAirports = Object.keys(mockMyselfUpdate.rwyconfig).filter((a) => getAirportByIcao(a))
     if (mockAirports.length > 0) {
         setMyAirports(mockAirports)
     }
@@ -1500,18 +1500,20 @@ udpIn.on("message", (msg, rinfo) => {
                         }
                     }
                 }
-                if (discoveredAirports.length > 0) {
+                // Only include airports that exist in airports.csv (skip small/uncontrolled fields)
+                const knownAirports = discoveredAirports.filter((a) => getAirportByIcao(a))
+                if (knownAirports.length > 0) {
                     const previousAirports = [...staticConfig.myAirports]
-                    const airportsChanged = JSON.stringify(previousAirports.sort()) !== JSON.stringify(discoveredAirports.sort())
+                    const airportsChanged = JSON.stringify(previousAirports.sort()) !== JSON.stringify(knownAirports.sort())
 
-                    setMyAirports(discoveredAirports)
-                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${discoveredAirports.join(", ")}`)
+                    setMyAirports(knownAirports)
+                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${knownAirports.join(", ")}`)
 
                     // If airports changed, we need to refresh
                     if (airportsChanged && previousAirports.length > 0) {
                         console.log(`Airports changed, clearing store`)
                         store.clear()
-                        broadcastRefresh(`Airports changed to ${discoveredAirports.join(", ")}`)
+                        broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
                     }
                 }
 

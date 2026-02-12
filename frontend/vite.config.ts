@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
 import fonts from 'unplugin-fonts/vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -28,6 +29,35 @@ export default defineConfig({
             weights: [100, 300, 400, 500, 700, 900],
             styles: ['normal', 'italic'],
           },
+        ],
+      },
+    }),
+
+    VitePWA({
+      registerType: 'autoUpdate',
+      devOptions: {
+        enabled: true,
+      },
+      manifest: {
+        name: "VatEFS",
+        short_name: "VatEFS",
+        description: "VATSIM Electronic Flight Strip application",
+        theme_color: "#1e2022",
+        icons: [
+            {
+                src: "/android-icon-192x192.png",
+                sizes: "192x192",
+                type: "image/png",
+            }
+        ],
+        screenshots: [
+            {
+                src: "/screenshots/1024.png",
+                sizes: "1024x768",
+                type: "image/png",
+                form_factor: "wide",
+                label: "VatEFS",
+            }
         ],
       },
     }),
