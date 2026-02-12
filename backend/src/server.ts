@@ -46,7 +46,9 @@ import type { DclStatus } from "./hoppie-service.js"
 // __filename and __dirname are provided by esbuild's CJS output
 
 // Data directory path (relative to backend root when running from src/)
-const dataDir = path.resolve(__dirname, "../../data")
+let dataDir = path.resolve(__dirname, "../../data")
+if (!fs.existsSync(dataDir)) dataDir = path.resolve(__dirname, "../data")
+if (!fs.existsSync(dataDir)) dataDir = path.resolve(__dirname, "data")
 
 const port = 17770
 const udpInPort = 17771
@@ -1320,8 +1322,10 @@ app.get("/api/dcl/status", (req, res) => {
     res.json({ status: currentDclStatus, error: currentDclError })
 })
 
-app.use(serveStatic(path.resolve(__dirname, "../public")))
-app.get("/*splat", (req, res) => res.sendFile(path.resolve(__dirname, "../public") + "/index.html"))
+let publicDir = path.resolve(__dirname, "../public")
+if (!fs.existsSync(publicDir)) publicDir = path.resolve(__dirname, "public")
+app.use(serveStatic(publicDir))
+app.get("/*splat", (req, res) => res.sendFile(publicDir + "/index.html"))
 const server = app.listen(port, () => console.log(`EFS backend ${constants.version} listening at http://127.0.0.1:${port}`))
 server.on("upgrade", (request, socket, head) => {
     wsServer.handleUpgrade(request, socket, head, (socket) => {

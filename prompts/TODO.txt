@@ -1,6 +1,10 @@
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
 
+- Kolla om ESSA slow-SIDs inte kom i "sid" fältet berodde på UTF8 jox, 
+  om det kan fixas i pluginen, ta bort specialhantering av SID namn
+
+
 
 Test ESSA 2026-02-11:
 
@@ -58,6 +62,7 @@ Vidare i livet:
 - GO-AROUND
 
 Tekniskt / icke-funktionellt:
+- Plugin inte göra nånting (minimera risk för krascher, nätverksstrul) om ingen klient connectad
 - Nåt sätt att välja/ladda config osv.
 - Smidig paketering.
 - Refactor plugin, extrahera metoder, ta bort testkommandon
