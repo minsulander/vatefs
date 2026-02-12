@@ -57,6 +57,15 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::string connectionError;
     std::vector<DummyRadarScreen *> dummyRadarScreens;
 
+    void* backendProcess; // HANDLE to the efs.exe process (void* to avoid windows.h in header)
+    void* backendOutputRead; // HANDLE to the read end of stdout/stderr pipe
+    void* backendLogFile; // HANDLE to VatEFS.log
+    std::string backendLineBuf; // partial line buffer for pipe reads
+    void StartBackend();
+    void StopBackend();
+    void CleanupBackendHandles();
+    void PollBackendOutput();
+
     void InitializeWinsock();
     void CleanupWinsock();
     void InitializeUdpReceiveSocket();

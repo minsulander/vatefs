@@ -68,5 +68,4 @@ Tekniskt / icke-funktionellt:
 - Refactor plugin, extrahera metoder, ta bort testkommandon
 - Bättre bygge, inte behöva manuellt bygga common först
 
-- Plugin starta backend?
 - Visa QR-kod för adressen som man kan scanna med sin iPad

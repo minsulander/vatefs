@@ -5,6 +5,15 @@ import logRequests from "morgan"
 import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
+import { inspect } from "util"
+
+// Force synchronous stdout/stderr so output isn't buffered when piped
+function formatArgs(args: unknown[]): string {
+    return args.map(a => typeof a === "string" ? a : inspect(a)).join(" ")
+}
+console.log = (...args: unknown[]) => { fs.writeSync(1, formatArgs(args) + "\n") }
+console.warn = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
+console.error = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 
 import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
 import type {
@@ -1365,7 +1374,7 @@ let publicDir = path.resolve(__dirname, "../public")
 if (!fs.existsSync(publicDir)) publicDir = path.resolve(__dirname, "public")
 app.use(serveStatic(publicDir))
 app.get("/*splat", (req, res) => res.sendFile(publicDir + "/index.html"))
-const server = app.listen(port, () => console.log(`EFS backend ${constants.version} listening at http://127.0.0.1:${port}`))
+const server = app.listen(port, "0.0.0.0", () => console.log(`EFS backend ${constants.version} listening at http://0.0.0.0:${port}`))
 server.on("upgrade", (request, socket, head) => {
     wsServer.handleUpgrade(request, socket, head, (socket) => {
         wsServer.emit("connection", socket, request)

@@ -43,6 +43,9 @@ VatEFSPlugin::VatEFSPlugin()
     debug = false;
     udpReceiveSocket = nullptr;
     winsockInitialized = false;
+    backendProcess = nullptr;
+    backendOutputRead = nullptr;
+    backendLogFile = nullptr;
 
     GetModuleFileNameA(HINSTANCE(&__ImageBase), DllPathFile, sizeof(DllPathFile));
     std::string settingsPath = DllPathFile;
@@ -66,6 +69,17 @@ VatEFSPlugin::VatEFSPlugin()
 
 VatEFSPlugin::~VatEFSPlugin()
 {
+    // Kill the backend process if we started it
+    if (backendProcess != nullptr) {
+        DWORD exitCode = 0;
+        if (GetExitCodeProcess((HANDLE)backendProcess, &exitCode) && exitCode == STILL_ACTIVE) {
+            TerminateProcess((HANDLE)backendProcess, 0);
+            WaitForSingleObject((HANDLE)backendProcess, 5000);
+        }
+        CloseHandle((HANDLE)backendProcess);
+        backendProcess = nullptr;
+    }
+    CleanupBackendHandles();
     CleanupUdpReceiveSocket();
     CleanupWinsock();
 }
@@ -636,6 +650,23 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         Refresh();
         DisplayMessage("Refreshed all flight plans and radar targets");
         return true;
+    } else if (subcommand == "start") {
+        StartBackend();
+        return true;
+    } else if (subcommand == "stop") {
+        StopBackend();
+        return true;
+    } else if (subcommand == "status") {
+        if (backendProcess == nullptr) {
+            DisplayMessage("Backend is not running");
+        } else {
+            DWORD exitCode = 0;
+            if (GetExitCodeProcess((HANDLE)backendProcess, &exitCode) && exitCode == STILL_ACTIVE)
+                DisplayMessage("Backend is running");
+            else
+                DisplayMessage("Backend process has exited");
+        }
+        return true;
     }
     return false;
 }
@@ -643,6 +674,9 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 void VatEFSPlugin::OnTimer(int counter)
 {
     try {
+        // Poll backend stdout/stderr pipe (msg mode) — runs regardless of connection state
+        PollBackendOutput();
+
         if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT ||
                          GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX ||
                          GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK)) {
@@ -1457,6 +1491,157 @@ void VatEFSPlugin::PostJson(const nlohmann::json &jsonData, const char *whereabo
     if (!connectionError.empty()) {
         DisplayMessage(std::string("PostJson: ") + connectionError);
     }
+}
+
+
+void VatEFSPlugin::CleanupBackendHandles()
+{
+    if (backendOutputRead != nullptr) {
+        CloseHandle((HANDLE)backendOutputRead);
+        backendOutputRead = nullptr;
+    }
+    if (backendLogFile != nullptr) {
+        CloseHandle((HANDLE)backendLogFile);
+        backendLogFile = nullptr;
+    }
+    backendLineBuf.clear();
+}
+
+void VatEFSPlugin::PollBackendOutput()
+{
+    if (backendOutputRead == nullptr) return;
+
+    char buf[4096];
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe((HANDLE)backendOutputRead, NULL, 0, NULL, &avail, NULL) || avail == 0)
+            break;
+        DWORD bytesRead = 0;
+        DWORD toRead = (avail < sizeof(buf)) ? avail : sizeof(buf);
+        if (!ReadFile((HANDLE)backendOutputRead, buf, toRead, &bytesRead, NULL) || bytesRead == 0)
+            break;
+
+        // Write raw data to log file
+        if (backendLogFile != nullptr) {
+            DWORD written = 0;
+            WriteFile((HANDLE)backendLogFile, buf, bytesRead, &written, NULL);
+        }
+
+        // If debug, also emit complete lines to EuroScope messages
+        if (debug) {
+            backendLineBuf.append(buf, bytesRead);
+            std::string::size_type pos;
+            while ((pos = backendLineBuf.find('\n')) != std::string::npos) {
+                std::string line = backendLineBuf.substr(0, pos);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                backendLineBuf.erase(0, pos + 1);
+                if (!line.empty())
+                    DebugMessage(line, "EFS backend");
+            }
+        }
+    }
+}
+
+void VatEFSPlugin::StartBackend()
+{
+    if (backendProcess != nullptr) {
+        DWORD exitCode = 0;
+        if (GetExitCodeProcess((HANDLE)backendProcess, &exitCode) && exitCode == STILL_ACTIVE) {
+            // Stop the running backend before restarting
+            PollBackendOutput();
+            TerminateProcess((HANDLE)backendProcess, 0);
+            WaitForSingleObject((HANDLE)backendProcess, 5000);
+        }
+        CloseHandle((HANDLE)backendProcess);
+        backendProcess = nullptr;
+        CleanupBackendHandles();
+    }
+
+    const char *exePath = "C:\\Program Files\\VATEFS\\efs.exe";
+    DWORD attrib = GetFileAttributesA(exePath);
+    if (attrib == INVALID_FILE_ATTRIBUTES) {
+        DisplayMessage("Backend not found: " + std::string(exePath));
+        return;
+    }
+
+    // Open log file in the plugin directory
+    std::string logPath = DllPathFile;
+    logPath.resize(logPath.size() - strlen("VatEFS.dll"));
+    logPath += "VatEFS.log";
+
+    HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hLog == INVALID_HANDLE_VALUE) {
+        DisplayMessage("Failed to create log file: " + logPath +
+                       " (error " + std::to_string(GetLastError()) + ")");
+        return;
+    }
+    backendLogFile = hLog;
+
+    // Create pipe to capture stdout/stderr
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        DisplayMessage("Failed to create pipe (error " + std::to_string(GetLastError()) + ")");
+        CleanupBackendHandles();
+        return;
+    }
+    // The read end should not be inherited by the child
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+    backendOutputRead = hRead;
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = CreateProcessA(exePath, NULL, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    // Close the write end of the pipe in the parent — the child has its own copy
+    CloseHandle(hWrite);
+
+    if (!ok) {
+        DisplayMessage("Failed to start backend (error " + std::to_string(GetLastError()) + ")");
+        CleanupBackendHandles();
+        return;
+    }
+
+    CloseHandle(pi.hThread);
+    backendProcess = pi.hProcess;
+    DisplayMessage("Backend started, logging to " + logPath);
+}
+
+void VatEFSPlugin::StopBackend()
+{
+    if (backendProcess == nullptr) {
+        DisplayMessage("Backend is not running");
+        return;
+    }
+
+    // Drain any remaining pipe output before stopping
+    PollBackendOutput();
+
+    DWORD exitCode = 0;
+    if (GetExitCodeProcess((HANDLE)backendProcess, &exitCode) && exitCode != STILL_ACTIVE) {
+        CloseHandle((HANDLE)backendProcess);
+        backendProcess = nullptr;
+        CleanupBackendHandles();
+        DisplayMessage("Backend had already exited");
+        return;
+    }
+
+    TerminateProcess((HANDLE)backendProcess, 0);
+    WaitForSingleObject((HANDLE)backendProcess, 5000);
+    CloseHandle((HANDLE)backendProcess);
+    backendProcess = nullptr;
+    CleanupBackendHandles();
+    DisplayMessage("Backend stopped");
 }
 
 

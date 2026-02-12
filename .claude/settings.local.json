@@ -24,7 +24,9 @@
       "WebFetch(domain:npmtrends.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm view:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(dir:*)",
+      "Bash(ls:*)"
     ]
   }
 }
