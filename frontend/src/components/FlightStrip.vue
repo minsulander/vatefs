@@ -924,10 +924,17 @@ function onDeleteConfirm() {
 /* DCL status coloring for CLNC button */
 .action-dcl-request {
   background: linear-gradient(to bottom, #fdd835, #f9a825) !important;
+  animation: dcl-flash 0.8s ease-in-out infinite;
 }
 
 .action-dcl-request:hover {
   background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
+  animation: none;
+}
+
+@keyframes dcl-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .action-dcl-error {

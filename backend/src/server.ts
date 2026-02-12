@@ -42,6 +42,7 @@ import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
+import { loadDclSound, playDclSound } from "./sound.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
 
@@ -158,6 +159,8 @@ if (EUROSCOPE_DIR) {
     }
     // Load Hoppie config (logon code + DCL templates)
     loadHoppieConfig(EUROSCOPE_DIR)
+    // Load DCL notification sound
+    loadDclSound(EUROSCOPE_DIR)
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
 }
@@ -607,13 +610,13 @@ function handleDclRequest(from: string, packet: string) {
     const flight = flightStore.getFlight(callsign!)
     if (!flight) {
         console.log(`[DCL] Flight ${callsign} not found in store`)
-        // Send reject
+        // Send reject with "flight plan not held"
         if (hoppieService) {
             const seq = hoppieService.getNextSeq()
             hoppieService.sendMessage(
                 from,
                 "cpdlc",
-                `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign} @${from}@ RCD REJECTED @REVERT TO VOICE PROCEDURES`,
+                `/data2/${seq}//NE/FSM ${time} ${date} ${dclCallsign ?? "----"} ${from} RCD REJECTED @FLIGHT PLAN NOT HELD @REVERT TO VOICE PROCEDURES`,
             )
         }
         return
@@ -623,6 +626,9 @@ function handleDclRequest(from: string, packet: string) {
     console.log(`[DCL] Valid request from ${from} for ${callsign} at ${airport}`)
     flight.dclStatus = "REQUEST"
     flight.dclMessage = packet
+
+    // Play notification sound
+    playDclSound()
 
     // Build clearance preview
     const templateData = buildDclTemplateData(flight, "")
@@ -677,6 +683,7 @@ function handleCpdlcResponse(from: string, packet: string) {
     if (response!.toUpperCase() === "WILCO" && flight.dclStatus === "SENT") {
         console.log(`[DCL] WILCO from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "DONE"
+        flight.dclSentAt = undefined
 
         // End fast polling since we got the response
         hoppieService?.endFastPoll()
@@ -703,6 +710,7 @@ function handleCpdlcResponse(from: string, packet: string) {
     } else if (response!.toUpperCase() === "UNABLE") {
         console.log(`[DCL] UNABLE from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "UNABLE"
+        flight.dclSentAt = undefined
 
         // End fast polling since we got the response
         hoppieService?.endFastPoll()
@@ -912,6 +920,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.dclClearance = undefined
                         flight.dclSeqNumber = undefined
                         flight.dclPdcNumber = undefined
+                        flight.dclSentAt = undefined
                     }
                 }
 
@@ -1190,6 +1199,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 flight.dclSeqNumber = seq
                 flight.dclPdcNumber = pdc
                 flight.dclClearance = plainClearance
+                flight.dclSentAt = Date.now()
 
                 console.log(`[DCL] Sent clearance to ${strip.callsign} (seq=${seq}, pdc=${pdcStr})`)
             }
@@ -1598,6 +1608,56 @@ udpIn.on("error", (err) => {
 udpIn.bind(udpInPort, () => {
     console.log(`UDP listener bound to port ${udpInPort}`)
 })
+
+// DCL timeout check - cancel clearances that haven't received WILCO/UNABLE within 10 minutes
+const DCL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+const DCL_CHECK_INTERVAL_MS = 30 * 1000 // Check every 30 seconds
+
+function checkDclTimeouts() {
+    if (!hoppieService) return
+
+    const now = Date.now()
+    const flights = flightStore.getAllFlights()
+
+    for (const flight of flights) {
+        if (flight.dclStatus === "SENT" && flight.dclSentAt && flight.dclSeqNumber !== undefined) {
+            const elapsed = now - flight.dclSentAt
+            if (elapsed >= DCL_TIMEOUT_MS) {
+                console.log(`[DCL] Timeout for ${flight.callsign} (sent ${Math.round(elapsed / 1000)}s ago)`)
+
+                const dclCallsign = getDclCallsign()
+                const { time, date } = formatTimestamp()
+                const seq = hoppieService.getNextSeq()
+
+                hoppieService.sendMessage(
+                    flight.callsign,
+                    "cpdlc",
+                    `/data2/${seq}/${flight.dclSeqNumber}/NE/ATC REQUEST STATUS . . FSM ${time} ${date} ${dclCallsign ?? "----"} @${flight.callsign}@ ACK NOT RECEIVED @CLEARANCE CANCELLED @REVERT TO VOICE PROCEDURES`,
+                )
+
+                // Reset DCL state
+                flight.dclStatus = undefined
+                flight.dclMessage = undefined
+                flight.dclClearance = undefined
+                flight.dclSeqNumber = undefined
+                flight.dclPdcNumber = undefined
+                flight.dclSentAt = undefined
+
+                // End fast polling since we're giving up
+                hoppieService.endFastPoll()
+
+                // Regenerate and broadcast strip
+                const strip = flightStore.regenerateStrip(flight.callsign)
+                if (strip) {
+                    store.updateStripFromFlight(strip)
+                    broadcastStrip(strip)
+                }
+            }
+        }
+    }
+}
+
+setInterval(checkDclTimeouts, DCL_CHECK_INTERVAL_MS)
 
 // Calculate initial DCL availability (must be after hoppieService is declared)
 recalculateDclAvailability()

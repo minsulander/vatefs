@@ -9,7 +9,7 @@ Att reda ut:
 Test ESSA 2026-02-11:
 
 - Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
-- Frontend: fullscreen knappen funkar inte på iPad brave
+- Frontend: fullscreen knappen funkar inte på iPad brave (kanske inte går på iOS utan PWA?)
 - Frontend: fula fonter på iPad
 
 Idéer:
@@ -18,7 +18,7 @@ Idéer:
 - Highlighta PARK när de når sitt stand?
 - Highlighta XFER när de passerar ut ur CTR ... lätt att glömma
 - Indikera/göm XFER under viss höjd? 
-- DCL funka fint! Dock lätt missa. Ljud? Blink?
+-27 DCL funka fint! Dock lätt missa. Ljud? Blink?
 - Indikera SLOW i CLNC dialog
 - CFL (och andra) dropdowns highlight och scroll till det som nu är satt
 
@@ -27,7 +27,7 @@ Idéer:
 
 - Generell automove rule att om jag flyttat en strip manuellt får den inte flytta tillbaka till den jag flyttade från
 
-- Hantera flera FL positioner:
+-26 Hantera flera FL positioner:
   - XFER istför LU/CTO om jag är GND
   - XFER istför TXI om jag är TWR+ och GND online
   - READY istför PUSH om jag är DEL (DE-ICE + XFER)
@@ -41,10 +41,10 @@ Idéer:
 
 - Inte ta med massa små okontrollerade flygplatser som ESEB ESEN
 
-- DCL svara FLIGHT PLAN NOT HELD i de fall det är aktuellt
+-27 DCL svara FLIGHT PLAN NOT HELD i de fall det är aktuellt
 /data2/1//NE/FSM 2059 260211 ---- DLH5MR RCD REJECTED @FLIGHT PLAN NOT HELD @REVERT TO VOICE PROCEDURES
 
-- DCL om vi inte får wilco/unable efter 10 minuter:
+-27 DCL om vi inte får wilco/unable efter 10 minuter:
 /data2/24/21/NE/ATC REQUEST STATUS . . FSM 1920 260211 EDDM @DLH1KT@ ACK NOT RECEIVED @CLEARANCE CANCELLED @REVERT TO VOICE PROCEDURES
 
 

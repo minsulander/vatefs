@@ -19,7 +19,12 @@
       "WebSearch",
       "WebFetch(domain:www.hoppie.nl)",
       "WebFetch(domain:github.com)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:npmtrends.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm view:*)",
+      "Bash(python3:*)"
     ]
   }
 }
