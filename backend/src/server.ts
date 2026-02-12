@@ -26,9 +26,9 @@ import type {
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
-import type { MyselfUpdateMessage } from "./types.js"
+import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage } from "./types.js"
 import { loadAirports, getAirportCount } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
@@ -281,7 +281,10 @@ if (cliArgs.mock) {
         setActiveRunways(activeRunways)
     }
 
-    console.log(`Mock data enabled (callsign: ${mockMyselfUpdate.callsign}, airports: ${mockAirports.join(", ")})`)
+    // Set controller role from mock callsign (or CLI override)
+    const mockRole = parseControllerRole(cliArgs.callsign ?? mockMyselfUpdate.callsign, staticConfig.myAirports)
+    setMyRole(mockRole)
+    console.log(`Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${mockAirports.join(", ")})`)
 
     // Start ATIS polling for mock mode
     startAtisService()
@@ -341,12 +344,13 @@ function broadcastRefresh(reason?: string) {
     console.log(`Broadcast refresh to all clients: ${reason ?? "no reason"}`)
 }
 
-// Send status (callsign + airports) to a client
+// Send status (callsign + airports + role) to a client
 function sendStatus(socket: WebSocket) {
     const message: StatusMessage = {
         type: "status",
         callsign: staticConfig.myCallsign ?? "",
         airports: staticConfig.myAirports,
+        role: staticConfig.myRole,
     }
     sendMessage(socket, message)
 }
@@ -357,6 +361,7 @@ function broadcastStatus() {
         type: "status",
         callsign: staticConfig.myCallsign ?? "",
         airports: staticConfig.myAirports,
+        role: staticConfig.myRole,
     }
     broadcast(message)
 }
@@ -711,6 +716,18 @@ function handleCpdlcResponse(from: string, packet: string) {
     }
 }
 
+// Regenerate all strips (e.g., when online controller state changes)
+function regenerateAllStrips() {
+    const allStrips = store.getAllStrips()
+    for (const strip of allStrips) {
+        const regenerated = flightStore.regenerateStrip(strip.callsign)
+        if (regenerated) {
+            store.updateStripFromFlight(regenerated)
+            broadcastStrip(regenerated)
+        }
+    }
+}
+
 // Send layout to a client
 function sendLayout(socket: WebSocket) {
     const message: LayoutMessage = {
@@ -872,9 +889,16 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const strip = store.getStrip(message.stripId)
             if (strip) {
                 console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
-                const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
-                if (pluginCommand) {
-                    sendUdp(JSON.stringify(pluginCommand))
+
+                // READY is a compound action: set DE-ICE groundstate + transfer
+                if (message.action === "READY") {
+                    sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
+                    sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign }))
+                } else {
+                    const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
+                    if (pluginCommand) {
+                        sendUdp(JSON.stringify(pluginCommand))
+                    }
                 }
 
                 const flight = flightStore.getFlight(strip.callsign)
@@ -927,6 +951,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.clearedToLand = true
                             break
                         case "XFER":
+                            flight.controller = ""
+                            flight.handoffTargetController = ""
+                            break
+                        case "READY":
+                            flight.groundstate = "DE-ICE"
                             flight.controller = ""
                             flight.handoffTargetController = ""
                             break
@@ -1360,6 +1389,7 @@ udpIn.on("message", (msg, rinfo) => {
             setMyCallsign("")
             setMyAirports([])
             setIsController(false)
+            clearOnlineControllers()
             broadcastStatus()
             broadcastRefresh("Connection lost")
 
@@ -1378,6 +1408,30 @@ udpIn.on("message", (msg, rinfo) => {
             return
         }
 
+        // Handle controllerPositionUpdate - track online controllers at our airports
+        if (data.type === "controllerPositionUpdate") {
+            const msg = data as ControllerPositionUpdateMessage
+            if (!msg.me && msg.controller) {
+                const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports)
+                if (changed) {
+                    console.log(`Online controllers changed: DEL=${staticConfig.delOnline}, GND=${staticConfig.gndOnline}`)
+                    regenerateAllStrips()
+                }
+            }
+            return
+        }
+
+        // Handle controllerDisconnect - remove from online controller tracking
+        if (data.type === "controllerDisconnect") {
+            const msg = data as ControllerDisconnectMessage
+            const changed = removeOnlineController(msg.callsign)
+            if (changed) {
+                console.log(`Controller disconnected: ${msg.callsign}, DEL=${staticConfig.delOnline}, GND=${staticConfig.gndOnline}`)
+                regenerateAllStrips()
+            }
+            return
+        }
+
         // Handle myselfUpdate to set our callsign and discover airports
         if (data.type === "myselfUpdate") {
             const msg = data as MyselfUpdateMessage
@@ -1390,6 +1444,13 @@ udpIn.on("message", (msg, rinfo) => {
             }
 
             setIsController(msg.controller)
+
+            // Parse controller role from callsign (only when not in mock mode, which sets it at startup)
+            if (!cliArgs.mock && callsignChanged) {
+                const role = parseControllerRole(msg.callsign, staticConfig.myAirports)
+                setMyRole(role)
+                console.log(`Controller role: ${role}`)
+            }
 
             // Store frequency
             if (msg.frequency) {

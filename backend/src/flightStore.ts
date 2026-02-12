@@ -8,7 +8,7 @@ import type {
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
@@ -719,8 +719,15 @@ class FlightStore {
 
         if (!clearedForTakeoff && !clearedToLand) {
             if (isTrackedByMe && stripType === 'departure' && flight.groundstate === 'TAXI') {
-                // Special case: TAXI departures get LU+CTO
-                actions = ['LU', 'CTO']
+                // Special case: TAXI departures get LU+CTO (only for TWR)
+                const myRole = this.config.myRole ?? 'TWR'
+                if (myRole === 'TWR') {
+                    actions = ['LU', 'CTO']
+                } else {
+                    // GND/DEL: use rules engine (will return XFER for GND via config rule)
+                    const defaultAction = determineActionForFlight(flight, sectionId, this.config)
+                    if (defaultAction) actions = [defaultAction]
+                }
             } else if (isTrackedByMe) {
                 // We're the tracking controller - show action from rules
                 const defaultAction = determineActionForFlight(flight, sectionId, this.config)
@@ -745,6 +752,24 @@ class FlightStore {
         let xferFrequency: string | undefined
         if (flight.nextControllerFrequency && flight.nextController) {
             xferFrequency = flight.nextControllerFrequency.toFixed(3)
+        }
+
+        // Supplement xferFrequency from online controller tracking when flight data doesn't have it
+        if (!xferFrequency && actions?.length) {
+            const myRole = this.config.myRole ?? 'TWR'
+            const primaryAction = actions[0]
+            if (primaryAction === 'READY' && myRole === 'DEL') {
+                const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
+                if (freq) xferFrequency = freq.toFixed(3)
+            } else if (primaryAction === 'XFER') {
+                if (myRole === 'GND') {
+                    const freq = getControllerFrequency('TWR')
+                    if (freq) xferFrequency = freq.toFixed(3)
+                } else if (myRole === 'TWR' && stripType === 'arrival') {
+                    const freq = getControllerFrequency('GND')
+                    if (freq) xferFrequency = freq.toFixed(3)
+                }
+            }
         }
 
         // Can reset squawk if we're a controller and we track the flight (or it's untracked)

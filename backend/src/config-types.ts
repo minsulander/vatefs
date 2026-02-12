@@ -7,9 +7,14 @@ import type { EfsLayout } from "@vatefs/common"
 import type { GroundState } from "./types.js"
 
 /**
+ * Controller role derived from callsign suffix
+ */
+export type ControllerRole = 'DEL' | 'GND' | 'TWR'
+
+/**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY'
 
 /**
  * Flight direction relative to our airport
@@ -96,6 +101,15 @@ export interface SectionRule {
      * allowing lower-priority fallback rules to take over.
      */
     withinCtr?: boolean
+
+    /** My role must be one of these for the rule to match */
+    myRole?: ControllerRole[]
+
+    /** Whether a DEL controller is online at our airport */
+    delOnline?: boolean
+
+    /** Whether a GND controller is online at our airport */
+    gndOnline?: boolean
 }
 
 /**
@@ -146,6 +160,15 @@ export interface ActionRule {
      * Whether a handoff has been initiated (handoffTargetController is non-empty)
      */
     handoffInitiated?: boolean
+
+    /** My role must be one of these for the rule to match */
+    myRole?: ControllerRole[]
+
+    /** Whether a DEL controller is online at our airport */
+    delOnline?: boolean
+
+    /** Whether a GND controller is online at our airport */
+    gndOnline?: boolean
 }
 
 /**
@@ -189,6 +212,15 @@ export interface DeleteRule {
      * If CTR data is not available, this condition fails (rule does not match).
      */
     withinCtr?: boolean
+
+    /** My role must be one of these for the rule to match */
+    myRole?: ControllerRole[]
+
+    /** Whether a DEL controller is online at our airport */
+    delOnline?: boolean
+
+    /** Whether a GND controller is online at our airport */
+    gndOnline?: boolean
 }
 
 /**
@@ -224,6 +256,9 @@ export interface MoveRule {
 
     /** Flight direction at our airport */
     direction?: FlightDirection
+
+    /** My role must be one of these for the rule to match */
+    myRole?: ControllerRole[]
 
     // === Action to execute ===
 
@@ -273,4 +308,16 @@ export interface EfsStaticConfig {
 
     /** Active runways per airport, extracted from rwyconfig */
     activeRunways?: Record<string, { arr: string[]; dep: string[] }>
+
+    /** My controller role (DEL, GND, TWR) derived from callsign */
+    myRole?: ControllerRole
+
+    /** Online controllers at our airports, keyed by callsign */
+    onlineControllers?: Map<string, { role: ControllerRole; frequency: number; callsign: string }>
+
+    /** Whether a DEL controller is online at our airport */
+    delOnline?: boolean
+
+    /** Whether a GND controller is online at our airport */
+    gndOnline?: boolean
 }

@@ -9,6 +9,7 @@
 
 // Re-export types
 export type {
+    ControllerRole,
     StripAction,
     FlightDirection,
     ControllerCondition,
@@ -21,7 +22,21 @@ export type {
 } from "./config-types.js"
 
 // Re-export config and setter functions
-export { staticConfig, setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, applyConfig } from "./static-config.js"
+export {
+    staticConfig,
+    setMyCallsign,
+    setMyAirports,
+    setIsController,
+    setMyFrequency,
+    setActiveRunways,
+    applyConfig,
+    parseControllerRole,
+    setMyRole,
+    updateOnlineController,
+    removeOnlineController,
+    getControllerFrequency,
+    clearOnlineControllers
+} from "./static-config.js"
 
 // Re-export rules engine functions
 export {

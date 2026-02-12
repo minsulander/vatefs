@@ -8,6 +8,7 @@ import type {
     EfsStaticConfig,
     FlightDirection,
     ControllerCondition,
+    ControllerRole,
     SectionRule,
     ActionRule,
     DeleteRule,
@@ -29,6 +30,9 @@ type CommonRuleConditions = {
     clearedToLand?: boolean
     airborne?: boolean
     onRunway?: boolean
+    myRole?: ControllerRole[]
+    delOnline?: boolean
+    gndOnline?: boolean
 }
 
 function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
@@ -189,6 +193,21 @@ function evaluateCommonConditions(
     }
 
     if (rule.onRunway !== undefined && !evaluateOnRunwayCondition(flight, config, rule.onRunway)) {
+        return false
+    }
+
+    // myRole: if specified, config.myRole (default 'TWR') must be in the list
+    if (rule.myRole && !rule.myRole.includes(config.myRole ?? 'TWR')) {
+        return false
+    }
+
+    // delOnline: if specified, must match config.delOnline (default false)
+    if (rule.delOnline !== undefined && (config.delOnline ?? false) !== rule.delOnline) {
+        return false
+    }
+
+    // gndOnline: if specified, must match config.gndOnline (default false)
+    if (rule.gndOnline !== undefined && (config.gndOnline ?? false) !== rule.gndOnline) {
         return false
     }
 
@@ -426,6 +445,11 @@ function evaluateMoveRule(
         if (!isAtOurAirport(flight, config, rule.direction)) {
             return false
         }
+    }
+
+    // Check myRole condition
+    if (rule.myRole && !rule.myRole.includes(config.myRole ?? 'TWR')) {
+        return false
     }
 
     return true
