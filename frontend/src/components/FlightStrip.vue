@@ -52,7 +52,7 @@
         <!-- Time section -->
         <div class="strip-section strip-time">
           <div class="time-value">{{ displayTime }}</div>
-          <div class="time-label" v-if="strip.stripType === 'departure'">EOBT</div>
+          <div class="time-label" v-if="strip.stripType === 'departure' || strip.stripType === 'local'">EOBT</div>
           <div class="time-label" v-else>ETA</div>
         </div>
 
@@ -71,10 +71,10 @@
 
         <!-- Airports section -->
         <div class="strip-section strip-airports">
-          <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' }">
+          <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' || strip.stripType === 'local' }">
             <span class="icao">{{ strip.adep }}</span>
           </div>
-          <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' }">
+          <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' || strip.stripType === 'local' }">
             <span class="icao">{{ strip.ades }}</span>
           </div>
         </div>
@@ -159,7 +159,7 @@ const stripStyle = computed(() => {
 })
 
 const displayTime = computed(() => {
-  if (props.strip.stripType === 'departure') {
+  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
     return props.strip.eobt || ''
   }
   return props.strip.eta || ''
@@ -566,7 +566,6 @@ function onDeleteConfirm() {
   min-height: 44px;
   cursor: move;
   transition: all 0.12s ease;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 11px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
   user-select: none;
@@ -983,7 +982,6 @@ function onDeleteConfirm() {
 .delete-dialog {
   background: #2a2a2e;
   border: 2px solid #555;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   padding: 0;
 }
 
@@ -1004,7 +1002,6 @@ function onDeleteConfirm() {
   flex: 1;
   padding: 8px 0;
   border: none;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 12px;
   font-weight: bold;
   cursor: pointer;

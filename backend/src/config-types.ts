@@ -17,9 +17,13 @@ export type ControllerRole = 'DEL' | 'GND' | 'TWR'
 export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY'
 
 /**
- * Flight direction relative to our airport
+ * Flight direction relative to our airport.
+ * 'departure' = origin is our airport, destination is NOT (exclusive)
+ * 'arrival' = destination is our airport, origin is NOT (exclusive)
+ * 'local' = BOTH origin and destination are at our airports
+ * 'either' = any of the above (departure, arrival, or local)
  */
-export type FlightDirection = 'departure' | 'arrival' | 'either'
+export type FlightDirection = 'departure' | 'arrival' | 'local' | 'either'
 
 /**
  * Controller relationship for rule matching

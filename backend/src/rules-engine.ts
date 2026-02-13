@@ -40,7 +40,10 @@ function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
 }
 
 /**
- * Check if a flight is at one of our airports in the given direction
+ * Check if a flight is at one of our airports in the given direction.
+ * 'departure' and 'arrival' are exclusive — they do NOT match local flights.
+ * 'local' matches flights where BOTH origin and destination are at our airports.
+ * 'either' matches any of departure, arrival, or local.
  */
 export function isAtOurAirport(
     flight: Flight,
@@ -48,14 +51,18 @@ export function isAtOurAirport(
     direction: FlightDirection
 ): boolean {
     const myAirports = config.myAirports
+    const originIsOurs = flight.origin !== undefined && myAirports.includes(flight.origin)
+    const destIsOurs = flight.destination !== undefined && myAirports.includes(flight.destination)
+
     switch (direction) {
         case 'departure':
-            return flight.origin !== undefined && myAirports.includes(flight.origin)
+            return originIsOurs && !destIsOurs
         case 'arrival':
-            return flight.destination !== undefined && myAirports.includes(flight.destination)
+            return destIsOurs && !originIsOurs
+        case 'local':
+            return originIsOurs && destIsOurs
         case 'either':
-            return (flight.origin !== undefined && myAirports.includes(flight.origin)) ||
-                   (flight.destination !== undefined && myAirports.includes(flight.destination))
+            return originIsOurs || destIsOurs
     }
 }
 

@@ -718,7 +718,7 @@ class FlightStore {
         const isHandoffToMe = flight.handoffTargetController === myCallsign
 
         if (!clearedForTakeoff && !clearedToLand) {
-            if (isTrackedByMe && stripType === 'departure' && flight.groundstate === 'TAXI') {
+            if (isTrackedByMe && (stripType === 'departure' || stripType === 'local') && flight.groundstate === 'TAXI') {
                 // Special case: TAXI departures get LU+CTO (only for TWR)
                 const myRole = this.config.myRole ?? 'TWR'
                 if (myRole === 'TWR') {
@@ -765,7 +765,7 @@ class FlightStore {
                 if (myRole === 'GND') {
                     const freq = getControllerFrequency('TWR')
                     if (freq) xferFrequency = freq.toFixed(3)
-                } else if (myRole === 'TWR' && stripType === 'arrival') {
+                } else if (myRole === 'TWR' && (stripType === 'arrival' || stripType === 'local')) {
                     const freq = getControllerFrequency('GND')
                     if (freq) xferFrequency = freq.toFixed(3)
                 }
@@ -796,7 +796,9 @@ class FlightStore {
             assignedHeading: flight.ahdg && flight.ahdg > 0 ? String(flight.ahdg).padStart(3, '0') : undefined,
             assignedSpeed: flight.asp ? String(flight.asp) : undefined,
             stand: flight.stand,
-            runway: stripType === 'departure' ? flight.depRwy : flight.arrRwy,
+            runway: stripType === 'departure' || stripType === 'local'
+                ? (flight.depRwy || flight.arrRwy)
+                : flight.arrRwy,
             stripType,
             bayId,
             sectionId,

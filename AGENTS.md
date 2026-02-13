@@ -177,7 +177,7 @@ sectionRules:
   rule_name:      # Rule ID as key
     sectionId: inbound
     bayId: bay1
-    direction: arrival  # departure/arrival/either
+    direction: arrival  # departure/arrival/local/either
     groundstates: [ARR, '']
     controller: not_myself  # myself/not_myself/any
     priority: 70
@@ -221,7 +221,7 @@ The backend uses a priority-based rules engine to determine:
 
 ### Section Rules
 Determine which section a flight strip belongs to based on:
-- Flight direction (departure/arrival/either)
+- Flight direction (departure/arrival/local/either)
 - Ground state (NSTS, STUP, PUSH, TAXI, TXIN, DEPA, ARR, LINEUP, etc.)
 - Controller relationship (myself/not_myself/any)
 - Clearance flag, cleared to land flag, airborne flag
@@ -289,6 +289,26 @@ Strips are only created for flights that meet all of these criteria:
 3. **Within range**: Flight must be within `radarRangeNm` (default 25nm) of any `myAirport`
 
 This filtering ensures strips only appear for flights that are relevant to the controller's position and within their radar coverage area.
+
+### Local Flights
+Flights where both origin AND destination are at "my airports" (e.g., VFR traffic pattern flights) are classified as **local** flights:
+- `StripType` is `'local'` (red indicator strip on frontend)
+- `FlightDirection` `'local'` in the rules engine — separate from `'departure'` and `'arrival'`
+- `'departure'` and `'arrival'` directions are **exclusive**: they do NOT match local flights
+- `'either'` matches all three (departure, arrival, local)
+- Ground flow (pending → cleared → push&start → taxi → runway) is the same as departures
+- Airborne local flights default to CTR DEP; user manually drags to CTR ARR when returning
+- After landing, local flights go to TAXI section (via ARR/TXIN groundstate rules)
+
+### Local Flights
+Flights where both origin AND destination are at "my airports" (e.g., VFR traffic pattern flights) are classified as **local** flights:
+- `StripType` is `'local'` (red indicator strip on frontend)
+- `FlightDirection` `'local'` in the rules engine — separate from `'departure'` and `'arrival'`
+- `'departure'` and `'arrival'` directions are **exclusive**: they do NOT match local flights
+- `'either'` matches all three (departure, arrival, local)
+- Ground flow (pending → cleared → push&start → taxi → runway) is the same as departures
+- Airborne local flights default to CTR DEP; user manually drags to CTR ARR when returning
+- After landing, local flights go to TAXI section (via ARR/TXIN groundstate rules)
 
 ### Multi-Airport Support
 The backend supports controlling multiple airports simultaneously:

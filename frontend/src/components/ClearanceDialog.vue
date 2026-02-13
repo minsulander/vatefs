@@ -321,7 +321,6 @@ function onResetSquawk() {
 .clnc-dialog {
   background: #2a2a2e;
   border: 2px solid #555;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   padding: 0;
   position: relative;
 }
@@ -384,7 +383,6 @@ function onResetSquawk() {
   flex: 1;
   padding: 8px 0;
   border: none;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 12px;
   font-weight: bold;
   cursor: pointer;
@@ -494,7 +492,6 @@ function onResetSquawk() {
   background: #333;
   border: 1px solid #555;
   color: #e0e0e0;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 11px;
   padding: 3px 6px;
   border-radius: 2px;

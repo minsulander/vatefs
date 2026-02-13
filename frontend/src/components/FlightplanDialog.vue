@@ -195,7 +195,6 @@ watch(dialogOpen, (open) => {
 .fpl-dialog {
   background: #2a2a2e;
   border: 2px solid #555;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   padding: 0;
 }
 
@@ -302,7 +301,6 @@ watch(dialogOpen, (open) => {
   border: none;
   background: #555;
   color: #ccc;
-  font-family: 'Consolas', 'Monaco', 'Lucida Console', monospace;
   font-size: 12px;
   font-weight: bold;
   cursor: pointer;

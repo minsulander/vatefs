@@ -93,6 +93,57 @@ sectionRules:
     airborne: true
     priority: 100
 
+  # === LOCAL FLIGHT GROUND FLOW (mirrors departure flow) ===
+
+  # PENDING DEP: Local flights without clearance
+  pending_dep_local:
+    sectionId: pending_dep
+    direction: local
+    airborne: false
+    groundstates: ['', NSTS, ONFREQ]
+    clearance: false
+    priority: 40
+
+  # CLEARED: Local flights with clearance flag
+  cleared_local:
+    sectionId: cleared
+    direction: local
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ]
+    priority: 50
+
+  # PUSH&START: Local flights with DE-ICE/STUP/PUSH
+  push_start_local:
+    sectionId: push_start
+    direction: local
+    airborne: false
+    groundstates: [DE-ICE, STUP, PUSH]
+    priority: 60
+
+  # TAXI: Local flights taxiing out (pre-departure phase)
+  taxi_dep_local:
+    sectionId: taxi
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    priority: 30
+
+  # TAXI: Local flights after landing (post-arrival phase)
+  taxi_arr_local:
+    sectionId: taxi
+    direction: local
+    airborne: false
+    groundstates: [ARR, TXIN]
+    priority: 35
+
+  # CTR DEP: Airborne local flights (user can manually drag to CTR ARR)
+  ctr_dep_airborne_local:
+    sectionId: ctr_dep
+    direction: local
+    airborne: true
+    priority: 100
+
   # === ARRIVAL FLOW ===
 
   # INBOUND: Arrivals not yet assumed (ARR groundstate or just arriving)
@@ -131,10 +182,10 @@ sectionRules:
     maxAltitudeAboveField: 1500
     priority: 75
 
-  # RUNWAY: Cleared to land arrivals
+  # RUNWAY: Cleared to land (arrivals and local flights returning)
   runway_cleared_to_land:
     sectionId: runway
-    direction: arrival
+    direction: either
     clearedToLand: true
     airborne: true
     groundstates: ['', NSTS, ARR]
@@ -163,60 +214,66 @@ sectionRules:
     direction: departure
     priority: 5
 
+  # Catch-all for local flights
+  fallback_local:
+    sectionId: pending_dep
+    direction: local
+    priority: 5
+
 actionRules:
   # === ROLE-SPECIFIC RULES (high priority overrides) ===
 
-  # DEL: READY for cleared departures (sets DE-ICE + transfer, instead of PUSH)
+  # DEL: READY for cleared departures/local (sets DE-ICE + transfer, instead of PUSH)
   ready_del:
     action: READY
-    direction: departure
+    direction: either
     controller: myself
     clearance: true
     groundstates: ['', ONFREQ, STUP, NSTS]
     myRole: [DEL]
     priority: 120
 
-  # DEL: CLNC always available for pending departures
+  # DEL: CLNC always available for pending departures/local
   clnc_del:
     action: CLNC
     sectionId: pending_dep
-    direction: departure
+    direction: either
     clearance: false
     myRole: [DEL]
     priority: 115
 
-  # DEL: ASSUME ground departures
+  # DEL: ASSUME ground departures/local
   assume_dep_del:
     action: ASSUME
-    direction: departure
+    direction: either
     controller: not_myself
     airborne: false
     myRole: [DEL]
     priority: 110
 
-  # GND: XFER to TWR for taxi departures
+  # GND: XFER to TWR for taxi departures/local
   xfer_gnd_taxi_dep:
     action: XFER
-    direction: departure
+    direction: either
     controller: myself
     groundstates: [TAXI]
     myRole: [GND]
     priority: 115
 
-  # GND/TWR: PUSH for DE-ICE departures (after assuming from DEL)
+  # GND/TWR: PUSH for DE-ICE departures/local (after assuming from DEL)
   push_deice_gnd:
     action: PUSH
     sectionId: push_start
-    direction: departure
+    direction: either
     controller: myself
     groundstates: [DE-ICE]
     myRole: [GND, TWR]
     priority: 113
 
-  # GND: TXI for on-ground arrivals
+  # GND: TXI for on-ground arrivals/local (after landing)
   txi_arr_gnd:
     action: TXI
-    direction: arrival
+    direction: either
     controller: myself
     groundstates: ['', NSTS, ARR]
     airborne: false
@@ -232,10 +289,10 @@ actionRules:
     myRole: [GND]
     priority: 111
 
-  # TWR: XFER to GND for on-ground arrivals when GND online
+  # TWR: XFER to GND for on-ground arrivals/local when GND online
   xfer_twr_to_gnd:
     action: XFER
-    direction: arrival
+    direction: either
     controller: myself
     groundstates: ['', NSTS, ARR]
     airborne: false
@@ -254,27 +311,28 @@ actionRules:
     myRole: [TWR]
     priority: 100
 
-  # CTR ARR arrivals: CTL (cleared to land) (TWR only)
+  # CTR ARR: CTL (cleared to land) for arrivals and local flights (TWR only)
   ctl_ctr_arr:
     action: CTL
     sectionId: ctr_arr
-    direction: arrival
+    direction: either
     controller: myself
     clearedToLand: false  # Only if not already cleared
     myRole: [TWR]
     priority: 90
 
-  # RUNWAY lineup: CTO (cleared for takeoff) (TWR only)
+  # RUNWAY lineup: CTO (cleared for takeoff) for departures and local (TWR only)
   cto_lineup:
     action: CTO
     sectionId: runway
-    direction: departure
+    direction: either
     controller: myself
     groundstates: [LINEUP]
     myRole: [TWR]
     priority: 90
 
   # CTR DEP airborne: XFER (transfer to next controller) (TWR only)
+  # Departures only — local flights stay in the pattern, no XFER
   xfer_ctr_dep:
     action: XFER
     sectionId: ctr_dep
@@ -285,19 +343,19 @@ actionRules:
     myRole: [TWR]
     priority: 80
 
-  # Taxiing arrivals: PARK (set parked) (GND/TWR)
+  # Taxiing arrivals/local: PARK (set parked) (GND/TWR)
   park_arr:
     action: PARK
-    direction: arrival
+    direction: either
     controller: myself
     groundstates: [TXIN]
     myRole: [GND, TWR]
     priority: 77
 
-  # Arrivals on ground (not airborne): TXI (taxi in) (TWR only, when GND not online)
+  # On-ground arrivals/local (not airborne): TXI (taxi in) (TWR only, when GND not online)
   txi_arr_twr:
     action: TXI
-    direction: arrival
+    direction: either
     controller: myself
     groundstates: ['', NSTS, ARR]
     airborne: false
@@ -305,31 +363,31 @@ actionRules:
     gndOnline: false
     priority: 76
 
-  # PUSH&START departures with PUSH groundstate: TXO (taxi out) (GND/TWR)
+  # PUSH&START departures/local with PUSH groundstate: TXO (taxi out) (GND/TWR)
   txo_push:
     action: TXO
     sectionId: push_start
-    direction: departure
+    direction: either
     controller: myself
     groundstates: [PUSH, STUP]
     myRole: [GND, TWR]
     priority: 75
 
-  # PENDING DEP departures without clearance: CLNC (open clearance dialog)
+  # PENDING DEP departures/local without clearance: CLNC (open clearance dialog)
   # Suppressed when DEL is online (DEL handles clearances)
   clnc_pending_dep:
     action: CLNC
     sectionId: pending_dep
-    direction: departure
+    direction: either
     clearance: false
     delOnline: false
     priority: 65
 
-  # CLEARED departures: PUSH (approve startup/pushback) (GND/TWR)
+  # CLEARED departures/local: PUSH (approve startup/pushback) (GND/TWR)
   push_cleared:
     action: PUSH
     sectionId: cleared
-    direction: departure
+    direction: either
     controller: myself
     clearance: true
     groundstates: ['', ONFREQ, STUP, NSTS]
@@ -338,10 +396,10 @@ actionRules:
 
   # === CATCH-ALL ASSUME RULES ===
 
-  # Assume any untracked departure on the ground (suppressed when DEL online)
+  # Assume any untracked departure/local on the ground (suppressed when DEL online)
   assume_departure_ground:
     action: ASSUME
-    direction: departure
+    direction: either
     controller: not_myself
     airborne: false
     delOnline: false
@@ -357,16 +415,16 @@ actionRules:
 
 deleteRules:
   # Departures: Delete when high enough and transferred/freed
-  # Altitude > field elevation + 1500ft AND not controlled by me
+  # Altitude > field elevation + 2500ft AND not controlled by me
   delete_dep_high_transferred:
     direction: departure
     controller: not_myself
     minAltitudeAboveField: 2500
     priority: 100
 
-  # Arrivals: Delete when parked
-  delete_arr_parked:
-    direction: arrival
+  # Arrivals/local: Delete when parked
+  delete_parked:
+    direction: either
     groundstates: [PARK]
     priority: 100
 
@@ -377,13 +435,13 @@ deleteRules:
     priority: 10
 
 moveRules:
-  # === DEPARTURE FLOW ===
+  # === DEPARTURE/LOCAL FLOW ===
 
   # PENDING DEP -> CLEARED: Set clearance flag (DEL/TWR)
   move_pending_to_cleared:
     fromSectionId: pending_dep
     toSectionId: cleared
-    direction: departure
+    direction: either
     myRole: [DEL, TWR]
     command:
       type: setClearance
@@ -393,7 +451,7 @@ moveRules:
   move_cleared_to_push:
     fromSectionId: cleared
     toSectionId: push_start
-    direction: departure
+    direction: either
     myRole: [GND, TWR]
     command:
       type: setGroundstate
@@ -403,7 +461,7 @@ moveRules:
   move_push_to_taxi:
     fromSectionId: push_start
     toSectionId: taxi
-    direction: departure
+    direction: either
     myRole: [GND, TWR]
     command:
       type: setGroundstate
@@ -413,7 +471,7 @@ moveRules:
   move_taxi_to_runway:
     fromSectionId: taxi
     toSectionId: runway
-    direction: departure
+    direction: either
     myRole: [TWR]
     command:
       type: setGroundstate
@@ -432,20 +490,21 @@ moveRules:
       value: true
 
   # CTR ARR -> RUNWAY: Set cleared to land (TWR only)
+  # Also applies to local flights manually placed in CTR ARR
   move_ctr_arr_to_runway:
     fromSectionId: ctr_arr
     toSectionId: runway
-    direction: arrival
+    direction: either
     myRole: [TWR]
     command:
       type: setClearedToLand
       value: true
 
-  # RUNWAY -> TAXI (arrival): Set groundstate to TXIN (GND/TWR)
+  # RUNWAY -> TAXI (arrival/local): Set groundstate to TXIN (GND/TWR)
   move_runway_to_taxi_arr:
     fromSectionId: runway
     toSectionId: taxi
-    direction: arrival
+    direction: either
     myRole: [GND, TWR]
     command:
       type: setGroundstate
