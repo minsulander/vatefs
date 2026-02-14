@@ -1,6 +1,6 @@
 // WebSocket API message types
 
-import type { AirportAtisInfo, EfsLayout, FlightStrip, Gap, Section } from "./types.js"
+import type { AirportAtisInfo, DclMode, EfsLayout, FlightStrip, Gap, Section } from "./types.js"
 
 // Server -> Client messages
 
@@ -53,6 +53,7 @@ export interface DclStatusMessage {
     type: 'dclStatus'
     status: 'available' | 'connected' | 'error' | 'unavailable'
     error?: string
+    dclMode?: DclMode
 }
 
 export interface HoppieMessage {
@@ -149,12 +150,17 @@ export interface DclSendMessage {
     remarks: string
 }
 
+export interface DclSetModeMessage {
+    type: 'dclSetMode'
+    mode: DclMode
+}
+
 export interface SwitchConfigMessage {
     type: 'switchConfig'
     file: string  // Config file basename (e.g. "dualrwy4bays.yml")
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | SwitchConfigMessage
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage
 
 // Type guards for message parsing
 
@@ -174,5 +180,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'switchConfig'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig'
 }

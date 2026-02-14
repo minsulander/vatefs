@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -19,6 +19,7 @@ export const useEfsStore = defineStore("efs", () => {
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
     const dclError = ref<string | undefined>(undefined)
+    const dclMode = ref<DclMode>('manual')
 
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
@@ -95,6 +96,7 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'dclStatus':
                         dclStatus.value = message.status
                         dclError.value = message.error
+                        if (message.dclMode) dclMode.value = message.dclMode
                         break
                     case 'atisUpdate':
                         atisInfo.value = message.airports
@@ -533,6 +535,11 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclReject', stripId })
     }
 
+    function dclSetMode(mode: DclMode) {
+        dclMode.value = mode
+        sendMessage({ type: 'dclSetMode', mode })
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -591,10 +598,12 @@ export const useEfsStore = defineStore("efs", () => {
         atisInfo,
         dclStatus,
         dclError,
+        dclMode,
         dclLogin,
         dclLogout,
         dclSend,
         dclReject,
+        dclSetMode,
         availableConfigs,
         activeConfig,
         switchConfig,

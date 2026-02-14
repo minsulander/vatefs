@@ -91,6 +91,8 @@ export interface EfsLayout {
     bays: Bay[]
 }
 
+export type DclMode = 'manual' | 'auto' | 'semi'
+
 export interface AirportAtisInfo {
     airport: string
     atis?: string          // ATIS letter (single-ATIS airports)

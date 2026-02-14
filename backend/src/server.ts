@@ -523,6 +523,7 @@ function startAtisService() {
 let hoppieService: HoppieService | null = null
 let currentDclStatus: DclStatus = "unavailable"
 let currentDclError: string | undefined
+let currentDclMode: import("@vatefs/common").DclMode = "manual"
 
 /**
  * Determine the DCL callsign based on configured airports.
@@ -542,12 +543,12 @@ function getDclCallsign(): string | null {
 function updateDclStatus(status: DclStatus, error?: string) {
     currentDclStatus = status
     currentDclError = error
-    const message: DclStatusMessage = { type: "dclStatus", status, error }
+    const message: DclStatusMessage = { type: "dclStatus", status, error, dclMode: currentDclMode }
     broadcast(message)
 }
 
 function sendDclStatus(socket: WebSocket) {
-    const message: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError }
+    const message: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError, dclMode: currentDclMode }
     sendMessage(socket, message)
 }
 
@@ -642,6 +643,95 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
 }
 
 /**
+ * Check whether a flight has all required fields for an automatic DCL send.
+ * Returns true if SID is valid, CFL is set, and squawk is assigned.
+ */
+function canAutoSendDcl(flight: import("./types.js").Flight): boolean {
+    // SID must be a standard IFR SID format: 5 letters + 1 digit + 1 letter (e.g., VADIN3J)
+    const sidValid = !!flight.sid && /^[A-Z]{5}\d[A-Z]$/.test(flight.sid)
+    const cflValid = !!flight.cfl && flight.cfl > 2
+    const squawkValid = !!flight.squawk && flight.squawk !== "0000"
+    return sidValid && cflValid && squawkValid
+}
+
+/**
+ * Attempt to automatically assign CFL and squawk for a flight (AUTO mode).
+ * Replicates the same logic as the clearance dialog's applyDefaultCfl + applyDefaultSquawk.
+ */
+function autoAssignCflAndSquawk(flight: import("./types.js").Flight) {
+    // Auto-assign CFL from SID altitude if not already set
+    if (flight.sid && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
+        const sidAlt = getSidAltitude(flight.origin, flight.sid)
+        if (sidAlt !== undefined) {
+            sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
+            console.log(`[DCL AUTO] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${flight.sid})`)
+            if (cliArgs.mock) {
+                flight.cfl = sidAlt
+            }
+        }
+    }
+
+    // Auto-assign squawk if not set
+    if (!flight.squawk || flight.squawk === "0000") {
+        sendUdp(JSON.stringify({ type: "resetSquawk", callsign: flight.callsign }))
+        console.log(`[DCL AUTO] Auto-assigned squawk for ${flight.callsign}`)
+        if (cliArgs.mock) {
+            flight.squawk = String(Math.floor(2000 + Math.random() * 5777)).padStart(4, "0")
+        }
+    }
+}
+
+/**
+ * Attempt to automatically send a DCL clearance for a flight.
+ * Called after a DCL request is received (in auto/semi mode) and when
+ * flight data updates in semi mode.
+ *
+ * Returns true if the clearance was sent automatically.
+ */
+function tryAutoSendDcl(flight: import("./types.js").Flight): boolean {
+    if (!hoppieService || flight.dclStatus !== "REQUEST") return false
+    if (!canAutoSendDcl(flight)) return false
+
+    const dclAirport = staticConfig.myAirports.find((a) => a === flight.origin)
+    if (!dclAirport) return false
+
+    // Build template data (no remarks for auto-DCL)
+    const templateData = buildDclTemplateData(flight, "")
+    const markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+    if (!markerClearance) return false
+
+    const plainClearance = fillDclTemplate(dclAirport, templateData)
+    const dclCallsign = getDclCallsign()
+    const { time, date } = formatTimestamp()
+    const seq = hoppieService.getNextSeq()
+    const pdc = hoppieService.getNextPdc()
+    const pdcStr = String(pdc).padStart(3, "0")
+
+    hoppieService.sendMessage(
+        flight.callsign,
+        "cpdlc",
+        `/data2/${seq}//WU/${dclCallsign} PDC ${pdcStr} . . . . . CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} @${flight.callsign}@ ${markerClearance}`,
+    )
+
+    flight.dclStatus = "SENT"
+    flight.dclSeqNumber = seq
+    flight.dclPdcNumber = pdc
+    flight.dclClearance = plainClearance
+    flight.dclSentAt = Date.now()
+
+    console.log(`[DCL AUTO] Sent clearance to ${flight.callsign} (seq=${seq}, pdc=${pdcStr}, mode=${currentDclMode})`)
+
+    // Regenerate and broadcast strip
+    const strip = flightStore.regenerateStrip(flight.callsign)
+    if (strip) {
+        store.updateStripFromFlight(strip)
+        broadcastStrip(strip)
+    }
+
+    return true
+}
+
+/**
  * Handle an incoming Hoppie telex (DCL request from pilot).
  * Parses: REQUEST PREDEP CLEARANCE <callsign> <actype> TO <dest> AT <airport> STAND <stand> ATIS <atis>
  */
@@ -720,6 +810,40 @@ function handleDclRequest(from: string, packet: string) {
         store.updateStripFromFlight(strip)
         broadcastStrip(strip)
     }
+
+    // Record when the request was received (for REQUEST timeout)
+    flight.dclRequestedAt = Date.now()
+
+    // Attempt automatic DCL processing based on mode
+    if (currentDclMode === "auto") {
+        // AUTO mode: assign CFL + squawk if needed, then try to send
+        autoAssignCflAndSquawk(flight)
+
+        // In non-mock mode, assignments are processed asynchronously via the plugin roundtrip.
+        // Wait a short delay to allow the plugin to process the squawk/CFL assignments
+        // before attempting to auto-send.
+        if (!cliArgs.mock) {
+            setTimeout(() => {
+                // Re-fetch the flight in case data updated during the wait
+                const updatedFlight = flightStore.getFlight(callsign!)
+                if (updatedFlight && updatedFlight.dclStatus === "REQUEST") {
+                    if (!tryAutoSendDcl(updatedFlight)) {
+                        console.log(`[DCL AUTO] Could not auto-send for ${callsign} (missing data), falling back to manual`)
+                    }
+                }
+            }, 3000) // 3 second delay for plugin roundtrip
+        } else {
+            // Mock mode: data is applied synchronously
+            tryAutoSendDcl(flight)
+        }
+    } else if (currentDclMode === "semi") {
+        // SEMI mode: only auto-send if CFL and squawk are already correctly set
+        if (canAutoSendDcl(flight)) {
+            tryAutoSendDcl(flight)
+        } else {
+            console.log(`[DCL SEMI] Flight ${callsign} not ready for auto-send, waiting for manual setup`)
+        }
+    }
 }
 
 /**
@@ -751,6 +875,7 @@ function handleCpdlcResponse(from: string, packet: string) {
         console.log(`[DCL] WILCO from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "DONE"
         flight.dclSentAt = undefined
+        flight.dclRequestedAt = undefined
 
         // End fast polling since we got the response
         hoppieService?.endFastPoll()
@@ -778,6 +903,7 @@ function handleCpdlcResponse(from: string, packet: string) {
         console.log(`[DCL] UNABLE from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "UNABLE"
         flight.dclSentAt = undefined
+        flight.dclRequestedAt = undefined
 
         // End fast polling since we got the response
         hoppieService?.endFastPoll()
@@ -997,6 +1123,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.dclSeqNumber = undefined
                         flight.dclPdcNumber = undefined
                         flight.dclSentAt = undefined
+                        flight.dclRequestedAt = undefined
                     }
                 }
 
@@ -1206,6 +1333,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
             console.log(`[DCL] Rejecting DCL for ${strip.callsign}`)
             flight.dclStatus = "REJECTED"
+            flight.dclRequestedAt = undefined
 
             // Send reject CPDLC
             if (hoppieService) {
@@ -1286,6 +1414,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 store.updateStripFromFlight(sendStrip)
                 broadcastStrip(sendStrip)
             }
+            break
+        }
+
+        case "dclSetMode": {
+            console.log(`[DCL] Mode changed to: ${message.mode}`)
+            currentDclMode = message.mode
+            // Broadcast updated DCL status with new mode to all clients
+            const modeMsg: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError, dclMode: currentDclMode }
+            broadcast(modeMsg)
             break
         }
 
@@ -1679,6 +1816,34 @@ udpIn.on("message", (msg, rinfo) => {
                         broadcastGap(shiftedGap)
                     }
                 }
+
+                // Update DCL clearance preview when flight data changes (non-mock mode)
+                {
+                    const flight = flightStore.getFlight(result.strip.callsign)
+                    if (flight && flight.dclStatus === "REQUEST" && flight.origin) {
+                        const templateData = buildDclTemplateData(flight, "")
+                        const preview = fillDclTemplate(flight.origin, templateData)
+                        if (preview && preview !== flight.dclClearance) {
+                            flight.dclClearance = preview
+                            // Re-broadcast strip with updated preview
+                            const updatedStrip = flightStore.regenerateStrip(flight.callsign)
+                            if (updatedStrip) {
+                                store.updateStripFromFlight(updatedStrip)
+                                broadcastStrip(updatedStrip)
+                            }
+                        }
+                    }
+                }
+
+                // SEMI/AUTO mode: check if a pending DCL request can now be auto-sent
+                // This handles the case where the controller sets CFL/squawk via the dialog
+                // and the plugin roundtrip updates the flight data.
+                if (currentDclMode !== "manual" && hoppieService) {
+                    const flight = flightStore.getFlight(result.strip.callsign)
+                    if (flight && flight.dclStatus === "REQUEST") {
+                        tryAutoSendDcl(flight)
+                    }
+                }
             }
             // If result is empty (no strip, no delete), nothing changed - don't log
         } else {
@@ -1702,7 +1867,8 @@ udpIn.bind(udpInPort, () => {
     console.log(`UDP listener bound to port ${udpInPort}`)
 })
 
-// DCL timeout check - cancel clearances that haven't received WILCO/UNABLE within 10 minutes
+// DCL timeout check - cancel clearances that haven't received WILCO/UNABLE within 10 minutes,
+// and auto-reject DCL requests that haven't been handled within 10 minutes.
 const DCL_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
 const DCL_CHECK_INTERVAL_MS = 30 * 1000 // Check every 30 seconds
 
@@ -1711,14 +1877,15 @@ function checkDclTimeouts() {
 
     const now = Date.now()
     const flights = flightStore.getAllFlights()
+    const dclCallsign = getDclCallsign()
 
     for (const flight of flights) {
+        // Timeout: clearance sent but no WILCO/UNABLE received
         if (flight.dclStatus === "SENT" && flight.dclSentAt && flight.dclSeqNumber !== undefined) {
             const elapsed = now - flight.dclSentAt
             if (elapsed >= DCL_TIMEOUT_MS) {
                 console.log(`[DCL] Timeout for ${flight.callsign} (sent ${Math.round(elapsed / 1000)}s ago)`)
 
-                const dclCallsign = getDclCallsign()
                 const { time, date } = formatTimestamp()
                 const seq = hoppieService.getNextSeq()
 
@@ -1735,9 +1902,38 @@ function checkDclTimeouts() {
                 flight.dclSeqNumber = undefined
                 flight.dclPdcNumber = undefined
                 flight.dclSentAt = undefined
+                flight.dclRequestedAt = undefined
 
                 // End fast polling since we're giving up
                 hoppieService.endFastPoll()
+
+                // Regenerate and broadcast strip
+                const strip = flightStore.regenerateStrip(flight.callsign)
+                if (strip) {
+                    store.updateStripFromFlight(strip)
+                    broadcastStrip(strip)
+                }
+            }
+        }
+
+        // Timeout: DCL request received but controller didn't act within 10 minutes
+        if (flight.dclStatus === "REQUEST" && flight.dclRequestedAt) {
+            const elapsed = now - flight.dclRequestedAt
+            if (elapsed >= DCL_TIMEOUT_MS) {
+                console.log(`[DCL] Request timeout for ${flight.callsign} (requested ${Math.round(elapsed / 1000)}s ago)`)
+
+                const { time, date } = formatTimestamp()
+                const seq = hoppieService.getNextSeq()
+
+                hoppieService.sendMessage(
+                    flight.callsign,
+                    "cpdlc",
+                    `/data2/${seq}//NE/DEPART REQUEST STATUS . FSM ${time} ${date} ${dclCallsign ?? "----"} @${flight.callsign}@ RCD REJECTED @CONTROLLER TIMEOUT @REVERT TO VOICE PROCEDURES`,
+                )
+
+                // Reset DCL state
+                flight.dclStatus = "REJECTED"
+                flight.dclRequestedAt = undefined
 
                 // Regenerate and broadcast strip
                 const strip = flightStore.regenerateStrip(flight.callsign)

@@ -39,6 +39,30 @@
       >
         DCL
       </v-btn>
+      <v-menu v-if="efs.dclStatus !== 'unavailable'" offset-y>
+        <template v-slot:activator="{ props }">
+          <v-btn
+            variant="text"
+            size="small"
+            class="dcl-mode-btn text-grey"
+            v-bind="props"
+            :title="`DCL mode: ${efs.dclMode.toUpperCase()}`"
+          >
+            {{ efs.dclMode.toUpperCase() }}
+            <v-icon end size="x-small">mdi-chevron-down</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" bg-color="#2b2d31" class="text-grey">
+          <v-list-item
+            v-for="mode in dclModes"
+            :key="mode.value"
+            :active="mode.value === efs.dclMode"
+            @click="efs.dclSetMode(mode.value)"
+          >
+            <v-list-item-title>{{ mode.label }}</v-list-item-title>
+          </v-list-item>
+        </v-list>
+      </v-menu>
       <v-spacer />
       <!-- Config selector -->
       <v-menu v-if="efs.availableConfigs.length > 1" offset-y>
@@ -72,10 +96,17 @@
 import Clock from './Clock.vue'
 import { ref, computed, onMounted } from "vue"
 import { useEfsStore } from "../store/efs"
+import type { DclMode } from "@vatefs/common"
 
 const efs = useEfsStore()
 const fullscreen = ref(window.innerHeight == screen.height)
 const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
+
+const dclModes: { label: string; value: DclMode }[] = [
+  { label: 'MANUAL', value: 'manual' },
+  { label: 'SEMI', value: 'semi' },
+  { label: 'AUTO', value: 'auto' },
+]
 
 interface AtisDisplayItem {
   airport: string
@@ -173,3 +204,13 @@ onMounted(() => {
   })
 })
 </script>
+
+<style scoped>
+.dcl-mode-btn {
+  min-width: 0 !important;
+  padding: 0 4px !important;
+  margin-left: -4px !important;
+  font-size: 10px !important;
+  letter-spacing: 0.5px;
+}
+</style>

@@ -10,6 +10,7 @@ export type {
     Bay,
     EfsLayout,
     Gap,
+    DclMode,
     AirportAtisInfo
 } from "./types.js"
 
@@ -38,6 +39,7 @@ export type {
     DclActionMessage,
     DclRejectMessage,
     DclSendMessage,
+    DclSetModeMessage,
     SwitchConfigMessage,
     ConfigInfo,
     ConfigListMessage,

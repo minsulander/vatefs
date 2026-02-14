@@ -11,7 +11,7 @@ Test ESSA 2026-02-11:
 - Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
   Behöver beskrivas noggrannare när det händer och inte...
 
-- Frontend: visa inte fullscreen knapp på standalone iOS (gäller vatiris också)
+-# Frontend: visa inte fullscreen knapp på standalone iOS (gäller vatiris också)
 
 Idéer:
 - Visa ADES i CLNC dialog (och utskrivet)
@@ -39,7 +39,7 @@ Idéer:
 
 
 
-- Skilja på DEP RWY, ARR RWY i ESSA layout
+-30 Skilja på DEP RWY, ARR RWY i ESSA layout
 
 -27 DCL svara FLIGHT PLAN NOT HELD i de fall det är aktuellt
 /data2/1//NE/FSM 2059 260211 ---- DLH5MR RCD REJECTED @FLIGHT PLAN NOT HELD @REVERT TO VOICE PROCEDURES

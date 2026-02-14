@@ -56,6 +56,7 @@ export interface Flight {
     dclSeqNumber?: number         // Our CPDLC sequence number (to match WILCO/UNABLE)
     dclPdcNumber?: number         // PDC number for this clearance
     dclSentAt?: number            // Timestamp when clearance was sent (for timeout)
+    dclRequestedAt?: number       // Timestamp when DCL request was received (for request timeout)
 
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
