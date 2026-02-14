@@ -61,6 +61,7 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void* backendOutputRead; // HANDLE to the read end of stdout/stderr pipe
     void* backendLogFile; // HANDLE to VatEFS.log
     std::string backendLineBuf; // partial line buffer for pipe reads
+    bool backendAutoRestartUsed; // true after one automatic restart attempt
     void StartBackend();
     void StopBackend();
     void CleanupBackendHandles();

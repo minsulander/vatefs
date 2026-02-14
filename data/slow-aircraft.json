@@ -1,0 +1,6 @@
+{
+  "rules": [
+    { "wakeTurbulence": "L", "excludeTypes": ["P180"] },
+    { "wakeTurbulence": "M", "includeTypes": ["ATP","AT43","AT45","AT72","AT75","AT76","B190","C212","D328","DH8A","DH8B","DH8C","E120","F27","F50","JS31","JS32","JS41","S100","SF34","SH33","SH36","SW4","T100"] }
+  ]
+}

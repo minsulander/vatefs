@@ -13,6 +13,9 @@ import type { EfsStaticConfig } from "./config.js"
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
 import { findStandForPosition } from "./stand-data.js"
+import { isOnAnyRunway } from "./runway-detection.js"
+import { isWithinCtr } from "./ctr-data.js"
+import { isSlowAircraft } from "./slow-aircraft.js"
 import moment from "moment"
 
 /**
@@ -798,6 +801,40 @@ class FlightStore {
         // Can edit clearance if we're a controller and the flight is tracked by me or untracked
         const canEditClearance = this.config.isController === true && (isTrackedByMe || isUntracked)
 
+        // Slow aircraft detection
+        const isSlow = isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '') || undefined
+
+        // Highlight actions: determine which action buttons should be highlighted yellow
+        const highlightActions: string[] = []
+        if (actions && flight.latitude !== undefined && flight.longitude !== undefined && flight.currentAltitude !== undefined) {
+            // TXI highlight: arrival that has left the runway (taxiing in)
+            if (actions.includes('TXI') && stripType === 'arrival') {
+                const onRunway = isOnAnyRunway(flight.latitude, flight.longitude, flight.currentAltitude, this.config.myAirports)
+                if (!onRunway) {
+                    highlightActions.push('TXI')
+                }
+            }
+
+            // PARK highlight: arrival at a stand
+            if (actions.includes('PARK') && stripType === 'arrival') {
+                const nearestAirport = findNearestAirport(flight.latitude, flight.longitude, this.config.myAirports, getAirportCoords)
+                if (nearestAirport) {
+                    const stand = findStandForPosition(nearestAirport, flight.latitude, flight.longitude)
+                    if (stand) {
+                        highlightActions.push('PARK')
+                    }
+                }
+            }
+
+            // XFER highlight: departure outside CTR
+            if (actions.includes('XFER') && stripType === 'departure') {
+                const withinCtr = isWithinCtr(this.config.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
+                if (withinCtr === false) {
+                    highlightActions.push('XFER')
+                }
+            }
+        }
+
         return {
             id: flight.callsign, // Use callsign as strip ID
             callsign: flight.callsign,
@@ -810,6 +847,7 @@ class FlightStore {
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
             sid: extractDisplaySid(flight),
+            star: flight.star,
             rfl,
             squawk: flight.squawk,
             clearedAltitude,
@@ -834,7 +872,9 @@ class FlightStore {
             xferFrequency,
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
-            dclClearance: flight.dclClearance
+            dclClearance: flight.dclClearance,
+            isSlow,
+            highlightActions: highlightActions.length > 0 ? highlightActions : undefined
         }
     }
 

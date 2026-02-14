@@ -164,13 +164,15 @@ export const mockPluginMessages: PluginMessage[] = [
         rfl: 12000,
         depRwy: '21',
         sid: 'OSNAK1D',
-        route: 'DCT'
+        route: 'DCT',
+        nextController: 'ESGG_E_APP',
+        nextControllerFrequency: 126.480,
     }),
     ctrUpdate('BRA841', {
         squawk: '3421',
         groundstate: 'DEPA',
         clearance: true,
-        controller: 'ESGG_TWR'
+        controller: 'ESGG_TWR',
         // airborne: true will be set by backend
     }),
 

@@ -49,63 +49,68 @@
     <!-- Middle section (truncatable) -->
     <div class="strip-middle">
       <div class="strip-middle-content">
-        <!-- Time section -->
+        <!-- Time section / clearance triangle -->
         <div class="strip-section strip-time">
-          <div class="time-value">{{ displayTime }}</div>
-          <div class="time-label" v-if="strip.stripType === 'departure' || strip.stripType === 'local'">EOBT</div>
-          <div class="time-label" v-else>ETA</div>
+          <template v-if="strip.clearedForTakeoff || strip.clearedToLand">
+            <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
+              <polygon points="12,4 22,20 2,20" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" class="clearance-triangle landing">
+              <polygon points="12,20 22,4 2,4" />
+            </svg>
+          </template>
+          <template v-else>
+            <div class="time-value">{{ displayTime }}</div>
+            <div class="time-label" v-if="strip.stripType === 'departure' || strip.stripType === 'local'">EOBT</div>
+            <div class="time-label" v-else>ETA</div>
+          </template>
         </div>
 
         <div class="strip-divider"></div>
 
-        <!-- SID/Clearance section -->
+        <!-- SID/STAR section -->
         <div class="strip-section strip-sid">
-          <div class="sid-value">{{ strip.sid || '' }}</div>
-          <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
-            <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
-            <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
-          </div>
+          <template v-if="strip.stripType === 'arrival'">
+            <div class="sid-value">{{ strip.star || '' }}</div>
+          </template>
+          <template v-else>
+            <div class="sid-value">{{ strip.sid || '' }}</div>
+            <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
+              <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
+              <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+            </div>
+          </template>
         </div>
 
         <div class="strip-divider"></div>
 
         <!-- Airports section -->
         <div class="strip-section strip-airports">
-          <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' || strip.stripType === 'local' }">
-            <span class="icao">{{ strip.adep }}</span>
-          </div>
-          <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' || strip.stripType === 'local' }">
-            <span class="icao">{{ strip.ades }}</span>
-          </div>
+          <template v-if="store.myAirports.length > 1">
+            <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' || strip.stripType === 'local' }">
+              <span class="icao">{{ strip.adep }}</span>
+            </div>
+            <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' || strip.stripType === 'local' }">
+              <span class="icao">{{ strip.ades }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="airport highlight single-airport">
+              <span class="icao">{{ (strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adep : strip.ades }}</span>
+            </div>
+          </template>
         </div>
 
-        <div class="strip-divider"></div>
-
-        <!-- Route & RFL section (this one truncates) -->
-        <div class="strip-section strip-route">
-          <div class="route-text">{{ strip.route || '' }}</div>
-          <div class="rfl" v-if="strip.rfl">{{ strip.rfl }}</div>
-        </div>
       </div>
     </div>
 
     <!-- Runway section (always visible, right-aligned) -->
-    <div class="strip-runway-fixed" v-if="strip.runway || strip.clearedForTakeoff || strip.clearedToLand">
+    <div class="strip-runway-fixed" v-if="strip.runway">
       <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
     </div>
 
-    <!-- Right section: Takeoff/landing triangle or action button(s) -->
-    <div v-if="strip.clearedForTakeoff || strip.clearedToLand" class="strip-right">
-      <!-- Takeoff triangle (pointing up) -->
-      <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
-        <polygon points="12,4 22,20 2,20" />
-      </svg>
-      <!-- Landing triangle (pointing down) -->
-      <svg v-else-if="strip.clearedToLand" viewBox="0 0 24 24" class="clearance-triangle landing">
-        <polygon points="12,20 22,4 2,4" />
-      </svg>
-    </div>
-    <div v-else-if="strip.actions && strip.actions.length > 0" class="strip-right"
+    <!-- Right section: Action button(s) -->
+    <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
       :class="{ 'multi-action': strip.actions.length > 1 }">
       <button v-for="action in strip.actions" :key="action" class="action-button"
         :class="actionButtonClass(action)"
@@ -114,6 +119,7 @@
         <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
       </button>
     </div>
+    <div v-else class="strip-right strip-right-empty"></div>
   </div>
 </template>
 
@@ -165,15 +171,29 @@ const displayTime = computed(() => {
   return props.strip.eta || ''
 })
 
-// DCL button coloring
+// DCL button coloring + action highlight
 function actionButtonClass(action: string): Record<string, boolean> {
-  if (action !== 'CLNC') return {}
-  const status = props.strip.dclStatus
-  return {
-    'action-dcl-request': status === 'REQUEST',
-    'action-dcl-error': status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED',
-    'action-dcl-sent': status === 'SENT',
+  const classes: Record<string, boolean> = {}
+
+  // Highlight actions (TXI, PARK, XFER)
+  if (props.strip.highlightActions?.includes(action)) {
+    classes['action-highlight'] = true
   }
+
+  // ASSUME needs condensed text
+  if (action === 'ASSUME') {
+    classes['action-assume'] = true
+  }
+
+  // DCL status coloring for CLNC button
+  if (action === 'CLNC') {
+    const status = props.strip.dclStatus
+    classes['action-dcl-request'] = status === 'REQUEST'
+    classes['action-dcl-error'] = status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED'
+    classes['action-dcl-sent'] = status === 'SENT'
+  }
+
+  return classes
 }
 
 // Mouse/pointer drag handlers (desktop)
@@ -855,8 +875,10 @@ function onDeleteConfirm() {
   color: #333;
 }
 
-/* Clearance triangles (takeoff/landing) */
+/* Clearance triangles (takeoff/landing) - shown in time section */
 .clearance-triangle {
+  width: 24px;
+  height: 24px;
 }
 
 .clearance-triangle.takeoff polygon {
@@ -871,12 +893,23 @@ function onDeleteConfirm() {
   stroke-width: 1;
 }
 
+.single-airport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
 /* Right section - Action button(s) */
 .strip-right {
   width: 40px;
   display: flex;
   align-items: stretch;
   border-left: 1px solid #999;
+}
+
+.strip-right-empty {
+  background: #e8e4d8;
 }
 
 /* Multiple actions: stack vertically */
@@ -916,23 +949,39 @@ function onDeleteConfirm() {
 }
 
 .action-text {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
 }
 
+.action-assume .action-text {
+  font-size: 11px;
+  letter-spacing: -0.5px;
+  font-stretch: condensed;
+}
+
 .action-freq {
-  font-size: 7px;
+  font-size: 11px;
   font-weight: 600;
   color: #555;
   line-height: 1;
+  font-stretch: condensed;
 }
 
 .action-button:has(.action-freq) {
   flex-direction: column;
   gap: 0px;
   padding: 1px 2px;
+}
+
+/* Highlight action buttons (TXI, PARK, XFER) */
+.action-highlight {
+  background: linear-gradient(to bottom, #fdd835, #f9a825) !important;
+}
+
+.action-highlight:hover {
+  background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
 }
 
 /* DCL status coloring for CLNC button */

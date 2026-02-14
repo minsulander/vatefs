@@ -54,6 +54,8 @@ import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
 import { loadDclSound, playDclSound } from "./sound.js"
+import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
+import { loadSlowAircraft } from "./slow-aircraft.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
 
@@ -121,6 +123,22 @@ if (fs.existsSync(runwaysFile)) {
     loadRunways(runwaysFile)
 } else {
     console.warn(`Runway data file not found: ${runwaysFile}`)
+}
+
+// Load ICAO airport names
+const icaoAirportsFile = path.join(dataDir, "ICAO_Airports.txt")
+if (fs.existsSync(icaoAirportsFile)) {
+    loadIcaoAirports(icaoAirportsFile)
+} else {
+    console.warn(`ICAO airports file not found: ${icaoAirportsFile}`)
+}
+
+// Load slow aircraft rules
+const slowAircraftFile = path.join(dataDir, "slow-aircraft.json")
+if (fs.existsSync(slowAircraftFile)) {
+    loadSlowAircraft(slowAircraftFile)
+} else {
+    console.warn(`Slow aircraft config not found: ${slowAircraftFile}`)
 }
 
 /**
@@ -1615,6 +1633,16 @@ app.get("/api/withinctr", (req, res) => {
     } else {
         res.json({ airport: null, within: false, message: "No CTR/TIZ zone found at this position" })
     }
+})
+
+app.get("/api/airport-name", (req, res) => {
+    const icao = (req.query.icao as string ?? "").toUpperCase()
+    if (!icao) {
+        res.status(400).json({ error: "Missing icao parameter" })
+        return
+    }
+    const name = getIcaoAirportName(icao)
+    res.json({ name: name ?? null })
 })
 
 app.get("/api/dcl/status", (req, res) => {

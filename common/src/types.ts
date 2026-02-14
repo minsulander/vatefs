@@ -18,6 +18,7 @@ export interface FlightStrip {
     ades: string               // Destination aerodrome (ICAO)
     route?: string             // Flight planned route
     sid?: string               // Standard Instrument Departure
+    star?: string              // Standard Terminal Arrival Route
     rfl?: string               // Requested Flight Level e.g., "FL340", "A050"
 
     // Assigned data (from controller)
@@ -62,6 +63,12 @@ export interface FlightStrip {
 
     // Transfer frequency (shown on XFER button when handoff target matches next controller)
     xferFrequency?: string
+
+    // Slow aircraft indicator (light WTC or specific medium turboprops)
+    isSlow?: boolean
+
+    // Actions that should be highlighted (yellow) to prompt controller action
+    highlightActions?: string[]
 
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)

@@ -46,6 +46,7 @@ VatEFSPlugin::VatEFSPlugin()
     backendProcess = nullptr;
     backendOutputRead = nullptr;
     backendLogFile = nullptr;
+    backendAutoRestartUsed = false;
 
     GetModuleFileNameA(HINSTANCE(&__ImageBase), DllPathFile, sizeof(DllPathFile));
     std::string settingsPath = DllPathFile;
@@ -653,6 +654,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         DisplayMessage("Refreshed all flight plans and radar targets");
         return true;
     } else if (subcommand == "start") {
+        backendAutoRestartUsed = false;
         StartBackend();
         return true;
     } else if (subcommand == "stop") {
@@ -678,6 +680,23 @@ void VatEFSPlugin::OnTimer(int counter)
     try {
         // Poll backend stdout/stderr pipe (msg mode) — runs regardless of connection state
         PollBackendOutput();
+
+        // Check backend health every ~10 seconds
+        if (counter % 10 == 0 && backendProcess != nullptr) {
+            DWORD exitCode = 0;
+            if (!GetExitCodeProcess((HANDLE)backendProcess, &exitCode) || exitCode != STILL_ACTIVE) {
+                CloseHandle((HANDLE)backendProcess);
+                backendProcess = nullptr;
+                CleanupBackendHandles();
+                if (!backendAutoRestartUsed) {
+                    backendAutoRestartUsed = true;
+                    DisplayMessage("Backend has exited unexpectedly, attempting restart...");
+                    StartBackend();
+                } else {
+                    DisplayMessage("Backend has exited again. Use .efs start to restart manually.");
+                }
+            }
+        }
 
         if (disabled && (GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_DIRECT ||
                          GetConnectionType() == EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX ||

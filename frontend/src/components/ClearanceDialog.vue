@@ -1,7 +1,23 @@
 <template>
   <v-dialog v-model="dialogOpen" max-width="280" content-class="clnc-dialog-wrapper">
     <div class="clnc-dialog">
-      <div class="clnc-header">{{ strip.callsign }}</div>
+      <div class="clnc-header">
+        <span>{{ strip.callsign }}</span>
+        <span class="clnc-header-right">
+          <span v-if="strip.isSlow" class="clnc-slow-tag">SLOW</span>
+          <span class="clnc-header-info">{{ strip.flightRules }} {{ strip.aircraftType }}/{{ strip.wakeTurbulence }}</span>
+          <span v-if="strip.stand" class="clnc-header-info">{{ strip.stand }}</span>
+        </span>
+      </div>
+      <div v-if="departureName && store.myAirports.length > 1" class="clnc-destination">
+        <span class="clnc-dest-icao">{{ strip.adep }}</span>
+        <span class="clnc-dest-name">{{ departureName }}</span>
+      </div>
+      <div v-if="destinationName" class="clnc-destination clnc-clickable" @click="showRoute = !showRoute">
+        <span class="clnc-dest-icao">{{ strip.ades }}</span>
+        <span class="clnc-dest-name">{{ destinationName }}</span>
+      </div>
+      <div v-if="showRoute && strip.route" class="clnc-route">{{ strip.route }}</div>
       <div class="clnc-fields">
         <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value clnc-clickable" @click="openDropdown('rwy')">{{ strip.runway || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ strip.sid || '---' }}</span></div>
@@ -27,7 +43,7 @@
       <!-- Dropdown overlay -->
       <div v-if="activeDropdown" class="clnc-dropdown-overlay" @click="activeDropdown = null">
         <div class="clnc-dropdown" :style="dropdownStyle" @click.stop>
-          <div class="clnc-dropdown-scroll">
+          <div ref="dropdownScrollRef" class="clnc-dropdown-scroll">
             <div v-for="option in dropdownOptions" :key="option.value"
               class="clnc-dropdown-item"
               :class="{ 'clnc-dropdown-selected': option.selected }"
@@ -56,7 +72,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 
@@ -101,6 +117,40 @@ const dclStatusClass = computed(() => {
     default: return ''
   }
 })
+
+// Airport name lookups
+const destinationName = ref<string | null>(null)
+const departureName = ref<string | null>(null)
+const showRoute = ref(false)
+
+async function fetchAirportName(icao: string): Promise<string | null> {
+  if (!icao || icao === '????') return null
+  try {
+    const res = await fetch(`/api/airport-name?icao=${icao}`)
+    if (res.ok) {
+      const data = await res.json()
+      return data.name ?? null
+    }
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+async function fetchDestinationName() {
+  destinationName.value = await fetchAirportName(props.strip.ades)
+}
+
+async function fetchDepartureName() {
+  if (store.myAirports.length > 1) {
+    departureName.value = await fetchAirportName(props.strip.adep)
+  } else {
+    departureName.value = null
+  }
+}
+
+// Dropdown scroll ref
+const dropdownScrollRef = ref<HTMLElement | null>(null)
 
 // Dropdown state
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
@@ -171,11 +221,30 @@ watch(dialogOpen, (open) => {
   if (open) {
     fetchRunways()
     fetchSids()
+    fetchDestinationName()
+    fetchDepartureName()
     applyDefaultCfl()
     applyDefaultSquawk()
     remarks.value = ''
   } else {
     activeDropdown.value = null
+    destinationName.value = null
+    departureName.value = null
+    showRoute.value = false
+  }
+})
+
+// Auto-scroll dropdown to selected item when dropdown opens
+watch(activeDropdown, (val) => {
+  if (val) {
+    nextTick(() => {
+      const container = dropdownScrollRef.value
+      if (!container) return
+      const selected = container.querySelector('.clnc-dropdown-selected') as HTMLElement | null
+      if (selected) {
+        selected.scrollIntoView({ block: 'center' })
+      }
+    })
   }
 })
 
@@ -332,6 +401,60 @@ function onResetSquawk() {
   font-weight: bold;
   padding: 6px 12px;
   letter-spacing: 0.5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.clnc-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clnc-header-info {
+  font-size: 10px;
+  font-weight: normal;
+  opacity: 0.8;
+}
+
+.clnc-slow-tag {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: #f57c00;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+.clnc-destination {
+  text-align: center;
+  padding: 6px 12px 2px;
+  border-bottom: 1px solid #444;
+}
+
+.clnc-dest-icao {
+  font-size: 13px;
+  font-weight: bold;
+  color: #e0e0e0;
+  display: block;
+}
+
+.clnc-dest-name {
+  font-size: 10px;
+  color: #999;
+  display: block;
+  margin-top: 1px;
+}
+
+.clnc-route {
+  color: #ccc;
+  font-size: 10px;
+  word-break: break-all;
+  line-height: 1.4;
+  padding: 4px 12px 6px;
+  border-bottom: 1px solid #444;
 }
 
 .clnc-fields {
