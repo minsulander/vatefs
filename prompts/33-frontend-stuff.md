@@ -35,3 +35,8 @@ Let's make some frontend improvements:
   It doesn't quite fit within the button as it is right now.
 
 - In the strip, where we now show SID and CFL for departures, show STAR for arrivals (and not CFL)
+
+- In the clearance dialog header, right-aligned, show rules (I/V), aircraft type, weight category and stand number
+  (like in the strip)
+
+- Clicking on the destination airport in the clearance window reveals the flight full route (like in the flight plan dialog)

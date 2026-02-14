@@ -109,17 +109,19 @@
       <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
     </div>
 
-    <!-- Right section: Action button(s) -->
-    <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
-      :class="{ 'multi-action': strip.actions.length > 1 }">
-      <button v-for="action in strip.actions" :key="action" class="action-button"
-        :class="actionButtonClass(action)"
-        @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
-        <span class="action-text">{{ action }}</span>
-        <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
-      </button>
-    </div>
-    <div v-else class="strip-right strip-right-empty"></div>
+    <!-- Right section: Action button(s) (hidden in observer mode) -->
+    <template v-if="store.isController">
+      <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
+        :class="{ 'multi-action': strip.actions.length > 1 }">
+        <button v-for="action in strip.actions" :key="action" class="action-button"
+          :class="actionButtonClass(action)"
+          @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
+          <span class="action-text">{{ action }}</span>
+          <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
+        </button>
+      </div>
+      <div v-else class="strip-right strip-right-empty"></div>
+    </template>
   </div>
 </template>
 
@@ -161,6 +163,9 @@ const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
 
 const stripStyle = computed(() => {
   const style: Record<string, string> = {}
+  if (!store.isController) {
+    style['grid-template-columns'] = '10px auto minmax(0, 1fr) auto'
+  }
   return style
 })
 
@@ -827,33 +832,6 @@ function onDeleteConfirm() {
   font-weight: 500;
   color: #444;
   letter-spacing: 0.3px;
-}
-
-/* Route section - truncates when space is limited */
-.strip-route {
-  min-width: 60px;
-  flex: 1 1 100px;
-  /* Can grow and shrink */
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 2px 4px;
-  overflow: hidden;
-}
-
-.route-text {
-  font-size: 9px;
-  color: #555;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.rfl {
-  font-weight: 600;
-  font-size: 10px;
-  color: #0055aa;
-  margin-top: 1px;
 }
 
 /* Runway section - fixed on right, always visible */

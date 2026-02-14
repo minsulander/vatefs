@@ -47,6 +47,7 @@ export interface StatusMessage {
     callsign: string      // Controller callsign (e.g., 'ESGG_TWR')
     airports: string[]    // Configured airports (e.g., ['ESGG', 'ESGT'])
     role?: string         // Controller role (e.g., 'DEL', 'GND', 'TWR')
+    isController?: boolean // Whether connected as a controller (false = observer)
 }
 
 export interface DclStatusMessage {

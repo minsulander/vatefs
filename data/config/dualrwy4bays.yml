@@ -378,6 +378,7 @@ actionRules:
     direction: either
     controller: myself
     groundstates: [TXIN]
+    onRunway: false
     myRole: [GND, TWR]
     priority: 77
 

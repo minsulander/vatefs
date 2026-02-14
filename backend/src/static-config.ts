@@ -29,13 +29,16 @@ export const staticConfig: EfsStaticConfig = { ...defaultConfig }
  * Apply loaded configuration
  */
 export function applyConfig(config: EfsStaticConfig) {
-    // Preserve myCallsign if already set (from myselfUpdate or CLI)
+    // Preserve runtime state that was set from myselfUpdate / CLI / plugin
     const currentCallsign = staticConfig.myCallsign
-    // Preserve runtime controller state
+    const currentMyAirports = staticConfig.myAirports
     const currentRole = staticConfig.myRole
     const currentOnlineControllers = staticConfig.onlineControllers
     const currentDelOnline = staticConfig.delOnline
     const currentGndOnline = staticConfig.gndOnline
+    const currentActiveRunways = staticConfig.activeRunways
+    const currentIsController = staticConfig.isController
+    const currentMyFrequency = staticConfig.myFrequency
 
     // Replace all config properties
     staticConfig.myAirports = config.myAirports
@@ -48,16 +51,18 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules
 
-    // Restore callsign if it was set
-    if (currentCallsign) {
-        staticConfig.myCallsign = currentCallsign
-    }
+    // Restore runtime state
+    if (currentCallsign) staticConfig.myCallsign = currentCallsign
+    if (currentMyAirports.length > 0) staticConfig.myAirports = currentMyAirports
 
-    // Restore runtime controller state
+    // Restore runtime state
     if (currentRole) staticConfig.myRole = currentRole
     if (currentOnlineControllers) staticConfig.onlineControllers = currentOnlineControllers
     if (currentDelOnline !== undefined) staticConfig.delOnline = currentDelOnline
     if (currentGndOnline !== undefined) staticConfig.gndOnline = currentGndOnline
+    if (currentActiveRunways) staticConfig.activeRunways = currentActiveRunways
+    if (currentIsController !== undefined) staticConfig.isController = currentIsController
+    if (currentMyFrequency !== undefined) staticConfig.myFrequency = currentMyFrequency
 }
 
 /**

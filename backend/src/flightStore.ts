@@ -166,8 +166,9 @@ class FlightStore {
      * - Groundstate is not already set to a meaningful value
      */
     private tryAutoSetParked(flight: Flight) {
-        // Must be an arrival at our airport
+        // Must be an arrival at our airport (skip local flights where origin=destination)
         if (!flight.destination || !this.config.myAirports.includes(flight.destination)) return
+        if (flight.origin && flight.origin === flight.destination) return
 
         // Must be uncontrolled
         if (flight.controller && flight.controller !== '') return
@@ -996,6 +997,9 @@ class FlightStore {
 
         for (const flight of this.flights.values()) {
             if (flight.manuallyDeleted) continue
+
+            // Must have required data and be within range
+            if (!flightHasRequiredData(flight) || !this.isEligibleForStrip(flight)) continue
 
             // Re-evaluate delete rules
             const deleteResult = shouldDeleteFlight(flight, this.config)

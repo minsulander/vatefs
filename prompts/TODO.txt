@@ -5,6 +5,9 @@ Att reda ut:
   om det kan fixas i pluginen, ta bort specialhantering av SID namn
 
 
+- Release när man gör PARK
+
+
 
 Test ESSA 2026-02-11:
 

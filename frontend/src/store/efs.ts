@@ -15,6 +15,8 @@ export const useEfsStore = defineStore("efs", () => {
     // Controller status
     const myCallsign = ref('')
     const myAirports = ref<string[]>([])
+    const myRole = ref<string | undefined>(undefined)
+    const isController = ref(false)
 
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
@@ -91,7 +93,7 @@ export const useEfsStore = defineStore("efs", () => {
                         refresh(true)
                         break
                     case 'status':
-                        handleStatusMessage(message.callsign, message.airports)
+                        handleStatusMessage(message.callsign, message.airports, message.role, message.isController)
                         break
                     case 'dclStatus':
                         dclStatus.value = message.status
@@ -185,9 +187,11 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Handle status message from server
-    function handleStatusMessage(callsign: string, airports: string[]) {
+    function handleStatusMessage(callsign: string, airports: string[], role?: string, controller?: boolean) {
         myCallsign.value = callsign
         myAirports.value = airports
+        myRole.value = role
+        isController.value = controller ?? false
     }
 
     // Computed: airports that are not part of the callsign (for display)
@@ -579,6 +583,8 @@ export const useEfsStore = defineStore("efs", () => {
         gaps,
         myCallsign,
         myAirports,
+        myRole,
+        isController,
         displayAirports,
         getStripsBySection,
         getTopStrips,

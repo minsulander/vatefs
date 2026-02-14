@@ -56,6 +56,7 @@ import type { DclStatus } from "./hoppie-service.js"
 import { loadDclSound, playDclSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
+import { initUserSettings, loadUserSettings, saveUserSettings } from "./user-settings.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
 
@@ -195,6 +196,25 @@ if (EUROSCOPE_DIR) {
     loadHoppieConfig(EUROSCOPE_DIR)
     // Load DCL notification sound
     loadDclSound(EUROSCOPE_DIR)
+    // Initialize user settings persistence
+    initUserSettings(EUROSCOPE_DIR)
+    const savedSettings = loadUserSettings()
+    if (savedSettings.activeConfig) {
+        const configInfo = availableConfigs.find(c => c.file === savedSettings.activeConfig)
+        if (configInfo) {
+            console.log(`Restoring saved config: ${configInfo.name} (${savedSettings.activeConfig})`)
+            try {
+                const config = loadConfig(configInfo.fullPath)
+                applyConfig(config)
+                activeConfigFile = savedSettings.activeConfig
+            } catch (err) {
+                console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
+            }
+        }
+    }
+    if (savedSettings.dclMode) {
+        console.log(`Restoring saved DCL mode: ${savedSettings.dclMode}`)
+    }
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
 }
@@ -440,6 +460,7 @@ function sendStatus(socket: WebSocket) {
         callsign: staticConfig.myCallsign ?? "",
         airports: staticConfig.myAirports,
         role: staticConfig.myRole,
+        isController: staticConfig.isController,
     }
     sendMessage(socket, message)
 }
@@ -451,6 +472,7 @@ function broadcastStatus() {
         callsign: staticConfig.myCallsign ?? "",
         airports: staticConfig.myAirports,
         role: staticConfig.myRole,
+        isController: staticConfig.isController,
     }
     broadcast(message)
 }
@@ -560,12 +582,14 @@ function switchConfig(file: string) {
         const config = loadConfig(configInfo.fullPath)
         applyConfig(config)
         activeConfigFile = file
+        saveUserSettings({ activeConfig: file })
 
         // Re-process all flights with new config rules
         store.reprocessAllFlights()
 
         // Broadcast new state to all clients
-        broadcastLayout()
+        // broadcastRefresh tells clients to clear state and re-request layout+strips.
+        // We broadcast config list separately as it's not part of the refresh flow.
         broadcastConfigList()
         broadcastRefresh(`Config switched to ${configInfo.name}`)
     } catch (err) {
@@ -593,7 +617,7 @@ function startAtisService() {
 let hoppieService: HoppieService | null = null
 let currentDclStatus: DclStatus = "unavailable"
 let currentDclError: string | undefined
-let currentDclMode: import("@vatefs/common").DclMode = "manual"
+let currentDclMode: import("@vatefs/common").DclMode = loadUserSettings().dclMode ?? "manual"
 
 /**
  * Determine the DCL callsign based on configured airports.
@@ -717,8 +741,8 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
  * Returns true if SID is valid, CFL is set, and squawk is assigned.
  */
 function canAutoSendDcl(flight: import("./types.js").Flight): boolean {
-    // SID must be a standard IFR SID format: 5 letters + 1 digit + 1 letter (e.g., VADIN3J)
-    const sidValid = !!flight.sid && /^[A-Z]{5}\d[A-Z]$/.test(flight.sid)
+    // SID must be assigned and look like a standard SID (letters/digits, no special chars like · or spaces)
+    const sidValid = !!flight.sid && /^[A-Z0-9]+$/.test(flight.sid)
     const cflValid = !!flight.cfl && flight.cfl > 2
     const squawkValid = !!flight.squawk && flight.squawk !== "0000"
     return sidValid && cflValid && squawkValid
@@ -1124,6 +1148,16 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             )
                             executeMoveCommand(moveAction.command, result.strip.callsign, flight)
                         }
+
+                        // Moving out of any RUNWAY section clears the cleared-to-land flag
+                        if (fromSectionId.includes('runway') && !message.targetSectionId.includes('runway') && flight.clearedToLand) {
+                            console.log(`[MOVE] Clearing clearedToLand for ${result.strip.callsign} (left runway section)`)
+                            sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign: result.strip.callsign }))
+                            if (cliArgs.mock) {
+                                flight.clearedToLand = false
+                                applyMoveStateAndBroadcast(result.strip.callsign, flight)
+                            }
+                        }
                     }
                 } else {
                     console.log(`Strip ${message.stripId} dragged within ${message.targetSectionId} (bottom: ${message.isBottom})`)
@@ -1330,6 +1364,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const deletedId = store.manualDeleteStrip(message.stripId)
             if (deletedId) {
                 broadcastStripDelete(deletedId, socket)
+                sendUdp(JSON.stringify({ type: "release", callsign: deletedId }))
                 console.log(`[DELETE] Strip ${message.stripId} manually deleted`)
             } else {
                 console.log(`[DELETE] Strip ${message.stripId} not found`)
@@ -1478,6 +1513,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "dclSetMode": {
             console.log(`[DCL] Mode changed to: ${message.mode}`)
             currentDclMode = message.mode
+            saveUserSettings({ dclMode: message.mode })
             // Broadcast updated DCL status with new mode to all clients
             const modeMsg: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError, dclMode: currentDclMode }
             broadcast(modeMsg)
@@ -1843,6 +1879,8 @@ udpIn.on("message", (msg, rinfo) => {
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.deleteStripId) {
                 broadcastStripDelete(result.deleteStripId)
+                // Release the flight in EuroScope (end tracking)
+                sendUdp(JSON.stringify({ type: "release", callsign: result.deleteStripId }))
                 if (result.softDeleted) {
                     console.log(`Strip ${result.deleteStripId} soft-deleted`)
                 } else {

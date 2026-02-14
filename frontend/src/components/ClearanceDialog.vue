@@ -99,8 +99,8 @@ const remarks = ref('')
 
 const canSendDcl = computed(() => {
   const s = props.strip
-  // SID must match standard IFR SID format: 5 letters + 1 digit + 1 letter (e.g., VADIN3J)
-  const sidValid = !!s.sid && /^[A-Z]{5}\d[A-Z]$/.test(s.sid)
+  // SID must be assigned and look like a standard SID (no special chars like · or spaces)
+  const sidValid = !!s.sid && /^[A-Z0-9]+$/.test(s.sid)
   const cflValid = !!s.clearedAltitude
   const squawkValid = !!s.squawk && s.squawk !== '----'
   return sidValid && cflValid && squawkValid
@@ -282,12 +282,17 @@ const dropdownOptions = computed(() => {
         value: rwy,
         selected: rwy === props.strip.runway
       }))
-    case 'sid':
-      return availableSids.value.map(sid => ({
+    case 'sid': {
+      const isVfr = props.strip.flightRules === 'V'
+      const sids = isVfr
+        ? availableSids.value.filter(sid => sid.name.startsWith('VFR'))
+        : availableSids.value
+      return sids.map(sid => ({
         label: sid.name,
         value: sid.name,
         selected: sid.name === props.strip.sid
       }))
+    }
     case 'hdg': {
       const current = props.strip.assignedHeading
       return headingOptions.map(opt => ({

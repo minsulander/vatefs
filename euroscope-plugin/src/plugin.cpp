@@ -1194,6 +1194,22 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         DisplayMessage("transfer: Empty callsign");
                     }
+                } else if (message["type"] == "release") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (!callsign.empty()) {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (fp.IsValid()) {
+                            bool ok = fp.EndTracking();
+                            if (ok)
+                                DebugMessage("Released (end tracking) " + callsign);
+                            else
+                                DisplayMessage("Failed to release " + callsign);
+                        } else {
+                            DebugMessage("release: Flight plan not found: " + callsign);
+                        }
+                    }
                 } else if (message["type"] == "resetSquawk") {
                     auto callsign = message["callsign"].get<std::string>();
                     DebugMessage("resetSquawk: " + callsign);
