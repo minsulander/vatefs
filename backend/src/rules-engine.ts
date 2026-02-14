@@ -30,6 +30,7 @@ type CommonRuleConditions = {
     clearedToLand?: boolean
     airborne?: boolean
     onRunway?: boolean
+    depRunway?: boolean
     myRole?: ControllerRole[]
     delOnline?: boolean
     gndOnline?: boolean
@@ -158,6 +159,48 @@ function evaluateOnRunwayCondition(
     return isOnRunway === expectedOnRunway
 }
 
+/**
+ * Evaluate whether the flight's assigned runway is an active departure runway.
+ * For departures/local on ground: checks depRwy
+ * For arrivals/local airborne: checks arrRwy
+ */
+function evaluateDepRunwayCondition(
+    flight: Flight,
+    config: EfsStaticConfig,
+    expectedDepRunway: boolean
+): boolean {
+    // Collect all active departure runways across our airports
+    const depRunways: string[] = []
+    if (config.activeRunways) {
+        for (const airport of config.myAirports) {
+            const rwy = config.activeRunways[airport]
+            if (rwy) depRunways.push(...rwy.dep)
+        }
+    }
+    if (depRunways.length === 0) return !expectedDepRunway // No active runway data
+
+    // Determine the flight's relevant runway based on direction
+    const originIsOurs = flight.origin !== undefined && config.myAirports.includes(flight.origin)
+    const destIsOurs = flight.destination !== undefined && config.myAirports.includes(flight.destination)
+
+    let relevantRunway: string | undefined
+    if (originIsOurs && destIsOurs) {
+        // Local flight: depRwy on ground, arrRwy when airborne
+        relevantRunway = (flight.airborne ?? false) ? flight.arrRwy : flight.depRwy
+    } else if (originIsOurs) {
+        // Departure
+        relevantRunway = flight.depRwy
+    } else if (destIsOurs) {
+        // Arrival
+        relevantRunway = flight.arrRwy
+    }
+
+    if (!relevantRunway) return !expectedDepRunway // No runway assigned
+
+    const isDepRunway = depRunways.includes(relevantRunway)
+    return isDepRunway === expectedDepRunway
+}
+
 function evaluateCommonConditions(
     flight: Flight,
     rule: CommonRuleConditions,
@@ -200,6 +243,10 @@ function evaluateCommonConditions(
     }
 
     if (rule.onRunway !== undefined && !evaluateOnRunwayCondition(flight, config, rule.onRunway)) {
+        return false
+    }
+
+    if (rule.depRunway !== undefined && !evaluateDepRunwayCondition(flight, config, rule.depRunway)) {
         return false
     }
 
@@ -452,6 +499,11 @@ function evaluateMoveRule(
         if (!isAtOurAirport(flight, config, rule.direction)) {
             return false
         }
+    }
+
+    // Check depRunway condition
+    if (rule.depRunway !== undefined && !evaluateDepRunwayCondition(flight, config, rule.depRunway)) {
+        return false
     }
 
     // Check myRole condition

@@ -3,14 +3,28 @@
  */
 
 import fs from "fs"
+import path from "path"
 import yaml from "js-yaml"
 import type { EfsStaticConfig, SectionRule, ActionRule, DeleteRule, MoveRule } from "./config-types.js"
 import type { EfsLayout, Bay, Section } from "@vatefs/common"
 
 /**
+ * Metadata for a discovered config file
+ */
+export interface ConfigFileInfo {
+    /** File basename (e.g. "singlerwy4bays.yml") */
+    file: string
+    /** Display name from the "name" field in YAML */
+    name: string
+    /** Full path to the config file */
+    fullPath: string
+}
+
+/**
  * Raw YAML config structure (before transformation)
  */
 interface YamlConfig {
+    name?: string
     radarRange?: number
     layout: {
         bays: Record<string, {
@@ -158,4 +172,32 @@ export function loadConfig(configPath: string): EfsStaticConfig {
  */
 export function getDefaultConfigPath(dataDir: string): string {
     return `${dataDir}/config/singlerwy4bays.yml`
+}
+
+/**
+ * Scan a directory for YAML config files and extract their names.
+ * Returns an array of config file info sorted by name.
+ */
+export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
+    if (!fs.existsSync(configDir)) {
+        return []
+    }
+
+    const files = fs.readdirSync(configDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'))
+    const configs: ConfigFileInfo[] = []
+
+    for (const file of files) {
+        const fullPath = path.join(configDir, file)
+        try {
+            const content = fs.readFileSync(fullPath, 'utf8')
+            const yamlConfig = yaml.load(content) as { name?: string }
+            const name = yamlConfig?.name ?? file.replace(/\.(yml|yaml)$/, '')
+            configs.push({ file, name, fullPath })
+        } catch {
+            // Skip files that can't be parsed
+            console.warn(`Skipping config file ${file}: failed to parse`)
+        }
+    }
+
+    return configs.sort((a, b) => a.name.localeCompare(b.name))
 }

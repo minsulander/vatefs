@@ -38,6 +38,9 @@ export type {
     DclActionMessage,
     DclRejectMessage,
     DclSendMessage,
+    SwitchConfigMessage,
+    ConfigInfo,
+    ConfigListMessage,
     ClientMessage
 } from "./messages.js"
 

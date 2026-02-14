@@ -1,8 +1,10 @@
-# VatEFS Configuration for single runway, 4 bays, kind like at ESGG (Gothenburg)
-# Note: Airports are discovered at runtime from EuroScope's rwyconfig
-# or can be set via --airport CLI argument
+# VatEFS Configuration for dual runway, 4 bays (e.g. ESSA)
+# Separate sections for arrival runway and departure runway.
+# The departure runway section is the "exception" — flights on a third runway
+# or with no matching active runway default to the arrival runway section.
+# Section titles use templates: <arwy> and <drwy> resolve to active runway identifiers.
 
-name: 1RWY4BAY
+name: 2RWY4BAY
 radarRange: 25  # nm
 
 layout:
@@ -11,15 +13,17 @@ layout:
       sections:
         inbound:
           title: INBOUND
+        ctr_arr:
+          title: CTR ARR
+        arr_runway:
+          title: RUNWAY <arwy>
 
     bay2:
       sections:
-        ctr_arr:
-          title: CTR ARR
-        runway:
-          title: RUNWAY
         ctr_dep:
           title: CTR DEP
+        dep_runway:
+          title: RUNWAY <drwy>
 
     bay3:
       sections:
@@ -38,10 +42,16 @@ layout:
 sectionRules:
   # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
 
-  # Any aircraft physically on a runway (detected by geographic position and altitude)
-  # This overrides all other section rules
-  on_runway_geographic:
-    sectionId: runway
+  # Aircraft physically on the departure runway
+  on_runway_geographic_dep:
+    sectionId: dep_runway
+    onRunway: true
+    depRunway: true
+    priority: 201
+
+  # Aircraft physically on the arrival runway (or any other runway — fallback)
+  on_runway_geographic_arr:
+    sectionId: arr_runway
     onRunway: true
     priority: 200
 
@@ -81,13 +91,21 @@ sectionRules:
     groundstates: [TAXI, TXIN]
     priority: 30
 
-  # RUNWAY: Lineup and departure roll
-  runway_lineup_depa:
-    sectionId: runway
+  # DEP RUNWAY: Lineup and departure roll on departure runway
+  runway_lineup_depa_dep:
+    sectionId: dep_runway
     groundstates: [LINEUP, DEPA]
+    depRunway: true
+    priority: 91
+
+  # ARR RUNWAY: Lineup and departure roll on arrival/other runway (exception)
+  runway_lineup_depa_arr:
+    sectionId: arr_runway
+    groundstates: [LINEUP, DEPA]
+    depRunway: false
     priority: 90
 
-  # CTR DEP: Airborne departures (groundstate DEPA + airborne flag)
+  # CTR DEP: Airborne departures
   ctr_dep_airborne:
     sectionId: ctr_dep
     direction: departure
@@ -183,9 +201,19 @@ sectionRules:
     maxAltitudeAboveField: 1500
     priority: 75
 
-  # RUNWAY: Cleared to land (arrivals and local flights returning)
-  runway_cleared_to_land:
-    sectionId: runway
+  # DEP RUNWAY: Cleared to land on departure runway (exception)
+  runway_cleared_to_land_dep:
+    sectionId: dep_runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    depRunway: true
+    priority: 96
+
+  # ARR RUNWAY: Cleared to land on arrival/other runway (normal case)
+  runway_cleared_to_land_arr:
+    sectionId: arr_runway
     direction: either
     clearedToLand: true
     airborne: true
@@ -276,7 +304,7 @@ actionRules:
     action: TXI
     direction: either
     controller: myself
-    groundstates: [ARR]
+    groundstates: ['', NSTS, ARR]
     airborne: false
     myRole: [GND]
     priority: 112
@@ -318,14 +346,14 @@ actionRules:
     sectionId: ctr_arr
     direction: either
     controller: myself
-    clearedToLand: false  # Only if not already cleared
+    clearedToLand: false
     myRole: [TWR]
     priority: 90
 
-  # RUNWAY lineup: CTO (cleared for takeoff) for departures and local (TWR only)
+  # RUNWAY lineup: CTO (cleared for takeoff) (TWR only)
+  # No sectionId — works for both arr_runway and dep_runway
   cto_lineup:
     action: CTO
-    sectionId: runway
     direction: either
     controller: myself
     groundstates: [LINEUP]
@@ -416,7 +444,6 @@ actionRules:
 
 deleteRules:
   # Departures: Delete when high enough and transferred/freed
-  # Altitude > field elevation + 2500ft AND not controlled by me
   delete_dep_high_transferred:
     direction: departure
     controller: not_myself
@@ -430,7 +457,6 @@ deleteRules:
     priority: 100
 
   # Fallback: Delete any aircraft that moves beyond radar range
-  # This catches cases where other rules didn't trigger
   delete_beyond_range:
     beyondRange: true
     priority: 10
@@ -468,10 +494,20 @@ moveRules:
       type: setGroundstate
       value: TAXI
 
-  # TAXI -> RUNWAY: Set groundstate to LINEUP (TWR only)
-  move_taxi_to_runway:
+  # TAXI -> DEP RUNWAY: Set groundstate to LINEUP (TWR only)
+  move_taxi_to_dep_runway:
     fromSectionId: taxi
-    toSectionId: runway
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  # TAXI -> ARR RUNWAY: Set groundstate to LINEUP (TWR only, exception)
+  move_taxi_to_arr_runway:
+    fromSectionId: taxi
+    toSectionId: arr_runway
     direction: either
     myRole: [TWR]
     command:
@@ -480,30 +516,59 @@ moveRules:
 
   # === ARRIVAL FLOW ===
 
-  # INBOUND -> RUNWAY: Set cleared to land (TWR only)
-  move_inbound_to_runway:
+  # INBOUND -> ARR RUNWAY: Set cleared to land (TWR only)
+  move_inbound_to_arr_runway:
     fromSectionId: inbound
-    toSectionId: runway
+    toSectionId: arr_runway
     direction: arrival
     myRole: [TWR]
     command:
       type: setClearedToLand
       value: true
 
-  # CTR ARR -> RUNWAY: Set cleared to land (TWR only)
-  # Also applies to local flights manually placed in CTR ARR
-  move_ctr_arr_to_runway:
-    fromSectionId: ctr_arr
-    toSectionId: runway
+  # INBOUND -> DEP RUNWAY: Set cleared to land (TWR only, exception)
+  move_inbound_to_dep_runway:
+    fromSectionId: inbound
+    toSectionId: dep_runway
     direction: either
     myRole: [TWR]
     command:
       type: setClearedToLand
       value: true
 
-  # RUNWAY -> TAXI (arrival/local): Set groundstate to TXIN (GND/TWR)
-  move_runway_to_taxi_arr:
-    fromSectionId: runway
+  # CTR ARR -> ARR RUNWAY: Set cleared to land (TWR only)
+  move_ctr_arr_to_arr_runway:
+    fromSectionId: ctr_arr
+    toSectionId: arr_runway
+    direction: either
+    myRole: [TWR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  # CTR ARR -> DEP RUNWAY: Set cleared to land (TWR only, exception)
+  move_ctr_arr_to_dep_runway:
+    fromSectionId: ctr_arr
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  # ARR RUNWAY -> TAXI: Set groundstate to TXIN (GND/TWR)
+  move_arr_runway_to_taxi:
+    fromSectionId: arr_runway
+    toSectionId: taxi
+    direction: either
+    myRole: [GND, TWR]
+    command:
+      type: setGroundstate
+      value: TXIN
+
+  # DEP RUNWAY -> TAXI: Set groundstate to TXIN (GND/TWR)
+  move_dep_runway_to_taxi:
+    fromSectionId: dep_runway
     toSectionId: taxi
     direction: either
     myRole: [GND, TWR]

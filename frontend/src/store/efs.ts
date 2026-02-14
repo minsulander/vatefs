@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -22,6 +22,10 @@ export const useEfsStore = defineStore("efs", () => {
 
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
+
+    // Configuration
+    const availableConfigs = ref<ConfigInfo[]>([])
+    const activeConfig = ref('')
 
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
@@ -94,6 +98,10 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'atisUpdate':
                         atisInfo.value = message.airports
+                        break
+                    case 'configList':
+                        availableConfigs.value = message.configs
+                        activeConfig.value = message.activeConfig
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -525,6 +533,10 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclReject', stripId })
     }
 
+    function switchConfig(file: string) {
+        sendMessage({ type: 'switchConfig', file })
+    }
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -583,6 +595,9 @@ export const useEfsStore = defineStore("efs", () => {
         dclLogout,
         dclSend,
         dclReject,
+        availableConfigs,
+        activeConfig,
+        switchConfig,
         sendRequest,
         connect,
         refresh

@@ -106,6 +106,14 @@ export interface SectionRule {
      */
     withinCtr?: boolean
 
+    /**
+     * Whether the flight's assigned runway is an active departure runway.
+     * For departures/local on ground: checks depRwy
+     * For arrivals/local airborne: checks arrRwy
+     * Used to route flights to departure vs arrival runway sections.
+     */
+    depRunway?: boolean
+
     /** My role must be one of these for the rule to match */
     myRole?: ControllerRole[]
 
@@ -165,6 +173,9 @@ export interface ActionRule {
      */
     handoffInitiated?: boolean
 
+    /** Whether the flight's assigned runway is an active departure runway */
+    depRunway?: boolean
+
     /** My role must be one of these for the rule to match */
     myRole?: ControllerRole[]
 
@@ -217,6 +228,9 @@ export interface DeleteRule {
      */
     withinCtr?: boolean
 
+    /** Whether the flight's assigned runway is an active departure runway */
+    depRunway?: boolean
+
     /** My role must be one of these for the rule to match */
     myRole?: ControllerRole[]
 
@@ -260,6 +274,9 @@ export interface MoveRule {
 
     /** Flight direction at our airport */
     direction?: FlightDirection
+
+    /** Whether the flight's assigned runway is an active departure runway */
+    depRunway?: boolean
 
     /** My role must be one of these for the rule to match */
     myRole?: ControllerRole[]

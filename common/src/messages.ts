@@ -67,7 +67,20 @@ export interface AtisUpdateMessage {
     airports: AirportAtisInfo[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage
+export interface ConfigInfo {
+    /** Config file basename (e.g. "singlerwy4bays.yml") */
+    file: string
+    /** Display name from the "name" field in YAML (e.g. "1RWY4BAY") */
+    name: string
+}
+
+export interface ConfigListMessage {
+    type: 'configList'
+    configs: ConfigInfo[]
+    activeConfig: string  // file basename of the currently active config
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage
 
 // Client -> Server messages
 
@@ -136,7 +149,12 @@ export interface DclSendMessage {
     remarks: string
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage
+export interface SwitchConfigMessage {
+    type: 'switchConfig'
+    file: string  // Config file basename (e.g. "dualrwy4bays.yml")
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | SwitchConfigMessage
 
 // Type guards for message parsing
 
@@ -148,7 +166,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
-           type === 'hoppieMessage' || type === 'atisUpdate'
+           type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -156,5 +174,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'switchConfig'
 }

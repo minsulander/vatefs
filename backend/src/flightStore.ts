@@ -913,6 +913,65 @@ class FlightStore {
     }
 
     /**
+     * Clear strip assignments only (keep flights).
+     * Used when switching configs so flights can be re-evaluated with new rules.
+     */
+    clearAssignments() {
+        this.stripAssignments.clear()
+        this.positionCounters.clear()
+        // Reset per-flight rule tracking so rules re-evaluate cleanly
+        for (const flight of this.flights.values()) {
+            flight.lastSectionRule = undefined
+            flight.noSectionFound = false
+        }
+    }
+
+    /**
+     * Re-evaluate all eligible flights and return strips.
+     * Used after config switch to place flights into sections per new rules.
+     */
+    reprocessAll(): { strip: FlightStrip; softDeleted: boolean }[] {
+        const results: { strip: FlightStrip; softDeleted: boolean }[] = []
+
+        for (const flight of this.flights.values()) {
+            if (flight.manuallyDeleted) continue
+
+            // Re-evaluate delete rules
+            const deleteResult = shouldDeleteFlight(flight, this.config)
+            if (deleteResult.shouldDelete) {
+                flight.deleted = true
+                flight.lastDeleteRule = deleteResult.ruleId
+                continue
+            }
+            flight.deleted = false
+            flight.lastDeleteRule = undefined
+
+            // Determine section for flight
+            const targetSection = determineSectionForFlight(flight, this.config)
+            if (!targetSection) {
+                flight.noSectionFound = true
+                flight.deleted = true
+                continue
+            }
+
+            const position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            const bottom = false
+            this.stripAssignments.set(flight.callsign, {
+                bayId: targetSection.bayId,
+                sectionId: targetSection.sectionId,
+                position,
+                bottom
+            })
+            flight.lastSectionRule = targetSection.ruleId ?? 'default'
+
+            const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+            results.push({ strip, softDeleted: false })
+        }
+
+        return results
+    }
+
+    /**
      * Set backend-managed flags on a flight (clearedToLand, airborne, groundstate)
      * Returns the updated strip if the flight exists and has required data
      */

@@ -28,6 +28,7 @@ import type {
     DclStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
+    ConfigListMessage,
     ServerMessage,
     ClientMessage,
     AirportAtisInfo,
@@ -41,7 +42,8 @@ import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDi
 import { loadAirports, getAirportCount, getAirportByIcao } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
-import { loadConfig, getDefaultConfigPath } from "./config-loader.js"
+import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
+import type { ConfigFileInfo } from "./config-loader.js"
 import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
@@ -90,10 +92,15 @@ function parseArgs(): { config?: string; callsign?: string; airports?: string[];
 
 const cliArgs = parseArgs()
 
-// Load configuration from YAML file
-const configFile = cliArgs.config ?? getDefaultConfigPath(dataDir)
+// Configuration management
+const configDir = path.join(dataDir, "config")
+let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
+let activeConfigFile = path.basename(cliArgs.config ?? getDefaultConfigPath(dataDir))
+
+// Load initial configuration from YAML file
+const initialConfigPath = cliArgs.config ?? getDefaultConfigPath(dataDir)
 try {
-    const config = loadConfig(configFile)
+    const config = loadConfig(initialConfigPath)
     applyConfig(config)
 } catch (err) {
     console.error(`Failed to load config: ${err instanceof Error ? err.message : err}`)
@@ -445,6 +452,57 @@ function broadcastAtisUpdate() {
     broadcast(message)
 }
 
+// Send config list to a single client
+function sendConfigList(socket: WebSocket) {
+    const message: ConfigListMessage = {
+        type: "configList",
+        configs: availableConfigs.map(c => ({ file: c.file, name: c.name })),
+        activeConfig: activeConfigFile,
+    }
+    sendMessage(socket, message)
+}
+
+// Broadcast config list to all clients
+function broadcastConfigList() {
+    const message: ConfigListMessage = {
+        type: "configList",
+        configs: availableConfigs.map(c => ({ file: c.file, name: c.name })),
+        activeConfig: activeConfigFile,
+    }
+    broadcast(message)
+}
+
+/**
+ * Switch to a different configuration file.
+ * Reloads config, clears the store, re-applies section rules to existing flights,
+ * and broadcasts the new layout + refreshed strips to all clients.
+ */
+function switchConfig(file: string) {
+    const configInfo = availableConfigs.find(c => c.file === file)
+    if (!configInfo) {
+        console.error(`Config file not found: ${file}`)
+        return
+    }
+
+    console.log(`Switching config to: ${configInfo.name} (${file})`)
+
+    try {
+        const config = loadConfig(configInfo.fullPath)
+        applyConfig(config)
+        activeConfigFile = file
+
+        // Re-process all flights with new config rules
+        store.reprocessAllFlights()
+
+        // Broadcast new state to all clients
+        broadcastLayout()
+        broadcastConfigList()
+        broadcastRefresh(`Config switched to ${configInfo.name}`)
+    } catch (err) {
+        console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
+    }
+}
+
 /**
  * Start (or restart) the ATIS service for the current airports.
  */
@@ -753,6 +811,15 @@ function sendLayout(socket: WebSocket) {
     }
     sendMessage(socket, message)
     console.log("Sent layout to client")
+}
+
+// Broadcast layout to all clients (e.g., when active runways change and titles need updating)
+function broadcastLayout() {
+    const message: LayoutMessage = {
+        type: "layout",
+        layout: store.getLayout(),
+    }
+    broadcast(message)
 }
 
 // Send all strips to a client
@@ -1221,6 +1288,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
+        case "switchConfig": {
+            console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
+            switchConfig(message.file)
+            break
+        }
     }
 }
 
@@ -1237,6 +1310,7 @@ wsServer.on("connection", (socket) => {
     sendStatus(socket)
     sendDclStatus(socket)
     sendAtisUpdate(socket)
+    sendConfigList(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -1518,8 +1592,16 @@ udpIn.on("message", (msg, rinfo) => {
                 }
 
                 // Extract active runways per airport
+                const previousRunways = JSON.stringify(staticConfig.activeRunways ?? {})
                 const activeRunways = extractActiveRunways(msg.rwyconfig as Record<string, Record<string, unknown>>)
                 setActiveRunways(activeRunways)
+                const runwaysChanged = JSON.stringify(activeRunways) !== previousRunways
+
+                // Re-broadcast layout when runways change (section titles may have templates)
+                if (runwaysChanged) {
+                    console.log(`Active runways changed, broadcasting updated layout`)
+                    broadcastLayout()
+                }
 
                 // Start ATIS polling if not already running
                 if (!atisService) {

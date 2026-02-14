@@ -40,6 +40,25 @@
         DCL
       </v-btn>
       <v-spacer />
+      <!-- Config selector -->
+      <v-menu v-if="efs.availableConfigs.length > 1" offset-y>
+        <template v-slot:activator="{ props }">
+          <v-btn variant="text" size="small" class="text-grey" v-bind="props" title="Switch configuration">
+            {{ activeConfigName }}
+            <v-icon end size="x-small">mdi-chevron-down</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" bg-color="#2b2d31" class="text-grey">
+          <v-list-item
+            v-for="config in efs.availableConfigs"
+            :key="config.file"
+            :active="config.file === efs.activeConfig"
+            @click="efs.switchConfig(config.file)"
+          >
+            <v-list-item-title>{{ config.name }}</v-list-item-title>
+          </v-list-item>
+        </v-list>
+      </v-menu>
       <v-btn v-if="!fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen" class="text-grey"
         @click="requestFullScreen"></v-btn>
       <v-btn v-if="fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen-exit" class="text-grey"
@@ -97,6 +116,11 @@ const atisDisplayItems = computed((): AtisDisplayItem[] => {
       qnh,
     }
   })
+})
+
+const activeConfigName = computed(() => {
+  const active = efs.availableConfigs.find(c => c.file === efs.activeConfig)
+  return active?.name ?? efs.activeConfig
 })
 
 const dclTooltip = computed(() => {

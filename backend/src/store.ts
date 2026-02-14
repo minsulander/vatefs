@@ -1,10 +1,53 @@
 import type { EfsLayout, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
 import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
+import type { EfsStaticConfig } from "./config-types.js"
 import { flightStore } from "./flightStore.js"
 import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
+
+/**
+ * Resolve template variables in section titles.
+ * Supported variables:
+ *   <arwy>  - active arrival runway(s), e.g. "26" or "01L/01R"
+ *   <drwy>  - active departure runway(s), e.g. "19R" or "08/19R"
+ */
+function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): EfsLayout {
+    // Check if any title contains a template variable (fast path)
+    const hasTemplates = layout.bays.some(bay =>
+        bay.sections.some(section => section.title.includes('<'))
+    )
+    if (!hasTemplates) return layout
+
+    // Collect active runways across all airports
+    const allArrRunways: string[] = []
+    const allDepRunways: string[] = []
+    if (config.activeRunways) {
+        for (const airport of config.myAirports) {
+            const rwy = config.activeRunways[airport]
+            if (rwy) {
+                allArrRunways.push(...rwy.arr)
+                allDepRunways.push(...rwy.dep)
+            }
+        }
+    }
+
+    const arrRwyStr = allArrRunways.join('/') || '??'
+    const depRwyStr = allDepRunways.join('/') || '??'
+
+    return {
+        bays: layout.bays.map(bay => ({
+            ...bay,
+            sections: bay.sections.map(section => ({
+                ...section,
+                title: section.title
+                    .replace('<arwy>', arrRwyStr)
+                    .replace('<drwy>', depRwyStr)
+            }))
+        }))
+    }
+}
 
 const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "id",
@@ -237,9 +280,9 @@ class EfsStore {
         return null
     }
 
-    // Get layout (for sending to clients)
+    // Get layout (for sending to clients), with section title templates resolved
     getLayout(): EfsLayout {
-        return this.layout
+        return resolveLayoutTemplates(this.layout, staticConfig)
     }
 
     // Get all strips as array
@@ -411,6 +454,31 @@ class EfsStore {
         // Reload layout from config
         this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
         console.log('Store cleared')
+    }
+
+    /**
+     * Re-process all flights with current rules (used after config switch).
+     * Clears strips/gaps and re-evaluates all flights, keeping flight data intact.
+     */
+    reprocessAllFlights() {
+        this.strips.clear()
+        this.deletedStrips.clear()
+        this.gaps.clear()
+        // Reload layout from new config
+        this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
+
+        // Clear assignments so flights re-evaluate
+        flightStore.clearAssignments()
+
+        // Re-process all flights through new rules
+        const results = flightStore.reprocessAll()
+        for (const { strip, softDeleted } of results) {
+            if (!softDeleted) {
+                this.strips.set(strip.id, strip)
+            }
+        }
+
+        console.log(`Reprocessed all flights: ${this.strips.size} strips placed`)
     }
 
     /**

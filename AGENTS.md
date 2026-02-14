@@ -153,7 +153,8 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 ### Data Files
 - `data/airports.csv` - Airport database with ICAO codes, coordinates, elevations
 - `data/runways.csv` - Runway database with headings, dimensions, thresholds
-- `data/config/singlerwy4bays.yml` - Default configuration for ESGG (Gothenburg)
+- `data/config/singlerwy4bays.yml` - Default configuration for ESGG (Gothenburg, single runway)
+- `data/config/dualrwy4bays.yml` - Configuration for ESSA (Stockholm, dual runway)
 
 ### Configuration Files (YAML)
 
@@ -225,6 +226,8 @@ Determine which section a flight strip belongs to based on:
 - Ground state (NSTS, STUP, PUSH, TAXI, TXIN, DEPA, ARR, LINEUP, etc.)
 - Controller relationship (myself/not_myself/any)
 - Clearance flag, cleared to land flag, airborne flag
+- `depRunway` condition: whether the flight's assigned runway is an active departure runway
+- `onRunway` condition: geographic runway detection
 
 ### Action Rules
 Determine the default action button on a strip (ASSUME, CTL, CTO, XFER, PUSH, TAXI)
@@ -239,6 +242,21 @@ Determine EuroScope commands when strips are manually dragged between sections:
 - PENDING CLR → CLEARED: set clearance flag
 - CLEARED → START&PUSH: set groundstate PUSH
 - etc.
+
+### Section Title Templates
+Section titles in YAML config can use template variables that resolve at runtime:
+- `<arwy>` — active arrival runway(s), e.g. "26" or "01L/01R"
+- `<drwy>` — active departure runway(s), e.g. "19R" or "08/19R"
+- Templates are resolved when sending layout to clients
+- Layout is re-broadcast to all clients when active runways change (rwyconfig update)
+
+### Dual Runway Support
+The `dualrwy4bays.yml` config demonstrates separate arrival and departure runway sections:
+- `arr_runway` — for flights on the arrival runway (default/fallback)
+- `dep_runway` — for flights on the departure runway (exception)
+- Uses `depRunway: true/false` condition to route flights to the correct section
+- `depRunway` checks the flight's relevant runway (depRwy for departures, arrRwy for arrivals) against the active departure runways from rwyconfig
+- Flights on a third runway default to the arrival runway section
 
 ## Important Notes
 
