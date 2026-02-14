@@ -281,6 +281,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
                 SetJsonIfValidUtf8(message, "groundstate", scratch.c_str());
             } else if (scratch == "/EFS/CTL") {
                 message["clearedToLand"] = true;
+            } else if (scratch == "/EFS/CTL-") {
+                message["clearedToLand"] = false;
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
                 SetJsonIfValidUtf8(message, "stand", scratch.substr(6).c_str());
@@ -1103,6 +1105,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         UpdateScratchPad(callsign, "/EFS/CTL", true);
                     } else {
                         DisplayMessage("setClearedToLand: Invalid callsign");
+                    }
+                } else if (message["type"] == "unsetClearedToLand") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!callsign.empty()) {
+                        UpdateScratchPad(callsign, "/EFS/CTL-", true);
+                    } else {
+                        DisplayMessage("unsetClearedToLand: Invalid callsign");
                     }
                 } else if (message["type"] == "refresh") {
                     Refresh();

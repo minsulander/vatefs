@@ -501,6 +501,16 @@ moveRules:
       type: setClearedToLand
       value: true
 
+  # RUNWAY -> TAXI (departure): Set groundstate to TAXI
+  move_runway_to_taxi_dep:
+    fromSectionId: runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
   # RUNWAY -> TAXI (arrival/local): Set groundstate to TXIN (GND/TWR)
   move_runway_to_taxi_arr:
     fromSectionId: runway
@@ -510,3 +520,41 @@ moveRules:
     command:
       type: setGroundstate
       value: TXIN
+
+  # === UNDO OPERATIONS ===
+
+  # CLEARED -> PENDING DEP: Unset clearance flag
+  undo_cleared_to_pending:
+    fromSectionId: cleared
+    toSectionId: pending_dep
+    direction: either
+    command:
+      type: setClearance
+      value: false
+
+  # PUSH&START -> CLEARED: Set groundstate to ONFREQ
+  undo_push_to_cleared:
+    fromSectionId: push_start
+    toSectionId: cleared
+    direction: either
+    command:
+      type: setGroundstate
+      value: ONFREQ
+
+  # TAXI -> PUSH&START: Set groundstate to PUSH
+  undo_taxi_to_push:
+    fromSectionId: taxi
+    toSectionId: push_start
+    direction: either
+    command:
+      type: setGroundstate
+      value: PUSH
+
+  # RUNWAY -> CTR ARR: Unset cleared to land
+  undo_runway_to_ctr_arr:
+    fromSectionId: runway
+    toSectionId: ctr_arr
+    direction: either
+    command:
+      type: setClearedToLand
+      value: false

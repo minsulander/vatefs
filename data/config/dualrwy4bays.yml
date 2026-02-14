@@ -556,7 +556,17 @@ moveRules:
       type: setClearedToLand
       value: true
 
-  # ARR RUNWAY -> TAXI: Set groundstate to TXIN (GND/TWR)
+  # ARR RUNWAY -> TAXI (departure): Set groundstate to TAXI
+  move_arr_runway_to_taxi_dep:
+    fromSectionId: arr_runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  # ARR RUNWAY -> TAXI (arrival/local): Set groundstate to TXIN (GND/TWR)
   move_arr_runway_to_taxi:
     fromSectionId: arr_runway
     toSectionId: taxi
@@ -566,7 +576,17 @@ moveRules:
       type: setGroundstate
       value: TXIN
 
-  # DEP RUNWAY -> TAXI: Set groundstate to TXIN (GND/TWR)
+  # DEP RUNWAY -> TAXI (departure): Set groundstate to TAXI
+  move_dep_runway_to_taxi_dep:
+    fromSectionId: dep_runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  # DEP RUNWAY -> TAXI (arrival/local): Set groundstate to TXIN (GND/TWR)
   move_dep_runway_to_taxi:
     fromSectionId: dep_runway
     toSectionId: taxi
@@ -575,3 +595,50 @@ moveRules:
     command:
       type: setGroundstate
       value: TXIN
+
+  # === UNDO OPERATIONS ===
+
+  # CLEARED -> PENDING DEP: Unset clearance flag
+  undo_cleared_to_pending:
+    fromSectionId: cleared
+    toSectionId: pending_dep
+    direction: either
+    command:
+      type: setClearance
+      value: false
+
+  # PUSH&START -> CLEARED: Set groundstate to ONFREQ
+  undo_push_to_cleared:
+    fromSectionId: push_start
+    toSectionId: cleared
+    direction: either
+    command:
+      type: setGroundstate
+      value: ONFREQ
+
+  # TAXI -> PUSH&START: Set groundstate to PUSH
+  undo_taxi_to_push:
+    fromSectionId: taxi
+    toSectionId: push_start
+    direction: either
+    command:
+      type: setGroundstate
+      value: PUSH
+
+  # ARR RUNWAY -> CTR ARR: Unset cleared to land
+  undo_arr_runway_to_ctr_arr:
+    fromSectionId: arr_runway
+    toSectionId: ctr_arr
+    direction: either
+    command:
+      type: setClearedToLand
+      value: false
+
+  # DEP RUNWAY -> CTR ARR: Unset cleared to land
+  undo_dep_runway_to_ctr_arr:
+    fromSectionId: dep_runway
+    toSectionId: ctr_arr
+    direction: either
+    command:
+      type: setClearedToLand
+      value: false

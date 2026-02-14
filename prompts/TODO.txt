@@ -25,9 +25,9 @@ Idéer:
 -27 DCL funka fint! Dock lätt missa. Ljud? Blink?
 
 
-- Fler move actions, lista vilka
+-32 Fler move actions, lista vilka
 
-- Generell automove rule att om jag flyttat en strip manuellt får den inte flytta tillbaka till den jag flyttade från
+-32 Generell automove rule att om jag flyttat en strip manuellt får den inte flytta tillbaka till den jag flyttade från
 
 -26 Hantera flera FL positioner:
   - XFER istför LU/CTO om jag är GND
@@ -59,6 +59,7 @@ Vidare i livet:
 - Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
 - Skriva egna noteringar
 - Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
+  eller så visas detta mer som en extra grej invid section header..
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
 - GO-AROUND

@@ -239,6 +239,58 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
     }
 }
 
+/**
+ * Execute a move rule command: send the appropriate UDP message to EuroScope
+ * and apply the state change locally in mock mode.
+ */
+function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight: import("./types.js").Flight) {
+    switch (command.type) {
+        case "setGroundstate":
+            sendUdp(JSON.stringify({ type: "setGroundState", callsign, state: command.value }))
+            if (cliArgs.mock) {
+                flight.groundstate = command.value
+                applyMoveStateAndBroadcast(callsign, flight)
+            }
+            break
+
+        case "setClearance":
+            sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign }))
+            if (cliArgs.mock) {
+                flight.clearance = command.value
+                applyMoveStateAndBroadcast(callsign, flight)
+            }
+            break
+
+        case "setClearedToLand":
+            if (command.value) {
+                sendUdp(JSON.stringify({ type: "setClearedToLand", callsign }))
+            } else {
+                // Unset cleared to land — backend-managed flag + tell plugin to clear scratchpad
+                sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign }))
+            }
+            if (cliArgs.mock) {
+                flight.clearedToLand = command.value
+                applyMoveStateAndBroadcast(callsign, flight)
+            }
+            break
+
+        case "setClearedForTakeoff":
+            console.log(`setClearedForTakeoff not yet implemented for move rules`)
+            break
+    }
+}
+
+/**
+ * After a move command changes flight state in mock mode, regenerate and broadcast the strip.
+ */
+function applyMoveStateAndBroadcast(callsign: string, _flight: import("./types.js").Flight) {
+    const updatedStrip = flightStore.regenerateStrip(callsign)
+    if (updatedStrip) {
+        store.updateStripFromFlight(updatedStrip)
+        broadcastStrip(updatedStrip)
+    }
+}
+
 type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
     | { type: "setGroundState"; callsign: string; state: string }
@@ -1052,19 +1104,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             console.log(
                                 `[MOVE ACTION] ${result.strip.callsign}: ${formatEuroscopeCommand(moveAction.command)} (rule: ${moveAction.ruleId})`,
                             )
-                            if (moveAction.command.type === "setGroundstate") {
-                                sendUdp(
-                                    JSON.stringify({
-                                        type: "setGroundState",
-                                        callsign: result.strip.callsign,
-                                        state: moveAction.command.value,
-                                    }),
-                                )
-                            } else if (moveAction.command.type === "setClearedToLand") {
-                                sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: result.strip.callsign }))
-                            } else {
-                                console.log("Unimplemented move command")
-                            }
+                            executeMoveCommand(moveAction.command, result.strip.callsign, flight)
                         }
                     }
                 } else {
