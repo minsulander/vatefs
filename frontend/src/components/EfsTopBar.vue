@@ -6,7 +6,7 @@
       <!-- Callsign -->
       <span class="text-grey ml-1">{{ efs.myCallsign || 'NOT CONNECTED' }}</span>
       <!-- ATIS per airport -->
-      <span v-for="info in atisDisplayItems" :key="info.airport" class="ml-3" style="font-family: monospace; letter-spacing: 0.5px;">
+      <span v-for="info in atisDisplayItems" :key="info.airport" class="ml-3">
         <span class="text-grey-darken-1">{{ info.airport }}</span>
         <template v-if="info.split">
           <span class="text-amber ml-1" v-if="info.arrAtis">{{ info.arrAtis }}</span>
@@ -40,9 +40,9 @@
         DCL
       </v-btn>
       <v-spacer />
-      <v-btn v-if="!fullscreen" variant="text" icon="mdi-fullscreen" class="text-grey"
+      <v-btn v-if="!fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen" class="text-grey"
         @click="requestFullScreen"></v-btn>
-      <v-btn v-if="fullscreen" variant="text" icon="mdi-fullscreen-exit" class="text-grey"
+      <v-btn v-if="fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen-exit" class="text-grey"
         @click="exitFullScreen"></v-btn>
       <clock class="mx-2" />
     </v-app-bar>
@@ -56,6 +56,7 @@ import { useEfsStore } from "../store/efs"
 
 const efs = useEfsStore()
 const fullscreen = ref(window.innerHeight == screen.height)
+const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
 
 interface AtisDisplayItem {
   airport: string

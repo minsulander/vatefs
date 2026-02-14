@@ -275,7 +275,7 @@ actionRules:
     action: TXI
     direction: either
     controller: myself
-    groundstates: ['', NSTS, ARR]
+    groundstates: [ARR]
     airborne: false
     myRole: [GND]
     priority: 112
@@ -357,7 +357,7 @@ actionRules:
     action: TXI
     direction: either
     controller: myself
-    groundstates: ['', NSTS, ARR]
+    groundstates: [ARR]
     airborne: false
     myRole: [TWR]
     gndOnline: false

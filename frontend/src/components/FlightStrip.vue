@@ -33,7 +33,7 @@
 
     <!-- Left section: Callsign block (always visible) -->
     <div class="strip-left">
-      <div class="callsign">{{ strip.callsign }}</div>
+      <div class="callsign" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
@@ -203,9 +203,9 @@ function onDragEnd() {
 function onDragAreaTouchStart(event: TouchEvent) {
   if (event.touches.length !== 1) return
 
-  // Don't start drag when touching interactive elements (action buttons, etc.)
+  // Don't start drag when touching interactive elements (action buttons, menu button, etc.)
   const target = event.target as HTMLElement
-  if (target.closest('.action-button') || target.closest('.squawk-empty')) return
+  if (target.closest('.action-button') || target.closest('.squawk-empty') || target.closest('.callsign')) return
 
   touchStarted = true
 
@@ -540,6 +540,19 @@ function onContextMenu(event: MouseEvent) {
   menuOpen.value = true
 }
 
+function onCallsignClick(event: MouseEvent) {
+  menuPosition.value = [event.clientX, event.clientY]
+  menuOpen.value = true
+}
+
+function onCallsignTouch(event: TouchEvent) {
+  const touch = event.changedTouches[0]
+  if (touch) {
+    menuPosition.value = [touch.clientX, touch.clientY]
+    menuOpen.value = true
+  }
+}
+
 function onFplClick() {
   fplDialogOpen.value = true
   menuOpen.value = false
@@ -629,6 +642,8 @@ function onDeleteConfirm() {
   color: #000;
   letter-spacing: 0.3px;
   line-height: 1.2;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .callsign-sub {
