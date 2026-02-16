@@ -1580,7 +1580,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "updateNote": {
             const updatedStrip = store.updateNoteText(message.stripId, message.text)
             if (updatedStrip) {
-                broadcastStrip(updatedStrip, socket)
+                // Echo to all clients (including sender) so note text stays canonical
+                // even if local optimistic updates race with strip insertions/re-renders.
+                broadcastStrip(updatedStrip)
                 console.log(`[NOTE] Updated note ${message.stripId}: "${message.text.substring(0, 30)}"`)
             }
             break

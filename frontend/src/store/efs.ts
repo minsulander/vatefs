@@ -586,7 +586,7 @@ export const useEfsStore = defineStore("efs", () => {
         // Optimistic update
         const strip = strips.value.get(stripId)
         if (strip) {
-            strip.noteText = text
+            strips.value.set(stripId, { ...strip, noteText: text })
         }
 
         sendMessage({

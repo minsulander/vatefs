@@ -40,6 +40,7 @@
           v-model="noteText"
           class="note-input"
           placeholder="Type a note..."
+          @input="onNoteInput"
           @blur="onNoteBlur"
           @keydown.enter="onNoteBlur"
           @keydown.escape="onNoteBlur"
@@ -178,14 +179,30 @@ const deleteDialogOpen = ref(false)
 const isNote = computed(() => props.strip.stripType === 'note')
 const noteEditing = ref(false)
 const noteText = ref('')
+const noteInitialText = ref('')
+const noteDirty = ref(false)
 const noteInput = ref<HTMLInputElement | null>(null)
 
 function onNoteClick() {
+  // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
+  // Still re-focus the input (important for touch interactions).
+  if (noteEditing.value) {
+    nextTick(() => {
+      noteInput.value?.focus()
+    })
+    return
+  }
   noteText.value = props.strip.noteText ?? ''
+  noteInitialText.value = noteText.value
+  noteDirty.value = false
   noteEditing.value = true
   nextTick(() => {
     noteInput.value?.focus()
   })
+}
+
+function onNoteInput() {
+  noteDirty.value = true
 }
 
 function onNoteTouch(event: TouchEvent) {
@@ -203,8 +220,9 @@ function onNoteTouch(event: TouchEvent) {
 
 function onNoteBlur() {
   noteEditing.value = false
+  if (!noteDirty.value) return
   const text = noteText.value.trim()
-  if (text !== (props.strip.noteText ?? '')) {
+  if (text !== noteInitialText.value) {
     store.updateNote(props.strip.id, text)
   }
 }
@@ -1187,4 +1205,3 @@ function onDeleteConfirm() {
   background: #e53935;
 }
 </style>
-
