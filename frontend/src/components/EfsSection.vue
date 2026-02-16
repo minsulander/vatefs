@@ -1,4 +1,9 @@
 <template>
+  <StripCreationDialog
+    v-model="createDialogOpen"
+    :strip-type="createDialogType"
+    @create="onDialogCreate"
+  />
   <div
     class="efs-section"
     :data-section-id="section.id"
@@ -81,6 +86,9 @@ import type { Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import FlightStrip from './FlightStrip.vue'
+import StripCreationDialog from './StripCreationDialog.vue'
+
+type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
 
 const props = withDefaults(defineProps<{
   section: Section
@@ -91,6 +99,15 @@ const props = withDefaults(defineProps<{
   isFirstSection: false,
   isLastSection: false
 })
+
+const createDialogOpen = ref(false)
+const createDialogType = ref<SpecialStripType>('vfrDep')
+
+// Pending create info (stored while dialog is open, applied on dialog OK)
+const pendingCreatePosition = ref<number | undefined>(undefined)
+const pendingCreateIsBottom = ref<boolean>(false)
+const pendingCreateGapIndex = ref<number | undefined>(undefined)
+const pendingCreateGapSize = ref<number>(0)
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
@@ -160,11 +177,134 @@ function onGapClick(index: number) {
   store.removeGapAtIndex(props.bayId, props.section.id, index)
 }
 
+// Approximate half-height of a flight strip (for estimating "strip top" from cursor Y)
+const HALF_STRIP_HEIGHT = 22
+
+// Compute position + gap info for a new strip drop in the top zone
+function computeTopZoneCreateDrop(event: DragEvent): { position: number; gapIndex?: number; gapSize: number } {
+  const container = topContainer.value
+  if (!container) return { position: 0, gapSize: 0 }
+
+  const allStripElements = Array.from(container.querySelectorAll('.flight-strip'))
+  const draggedStripTop = event.clientY - HALF_STRIP_HEIGHT
+
+  let position = allStripElements.length
+  let droppedBelowLastStrip = false
+  let distanceBelowLastStrip = 0
+  let droppedIntoEmptySection = false
+  let distanceFromTop = 0
+
+  if (allStripElements.length > 0) {
+    const lastStrip = allStripElements[allStripElements.length - 1]
+    if (lastStrip) {
+      const lastRect = lastStrip.getBoundingClientRect()
+      if (draggedStripTop > lastRect.bottom) {
+        droppedBelowLastStrip = true
+        distanceBelowLastStrip = draggedStripTop - lastRect.bottom
+      }
+    }
+  } else {
+    const containerRect = container.getBoundingClientRect()
+    distanceFromTop = draggedStripTop - containerRect.top
+    if (distanceFromTop >= store.GAP_BUFFER) {
+      droppedIntoEmptySection = true
+    }
+  }
+
+  for (let i = 0; i < allStripElements.length; i++) {
+    const element = allStripElements[i]
+    if (!element) continue
+    const rect = element.getBoundingClientRect()
+    const midpoint = rect.top + rect.height / 2
+    if (event.clientY < midpoint) {
+      position = i
+      droppedBelowLastStrip = false
+      break
+    }
+  }
+
+  let gapIndex: number | undefined
+  let gapSize = 0
+
+  if (droppedBelowLastStrip && distanceBelowLastStrip >= store.GAP_BUFFER) {
+    gapIndex = position
+    gapSize = distanceBelowLastStrip
+  } else if (droppedIntoEmptySection) {
+    gapIndex = 0
+    gapSize = distanceFromTop
+  }
+
+  return { position, gapIndex, gapSize }
+}
+
+// Compute position for a new strip drop in the bottom strips zone
+function computeBottomStripsDrop(event: DragEvent): number {
+  const bottomContainer = (event.currentTarget as HTMLElement)
+  const stripElements = Array.from(bottomContainer.querySelectorAll('.flight-strip'))
+  let position = stripElements.length
+
+  for (let i = 0; i < stripElements.length; i++) {
+    const element = stripElements[i]
+    if (!element) continue
+    const rect = element.getBoundingClientRect()
+    const midpoint = rect.top + rect.height / 2
+    if (event.clientY < midpoint) {
+      position = i
+      break
+    }
+  }
+
+  return position
+}
+
+// Apply a pending create (note or dialog) with position + gap
+function applyCreate(
+  type: SpecialStripType,
+  callsign?: string,
+  aircraftType?: string,
+  airport?: string,
+  position?: number,
+  isBottom?: boolean,
+  gapIndex?: number,
+  gapSize?: number
+) {
+  store.createStrip(type, callsign, aircraftType, airport, props.bayId, props.section.id, position, isBottom)
+  if (gapIndex !== undefined && gapSize && gapSize >= store.GAP_BUFFER) {
+    store.setGapAtIndex(props.bayId, props.section.id, gapIndex, gapSize)
+  }
+}
+
+// Handle create from StripCreationDialog
+function onDialogCreate(data: { callsign: string; aircraftType?: string; airport?: string }) {
+  applyCreate(
+    createDialogType.value,
+    data.callsign,
+    data.aircraftType,
+    data.airport,
+    pendingCreatePosition.value,
+    pendingCreateIsBottom.value,
+    pendingCreateGapIndex.value,
+    pendingCreateGapSize.value
+  )
+}
+
+// Open the dialog with pending position/gap info
+function openCreateDialog(type: SpecialStripType, position?: number, isBottom = false, gapIndex?: number, gapSize = 0) {
+  createDialogType.value = type
+  pendingCreatePosition.value = position
+  pendingCreateIsBottom.value = isBottom
+  pendingCreateGapIndex.value = gapIndex
+  pendingCreateGapSize.value = gapSize
+  createDialogOpen.value = true
+}
+
 // Top strips drag handling
 function onTopDragOver(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move'
+    // Set appropriate dropEffect based on drag source
+    const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
+    event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
 }
 
@@ -185,6 +325,19 @@ function onTopDrop(event: DragEvent) {
   isDragOver.value = false
 
   if (!event.dataTransfer) return
+
+  // Handle create-strip drops from bottom bar
+  const createType = event.dataTransfer.getData('application/efs-create')
+  if (createType) {
+    const type = createType as SpecialStripType
+    const { position, gapIndex, gapSize } = computeTopZoneCreateDrop(event)
+    if (type === 'note') {
+      applyCreate('note', undefined, undefined, undefined, position, false, gapIndex, gapSize)
+    } else {
+      openCreateDialog(type, position, false, gapIndex, gapSize)
+    }
+    return
+  }
 
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
@@ -408,7 +561,8 @@ function onTopDrop(event: DragEvent) {
 function onBottomDragOver(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move'
+    const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
+    event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
 }
 
@@ -430,6 +584,18 @@ function onBottomDrop(event: DragEvent) {
 
   if (!event.dataTransfer) return
 
+  // Handle create-strip drops from bottom bar
+  const createType = event.dataTransfer.getData('application/efs-create')
+  if (createType) {
+    const type = createType as SpecialStripType
+    if (type === 'note') {
+      applyCreate('note', undefined, undefined, undefined, 0, true)
+    } else {
+      openCreateDialog(type, 0, true)
+    }
+    return
+  }
+
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     const { stripId } = data
@@ -445,7 +611,8 @@ function onBottomDrop(event: DragEvent) {
 function onBottomStripsDragOver(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move'
+    const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
+    event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
 }
 
@@ -454,27 +621,25 @@ function onBottomStripsDrop(event: DragEvent) {
 
   if (!event.dataTransfer) return
 
+  // Handle create-strip drops from bottom bar
+  const createType = event.dataTransfer.getData('application/efs-create')
+  if (createType) {
+    const type = createType as SpecialStripType
+    const position = computeBottomStripsDrop(event)
+    if (type === 'note') {
+      applyCreate('note', undefined, undefined, undefined, position, true)
+    } else {
+      openCreateDialog(type, position, true)
+    }
+    return
+  }
+
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     const { stripId } = data
 
     // Find position within bottom strips
-    const bottomContainer = (event.currentTarget as HTMLElement)
-    const stripElements = Array.from(bottomContainer.querySelectorAll('.flight-strip'))
-    let position = stripElements.length
-
-    for (let i = 0; i < stripElements.length; i++) {
-      const element = stripElements[i]
-      if (!element) continue
-
-      const rect = element.getBoundingClientRect()
-      const midpoint = rect.top + rect.height / 2
-
-      if (event.clientY < midpoint) {
-        position = i
-        break
-      }
-    }
+    const position = computeBottomStripsDrop(event)
 
     store.moveStripToBottom(stripId, props.bayId, props.section.id, position)
   } catch (error) {

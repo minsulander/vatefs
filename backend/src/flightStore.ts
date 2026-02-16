@@ -906,8 +906,8 @@ class FlightStore {
             return 'arrival'
         }
 
-        // Transit (neither origin nor destination at our airports) or alternate-only
-        return 'arrival' // Default to arrival for transits
+        // Cross traffic (neither origin nor destination at our airports)
+        return 'cross'
     }
 
     /**
@@ -1126,6 +1126,114 @@ class FlightStore {
             strip,
             sectionChanged: sectionChanged ?? false,
             previousSection,
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
+        }
+    }
+
+    /**
+     * Create a special strip (VFR DEP, VFR ARR, CROSS) by creating a synthetic flight.
+     * If a matching flight already exists, uses its data instead.
+     */
+    createSpecialStrip(
+        stripType: 'vfrDep' | 'vfrArr' | 'cross',
+        callsign: string,
+        aircraftType?: string,
+        airport?: string,
+        targetBayId?: string,
+        targetSectionId?: string,
+        position?: number,
+        isBottom?: boolean
+    ): { strip: FlightStrip; shiftedCallsigns?: string[] } | undefined {
+        const existingFlight = this.flights.get(callsign)
+        const hasMatchingFlight = !!existingFlight
+
+        // Determine origin/destination based on strip type
+        const primaryAirport = airport ?? this.config.myAirports[0] ?? 'ZZZZ'
+        let origin: string
+        let destination: string
+
+        if (stripType === 'vfrDep') {
+            origin = primaryAirport
+            destination = existingFlight?.destination ?? 'ZZZZ'
+        } else if (stripType === 'vfrArr') {
+            origin = existingFlight?.origin ?? 'ZZZZ'
+            destination = primaryAirport
+        } else {
+            // cross: use existing flight data or placeholder
+            origin = existingFlight?.origin ?? 'ZZZZ'
+            destination = existingFlight?.destination ?? 'ZZZZ'
+        }
+
+        // Create or update the flight record
+        const flight = existingFlight ?? this.getOrCreateFlight(callsign)
+        if (!existingFlight) {
+            // Synthetic flight - fill in minimal data
+            flight.origin = origin
+            flight.destination = destination
+            flight.aircraftType = aircraftType ?? 'UNKN'
+            flight.flightRules = stripType === 'cross' ? 'I' : 'V'
+            flight.synthetic = true
+            flight.lastUpdate = Date.now()
+        } else {
+            // Real flight exists: override origin/destination based on strip type
+            if (stripType === 'vfrDep') {
+                flight.origin = origin
+            } else if (stripType === 'vfrArr') {
+                flight.destination = destination
+            }
+        }
+
+        // Determine target section
+        let bayId: string
+        let sectionId: string
+        let pos: number
+        let bottom = isBottom ?? false
+
+        if (targetBayId && targetSectionId) {
+            bayId = targetBayId
+            sectionId = targetSectionId
+            pos = position ?? this.getNewStripPosition(bayId, sectionId)
+        } else {
+            const targetSection = determineSectionForFlight(flight, this.config)
+            if (!targetSection) {
+                // Use default section or first section
+                const defaultSection = this.config.defaultSection
+                const defaultBayId = defaultSection ? this.config.sectionToBay.get(defaultSection) : undefined
+                if (defaultBayId && defaultSection) {
+                    bayId = defaultBayId
+                    sectionId = defaultSection
+                } else if (this.config.layout.bays.length > 0 && this.config.layout.bays[0].sections.length > 0) {
+                    bayId = this.config.layout.bays[0].id
+                    sectionId = this.config.layout.bays[0].sections[0].id
+                } else {
+                    return undefined
+                }
+                pos = this.getNewStripPosition(bayId, sectionId)
+            } else {
+                bayId = targetSection.bayId
+                sectionId = targetSection.sectionId
+                pos = this.getNewStripPosition(bayId, sectionId)
+            }
+        }
+
+        // Record the assignment
+        this.stripAssignments.set(callsign, { bayId, sectionId, position: pos, bottom })
+        flight.lastSectionRule = 'manual'
+
+        // Create the strip
+        const strip = this.createStrip(flight, bayId, sectionId, pos, bottom)
+
+        // Override strip type for cross
+        if (stripType === 'cross') {
+            strip.stripType = 'cross'
+        }
+
+        // Set the matching flight indicator
+        strip.hasMatchingFlight = hasMatchingFlight
+
+        const shiftedCallsigns = this.getLastShiftedCallsigns()
+        return {
+            strip,
             shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
         }
     }

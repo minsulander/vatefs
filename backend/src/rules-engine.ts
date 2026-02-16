@@ -44,7 +44,8 @@ function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
  * Check if a flight is at one of our airports in the given direction.
  * 'departure' and 'arrival' are exclusive — they do NOT match local flights.
  * 'local' matches flights where BOTH origin and destination are at our airports.
- * 'either' matches any of departure, arrival, or local.
+ * 'cross' matches flights where NEITHER origin NOR destination is at our airports.
+ * 'either' matches any of departure, arrival, or local (NOT cross).
  */
 export function isAtOurAirport(
     flight: Flight,
@@ -62,6 +63,8 @@ export function isAtOurAirport(
             return destIsOurs && !originIsOurs
         case 'local':
             return originIsOurs && destIsOurs
+        case 'cross':
+            return !originIsOurs && !destIsOurs
         case 'either':
             return originIsOurs || destIsOurs
     }

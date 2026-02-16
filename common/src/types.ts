@@ -1,6 +1,6 @@
 // Flight strip types
 
-export type StripType = 'departure' | 'arrival' | 'local' | 'vfr'
+export type StripType = 'departure' | 'arrival' | 'local' | 'vfr' | 'cross' | 'note'
 export type FlightRules = 'I' | 'V' | 'Y' | 'Z' // IFR, VFR, IFR->VFR, VFR->IFR
 export type WakeCategory = 'L' | 'M' | 'H' | 'J' // Light, Medium, Heavy, Super
 
@@ -73,6 +73,10 @@ export interface FlightStrip {
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)
+
+    // Special strip fields
+    noteText?: string            // Text content for note strips
+    hasMatchingFlight?: boolean  // Whether a matching flight was found (false = greyed-out callsign)
 }
 
 export interface Section {

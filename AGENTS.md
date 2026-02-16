@@ -130,7 +130,9 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - `src/views/HomeView.vue` - Main view with strip bay layout
 - `src/components/StripBay.vue` - Bay container with sections
 - `src/components/StripSection.vue` - Section with drag-and-drop strips
-- `src/components/FlightStrip.vue` - Individual flight strip component
+- `src/components/FlightStrip.vue` - Individual flight strip component (supports normal, cross, and note strips)
+- `src/components/EfsBottomBar.vue` - Bottom bar with tiny strip creation buttons
+- `src/components/StripCreationDialog.vue` - Dialog for creating VFR DEP/ARR/CROSS strips
 
 ### Backend Structure
 - `src/server.ts` - Main server: Express, WebSocket, and UDP handlers
@@ -222,7 +224,7 @@ The backend uses a priority-based rules engine to determine:
 
 ### Section Rules
 Determine which section a flight strip belongs to based on:
-- Flight direction (departure/arrival/local/either)
+- Flight direction (departure/arrival/local/cross/either)
 - Ground state (NSTS, STUP, PUSH, TAXI, TXIN, DEPA, ARR, LINEUP, etc.)
 - Controller relationship (myself/not_myself/any)
 - Clearance flag, cleared to land flag, airborne flag
@@ -391,6 +393,39 @@ VatEFS integrates with the [Hoppie ACARS network](http://hoppie.nl/acars/system/
 **WebSocket messages** (additional):
 - `dclReject` (client→server) - Reject a DCL request (stripId)
 - `dclSend` (client→server) - Send DCL clearance (stripId, remarks)
+
+### Special Strips & Strip Creation
+
+The bottom bar contains four "tiny strips" that can be clicked or dragged to a section to create new strips:
+
+1. **VFR DEP** (blue ribbon) — VFR departure. Opens a dialog for callsign + aircraft type. Creates a departure strip with VFR rules, our airport as origin, ZZZZ as destination.
+2. **VFR ARR** (yellow ribbon) — VFR arrival. Same dialog. Creates an arrival strip with our airport as destination, ZZZZ as origin.
+3. **CROSS** (purple ribbon) — Crossing traffic where neither origin nor destination is our airport. Opens a dialog for callsign only. Uses the new `'cross'` direction/StripType.
+4. **NOTE** (grey ribbon) — A note strip with only an editable text field (no flight data). Auto-focuses the text input on creation.
+
+**Strip types**: `StripType = 'departure' | 'arrival' | 'local' | 'vfr' | 'cross' | 'note'`
+
+**Flight direction**: `FlightDirection` now includes `'cross'` — matches when NEITHER origin NOR destination is at our airports. `'either'` still only matches departure/arrival/local (NOT cross).
+
+**FlightStrip fields** (special strips):
+- `noteText?: string` — Text content for note strips
+- `hasMatchingFlight?: boolean` — When `false`, callsign is displayed greyed-out (no matching flight plan found)
+
+**Flight.synthetic** — Backend flag on Flight objects created from the UI (not from EuroScope). If a real flight plan arrives for the same callsign, it replaces the synthetic data.
+
+**WebSocket messages**:
+- `createStrip` (client→server) — Create a special strip (stripType, callsign, aircraftType, airport, targetBayId/sectionId)
+- `updateNote` (client→server) — Update note text (stripId, text)
+
+**Frontend components**:
+- `EfsBottomBar.vue` — Contains the four tiny strips with click, desktop drag, and touch drag support
+- `StripCreationDialog.vue` — Dialog for VFR DEP/ARR/CROSS with callsign input, aircraft type, airport selector, and live flight match indicator (queries `/api/flight/:callsign`)
+- `FlightStrip.vue` — Supports note strip layout (editable text), cross strip (purple ribbon), and greyed-out callsign for unmatched flights
+
+**Backend handling**:
+- `flightStore.createSpecialStrip()` — Creates a synthetic Flight + FlightStrip for VFR DEP/ARR/CROSS
+- `store.createNoteStrip()` — Creates a note FlightStrip directly (no Flight object)
+- `store.updateNoteText()` — Updates note text on a note strip
 
 ### Refactor Guardrails
 - Prefer editing source files under `frontend/src`, `backend/src`, and `common/src`.

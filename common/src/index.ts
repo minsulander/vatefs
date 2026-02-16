@@ -41,6 +41,8 @@ export type {
     DclSendMessage,
     DclSetModeMessage,
     SwitchConfigMessage,
+    CreateStripMessage,
+    UpdateNoteMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

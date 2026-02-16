@@ -21,9 +21,10 @@ export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'XFER' | 'PUSH' | 'TAXI' | 
  * 'departure' = origin is our airport, destination is NOT (exclusive)
  * 'arrival' = destination is our airport, origin is NOT (exclusive)
  * 'local' = BOTH origin and destination are at our airports
- * 'either' = any of the above (departure, arrival, or local)
+ * 'cross' = NEITHER origin NOR destination is at our airports (crossing traffic)
+ * 'either' = any of departure, arrival, or local (NOT cross)
  */
-export type FlightDirection = 'departure' | 'arrival' | 'local' | 'either'
+export type FlightDirection = 'departure' | 'arrival' | 'local' | 'cross' | 'either'
 
 /**
  * Controller relationship for rule matching

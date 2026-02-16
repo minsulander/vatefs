@@ -71,6 +71,9 @@ export interface Flight {
     lastDeleteRule?: string   // ID of the delete rule that caused soft-deletion
     manualMoveFromSection?: string  // Section the strip was manually dragged FROM (prevents auto-move back)
 
+    // Special strip tracking
+    synthetic?: boolean       // Flight was created from UI (VFR DEP/ARR/CROSS), not from EuroScope
+
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
     latitude?: number         // Current latitude from radar

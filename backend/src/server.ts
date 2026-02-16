@@ -1528,6 +1528,63 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             switchConfig(message.file)
             break
         }
+
+        case "createStrip": {
+            if (message.stripType === "note") {
+                const strip = store.createNoteStrip(
+                    message.targetBayId,
+                    message.targetSectionId,
+                    message.position,
+                    message.isBottom,
+                )
+                if (strip) {
+                    console.log(`[CREATE] Note strip ${strip.id} created`)
+                    broadcastStrip(strip)
+                }
+            } else {
+                // VFR DEP / VFR ARR / CROSS
+                if (!message.callsign) {
+                    console.log(`[CREATE] Missing callsign for ${message.stripType}`)
+                    break
+                }
+                const result = flightStore.createSpecialStrip(
+                    message.stripType,
+                    message.callsign,
+                    message.aircraftType,
+                    message.airport,
+                    message.targetBayId,
+                    message.targetSectionId,
+                    message.position,
+                    message.isBottom,
+                )
+                if (result) {
+                    store.updateStripFromFlight(result.strip)
+                    broadcastStrip(result.strip)
+                    console.log(`[CREATE] ${message.stripType} strip for ${message.callsign} -> ${result.strip.sectionId}`)
+
+                    // Broadcast shifted strips (from add-from-top)
+                    if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+                        for (const cs of result.shiftedCallsigns) {
+                            const shifted = flightStore.regenerateStrip(cs)
+                            if (shifted) {
+                                store.updateStripFromFlight(shifted)
+                                broadcastStrip(shifted)
+                            }
+                        }
+                    }
+                }
+            }
+            break
+        }
+
+        case "updateNote": {
+            const updatedStrip = store.updateNoteText(message.stripId, message.text)
+            if (updatedStrip) {
+                broadcastStrip(updatedStrip, socket)
+                console.log(`[NOTE] Updated note ${message.stripId}: "${message.text.substring(0, 30)}"`)
+            }
+            break
+        }
     }
 }
 

@@ -559,6 +559,43 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function createStrip(
+        stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note',
+        callsign?: string,
+        aircraftType?: string,
+        airport?: string,
+        targetBayId?: string,
+        targetSectionId?: string,
+        position?: number,
+        isBottom?: boolean
+    ) {
+        sendMessage({
+            type: 'createStrip',
+            stripType,
+            callsign,
+            aircraftType,
+            airport,
+            targetBayId,
+            targetSectionId,
+            position,
+            isBottom
+        })
+    }
+
+    function updateNote(stripId: string, text: string) {
+        // Optimistic update
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strip.noteText = text
+        }
+
+        sendMessage({
+            type: 'updateNote',
+            stripId,
+            text
+        })
+    }
+
     function recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
         const sectionStrips = bottom
             ? getBottomStrips(bayId, sectionId)
@@ -615,6 +652,8 @@ export const useEfsStore = defineStore("efs", () => {
         switchConfig,
         sendRequest,
         connect,
-        refresh
+        refresh,
+        createStrip,
+        updateNote
     }
 })

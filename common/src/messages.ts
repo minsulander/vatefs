@@ -161,7 +161,25 @@ export interface SwitchConfigMessage {
     file: string  // Config file basename (e.g. "dualrwy4bays.yml")
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage
+export interface CreateStripMessage {
+    type: 'createStrip'
+    stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+    callsign?: string           // For VFR DEP/ARR/CROSS
+    aircraftType?: string       // For VFR DEP/ARR
+    airport?: string            // Origin (VFR DEP) or destination (VFR ARR) when multiple airports
+    targetBayId?: string        // If dragged to a specific section
+    targetSectionId?: string
+    position?: number
+    isBottom?: boolean
+}
+
+export interface UpdateNoteMessage {
+    type: 'updateNote'
+    stripId: string
+    text: string
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage
 
 // Type guards for message parsing
 
@@ -181,5 +199,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote'
 }

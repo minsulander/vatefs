@@ -84,7 +84,9 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "clearedToLand",
     "dclStatus",
     "dclMessage",
-    "dclClearance"
+    "dclClearance",
+    "noteText",
+    "hasMatchingFlight"
 ]
 
 /**
@@ -479,6 +481,66 @@ class EfsStore {
         }
 
         console.log(`Reprocessed all flights: ${this.strips.size} strips placed`)
+    }
+
+    /**
+     * Create a note strip (no associated flight, just text).
+     * Returns the created strip.
+     */
+    createNoteStrip(
+        targetBayId?: string,
+        targetSectionId?: string,
+        position?: number,
+        isBottom?: boolean
+    ): FlightStrip | undefined {
+        const stripId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+        // Determine bay/section
+        let bayId: string
+        let sectionId: string
+        let pos: number
+
+        if (targetBayId && targetSectionId) {
+            bayId = targetBayId
+            sectionId = targetSectionId
+            pos = position ?? 0
+        } else if (staticConfig.layout.bays.length > 0 && staticConfig.layout.bays[0].sections.length > 0) {
+            bayId = staticConfig.layout.bays[0].id
+            sectionId = staticConfig.layout.bays[0].sections[0].id
+            pos = 0
+        } else {
+            return undefined
+        }
+
+        const strip: FlightStrip = {
+            id: stripId,
+            callsign: '',
+            aircraftType: '',
+            wakeTurbulence: 'M',
+            flightRules: 'V',
+            adep: '',
+            ades: '',
+            stripType: 'note',
+            bayId,
+            sectionId,
+            position: pos,
+            bottom: isBottom ?? false,
+            noteText: '',
+        }
+
+        this.strips.set(stripId, strip)
+        return strip
+    }
+
+    /**
+     * Update note text on a note strip.
+     * Returns the updated strip, or undefined if not found.
+     */
+    updateNoteText(stripId: string, text: string): FlightStrip | undefined {
+        const strip = this.strips.get(stripId)
+        if (!strip || strip.stripType !== 'note') return undefined
+        strip.noteText = text
+        return strip
     }
 
     /**

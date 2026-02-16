@@ -1,11 +1,11 @@
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
 
-- Kolla om ESSA slow-SIDs inte kom i "sid" fältet berodde på UTF8 jox, 
-  om det kan fixas i pluginen, ta bort specialhantering av SID namn
+- Skapa APL och korellera på callsign i ES pluginen
+  - Vilka fält krävs? TopSky APL window = callsign, FRUL, 
 
 
-- Release när man gör PARK
+-# Release när man gör PARK
 
 
 
@@ -14,15 +14,7 @@ Test ESSA 2026-02-11:
 - Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
   Behöver beskrivas noggrannare när det händer och inte...
 
-Idéer:
--33 Visa ADES i CLNC dialog (och utskrivet)
--33 Indikera SLOW i CLNC dialog
--33  CFL (och andra) dropdowns highlight och scroll till det som nu är satt
--33  Highlighta TXI när de lämnat bana
--33  Highlighta PARK när de når sitt stand?
--33  Highlighta XFER när de passerar ut ur CTR ... lätt att glömma
 - Highlight QNH när den ändras, kvittera med klick - borde vi hämta från metsensor istället kanske...
-- Indikera/göm XFER under viss höjd? 
 
 
 
@@ -32,10 +24,10 @@ Actions:
 
 Vidare i livet:
 - Fyll FPL dialogen med all vettig info
-- Överflygare, helikopter etc
-- Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
-- Skriva egna noteringar
-- Specialstrippar typ bana och EoR breakout som de har på SA (dra upp från botten)
+-34 Överflygare, helikopter etc
+-34 Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
+-34 Skriva egna noteringar
+- Specialstripparna typ bana och EoR breakout som de har på SA (dra upp från botten)
   eller så visas detta mer som en extra grej invid section header..
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen

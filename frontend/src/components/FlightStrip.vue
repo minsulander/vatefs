@@ -24,16 +24,37 @@
   </v-menu>
 
   <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom }]" :style="stripStyle"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote }]" :style="stripStyle"
     :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
     @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
     <!-- Color indicator bar on left -->
     <div class="strip-indicator"></div>
 
+    <!-- NOTE STRIP: Editable text layout -->
+    <template v-if="isNote">
+      <div class="note-content" @click.stop="onNoteClick" @touchend="onNoteTouch">
+        <input
+          v-if="noteEditing"
+          ref="noteInput"
+          v-model="noteText"
+          class="note-input"
+          placeholder="Type a note..."
+          @blur="onNoteBlur"
+          @keydown.enter="onNoteBlur"
+          @keydown.escape="onNoteBlur"
+        />
+        <span v-else class="note-display" :class="{ 'note-empty': !strip.noteText }">
+          {{ strip.noteText || 'Click to add note...' }}
+        </span>
+      </div>
+    </template>
+
+    <!-- NORMAL STRIP LAYOUT -->
+    <template v-else>
     <!-- Left section: Callsign block (always visible) -->
     <div class="strip-left">
-      <div class="callsign" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
+      <div class="callsign" :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
@@ -122,11 +143,12 @@
       </div>
       <div v-else class="strip-right strip-right-empty"></div>
     </template>
+    </template><!-- end v-else (normal strip layout) -->
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
@@ -151,6 +173,48 @@ const menuPosition = ref<[number, number]>([0, 0])
 const clncDialogOpen = ref(false)
 const fplDialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
+
+// Note strip state
+const isNote = computed(() => props.strip.stripType === 'note')
+const noteEditing = ref(false)
+const noteText = ref('')
+const noteInput = ref<HTMLInputElement | null>(null)
+
+function onNoteClick() {
+  noteText.value = props.strip.noteText ?? ''
+  noteEditing.value = true
+  nextTick(() => {
+    noteInput.value?.focus()
+  })
+}
+
+function onNoteTouch(event: TouchEvent) {
+  if (isDragging.value) return // Let the strip's touchend handler clean up the drag
+  // Cancel any pending drag timer that touchstart may have started
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+  touchStarted = false
+  event.stopPropagation()
+  event.preventDefault()
+  onNoteClick()
+}
+
+function onNoteBlur() {
+  noteEditing.value = false
+  const text = noteText.value.trim()
+  if (text !== (props.strip.noteText ?? '')) {
+    store.updateNote(props.strip.id, text)
+  }
+}
+
+// Auto-focus note strips that are newly created (empty text)
+onMounted(() => {
+  if (isNote.value && !props.strip.noteText) {
+    onNoteClick()
+  }
+})
 
 // Touch drag state
 let touchStarted = false
@@ -228,9 +292,9 @@ function onDragEnd() {
 function onDragAreaTouchStart(event: TouchEvent) {
   if (event.touches.length !== 1) return
 
-  // Don't start drag when touching interactive elements (action buttons, menu button, etc.)
+  // Don't start drag when touching interactive elements
   const target = event.target as HTMLElement
-  if (target.closest('.action-button') || target.closest('.squawk-empty') || target.closest('.callsign')) return
+  if (target.closest('.action-button') || target.closest('.squawk-empty') || target.closest('.callsign') || target.closest('.note-input')) return
 
   touchStarted = true
 
@@ -647,6 +711,16 @@ function onDeleteConfirm() {
   background: #3d9e3d;
 }
 
+/* Cross - Purple */
+.strip-cross .strip-indicator {
+  background: #9b59b6;
+}
+
+/* Note - Grey */
+.strip-note .strip-indicator {
+  background: #888;
+}
+
 /* Left section - Callsign block (always visible) */
 .strip-left {
   width: 75px;
@@ -927,20 +1001,20 @@ function onDeleteConfirm() {
 }
 
 .action-text {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: bold;
   color: #333;
   letter-spacing: 0.3px;
 }
 
 .action-assume .action-text {
-  font-size: 11px;
-  letter-spacing: -0.5px;
+  font-size: 10px;
+  letter-spacing: -0.8px;
   font-stretch: condensed;
 }
 
 .action-freq {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: #555;
   line-height: 1;
@@ -1000,6 +1074,50 @@ function onDeleteConfirm() {
 
 .action-dcl-sent .action-text {
   color: #fff;
+}
+
+/* Greyed-out callsign (no matching flight) */
+.callsign-no-match {
+  color: #999 !important;
+  font-style: italic;
+}
+
+/* Note strip layout */
+.strip-note-layout {
+  grid-template-columns: 10px 1fr !important;
+}
+
+.note-content {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  min-height: 40px;
+  cursor: text;
+}
+
+.note-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #aaa;
+  color: #333;
+  font-size: 12px;
+  font-weight: 500;
+  outline: none;
+  padding: 2px 0;
+  font-family: 'Segoe UI', 'Arial', sans-serif;
+}
+
+.note-display {
+  font-size: 12px;
+  font-weight: 500;
+  color: #333;
+  word-break: break-word;
+}
+
+.note-empty {
+  color: #999;
+  font-style: italic;
 }
 
 /* Context menu styling */
