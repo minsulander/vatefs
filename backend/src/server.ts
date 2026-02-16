@@ -333,6 +333,7 @@ type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
     | { type: "setGroundState"; callsign: string; state: string }
     | { type: "transfer"; callsign: string }
+    | { type: "release"; callsign: string }
     | { type: "assume"; callsign: string }
     | { type: "toggleClearanceFlag"; callsign: string }
     | { type: "resetSquawk"; callsign: string }
@@ -355,8 +356,6 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "setGroundState", callsign, state: "TAXI" }
         case "TXI":
             return { type: "setGroundState", callsign, state: "TXIN" }
-        case "PARK":
-            return { type: "setGroundState", callsign, state: "PARK" }
         case "XFER":
             return { type: "transfer", callsign }
         case "ASSUME":
@@ -1196,6 +1195,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 if (message.action === "READY") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign }))
+                // PARK is a compound action: set PARK groundstate + release
+                } else if (message.action === "PARK") {
+                    sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "PARK" }))
+                    sendUdp(JSON.stringify({ type: "release", callsign: strip.callsign }))
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
