@@ -1,11 +1,13 @@
+- Kunna revise clearance... context menu clearance dialog efter att man gett push
+
+- Flytt från RUNWAY till CTR DEP ska resetta ClearedToLand
+
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
 
 - Skapa APL och korellera på callsign i ES pluginen
   - Vilka fält krävs? TopSky APL window = callsign, FRUL, 
 
-
--# Release när man gör PARK
 
 
 
@@ -24,9 +26,6 @@ Actions:
 
 Vidare i livet:
 - Fyll FPL dialogen med all vettig info
--34 Överflygare, helikopter etc
--34 Skapa stripp för valfritt flygplan (hämta på callsign, undantag från filtrering)
--34 Skriva egna noteringar
 - Specialstripparna typ bana och EoR breakout som de har på SA (dra upp från botten)
   eller så visas detta mer som en extra grej invid section header..
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online

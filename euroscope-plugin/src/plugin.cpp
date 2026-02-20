@@ -171,10 +171,10 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         const char *sidName = fpData.GetSidName();
 
         if (arrRwy && *arrRwy && strlen(arrRwy) < 5) SetJsonIfValidUtf8(message, "arrRwy", arrRwy);
-        if (starName && *starName && strlen(starName) < 10)
+        if (starName && *starName && strlen(starName) < 50)
             message["star"] = AnsiToUtf8(starName);
         if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
-        if (sidName && *sidName && strlen(sidName) < 10)
+        if (sidName && *sidName && strlen(sidName) < 50)
             message["sid"] = AnsiToUtf8(sidName);
 
         const char *eobt = fpData.GetEstimatedDepartureTime();
@@ -625,28 +625,73 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         else
             DisplayMessage("Scratch pad set for " + callsign + ": " + content);
         return true;
-    } else if (subcommand == "ssr") {
-        std::string callsign = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+    } else if (subcommand == "apl") {
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign = remainder;
+        std::string::size_type space = remainder.find(' ');
+        if (space != std::string::npos) callsign = remainder.substr(0, space);
+        for (auto &c : callsign)
+            c = (char)std::toupper((unsigned char)c);
         if (callsign.empty()) {
-            DisplayMessage("Usage: .efs ssr CALLSIGN");
+            DisplayMessage("Usage: .efs apl CALLSIGN");
             return false;
         }
-        if (dummyRadarScreens.size() > 0) {
-            dummyRadarScreens[0]->AllocateSSR(callsign.c_str());
-        } else {
-            DisplayMessage("DummyRadarScreen not created");
+
+        // First check if there's a radar target for this callsign
+        auto rt = RadarTargetSelect(callsign.c_str());
+
+        // Try to get the existing flight plan
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            if (!rt.IsValid()) {
+                DisplayMessage("No flight plan or radar target found for " + callsign);
+                return false;
+            }
+            // There's a radar target but no flight plan - try to get the correlated FP
+            fp = rt.GetCorrelatedFlightPlan();
+            if (!fp.IsValid()) {
+                DisplayMessage("Radar target found but no flight plan for " + callsign + ". Cannot create APL.");
+                return false;
+            }
         }
-        return true;
-    } else if (subcommand == "clr") {
-        std::string callsign = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
-        if (callsign.empty()) {
-            DisplayMessage("Usage: .efs clr CALLSIGN");
+
+        auto fpData = fp.GetFlightPlanData();
+
+        // Set minimal flight plan data for an abbreviated flight plan
+        // Only set fields that are currently empty
+        const char *planType = fpData.GetPlanType();
+        if (!planType || !*planType || *planType == ' ') {
+            fpData.SetPlanType("I");
+        }
+        const char *origin = fpData.GetOrigin();
+        if (!origin || !*origin) {
+            fpData.SetOrigin("ZZZZ");
+        }
+        const char *destination = fpData.GetDestination();
+        if (!destination || !*destination) {
+            fpData.SetDestination("ZZZZ");
+        }
+
+        bool amended = fpData.AmendFlightPlan();
+        if (!amended) {
+            DisplayMessage("Failed to amend flight plan for " + callsign);
             return false;
         }
-        if (dummyRadarScreens.size() > 0) {
-            dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
+
+        // Correlate with radar target if we have one and they're not already correlated
+        if (rt.IsValid()) {
+            auto existingRt = fp.GetCorrelatedRadarTarget();
+            if (!existingRt.IsValid()) {
+                bool correlated = fp.CorrelateWithRadarTarget(rt);
+                if (correlated)
+                    DisplayMessage("APL created and correlated for " + callsign);
+                else
+                    DisplayMessage("APL created but correlation failed for " + callsign);
+            } else {
+                DisplayMessage("APL created for " + callsign + " (already correlated)");
+            }
         } else {
-            DisplayMessage("DummyRadarScreen not created");
+            DisplayMessage("APL created for " + callsign + " (no radar target to correlate)");
         }
         return true;
     } else if (subcommand == "refresh") {
@@ -1320,6 +1365,60 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         }
                         std::string ansiRoute = Utf8ToAnsi(newRoute);
                         DebugMessage("assignSid: new route: " + ansiRoute);
+                        fpData.SetRoute(ansiRoute.c_str());
+                        fpData.AmendFlightPlan();
+                    }
+                } else if (message["type"] == "assignArrivalRunway") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto runway = message["runway"].get<std::string>();
+                    DebugMessage("assignArrivalRunway: " + callsign + " -> " + runway);
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignArrivalRunway: Flight plan not found: " + callsign);
+                    } else {
+                        auto fpData = fp.GetFlightPlanData();
+                        const char *routeStr = fpData.GetRoute();
+                        std::string route = routeStr ? routeStr : "";
+                        const char *dest = fpData.GetDestination();
+                        std::string arrivalAirport = dest ? dest : "";
+                        const char *starName = fpData.GetStarName();
+                        std::string star = starName ? starName : "";
+
+                        // Extract the last term and the rest of the route before it
+                        std::string lastTerm;
+                        std::string routeBeforeLast;
+                        auto lastSpacePos = route.rfind(' ');
+                        if (lastSpacePos != std::string::npos) {
+                            lastTerm = route.substr(lastSpacePos + 1);
+                            routeBeforeLast = route.substr(0, lastSpacePos);
+                        } else {
+                            lastTerm = route;
+                        }
+
+                        std::string suffix;
+                        if (!star.empty()) {
+                            suffix = star + "/" + runway;
+                        } else {
+                            suffix = arrivalAirport + "/" + runway;
+                        }
+
+                        std::string newRoute;
+                        auto slashPos = lastTerm.find('/');
+                        if (slashPos != std::string::npos) {
+                            // Last term already has STAR/rwy or airport/rwy - replace it
+                            newRoute = routeBeforeLast;
+                            if (!newRoute.empty()) newRoute += " ";
+                            newRoute += suffix;
+                        } else {
+                            // No suffix - append after the full original route
+                            newRoute = route;
+                            if (!newRoute.empty()) newRoute += " ";
+                            newRoute += suffix;
+                        }
+                        std::string ansiRoute = Utf8ToAnsi(newRoute);
+                        DebugMessage("assignArrivalRunway: new route: " + ansiRoute);
                         fpData.SetRoute(ansiRoute.c_str());
                         fpData.AmendFlightPlan();
                     }
