@@ -316,6 +316,12 @@ class FlightStore {
         const currentAssignment = this.stripAssignments.get(callsign)
 
         if (!targetSection) {
+            // If the strip already has a placement (e.g. manually-created VFR strip),
+            // keep it in place rather than soft-deleting it.
+            if (currentAssignment) {
+                const strip = this.createStrip(flight, currentAssignment.bayId, currentAssignment.sectionId, currentAssignment.position, currentAssignment.bottom)
+                return { flight, strip }
+            }
             return this.handleNoSectionFound(flight)
         }
 
@@ -467,8 +473,10 @@ class FlightStore {
             return { flight }
         }
 
-        // Check if eligible for strip (position + airport + range)
-        if (!this.isEligibleForStrip(flight)) {
+        // Check if eligible for strip (position + airport + range).
+        // Skip eligibility check if a strip already exists for this flight
+        // (e.g. a manually-created VFR strip whose radar position hasn't arrived yet).
+        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
             return { flight }
         }
 
@@ -513,8 +521,10 @@ class FlightStore {
             return { flight, softDeleted: flight.deleted }
         }
 
-        // Check if eligible for strip (position + airport + range)
-        if (!this.isEligibleForStrip(flight)) {
+        // Check if eligible for strip (position + airport + range).
+        // Skip eligibility check if a strip already exists for this flight
+        // (e.g. a manually-created VFR strip whose radar position hasn't arrived yet).
+        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
             return { flight }
         }
 
@@ -1181,6 +1191,16 @@ class FlightStore {
             } else if (stripType === 'vfrArr') {
                 flight.destination = destination
             }
+        }
+
+        // Pre-populate default runway from active runway configuration if not already set.
+        // Applied for both new synthetic flights and existing flights (e.g. radar-only contacts
+        // that had no flight plan and therefore no departure runway assigned yet).
+        const airportRunways = this.config.activeRunways?.[primaryAirport]
+        if (stripType === 'vfrDep' && !flight.depRwy && airportRunways?.dep?.length) {
+            flight.depRwy = airportRunways.dep[0]
+        } else if (stripType === 'vfrArr' && !flight.arrRwy && airportRunways?.arr?.length) {
+            flight.arrRwy = airportRunways.arr[0]
         }
 
         // Determine target section

@@ -3,6 +3,7 @@
 
 #include "json.hpp"
 #include <chrono>
+#include <ctime>
 #include <format>
 #include <fstream>
 #include <sstream>
@@ -692,6 +693,80 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
             }
         } else {
             DisplayMessage("APL created for " + callsign + " (no radar target to correlate)");
+        }
+        return true;
+    } else if (subcommand == "atyp") {
+        // .efs atyp CALLSIGN AIRCRAFTTYPE  — set aircraft type on an existing flight plan
+        std::string remainder = (subEnd == std::string::npos) ? "" : rest.substr(subEnd + 1);
+        std::string callsign;
+        std::string acType;
+        std::string::size_type space = remainder.find(' ');
+        if (space != std::string::npos) {
+            callsign = remainder.substr(0, space);
+            acType   = remainder.substr(space + 1);
+        } else {
+            callsign = remainder;
+        }
+        for (auto &c : callsign) c = (char)std::toupper((unsigned char)c);
+        for (auto &c : acType)   c = (char)std::toupper((unsigned char)c);
+        // Trim trailing whitespace from acType
+        while (!acType.empty() && (acType.back() == ' ' || acType.back() == '\r' || acType.back() == '\n'))
+            acType.pop_back();
+
+        if (callsign.empty() || acType.empty()) {
+            DisplayMessage("Usage: .efs atyp CALLSIGN TYPE  (e.g. .efs atyp SEGBY C172)");
+            return false;
+        }
+
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            auto rt = RadarTargetSelect(callsign.c_str());
+            if (rt.IsValid()) fp = rt.GetCorrelatedFlightPlan();
+        }
+        if (!fp.IsValid()) {
+            DisplayMessage("atyp: No flight plan found for " + callsign);
+            return false;
+        }
+
+        std::string aircraftInfoStr = acType + "/L";
+        DisplayMessage("atyp: Setting aircraft info to '" + aircraftInfoStr + "' for " + callsign);
+
+        // Read back what EuroScope currently has before amending
+        {
+            auto fpd = fp.GetFlightPlanData();
+            const char *current = fpd.GetAircraftInfo();
+            DisplayMessage("atyp: Current AircraftInfo='" + std::string(current ? current : "(null)") + "'");
+        }
+
+        // First amendment
+        {
+            auto fpd = fp.GetFlightPlanData();
+            fpd.SetAircraftInfo(aircraftInfoStr.c_str());
+            bool ok = fpd.AmendFlightPlan();
+            DisplayMessage(std::string("atyp: First amendment ") + (ok ? "OK" : "FAILED"));
+        }
+
+        // Second amendment via fresh select
+        {
+            auto fp2 = FlightPlanSelect(callsign.c_str());
+            if (fp2.IsValid()) {
+                auto fpd2 = fp2.GetFlightPlanData();
+                const char *after = fpd2.GetAircraftInfo();
+                DisplayMessage("atyp: After 1st amend AircraftInfo='" + std::string(after ? after : "(null)") + "'");
+                fpd2.SetAircraftInfo(aircraftInfoStr.c_str());
+                bool ok2 = fpd2.AmendFlightPlan();
+                DisplayMessage(std::string("atyp: Second amendment ") + (ok2 ? "OK" : "FAILED"));
+            }
+        }
+
+        // Read back final value
+        {
+            auto fp3 = FlightPlanSelect(callsign.c_str());
+            if (fp3.IsValid()) {
+                auto fpd3 = fp3.GetFlightPlanData();
+                const char *final = fpd3.GetAircraftInfo();
+                DisplayMessage("atyp: Final AircraftInfo='" + std::string(final ? final : "(null)") + "'");
+            }
         }
         return true;
     } else if (subcommand == "refresh") {
@@ -1468,60 +1543,82 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     }
 
                     if (fp.IsValid()) {
-                        auto fpData = fp.GetFlightPlanData();
-
-                        if (stripType == "vfrDep") {
-                            // Always set origin, flight rules, aircraft type
-                            fpData.SetPlanType(flightRules.c_str());
-                            fpData.SetOrigin(origin.c_str());
-                            if (!aircraftType.empty() && aircraftType != "UNKN") {
-                                fpData.SetAircraftInfo(aircraftType.c_str());
-                            }
-                            // Set destination to ZZZZ only if there was no pre-existing FP and it's empty
-                            if (!hadExistingFP) {
-                                const char *dest = fpData.GetDestination();
-                                if (!dest || !*dest) {
-                                    fpData.SetDestination("ZZZZ");
-                                }
-                            }
-                        } else if (stripType == "vfrArr") {
-                            // Always set destination, flight rules, aircraft type
-                            fpData.SetPlanType(flightRules.c_str());
-                            fpData.SetDestination(destination.c_str());
-                            if (!aircraftType.empty() && aircraftType != "UNKN") {
-                                fpData.SetAircraftInfo(aircraftType.c_str());
-                            }
-                            // Set origin to ZZZZ only if there was no pre-existing FP and it's empty
-                            if (!hadExistingFP) {
-                                const char *org = fpData.GetOrigin();
-                                if (!org || !*org) {
-                                    fpData.SetOrigin("ZZZZ");
-                                }
-                            }
-                        } else if (stripType == "cross") {
-                            // Only called when there is no pre-existing FP
-                            fpData.SetPlanType(flightRules.c_str());
-                            const char *org = fpData.GetOrigin();
-                            if (!org || !*org) {
-                                fpData.SetOrigin("ZZZZ");
-                            }
-                            const char *dest = fpData.GetDestination();
-                            if (!dest || !*dest) {
-                                fpData.SetDestination("ZZZZ");
-                            }
+                        // Build EOBT string (current UTC HHmm)
+                        char eobt[5] = {};
+                        {
+                            std::time_t now = std::time(nullptr);
+                            std::tm utc{};
+                            gmtime_s(&utc, &now);
+                            std::snprintf(eobt, sizeof(eobt), "%02d%02d", utc.tm_hour, utc.tm_min);
                         }
 
+                        // Build aircraft info string in the format EuroScope's AP info field accepts: TYPE/WTC.
+                        // Always assume Light WTC for manually-created VFR strips.
+                        std::string aircraftInfoStr;
+                        if (!aircraftType.empty() && aircraftType != "UNKN") {
+                            aircraftInfoStr = aircraftType + "/L";
+                        }
+
+                        // Helper lambda: apply all fields to a given fpData object
+                        auto applyFields = [&](EuroScopePlugIn::CFlightPlanData &fpd) {
+                            fpd.SetPlanType(flightRules.c_str());
+                            fpd.SetEstimatedDepartureTime(eobt);
+                            if (!aircraftInfoStr.empty()) {
+                                fpd.SetAircraftInfo(aircraftInfoStr.c_str());
+                            }
+                            if (stripType == "vfrDep") {
+                                fpd.SetOrigin(origin.c_str());
+                                const char *dest = fpd.GetDestination();
+                                if (!dest || !*dest) {
+                                    fpd.SetDestination("ZZZZ");
+                                }
+                            } else if (stripType == "vfrArr") {
+                                fpd.SetDestination(destination.c_str());
+                                const char *org = fpd.GetOrigin();
+                                if (!org || !*org) {
+                                    fpd.SetOrigin("ZZZZ");
+                                }
+                            } else if (stripType == "cross") {
+                                const char *org = fpd.GetOrigin();
+                                if (!org || !*org) {
+                                    fpd.SetOrigin("ZZZZ");
+                                }
+                                const char *dest = fpd.GetDestination();
+                                if (!dest || !*dest) {
+                                    fpd.SetDestination("ZZZZ");
+                                }
+                            }
+                        };
+
+                        // First amendment — may use a correlated (not yet directly selectable) FP
+                        auto fpData = fp.GetFlightPlanData();
+                        applyFields(fpData);
                         bool amended = fpData.AmendFlightPlan();
+
                         if (!amended) {
                             DisplayMessage("createFlightPlan: Failed to amend for " + callsign);
                         } else {
                             DebugMessage("createFlightPlan: Amended " + stripType + " for " + callsign);
+
                             // Correlate with radar target if we have one and FP was new
                             if (rt.IsValid() && !hadExistingFP) {
                                 auto existingRt = fp.GetCorrelatedRadarTarget();
                                 if (!existingRt.IsValid()) {
                                     fp.CorrelateWithRadarTarget(rt);
                                 }
+                            }
+
+                            // Second amendment via a direct FlightPlanSelect.
+                            // EuroScope sometimes does not fire OnFlightPlanFlightPlanDataUpdate
+                            // on the first amendment when the FP was obtained via radar-target
+                            // correlation. Re-selecting and amending again reliably triggers the
+                            // callback so the backend receives the update.
+                            auto fp2 = FlightPlanSelect(callsign.c_str());
+                            if (fp2.IsValid()) {
+                                auto fpData2 = fp2.GetFlightPlanData();
+                                applyFields(fpData2);
+                                fpData2.AmendFlightPlan();
+                                DebugMessage("createFlightPlan: Second amendment done for " + callsign);
                             }
                         }
                     } else {
