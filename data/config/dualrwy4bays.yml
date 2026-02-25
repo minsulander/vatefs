@@ -94,6 +94,7 @@ sectionRules:
   # DEP RUNWAY: Lineup and departure roll on departure runway
   runway_lineup_depa_dep:
     sectionId: dep_runway
+    airborne: false
     groundstates: [LINEUP, DEPA]
     depRunway: true
     priority: 91
@@ -101,6 +102,7 @@ sectionRules:
   # ARR RUNWAY: Lineup and departure roll on arrival/other runway (exception)
   runway_lineup_depa_arr:
     sectionId: arr_runway
+    airborne: false
     groundstates: [LINEUP, DEPA]
     depRunway: false
     priority: 90

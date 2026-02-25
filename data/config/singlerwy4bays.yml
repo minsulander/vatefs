@@ -84,6 +84,7 @@ sectionRules:
   # RUNWAY: Lineup and departure roll
   runway_lineup_depa:
     sectionId: runway
+    airborne: false
     groundstates: [LINEUP, DEPA]
     priority: 90
 

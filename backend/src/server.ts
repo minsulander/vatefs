@@ -1367,7 +1367,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const deletedId = store.manualDeleteStrip(message.stripId)
             if (deletedId) {
                 broadcastStripDelete(deletedId, socket)
-                sendUdp(JSON.stringify({ type: "release", callsign: deletedId }))
                 console.log(`[DELETE] Strip ${message.stripId} manually deleted`)
             } else {
                 console.log(`[DELETE] Strip ${message.stripId} not found`)
@@ -1941,8 +1940,6 @@ udpIn.on("message", (msg, rinfo) => {
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.deleteStripId) {
                 broadcastStripDelete(result.deleteStripId)
-                // Release the flight in EuroScope (end tracking)
-                sendUdp(JSON.stringify({ type: "release", callsign: result.deleteStripId }))
                 if (result.softDeleted) {
                     console.log(`Strip ${result.deleteStripId} soft-deleted`)
                 } else {

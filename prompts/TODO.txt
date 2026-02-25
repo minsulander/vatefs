@@ -1,3 +1,13 @@
+-# Logg massa "Failed to release SAS123" på flygplan jag inte har assumed... inte försöka
+  release de jag inte har. Inte release på "delete out of range" - bara on park/xfer..
+
+-# Får massa flighter i RUNWAY section pga runway_lineup_depa när de är uppe på cruise...
+
+- Inte visa XFER gult i CTR DEP när jag sitter ESOS_1_CTR...
+
+- Inte confirmation på delete av note strip
+
+
 - Kunna revise clearance... context menu clearance dialog efter att man gett push
 
 - Flytt från RUNWAY till CTR DEP ska resetta ClearedToLand
@@ -7,6 +17,7 @@ Att reda ut:
 
 - Skapa APL och korellera på callsign i ES pluginen
   - Vilka fält krävs? TopSky APL window = callsign, FRUL, 
+  - Claude vajbat .efs apl kommando... testa.
 
 
 
