@@ -341,6 +341,7 @@ type OutboundPluginCommand =
     | { type: "assignSid"; callsign: string; sid: string }
     | { type: "assignHeading"; callsign: string; heading: number }
     | { type: "assignCfl"; callsign: string; altitude: number }
+    | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
@@ -1560,6 +1561,39 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     store.updateStripFromFlight(result.strip)
                     broadcastStrip(result.strip)
                     console.log(`[CREATE] ${message.stripType} strip for ${message.callsign} -> ${result.strip.sectionId}`)
+
+                    // Send createFlightPlan command to EuroScope plugin to create/amend flight plan
+                    if (message.stripType === "vfrDep") {
+                        sendUdp(JSON.stringify({
+                            type: "createFlightPlan",
+                            callsign: message.callsign,
+                            stripType: "vfrDep",
+                            origin: result.strip.adep,
+                            destination: result.strip.ades,
+                            aircraftType: result.strip.aircraftType,
+                            flightRules: "V",
+                        } satisfies OutboundPluginCommand))
+                    } else if (message.stripType === "vfrArr") {
+                        sendUdp(JSON.stringify({
+                            type: "createFlightPlan",
+                            callsign: message.callsign,
+                            stripType: "vfrArr",
+                            origin: result.strip.adep,
+                            destination: result.strip.ades,
+                            aircraftType: result.strip.aircraftType,
+                            flightRules: "V",
+                        } satisfies OutboundPluginCommand))
+                    } else if (message.stripType === "cross" && !result.strip.hasMatchingFlight) {
+                        sendUdp(JSON.stringify({
+                            type: "createFlightPlan",
+                            callsign: message.callsign,
+                            stripType: "cross",
+                            origin: "ZZZZ",
+                            destination: "ZZZZ",
+                            aircraftType: "UNKN",
+                            flightRules: "I",
+                        } satisfies OutboundPluginCommand))
+                    }
 
                     // Broadcast shifted strips (from add-from-top)
                     if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {

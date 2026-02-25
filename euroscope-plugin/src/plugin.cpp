@@ -1289,7 +1289,6 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         std::string route = routeStr ? routeStr : "";
                         const char *origin = fpData.GetOrigin();
                         std::string departureAirport = origin ? origin : "";
-                        DisplayMessage("hm: " + departureAirport);
 
                         std::string firstTerm;
                         std::string restOfRoute;
@@ -1447,6 +1446,86 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         bool ok = fp.GetControllerAssignedData().SetClearedAltitude(altitude);
                         if (!ok) DisplayMessage("assignCfl: Failed for " + callsign);
+                    }
+                } else if (message["type"] == "createFlightPlan") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto stripType = message["stripType"].get<std::string>();
+                    auto origin = message["origin"].get<std::string>();
+                    auto destination = message["destination"].get<std::string>();
+                    auto aircraftType = message["aircraftType"].get<std::string>();
+                    auto flightRules = message["flightRules"].get<std::string>();
+
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+
+                    // Try to find existing flight plan, or correlate via radar target
+                    auto rt = RadarTargetSelect(callsign.c_str());
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    bool hadExistingFP = fp.IsValid();
+
+                    if (!fp.IsValid() && rt.IsValid()) {
+                        fp = rt.GetCorrelatedFlightPlan();
+                    }
+
+                    if (fp.IsValid()) {
+                        auto fpData = fp.GetFlightPlanData();
+
+                        if (stripType == "vfrDep") {
+                            // Always set origin, flight rules, aircraft type
+                            fpData.SetPlanType(flightRules.c_str());
+                            fpData.SetOrigin(origin.c_str());
+                            if (!aircraftType.empty() && aircraftType != "UNKN") {
+                                fpData.SetAircraftInfo(aircraftType.c_str());
+                            }
+                            // Set destination to ZZZZ only if there was no pre-existing FP and it's empty
+                            if (!hadExistingFP) {
+                                const char *dest = fpData.GetDestination();
+                                if (!dest || !*dest) {
+                                    fpData.SetDestination("ZZZZ");
+                                }
+                            }
+                        } else if (stripType == "vfrArr") {
+                            // Always set destination, flight rules, aircraft type
+                            fpData.SetPlanType(flightRules.c_str());
+                            fpData.SetDestination(destination.c_str());
+                            if (!aircraftType.empty() && aircraftType != "UNKN") {
+                                fpData.SetAircraftInfo(aircraftType.c_str());
+                            }
+                            // Set origin to ZZZZ only if there was no pre-existing FP and it's empty
+                            if (!hadExistingFP) {
+                                const char *org = fpData.GetOrigin();
+                                if (!org || !*org) {
+                                    fpData.SetOrigin("ZZZZ");
+                                }
+                            }
+                        } else if (stripType == "cross") {
+                            // Only called when there is no pre-existing FP
+                            fpData.SetPlanType(flightRules.c_str());
+                            const char *org = fpData.GetOrigin();
+                            if (!org || !*org) {
+                                fpData.SetOrigin("ZZZZ");
+                            }
+                            const char *dest = fpData.GetDestination();
+                            if (!dest || !*dest) {
+                                fpData.SetDestination("ZZZZ");
+                            }
+                        }
+
+                        bool amended = fpData.AmendFlightPlan();
+                        if (!amended) {
+                            DisplayMessage("createFlightPlan: Failed to amend for " + callsign);
+                        } else {
+                            DebugMessage("createFlightPlan: Amended " + stripType + " for " + callsign);
+                            // Correlate with radar target if we have one and FP was new
+                            if (rt.IsValid() && !hadExistingFP) {
+                                auto existingRt = fp.GetCorrelatedRadarTarget();
+                                if (!existingRt.IsValid()) {
+                                    fp.CorrelateWithRadarTarget(rt);
+                                }
+                            }
+                        }
+                    } else {
+                        DebugMessage("createFlightPlan: No flight plan or radar target for " + callsign + ", cannot amend");
                     }
                 } else {
                     DisplayMessage("Unknown message type: " + message["type"].get<std::string>());
