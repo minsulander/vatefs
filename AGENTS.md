@@ -232,7 +232,10 @@ Determine which section a flight strip belongs to based on:
 - `onRunway` condition: geographic runway detection
 
 ### Action Rules
-Determine the default action button on a strip (ASSUME, CTL, CTO, XFER, PUSH, TAXI)
+Determine the default action button on a strip (ASSUME, CTL, CTO, XFER, PUSH, TAXI, GOA)
+
+- **GOA** (Go-Around) — shown for airborne arrival strips where `clearedToLand=true`. Sends `goaround` UDP command to EuroScope plugin, which sets scratchpad to `"MISAP_"` and clears `clearedToLand`. Add to `actionRules` with `airborne: true`, `clearedToLand: true`, and `myRole: [TWR]`.
+- **XFER** button is hidden for APP/CTR controllers (callsign ending in `_APP`/`_CTR`). `_R_APP` and `_R_CTR` (remote tower) are treated as TWR.
 
 ### Delete Rules
 Determine when to soft-delete (hide) a strip:
@@ -243,6 +246,7 @@ Determine when to soft-delete (hide) a strip:
 Determine EuroScope commands when strips are manually dragged between sections:
 - PENDING CLR → CLEARED: set clearance flag
 - CLEARED → START&PUSH: set groundstate PUSH
+- RUNWAY → CTR DEP (when `clearedToLand=true`): send `unsetClearedToLand` (go-around flow)
 - etc.
 
 ### Section Title Templates
@@ -281,6 +285,17 @@ The plugin reads settings from `VatEFSPlugin.txt` (same directory as DLL):
 - `debug` - Enable debug messages
 - `updateall` - Track all flight plans instead of just own sector
 
+### Plugin Startup Message
+When `.efs start` is sent (or the backend is launched), the plugin displays a message including the URL, e.g. `EFS accessible at http://192.168.1.81:17770/`. The local IP is detected using `gethostbyname` with scoring to prefer the best LAN address: 192.168.x.x (3) > 10.x.x.x (2) > 172.x.x.x (1) > other (0), skipping loopback (127.x.x.x) and link-local (169.254.x.x). This avoids surfacing Hyper-V virtual switch addresses.
+
+**Build gotcha**: Do NOT `#include <iphlpapi.h>` in `plugin.cpp`. It causes namespace/brace parsing failures in the EuroScope SDK headers (DummyRadarScreen errors). The `gethostbyname` approach uses only Winsock (`ws2_32.lib`), which is already linked.
+
+### Controller Role
+`ControllerRole` is derived from the controller's callsign: `DEL | GND | TWR | APP | CTR`.
+- `_APP` and `_CTR` suffixes → APP/CTR role (XFER button hidden on strips)
+- `_R_APP` and `_R_CTR` (remote tower positions) → treated as TWR (XFER shown)
+- Detection is in `parseControllerRole()` in `backend/src/static-config.ts`
+
 ### WebSocket Auto-Reconnect
 The frontend store automatically attempts to reconnect every 3 seconds if the WebSocket connection is lost.
 
@@ -309,16 +324,6 @@ Strips are only created for flights that meet all of these criteria:
 3. **Within range**: Flight must be within `radarRangeNm` (default 25nm) of any `myAirport`
 
 This filtering ensures strips only appear for flights that are relevant to the controller's position and within their radar coverage area.
-
-### Local Flights
-Flights where both origin AND destination are at "my airports" (e.g., VFR traffic pattern flights) are classified as **local** flights:
-- `StripType` is `'local'` (red indicator strip on frontend)
-- `FlightDirection` `'local'` in the rules engine — separate from `'departure'` and `'arrival'`
-- `'departure'` and `'arrival'` directions are **exclusive**: they do NOT match local flights
-- `'either'` matches all three (departure, arrival, local)
-- Ground flow (pending → cleared → push&start → taxi → runway) is the same as departures
-- Airborne local flights default to CTR DEP; user manually drags to CTR ARR when returning
-- After landing, local flights go to TAXI section (via ARR/TXIN groundstate rules)
 
 ### Local Flights
 Flights where both origin AND destination are at "my airports" (e.g., VFR traffic pattern flights) are classified as **local** flights:
@@ -426,6 +431,16 @@ The bottom bar contains four "tiny strips" that can be clicked or dragged to a s
 - `flightStore.createSpecialStrip()` — Creates a synthetic Flight + FlightStrip for VFR DEP/ARR/CROSS
 - `store.createNoteStrip()` — Creates a note FlightStrip directly (no Flight object)
 - `store.updateNoteText()` — Updates note text on a note strip
+
+### MSI Installer (WiX v3)
+The installer is built by `scripts/make_msi.sh` using WiX Toolset v3. Key files:
+- `scripts/vatefs.wxs` — Main product definition. Includes a `FirewallRules` component with `<fw:FirewallException>` for `efs.exe` (TCP, any scope, all profiles) so iPads can connect immediately after installation.
+- `scripts/WixUI.wxs` — Custom UI dialog flow (welcome → license → dir → verify).
+- `scripts/make_msi.sh` — Requires `-ext WixFirewallExtension` on both `candle` and `light` commands.
+
+### FlightStrip UX Notes
+- **Clearance context menu**: Departure and local strips have a right-click "Clearance" context menu item that opens the clearance dialog (same as clicking CLNC button).
+- **Note strip delete**: Deleting a note strip skips the confirmation dialog entirely (immediate delete).
 
 ### Refactor Guardrails
 - Prefer editing source files under `frontend/src`, `backend/src`, and `common/src`.

@@ -3,7 +3,7 @@
 <!--<?define ProductVersion = "0.0.1"?>-->
 <?define ProductUpgradeCode = "f3d63d12-9678-4e60-b1c1-ffc0590fef01"?>
 
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension" xmlns:fw="http://schemas.microsoft.com/wix/FirewallExtension">
    <Product Id="*" UpgradeCode="$(var.ProductUpgradeCode)" 
             Name="VatEFS" Version="$(var.ProductVersion)" Manufacturer="Martin Insulander" Language="1033">
       <Package InstallerVersion="200" Platform="x64" Compressed="yes" Comments="Windows Installer Package" InstallScope="perMachine"/>
@@ -38,12 +38,25 @@
                   Value="[INSTALLDIR]"
                   Action="set" />
                </Component>
+               <Component Id="FirewallRules" Win64="yes" Guid="3A7C9B42-F1D8-4E05-82B6-93AF0C571D2E">
+                  <!-- Allow inbound TCP on port 17770 so iPads and other clients can connect -->
+                  <fw:FirewallException
+                     Id="EfsFirewallException"
+                     Name="VatEFS Backend"
+                     Program="[INSTALLDIR]efs.exe"
+                     Protocol="tcp"
+                     Scope="any"
+                     Profile="all" />
+                  <RegistryValue Root="HKLM" Key="Software\VatEFS" Name="FirewallRuleInstalled"
+                     Type="integer" Value="1" KeyPath="yes" />
+               </Component>
             </Directory>
          </Directory>
       </Directory>
 
       <Feature Id="DefaultFeature" Level="1">
          <ComponentRef Id="ApplicationFiles"/>
+         <ComponentRef Id="FirewallRules"/>
          <ComponentGroupRef Id="AllFiles" />
       </Feature>
 

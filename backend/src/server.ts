@@ -725,6 +725,7 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
     }
 
     return {
+        callsign: flight.callsign,
         ades: flight.destination ?? "????",
         drwy: flight.depRwy ?? "---",
         sid: flight.sid ?? "---",
@@ -807,7 +808,7 @@ function tryAutoSendDcl(flight: import("./types.js").Flight): boolean {
     hoppieService.sendMessage(
         flight.callsign,
         "cpdlc",
-        `/data2/${seq}//WU/${dclCallsign} PDC ${pdcStr} . . . . . CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} @${flight.callsign}@ ${markerClearance}`,
+        `/data2/${seq}//WU/CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} ${markerClearance}`,
     )
 
     flight.dclStatus = "SENT"
@@ -1498,7 +1499,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 hoppieService.sendMessage(
                     strip.callsign,
                     "cpdlc",
-                    `/data2/${seq}//WU/${dclCallsign} PDC ${pdcStr} . . . . . CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} @${strip.callsign}@ ${markerClearance}`,
+                    `/data2/${seq}//WU/CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} ${markerClearance}`,
                 )
 
                 flight.dclStatus = "SENT"

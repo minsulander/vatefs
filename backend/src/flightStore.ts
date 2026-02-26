@@ -588,7 +588,7 @@ class FlightStore {
         const wasAirborne = flight.airborne ?? false
         const fieldElevation = getFieldElevationForFlight(flight, this.config)
         const airborneThreshold = fieldElevation + 200
-        const groundSpeedThreshold = 35
+        const groundSpeedThreshold = 55
 
         // Set airborne flag for both departures and arrivals
         if (!wasAirborne && message.altitude > airborneThreshold) {

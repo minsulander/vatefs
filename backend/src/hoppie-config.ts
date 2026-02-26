@@ -91,6 +91,7 @@ export function getDclTemplate(airport: string): string | undefined {
  * Data needed to fill a DCL template
  */
 export interface DclTemplateData {
+    callsign: string
     ades: string
     drwy: string
     sid: string
@@ -113,6 +114,8 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
     if (!template) return undefined
 
     return template
+        .replace(/<CALLSIGN>/g, data.callsign)
+        .replace(/<CR\/LF>/g, "\n")
         .replace(/<ades>/g, data.ades)
         .replace(/<drwy>/g, data.drwy)
         .replace(/<sid>/g, data.sid)
@@ -135,6 +138,8 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
     if (!template) return undefined
 
     return template
+        .replace(/<CALLSIGN>/g, `@${data.callsign}@`)
+        .replace(/<CR\/LF>/g, "\n")
         .replace(/<ades>/g, `@${data.ades}@`)
         .replace(/<drwy>/g, `@${data.drwy}@`)
         .replace(/<sid>/g, `@${data.sid}@`)

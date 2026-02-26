@@ -39,8 +39,8 @@ cp -rf data "$root"
 rm -f *.wixobj *.generated.wxs
 
 heat dir $root -gg -sfrag -template fragment -srd -cg AllFiles -var var.path -dr INSTALLDIR -out allfiles.generated.wxs
-candle -arch x64 -dpath=$root -dProductVersion=$VERSION scripts/*.wxs *.generated.wxs -ext WiXUtilExtension
-light *.wixobj -o $FILENAME -cultures:en-US -ext WixUIExtension.dll -ext WiXUtilExtension
+candle -arch x64 -dpath=$root -dProductVersion=$VERSION scripts/*.wxs *.generated.wxs -ext WiXUtilExtension -ext WixFirewallExtension
+light *.wixobj -o $FILENAME -cultures:en-US -ext WixUIExtension.dll -ext WiXUtilExtension -ext WixFirewallExtension
 
 rm -f *.wixobj *.generated.wxs *.wixpdb
 

@@ -14,4 +14,13 @@ Here are a few various implementations and improvements:
 
 - When I'm logged on as APP or CTR (my callsign ends in APP or CTR, except if it ends in R_APP or R_CTR (which are remote tower positions)),
   let's not show the XFER button for outbound departures (in CTR DEP), as we will keep them beyond the scope of the EFS application.
-  
+
+...
+
+ In the plugin, when we run ".efs start" and the plugin responds "Backend started" we also want to include instructions on how to            connect the frontend. Something like "EFS accessible at http://192.168.1.81:17770/", so the plugin also needs to figure out the IP
+  address of the local machine.
+
+...
+
+I've added a bash script and Wix installer files in @scripts/ - make the installer also include a firewall rule to open efs.exe for incoming traffic
+from outside, so it's possible to connect an iPad to EFS right after installation.

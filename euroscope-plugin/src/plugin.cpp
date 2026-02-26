@@ -1868,23 +1868,36 @@ void VatEFSPlugin::PollBackendOutput()
     }
 }
 
-// Returns the first non-loopback IPv4 address of this machine, or empty string on failure.
+// Returns the best LAN IPv4 address of this machine using gethostbyname.
+// Prefers 192.168.x.x (3) > 10.x.x.x (2) > 172.x.x.x (1) > other (0).
+// Skips loopback (127.x.x.x) and link-local (169.254.x.x).
 static std::string GetLocalIpAddress()
 {
     char hostname[256] = {};
     if (gethostname(hostname, sizeof(hostname)) != 0)
         return "";
-    struct hostent *he = gethostbyname(hostname);
+
+    hostent *he = gethostbyname(hostname);
     if (!he || he->h_addrtype != AF_INET)
         return "";
-    for (int i = 0; he->h_addr_list[i] != nullptr; i++) {
-        auto b = reinterpret_cast<unsigned char *>(he->h_addr_list[i]);
-        std::string ip = std::to_string(b[0]) + "." + std::to_string(b[1]) + "." +
-                         std::to_string(b[2]) + "." + std::to_string(b[3]);
-        if (ip != "127.0.0.1")
-            return ip;
+
+    std::string best;
+    int bestScore = -1;
+
+    for (int i = 0; he->h_addr_list[i]; ++i) {
+        auto *b = reinterpret_cast<unsigned char *>(he->h_addr_list[i]);
+        if (b[0] == 127)                     continue; // loopback
+        if (b[0] == 169 && b[1] == 254)      continue; // link-local
+
+        // Prefer 192.168.x.x (3) > 10.x.x.x (2) > 172.x.x.x (1) > other (0)
+        int score = b[0] == 192 ? 3 : b[0] == 10 ? 2 : b[0] == 172 ? 1 : 0;
+        if (score > bestScore) {
+            bestScore = score;
+            best = std::to_string(b[0]) + "." + std::to_string(b[1]) + "." +
+                   std::to_string(b[2]) + "." + std::to_string(b[3]);
+        }
     }
-    return "";
+    return best;
 }
 
 void VatEFSPlugin::StartBackend()
