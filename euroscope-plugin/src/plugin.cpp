@@ -1929,10 +1929,17 @@ void VatEFSPlugin::StartBackend()
         return;
     }
 
-    // Open log file in the plugin directory
-    std::string logPath = DllPathFile;
-    logPath.resize(logPath.size() - strlen("VatEFS.dll"));
-    logPath += "VatEFS.log";
+    // Open log file in %APPDATA%\EuroScope (writable, next to VatEFSsettings.json)
+    std::string logPath;
+    const char *appdata = getenv("APPDATA");
+    if (appdata && appdata[0] != '\0') {
+        logPath = std::string(appdata) + "\\EuroScope\\VatEFS.log";
+    } else {
+        // Fallback to plugin directory if APPDATA is unavailable
+        logPath = DllPathFile;
+        logPath.resize(logPath.size() - strlen("VatEFS.dll"));
+        logPath += "VatEFS.log";
+    }
 
     HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

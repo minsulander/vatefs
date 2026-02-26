@@ -28,9 +28,31 @@ Vidare i livet:
   eller så visas detta mer som en extra grej invid section header..
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
+- Visa ICAO callsign nånstans
 
 Tekniskt / icke-funktionellt:
 - Plugin inte göra nånting (minimera risk för krascher, nätverksstrul) om ingen klient connectad
 - Refactor plugin, extrahera metoder, ta bort testkommandon
 - Bättre bygge, inte behöva manuellt bygga common först
 - Visa QR-kod för adressen som man kan scanna med sin iPad
+
+
+
+
+
+HomeView-VORF7ogc.js:1
+[Intervention] Ignored attempt to cancel a touchstart event with cancelable=false, for example because scrolling is in progress and cannot be interrupted.
+
+a
+@
+HomeView-VORF7ogc.js:1
+
+
+Uncaught (in promise) Error: Extension context invalidated.
+    at polyfill.js:519:25
+    at new Promise (<anonymous>)
+    at wrappedSendMessage (polyfill.js:516:14)
+    at Object.apply (polyfill.js:214:26)
+    at notifyActive (cdp-session.js:26:22)
+
+
