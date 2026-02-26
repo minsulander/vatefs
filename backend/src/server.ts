@@ -342,6 +342,7 @@ type OutboundPluginCommand =
     | { type: "assignHeading"; callsign: string; heading: number }
     | { type: "assignCfl"; callsign: string; altitude: number }
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
+    | { type: "goaround"; callsign: string }
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
@@ -365,6 +366,8 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "toggleClearanceFlag", callsign }
         case "resetSquawk":
             return { type: "resetSquawk", callsign }
+        case "GOA":
+            return { type: "goaround", callsign }
         default:
             return null
     }
@@ -1257,6 +1260,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         case "CTL":
                             flight.clearedToLand = true
+                            break
+                        case "GOA":
+                            flight.clearedToLand = false
                             break
                         case "XFER":
                             flight.controller = ""

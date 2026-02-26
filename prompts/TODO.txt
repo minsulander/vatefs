@@ -3,14 +3,14 @@
 
 -# Får massa flighter i RUNWAY section pga runway_lineup_depa när de är uppe på cruise...
 
-- Inte visa XFER gult i CTR DEP när jag sitter ESOS_1_CTR...
+-#  Inte visa XFER gult i CTR DEP när jag sitter ESOS_1_CTR...
 
-- Inte confirmation på delete av note strip
+-# Inte confirmation på delete av note strip
 
 
-- Kunna revise clearance... context menu clearance dialog efter att man gett push
+-# Kunna revise clearance... context menu clearance dialog efter att man gett push
 
-- Flytt från RUNWAY till CTR DEP ska resetta ClearedToLand
+-# Flytt från RUNWAY till CTR DEP ska resetta ClearedToLand
 
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
@@ -18,6 +18,7 @@ Att reda ut:
 - Skapa APL och korellera på callsign i ES pluginen
   - Vilka fält krävs? TopSky APL window = callsign, FRUL, 
   - Claude vajbat .efs apl kommando... testa.
+  - Funkar nästan... men atyp sätts inte från början. Men ".efs atyp" funkar... wtf.
 
 
 

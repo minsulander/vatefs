@@ -103,7 +103,8 @@ export function setActiveRunways(runways: Record<string, { arr: string[]; dep: s
 /**
  * Parse controller role from callsign.
  * Checks if callsign matches any of our airports and ends with _DEL or _GND.
- * Everything else defaults to TWR (covers TWR, APP, CTR, etc.)
+ * Also detects _APP and _CTR roles (excluding _R_APP and _R_CTR remote tower positions).
+ * Everything else defaults to TWR.
  */
 export function parseControllerRole(callsign: string, myAirports: string[]): ControllerRole {
     const upper = callsign.toUpperCase()
@@ -112,6 +113,11 @@ export function parseControllerRole(callsign: string, myAirports: string[]): Con
             if (upper.endsWith('_DEL')) return 'DEL'
             if (upper.endsWith('_GND')) return 'GND'
         }
+    }
+    // R_APP and R_CTR are remote tower positions — treat as TWR
+    if (!upper.endsWith('_R_APP') && !upper.endsWith('_R_CTR')) {
+        if (upper.endsWith('_CTR')) return 'CTR'
+        if (upper.endsWith('_APP')) return 'APP'
     }
     return 'TWR'
 }

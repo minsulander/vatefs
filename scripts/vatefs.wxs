@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+
+<!--<?define ProductVersion = "0.0.1"?>-->
+<?define ProductUpgradeCode = "f3d63d12-9678-4e60-b1c1-ffc0590fef01"?>
+
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+   <Product Id="*" UpgradeCode="$(var.ProductUpgradeCode)" 
+            Name="VatEFS" Version="$(var.ProductVersion)" Manufacturer="Martin Insulander" Language="1033">
+      <Package InstallerVersion="200" Platform="x64" Compressed="yes" Comments="Windows Installer Package" InstallScope="perMachine"/>
+      <Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>
+
+      <MajorUpgrade AllowSameVersionUpgrades="yes" 
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. If you are sure you want to downgrade, remove the existing installation via Programs and Features." />
+      <Upgrade Id="$(var.ProductUpgradeCode)">
+         <UpgradeVersion Minimum="0.0.0" Maximum="$(var.ProductVersion)" OnlyDetect="no" IncludeMinimum="yes" IncludeMaximum="no" Property="OLDERVERSIONBEINGUPGRADED"/>	  
+      </Upgrade>
+      <Condition Message="A newer version of this software is already installed.">NOT NEWERVERSIONDETECTED</Condition>
+
+      <!--
+      <WixVariable Id="WixUILicenseRtf" Value=".\LICENSE.rtf" />
+      <WixVariable Id="WixUIBannerBmp" Value=".\scripts\windows\msi-banner.bmp" />
+      <WixVariable Id="WixUIDialogBmp" Value=".\scripts\windows\msi-welcome.bmp" />
+      -->
+
+      <Icon Id="icon.ico" SourceFile=".\scripts\icon.ico"/>
+      <Property Id="ARPPRODUCTICON" Value="icon.ico" />
+
+      <Directory Id="TARGETDIR" Name="SourceDir">
+         <Directory Id="ProgramFiles64Folder">
+            <Directory Id="INSTALLDIR" Name="VatEFS">
+               <Component Id="ApplicationFiles" Win64="yes" Guid="12345678-1234-1234-1234-222222222222">
+                  <File Id="ApplicationFile1" Source=".\scripts\README.txt"/>
+                  <Environment
+                  Id="Environment"
+                  Name="PATH"
+                  Part="first"
+                  System="yes"
+                  Value="[INSTALLDIR]"
+                  Action="set" />
+               </Component>
+            </Directory>
+         </Directory>
+      </Directory>
+
+      <Feature Id="DefaultFeature" Level="1">
+         <ComponentRef Id="ApplicationFiles"/>
+         <ComponentGroupRef Id="AllFiles" />
+      </Feature>
+
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+      <UIRef Id="WixUI" />
+
+   </Product>
+</Wix>

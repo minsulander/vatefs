@@ -11,21 +11,10 @@ rm -f "$root/fil.txt"
 
 cd "$(dirname $0)/.."
 
-cd common
-npm install
-npm run build
-
-cd ../backend
-npm install
-npm run build
-scripts/build_sea.sh
-
-cd ../frontend
-npm install
-npm run build
-cd ..
+. scripts/build.sh
 
 cp backend/dist/efs.exe "$root"
+cp euroscope-plugin/build/Release/VatEFS.dll "$root"
 rm -rf "$root/public"
 mkdir -p "$root/public"
 cp -rf frontend/dist/* "$root/public/"

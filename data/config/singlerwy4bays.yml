@@ -333,6 +333,17 @@ actionRules:
     myRole: [TWR]
     priority: 90
 
+  # RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR only)
+  goa_runway:
+    action: GOA
+    sectionId: runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR]
+    priority: 95
+
   # CTR DEP airborne: XFER (transfer to next controller) (TWR only)
   # Departures only — local flights stay in the pattern, no XFER
   xfer_ctr_dep:
@@ -556,6 +567,15 @@ moveRules:
   undo_runway_to_ctr_arr:
     fromSectionId: runway
     toSectionId: ctr_arr
+    direction: either
+    command:
+      type: setClearedToLand
+      value: false
+
+  # RUNWAY -> CTR DEP: Unset cleared to land (go-around)
+  runway_to_ctr_dep_go_around:
+    fromSectionId: runway
+    toSectionId: ctr_dep
     direction: either
     command:
       type: setClearedToLand

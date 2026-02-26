@@ -1252,6 +1252,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         DisplayMessage("unsetClearedToLand: Invalid callsign");
                     }
+                } else if (message["type"] == "goaround") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!callsign.empty()) {
+                        UpdateScratchPad(callsign, "MISAP_", false);
+                    } else {
+                        DisplayMessage("goaround: Invalid callsign");
+                    }
                 } else if (message["type"] == "refresh") {
                     Refresh();
                 } else if (message["type"] == "assume") {
@@ -1861,6 +1868,25 @@ void VatEFSPlugin::PollBackendOutput()
     }
 }
 
+// Returns the first non-loopback IPv4 address of this machine, or empty string on failure.
+static std::string GetLocalIpAddress()
+{
+    char hostname[256] = {};
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+        return "";
+    struct hostent *he = gethostbyname(hostname);
+    if (!he || he->h_addrtype != AF_INET)
+        return "";
+    for (int i = 0; he->h_addr_list[i] != nullptr; i++) {
+        auto b = reinterpret_cast<unsigned char *>(he->h_addr_list[i]);
+        std::string ip = std::to_string(b[0]) + "." + std::to_string(b[1]) + "." +
+                         std::to_string(b[2]) + "." + std::to_string(b[3]);
+        if (ip != "127.0.0.1")
+            return ip;
+    }
+    return "";
+}
+
 void VatEFSPlugin::StartBackend()
 {
     if (backendProcess != nullptr) {
@@ -1933,7 +1959,12 @@ void VatEFSPlugin::StartBackend()
 
     CloseHandle(pi.hThread);
     backendProcess = pi.hProcess;
-    DisplayMessage("Backend started, logging to " + logPath);
+
+    std::string startMsg = "Backend started, logging to " + logPath;
+    std::string localIp = GetLocalIpAddress();
+    if (!localIp.empty())
+        startMsg += " | EFS accessible at http://" + localIp + ":17770/";
+    DisplayMessage(startMsg);
 }
 
 void VatEFSPlugin::StopBackend()

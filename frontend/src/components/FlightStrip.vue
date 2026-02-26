@@ -14,7 +14,10 @@
 
   <v-menu v-model="menuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu">
-      <v-list-item @click="onFplClick">
+      <v-list-item v-if="isDeparture" @click="onClncMenuClick">
+        <v-list-item-title>Clearance</v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="!isNote" @click="onFplClick">
         <v-list-item-title>Flightplan</v-list-item-title>
       </v-list-item>
       <v-list-item @click="onDeleteClick">
@@ -177,6 +180,7 @@ const deleteDialogOpen = ref(false)
 
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
+const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
 const noteEditing = ref(false)
 const noteText = ref('')
 const noteInitialText = ref('')
@@ -665,9 +669,18 @@ function onFplClick() {
   menuOpen.value = false
 }
 
-function onDeleteClick() {
-  deleteDialogOpen.value = true
+function onClncMenuClick() {
+  clncDialogOpen.value = true
   menuOpen.value = false
+}
+
+function onDeleteClick() {
+  menuOpen.value = false
+  if (isNote.value) {
+    store.deleteStrip(props.strip.id)
+    return
+  }
+  deleteDialogOpen.value = true
 }
 
 function onDeleteConfirm() {
