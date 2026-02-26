@@ -90,24 +90,19 @@
             <div class="time-label" v-else>ETA</div>
           </template>
         </div>
-
         <div class="strip-divider"></div>
 
-        <!-- SID/STAR section -->
-        <div class="strip-section strip-sid">
-          <template v-if="strip.stripType === 'arrival'">
-            <div class="sid-value">{{ strip.star || '' }}</div>
-          </template>
-          <template v-else>
-            <div class="sid-value">{{ strip.sid || '' }}</div>
-            <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
-              <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
-              <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
-            </div>
-          </template>
-        </div>
-
-        <div class="strip-divider"></div>
+        <!-- SID section -->
+        <template  v-if="strip.stripType === 'departure'">
+          <div class="strip-section strip-sid">
+              <div class="sid-value">{{ strip.sid || '' }}</div>
+              <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
+                <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
+                <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+              </div>
+          </div>
+          <div class="strip-divider"></div>
+        </template>
 
         <!-- Airports section -->
         <div class="strip-section strip-airports">
@@ -185,7 +180,7 @@ const deleteDialogOpen = ref(false)
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
 const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
-const showGoaButton = computed(() => !isNote.value && !!props.strip.clearedToLand)
+const showGoaButton = computed(() => !isNote.value && !!props.strip.clearedToLand && !props.strip.missedApproach)
 const effectiveActionCount = computed(() => (props.strip.actions?.length ?? 0) + (showGoaButton.value ? 1 : 0))
 const noteEditing = ref(false)
 const noteText = ref('')
@@ -853,7 +848,7 @@ function onDeleteConfirm() {
 /* Vertical dividers */
 .strip-divider {
   width: 1px;
-  background: #aaa;
+  background: #ddd;
   margin: 2px 0;
   flex-shrink: 0;
 }
@@ -864,8 +859,8 @@ function onDeleteConfirm() {
 
 /* Time section - fixed width, important info */
 .strip-time {
-  width: 42px;
-  min-width: 42px;
+  width: 32px;
+  min-width: 32px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -889,8 +884,8 @@ function onDeleteConfirm() {
 
 /* SID/Clearance section */
 .strip-sid {
-  width: 65px;
-  min-width: 50px;
+  width: 70px;
+  min-width: 60px;
   flex-shrink: 1;
   display: flex;
   flex-direction: column;

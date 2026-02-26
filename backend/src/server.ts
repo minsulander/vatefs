@@ -143,16 +143,12 @@ if (fs.existsSync(slowAircraftFile)) {
 }
 
 /**
- * Validate that a directory is a EuroScope install: must contain ESAA subdir and ESAA*.prf file.
+ * Validate that a directory is a EuroScope install: must contain *.prf file.
  */
 function isValidEuroscopeDir(dir: string): boolean {
     try {
-        const esaaPath = path.join(dir, "ESAA")
-        if (!fs.existsSync(esaaPath) || !fs.statSync(esaaPath).isDirectory()) {
-            return false
-        }
         const entries = fs.readdirSync(dir)
-        const hasPrf = entries.some((name) => name.startsWith("ESAA") && name.endsWith(".prf"))
+        const hasPrf = entries.some((name) => name.endsWith(".prf"))
         return hasPrf
     } catch {
         return false
@@ -161,7 +157,6 @@ function isValidEuroscopeDir(dir: string): boolean {
 
 /**
  * Find EuroScope directory by trying multiple locations in sequence.
- * Valid directory must contain ESAA subdir and at least one ESAA*.prf file.
  */
 function findEuroscopeDir(): string | undefined {
     const home = process.env.HOME || process.env.USERPROFILE || ""
@@ -343,6 +338,7 @@ type OutboundPluginCommand =
     | { type: "assignCfl"; callsign: string; altitude: number }
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
+    | { type: "clearScratchpad"; callsign: string }
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
@@ -1209,6 +1205,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     if (pluginCommand) {
                         sendUdp(JSON.stringify(pluginCommand))
                     }
+                    // CTL on a missed-approach flight: also clear the MISAP_ scratchpad
+                    if (message.action === "CTL") {
+                        const maFlight = flightStore.getFlight(strip.callsign)
+                        if (maFlight?.missedApproach) {
+                            sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                        }
+                    }
                 }
 
                 const flight = flightStore.getFlight(strip.callsign)
@@ -1261,9 +1264,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         case "CTL":
                             flight.clearedToLand = true
+                            flight.missedApproach = false
                             break
                         case "GOA":
                             flight.clearedToLand = false
+                            flight.missedApproach = true
                             break
                         case "XFER":
                             flight.controller = ""

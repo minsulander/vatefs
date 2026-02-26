@@ -7,7 +7,12 @@ cd build
 cmake -A win32 ..
 cmake --build . --config Release
 
-if [ -d "$APPDATA/EuroScope/ESAA/Plugins" ]; then
-    cp -f Release/VatEFS.dll "$APPDATA/EuroScope/ESAA/Plugins/"
-    echo "Copied DLL to $APPDATA/EuroScope/ESAA/Plugins"
+# if [ -d "$APPDATA/EuroScope/ESAA/Plugins" ]; then
+#     cp -f Release/VatEFS.dll "$APPDATA/EuroScope/ESAA/Plugins/"
+#     echo "Copied DLL to $APPDATA/EuroScope/ESAA/Plugins"
+# fi
+
+if [ -d "/c/Program Files/VatEFS" ]; then
+    cp -f Release/VatEFS.dll "/c/Program Files/VatEFS/"
+    echo "Copied DLL to /c/Program Files/VatEFS"
 fi

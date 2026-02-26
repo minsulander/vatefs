@@ -499,6 +499,14 @@ class FlightStore {
         if (message.groundstate !== undefined) flight.groundstate = message.groundstate
         if (message.clearance !== undefined) flight.clearance = message.clearance
         if (message.clearedToLand !== undefined) flight.clearedToLand = message.clearedToLand
+        // Process scratchpad-based missedApproach flag:
+        // Plugin sends scratch: "MISAP_" when on missed approach, scratch: "" when cleared
+        if (message.scratch === 'MISAP_') {
+            flight.missedApproach = true
+            flight.clearedToLand = false  // GOA also clears cleared-to-land
+        } else if (message.scratch === '') {
+            flight.missedApproach = false
+        }
         if (message.stand !== undefined) flight.stand = message.stand
         if (message.asp !== undefined) flight.asp = message.asp
         if (message.mach !== undefined) flight.mach = message.mach
@@ -799,6 +807,10 @@ class FlightStore {
                 if (myRole === 'GND') {
                     const freq = getControllerFrequency('TWR')
                     if (freq) xferFrequency = freq.toFixed(3)
+                } else if (myRole === 'TWR' && flight.missedApproach) {
+                    // Missed approach: XFER goes to APP, not GND
+                    const freq = getControllerFrequency('APP')
+                    if (freq) xferFrequency = freq.toFixed(3)
                 } else if (myRole === 'TWR' && (stripType === 'arrival' || stripType === 'local')) {
                     const freq = getControllerFrequency('GND')
                     if (freq) xferFrequency = freq.toFixed(3)
@@ -879,6 +891,7 @@ class FlightStore {
             clearance: flight.clearance ?? undefined,
             clearedForTakeoff,
             clearedToLand,
+            missedApproach: flight.missedApproach || undefined,
             canEditClearance: canEditClearance || undefined,
             xferFrequency,
             dclStatus: flight.dclStatus,

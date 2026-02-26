@@ -60,6 +60,7 @@ export interface Flight {
 
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
+    missedApproach?: boolean  // Aircraft on missed approach (scratchpad MISAP_)
     airborne?: boolean        // Aircraft is airborne after departure
     deleted?: boolean         // Strip is soft-deleted (hidden from user)
     manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)
@@ -133,6 +134,7 @@ export interface ControllerAssignedDataUpdateMessage {
     groundstate?: GroundState
     clearance?: boolean
     clearedToLand?: boolean
+    scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")
     stand?: string
     asp?: number
     mach?: number

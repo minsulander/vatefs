@@ -1,7 +1,3 @@
-- Go-around: backend måste fatta MISAP_, släcka GOA knappen, flytta till CTR DEP, XFER knapp 
-  Behöver också kunna göra samma som XMissedApp (testa, logga, hur synkas det?) 
-- Assume... tar lite tid, gör att man trycker flera gånger... optimistisk uppdatering.
-- Inte STAR på ankommande
 
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
@@ -32,7 +28,6 @@ Vidare i livet:
   eller så visas detta mer som en extra grej invid section header..
 - "Härleda" groundstate beroende på fart eller vid gate - för att stödja OBS med ingen controller online
 - (låg prio / optional / kanske inte?) Skapa flight för radar targets utan flightplan som är på flygplatsen
-- GO-AROUND = MISAP_ i scratchpad (ej tmp, .efs scratch)
 
 Tekniskt / icke-funktionellt:
 - Plugin inte göra nånting (minimera risk för krascher, nätverksstrul) om ingen klient connectad

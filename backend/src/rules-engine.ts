@@ -34,6 +34,8 @@ type CommonRuleConditions = {
     myRole?: ControllerRole[]
     delOnline?: boolean
     gndOnline?: boolean
+    appOnline?: boolean
+    missedApproach?: boolean
 }
 
 function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
@@ -265,6 +267,16 @@ function evaluateCommonConditions(
 
     // gndOnline: if specified, must match config.gndOnline (default false)
     if (rule.gndOnline !== undefined && (config.gndOnline ?? false) !== rule.gndOnline) {
+        return false
+    }
+
+    // appOnline: if specified, must match config.appOnline (default false)
+    if (rule.appOnline !== undefined && (config.appOnline ?? false) !== rule.appOnline) {
+        return false
+    }
+
+    // missedApproach: if specified, must match flight.missedApproach (default false)
+    if (rule.missedApproach !== undefined && (flight.missedApproach ?? false) !== rule.missedApproach) {
         return false
     }
 

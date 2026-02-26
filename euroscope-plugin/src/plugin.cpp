@@ -1259,6 +1259,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         DisplayMessage("goaround: Invalid callsign");
                     }
+                } else if (message["type"] == "clearScratchpad") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!callsign.empty()) {
+                        UpdateScratchPad(callsign, "", false);
+                    } else {
+                        DisplayMessage("clearScratchpad: Invalid callsign");
+                    }
                 } else if (message["type"] == "refresh") {
                     Refresh();
                 } else if (message["type"] == "assume") {

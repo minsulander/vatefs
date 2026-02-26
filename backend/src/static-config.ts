@@ -36,6 +36,7 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentOnlineControllers = staticConfig.onlineControllers
     const currentDelOnline = staticConfig.delOnline
     const currentGndOnline = staticConfig.gndOnline
+    const currentAppOnline = staticConfig.appOnline
     const currentActiveRunways = staticConfig.activeRunways
     const currentIsController = staticConfig.isController
     const currentMyFrequency = staticConfig.myFrequency
@@ -60,6 +61,7 @@ export function applyConfig(config: EfsStaticConfig) {
     if (currentOnlineControllers) staticConfig.onlineControllers = currentOnlineControllers
     if (currentDelOnline !== undefined) staticConfig.delOnline = currentDelOnline
     if (currentGndOnline !== undefined) staticConfig.gndOnline = currentGndOnline
+    if (currentAppOnline !== undefined) staticConfig.appOnline = currentAppOnline
     if (currentActiveRunways) staticConfig.activeRunways = currentActiveRunways
     if (currentIsController !== undefined) staticConfig.isController = currentIsController
     if (currentMyFrequency !== undefined) staticConfig.myFrequency = currentMyFrequency
@@ -137,16 +139,20 @@ function recalculateOnlineFlags() {
     if (!controllers || controllers.size === 0) {
         staticConfig.delOnline = false
         staticConfig.gndOnline = false
+        staticConfig.appOnline = false
         return
     }
     let del = false
     let gnd = false
+    let app = false
     for (const ctrl of controllers.values()) {
         if (ctrl.role === 'DEL') del = true
         if (ctrl.role === 'GND') gnd = true
+        if (ctrl.role === 'APP') app = true
     }
     staticConfig.delOnline = del
     staticConfig.gndOnline = gnd
+    staticConfig.appOnline = app
 }
 
 /**
@@ -166,11 +172,14 @@ export function updateOnlineController(callsign: string, frequency: number, myAi
     const role = parseControllerRole(callsign, myAirports)
     const prevDel = staticConfig.delOnline ?? false
     const prevGnd = staticConfig.gndOnline ?? false
+    const prevApp = staticConfig.appOnline ?? false
 
     staticConfig.onlineControllers.set(callsign, { role, frequency, callsign })
     recalculateOnlineFlags()
 
-    return (staticConfig.delOnline ?? false) !== prevDel || (staticConfig.gndOnline ?? false) !== prevGnd
+    return (staticConfig.delOnline ?? false) !== prevDel ||
+        (staticConfig.gndOnline ?? false) !== prevGnd ||
+        (staticConfig.appOnline ?? false) !== prevApp
 }
 
 /**
@@ -185,10 +194,13 @@ export function removeOnlineController(callsign: string): boolean {
 
     const prevDel = staticConfig.delOnline ?? false
     const prevGnd = staticConfig.gndOnline ?? false
+    const prevApp = staticConfig.appOnline ?? false
 
     recalculateOnlineFlags()
 
-    return (staticConfig.delOnline ?? false) !== prevDel || (staticConfig.gndOnline ?? false) !== prevGnd
+    return (staticConfig.delOnline ?? false) !== prevDel ||
+        (staticConfig.gndOnline ?? false) !== prevGnd ||
+        (staticConfig.appOnline ?? false) !== prevApp
 }
 
 /**
@@ -212,4 +224,5 @@ export function clearOnlineControllers() {
     }
     staticConfig.delOnline = false
     staticConfig.gndOnline = false
+    staticConfig.appOnline = false
 }

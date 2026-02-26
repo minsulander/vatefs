@@ -7,50 +7,52 @@
 
   <div class="efs-bottom-bar">
     <div class="tiny-strips">
-      <div
-        class="tiny-strip tiny-strip-vfrdep"
-        draggable="true"
-        @dragstart="(e) => onTinyDragStart(e, 'vfrDep')"
-        @dragend="onTinyDragEnd"
-        @click="() => onTinyClick('vfrDep')"
-        @touchstart="(e) => onTinyTouchStart(e, 'vfrDep')"
-        @touchmove.prevent="onTinyTouchMove"
-        @touchend="(e) => onTinyTouchEnd(e, 'vfrDep')"
-        @touchcancel="onTinyTouchCancel"
-      >
-        <div class="tiny-indicator tiny-dep"></div>
-        <span class="tiny-label">VFR DEP</span>
-      </div>
+      <template v-if="store.myAirports.length > 0">
+        <div
+          class="tiny-strip tiny-strip-vfrdep"
+          draggable="true"
+          @dragstart="(e) => onTinyDragStart(e, 'vfrDep')"
+          @dragend="onTinyDragEnd"
+          @click="() => onTinyClick('vfrDep')"
+          @touchstart="(e) => onTinyTouchStart(e, 'vfrDep')"
+          @touchmove.prevent="onTinyTouchMove"
+          @touchend="(e) => onTinyTouchEnd(e, 'vfrDep')"
+          @touchcancel="onTinyTouchCancel"
+        >
+          <div class="tiny-indicator tiny-dep"></div>
+          <span class="tiny-label">VFR DEP</span>
+        </div>
 
-      <div
-        class="tiny-strip tiny-strip-vfrarr"
-        draggable="true"
-        @dragstart="(e) => onTinyDragStart(e, 'vfrArr')"
-        @dragend="onTinyDragEnd"
-        @click="() => onTinyClick('vfrArr')"
-        @touchstart="(e) => onTinyTouchStart(e, 'vfrArr')"
-        @touchmove.prevent="onTinyTouchMove"
-        @touchend="(e) => onTinyTouchEnd(e, 'vfrArr')"
-        @touchcancel="onTinyTouchCancel"
-      >
-        <div class="tiny-indicator tiny-arr"></div>
-        <span class="tiny-label">VFR ARR</span>
-      </div>
+        <div
+          class="tiny-strip tiny-strip-vfrarr"
+          draggable="true"
+          @dragstart="(e) => onTinyDragStart(e, 'vfrArr')"
+          @dragend="onTinyDragEnd"
+          @click="() => onTinyClick('vfrArr')"
+          @touchstart="(e) => onTinyTouchStart(e, 'vfrArr')"
+          @touchmove.prevent="onTinyTouchMove"
+          @touchend="(e) => onTinyTouchEnd(e, 'vfrArr')"
+          @touchcancel="onTinyTouchCancel"
+        >
+          <div class="tiny-indicator tiny-arr"></div>
+          <span class="tiny-label">VFR ARR</span>
+        </div>
 
-      <div
-        class="tiny-strip tiny-strip-cross"
-        draggable="true"
-        @dragstart="(e) => onTinyDragStart(e, 'cross')"
-        @dragend="onTinyDragEnd"
-        @click="() => onTinyClick('cross')"
-        @touchstart="(e) => onTinyTouchStart(e, 'cross')"
-        @touchmove.prevent="onTinyTouchMove"
-        @touchend="(e) => onTinyTouchEnd(e, 'cross')"
-        @touchcancel="onTinyTouchCancel"
-      >
-        <div class="tiny-indicator tiny-cross"></div>
-        <span class="tiny-label">CROSS</span>
-      </div>
+        <div
+          class="tiny-strip tiny-strip-cross"
+          draggable="true"
+          @dragstart="(e) => onTinyDragStart(e, 'cross')"
+          @dragend="onTinyDragEnd"
+          @click="() => onTinyClick('cross')"
+          @touchstart="(e) => onTinyTouchStart(e, 'cross')"
+          @touchmove.prevent="onTinyTouchMove"
+          @touchend="(e) => onTinyTouchEnd(e, 'cross')"
+          @touchcancel="onTinyTouchCancel"
+        >
+          <div class="tiny-indicator tiny-cross"></div>
+          <span class="tiny-label">CROSS</span>
+        </div>
+      </template>
 
       <div
         class="tiny-strip tiny-strip-note"

@@ -123,6 +123,9 @@ export interface SectionRule {
 
     /** Whether a GND controller is online at our airport */
     gndOnline?: boolean
+
+    /** Whether the flight is on a missed approach (scratchpad MISAP_) */
+    missedApproach?: boolean
 }
 
 /**
@@ -185,6 +188,12 @@ export interface ActionRule {
 
     /** Whether a GND controller is online at our airport */
     gndOnline?: boolean
+
+    /** Whether an APP controller is online at our airport */
+    appOnline?: boolean
+
+    /** Whether the flight is on a missed approach (scratchpad MISAP_) */
+    missedApproach?: boolean
 }
 
 /**
@@ -240,6 +249,9 @@ export interface DeleteRule {
 
     /** Whether a GND controller is online at our airport */
     gndOnline?: boolean
+
+    /** Whether an APP controller is online at our airport */
+    appOnline?: boolean
 }
 
 /**
@@ -342,4 +354,7 @@ export interface EfsStaticConfig {
 
     /** Whether a GND controller is online at our airport */
     gndOnline?: boolean
+
+    /** Whether an APP controller is online at our airport */
+    appOnline?: boolean
 }

@@ -73,6 +73,7 @@ export interface FlightStrip {
     // Status indicators
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)
+    missedApproach?: boolean     // Aircraft on missed approach (hides GOA button)
 
     // Special strip fields
     noteText?: string            // Text content for note strips
