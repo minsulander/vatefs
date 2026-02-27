@@ -1,5 +1,6 @@
 /**
  * Configuration loader - loads EFS configuration from YAML files.
+ * Supports `include:` to compose configs from shared rule fragments.
  */
 
 import fs from "fs"
@@ -21,27 +22,29 @@ export interface ConfigFileInfo {
 }
 
 /**
- * Raw YAML config structure (before transformation)
+ * Raw YAML config structure (before transformation).
+ * `layout` is optional so include-only fragments are valid YAML.
  */
 interface YamlConfig {
     name?: string
+    include?: string[]
     radarRange?: number
-    layout: {
+    layout?: {
         bays: Record<string, {
             sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
         }>
     }
-    sectionRules: Record<string, Omit<SectionRule, 'id'>>
-    actionRules: Record<string, Omit<ActionRule, 'id'>>
-    deleteRules: Record<string, Omit<DeleteRule, 'id'>>
-    moveRules: Record<string, Omit<MoveRule, 'id'>>
+    sectionRules?: Record<string, Omit<SectionRule, 'id'>>
+    actionRules?: Record<string, Omit<ActionRule, 'id'>>
+    deleteRules?: Record<string, Omit<DeleteRule, 'id'>>
+    moveRules?: Record<string, Omit<MoveRule, 'id'>>
 }
 
 /**
- * Transform YAML layout (key-based) to internal format (id-based)
- * Also builds sectionToBay lookup map
+ * Transform YAML layout (key-based) to internal format (id-based).
+ * Also builds sectionToBay lookup map.
  */
-function transformLayout(yamlLayout: YamlConfig['layout']): { layout: EfsLayout; sectionToBay: Map<string, string> } {
+function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layout: EfsLayout; sectionToBay: Map<string, string> } {
     const bays: Bay[] = []
     const sectionToBay = new Map<string, string>()
 
@@ -91,15 +94,56 @@ function transformRules<T extends { id: string }>(
 }
 
 /**
+ * Recursively load a YAML file and merge all `include:` fragments into it.
+ * Rules from included files are the base; the main file's rules override on key conflict.
+ * `visited` tracks resolved paths to detect circular includes.
+ */
+function loadYamlWithIncludes(configPath: string, visited = new Set<string>()): YamlConfig {
+    const resolved = path.resolve(configPath)
+
+    if (visited.has(resolved)) {
+        throw new Error(`Circular include detected: ${resolved}`)
+    }
+    visited.add(resolved)
+
+    if (!fs.existsSync(resolved)) {
+        throw new Error(`Config file not found: ${resolved}`)
+    }
+
+    const content = fs.readFileSync(resolved, 'utf8')
+    const raw = yaml.load(content) as YamlConfig
+    const dir = path.dirname(resolved)
+
+    // Accumulate rules from all includes in order
+    let sectionRules: Record<string, Omit<SectionRule, 'id'>> = {}
+    let actionRules: Record<string, Omit<ActionRule, 'id'>> = {}
+    let deleteRules: Record<string, Omit<DeleteRule, 'id'>> = {}
+    let moveRules: Record<string, Omit<MoveRule, 'id'>> = {}
+
+    for (const include of raw.include ?? []) {
+        const includedPath = path.resolve(dir, include)
+        const included = loadYamlWithIncludes(includedPath, new Set(visited))
+        sectionRules = { ...sectionRules, ...included.sectionRules }
+        actionRules  = { ...actionRules,  ...included.actionRules  }
+        deleteRules  = { ...deleteRules,  ...included.deleteRules  }
+        moveRules    = { ...moveRules,    ...included.moveRules    }
+    }
+
+    // Main file rules overlay on top (same key = main file wins)
+    return {
+        ...raw,
+        sectionRules: { ...sectionRules, ...raw.sectionRules },
+        actionRules:  { ...actionRules,  ...raw.actionRules  },
+        deleteRules:  { ...deleteRules,  ...raw.deleteRules  },
+        moveRules:    { ...moveRules,    ...raw.moveRules    },
+    }
+}
+
+/**
  * Load configuration from a YAML file
  */
 export function loadConfig(configPath: string): EfsStaticConfig {
-    if (!fs.existsSync(configPath)) {
-        throw new Error(`Configuration file not found: ${configPath}`)
-    }
-
-    const content = fs.readFileSync(configPath, 'utf8')
-    const yamlConfig = yaml.load(content) as YamlConfig
+    const yamlConfig = loadYamlWithIncludes(configPath)
 
     // Validate required fields
     if (!yamlConfig.layout?.bays) {
@@ -175,7 +219,8 @@ export function getDefaultConfigPath(dataDir: string): string {
 }
 
 /**
- * Scan a directory for YAML config files and extract their names.
+ * Scan a directory for selectable YAML config files and extract their names.
+ * Files without a `layout` key are include fragments and are skipped.
  * Returns an array of config file info sorted by name.
  */
 export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
@@ -190,7 +235,9 @@ export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
         const fullPath = path.join(configDir, file)
         try {
             const content = fs.readFileSync(fullPath, 'utf8')
-            const yamlConfig = yaml.load(content) as { name?: string }
+            const yamlConfig = yaml.load(content) as YamlConfig
+            // Skip include fragments (no layout key)
+            if (!yamlConfig?.layout) continue
             const name = yamlConfig?.name ?? file.replace(/\.(yml|yaml)$/, '')
             configs.push({ file, name, fullPath })
         } catch {

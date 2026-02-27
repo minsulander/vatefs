@@ -64,13 +64,18 @@ function parseDmsPart(part: string): number | undefined {
 
 /**
  * Find GRpluginStands.txt by recursively scanning the EuroScope directory.
+ * If packageFilter is provided, only returns a path that contains it (e.g. 'ESAA').
  */
-function findStandFile(euroscopeDir: string): string | undefined {
+function findStandFile(euroscopeDir: string, packageFilter?: string): string | undefined {
     const filename = 'GRpluginStands.txt'
+
+    function matchesFilter(filePath: string): boolean {
+        return !packageFilter || filePath.includes(packageFilter)
+    }
 
     // Check directly in euroscopeDir
     const directPath = path.join(euroscopeDir, filename)
-    if (fs.existsSync(directPath)) return directPath
+    if (fs.existsSync(directPath) && matchesFilter(directPath)) return directPath
 
     // Recursively scan subdirectories (typically found in e.g. ESAA/Plugins/)
     function searchDir(dir: string, depth: number): string | undefined {
@@ -80,7 +85,7 @@ function findStandFile(euroscopeDir: string): string | undefined {
             for (const entry of entries) {
                 if (entry.isDirectory()) {
                     const subPath = path.join(dir, entry.name, filename)
-                    if (fs.existsSync(subPath)) return subPath
+                    if (fs.existsSync(subPath) && matchesFilter(subPath)) return subPath
                     const deeper = searchDir(path.join(dir, entry.name), depth + 1)
                     if (deeper) return deeper
                 }
@@ -98,8 +103,8 @@ function findStandFile(euroscopeDir: string): string | undefined {
  * Load stands from a GRpluginStands.txt file found in the EuroScope directory.
  * Returns the number of stands loaded.
  */
-export function loadStands(euroscopeDir: string): number {
-    const standFile = findStandFile(euroscopeDir)
+export function loadStands(euroscopeDir: string, packageFilter?: string): number {
+    const standFile = findStandFile(euroscopeDir, packageFilter)
     if (!standFile) {
         console.warn('Stand file (GRpluginStands.txt) not found')
         return 0

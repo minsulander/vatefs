@@ -31,6 +31,7 @@ type CommonRuleConditions = {
     airborne?: boolean
     onRunway?: boolean
     depRunway?: boolean
+    arrRunway?: boolean
     myRole?: ControllerRole[]
     notMyRole?: ControllerRole[]
     missedApproach?: boolean
@@ -241,6 +242,44 @@ function evaluateDepRunwayCondition(
     return isDepRunway === expectedDepRunway
 }
 
+/**
+ * Evaluate whether the flight's assigned runway is an active arrival runway.
+ * Symmetric to evaluateDepRunwayCondition — use both with false to target a "third" runway.
+ */
+function evaluateArrRunwayCondition(
+    flight: Flight,
+    config: EfsStaticConfig,
+    expectedArrRunway: boolean
+): boolean {
+    // Collect all active arrival runways across our airports
+    const arrRunways: string[] = []
+    if (config.activeRunways) {
+        for (const airport of config.myAirports) {
+            const rwy = config.activeRunways[airport]
+            if (rwy) arrRunways.push(...rwy.arr)
+        }
+    }
+    if (arrRunways.length === 0) return !expectedArrRunway // No active runway data
+
+    // Determine the flight's relevant runway based on direction (same logic as depRunway)
+    const originIsOurs = flight.origin !== undefined && config.myAirports.includes(flight.origin)
+    const destIsOurs = flight.destination !== undefined && config.myAirports.includes(flight.destination)
+
+    let relevantRunway: string | undefined
+    if (originIsOurs && destIsOurs) {
+        relevantRunway = (flight.airborne ?? false) ? flight.arrRwy : flight.depRwy
+    } else if (originIsOurs) {
+        relevantRunway = flight.depRwy
+    } else if (destIsOurs) {
+        relevantRunway = flight.arrRwy
+    }
+
+    if (!relevantRunway) return !expectedArrRunway // No runway assigned
+
+    const isArrRunway = arrRunways.includes(relevantRunway)
+    return isArrRunway === expectedArrRunway
+}
+
 function evaluateCommonConditions(
     flight: Flight,
     rule: CommonRuleConditions,
@@ -287,6 +326,10 @@ function evaluateCommonConditions(
     }
 
     if (rule.depRunway !== undefined && !evaluateDepRunwayCondition(flight, config, rule.depRunway)) {
+        return false
+    }
+
+    if (rule.arrRunway !== undefined && !evaluateArrRunwayCondition(flight, config, rule.arrRunway)) {
         return false
     }
 

@@ -22,8 +22,9 @@ let copx: Map<string, Map<string, number>> = new Map()
 /**
  * Find the latest .ese file in the EuroScope directory (by modification time).
  * Scans the root directory and immediate subdirectories.
+ * If packageFilter is provided, only considers files whose path contains it (e.g. 'ESAA').
  */
-function findEseFile(euroscopeDir: string): string | undefined {
+function findEseFile(euroscopeDir: string, packageFilter?: string): string | undefined {
     let latestFile: string | undefined
     let latestMtime = 0
 
@@ -33,6 +34,7 @@ function findEseFile(euroscopeDir: string): string | undefined {
             for (const entry of entries) {
                 if (entry.isFile() && entry.name.endsWith('.ese')) {
                     const fullPath = path.join(dir, entry.name)
+                    if (packageFilter && !fullPath.includes(packageFilter)) continue
                     const stat = fs.statSync(fullPath)
                     if (stat.mtimeMs > latestMtime) {
                         latestMtime = stat.mtimeMs
@@ -65,8 +67,8 @@ function findEseFile(euroscopeDir: string): string | undefined {
  * Load SID and COPX data from the latest .ese file in the EuroScope directory.
  * Returns counts of loaded SIDs and COPX entries.
  */
-export function loadSidData(euroscopeDir: string): { sidCount: number; copxCount: number } {
-    const eseFile = findEseFile(euroscopeDir)
+export function loadSidData(euroscopeDir: string, packageFilter?: string): { sidCount: number; copxCount: number } {
+    const eseFile = findEseFile(euroscopeDir, packageFilter)
     if (!eseFile) {
         console.warn('No .ese sector file found')
         return { sidCount: 0, copxCount: 0 }

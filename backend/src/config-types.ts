@@ -116,6 +116,14 @@ export interface SectionRule {
     depRunway?: boolean
 
     /**
+     * Whether the flight's assigned runway is an active arrival runway.
+     * For departures/local on ground: checks depRwy
+     * For arrivals/local airborne: checks arrRwy
+     * Use depRunway: false, arrRunway: false together to target a "third" runway.
+     */
+    arrRunway?: boolean
+
+    /**
      * My effective roles for this flight's relevant airport must include at least one of these.
      * Effective roles reflect top-down coverage (e.g. TWR alone has [DEL, GND, TWR]).
      */
@@ -181,6 +189,9 @@ export interface ActionRule {
 
     /** Whether the flight's assigned runway is an active departure runway */
     depRunway?: boolean
+
+    /** Whether the flight's assigned runway is an active arrival runway */
+    arrRunway?: boolean
 
     /**
      * My effective roles for this flight's relevant airport must include at least one of these.

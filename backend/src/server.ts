@@ -174,16 +174,18 @@ function findEuroscopeDir(): string | undefined {
 }
 
 // Load EuroScope data (stands, SIDs)
+// TODO: make configurable — only load data files from this EuroScope package directory
+const EUROSCOPE_PACKAGE = 'ESAA'
 const EUROSCOPE_DIR = findEuroscopeDir()
 if (EUROSCOPE_DIR) {
     console.log(`EuroScope directory: ${EUROSCOPE_DIR}`)
     try {
-        loadStands(EUROSCOPE_DIR)
+        loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
     } catch (err) {
         console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
     }
     try {
-        loadSidData(EUROSCOPE_DIR)
+        loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
     } catch (err) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
     }
