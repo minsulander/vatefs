@@ -208,13 +208,15 @@ actionRules:
     myRole: [DEL]
     priority: 110
 
-  # GND: XFER to TWR for taxi departures/local
+  # GND: XFER to TWR for taxi departures/local — only when TWR is separately online
+  # (If GND is covering TWR top-down, LU applies instead)
   xfer_gnd_taxi_dep:
     action: XFER
     direction: either
     controller: myself
     groundstates: [TAXI]
     myRole: [GND]
+    notMyRole: [TWR]
     priority: 115
 
   # GND/TWR/APP/CTR: PUSH for DE-ICE departures/local (after assuming from DEL)
@@ -232,7 +234,7 @@ actionRules:
     action: TXI
     direction: either
     controller: myself
-    groundstates: ['', NSTS, ARR]
+    groundstates: [ARR]
     airborne: false
     myRole: [GND]
     priority: 112
@@ -275,7 +277,7 @@ actionRules:
     direction: either
     controller: myself
     clearedToLand: false  # Only if not already cleared
-    myRole: [TWR, APP, CTR]
+    myRole: [TWR]
     priority: 90
 
   # RUNWAY lineup: CTO (cleared for takeoff) for departures and local (TWR/APP/CTR top-down)
@@ -285,8 +287,26 @@ actionRules:
     direction: either
     controller: myself
     groundstates: [LINEUP]
-    myRole: [TWR, APP, CTR]
+    myRole: [TWR]
     priority: 90
+
+  # TAXI departures: LU (line up) — frontend shows LU+CTO pair (TWR/APP/CTR top-down)
+  lu_taxi_dep:
+    action: LU
+    direction: departure
+    controller: myself
+    groundstates: [TAXI]
+    myRole: [TWR]
+    priority: 85
+
+  # TAXI local flights: LU (line up) — frontend shows LU+CTO pair (TWR/APP/CTR top-down)
+  lu_taxi_local:
+    action: LU
+    direction: local
+    controller: myself
+    groundstates: [TAXI]
+    myRole: [TWR]
+    priority: 85
 
   # CTR DEP missed approach: XFER to APP when APP is separately online (TWR top-down)
   xfer_missed_approach:
@@ -294,8 +314,8 @@ actionRules:
     missedApproach: true
     controller: myself
     handoffInitiated: false
-    myRole: [TWR, APP, CTR]
-    notMyRole: [APP]
+    myRole: [TWR]
+    notMyRole: [APP, CTR]
     priority: 102
 
   # CTR DEP airborne: XFER (transfer to next controller) (TWR/APP/CTR top-down)
@@ -307,7 +327,7 @@ actionRules:
     controller: myself
     airborne: true
     handoffInitiated: false
-    myRole: [TWR, APP, CTR]
+    myRole: [TWR]
     priority: 80
 
   # Taxiing arrivals/local: PARK (set parked) (GND/TWR/APP/CTR)
@@ -317,7 +337,7 @@ actionRules:
     controller: myself
     groundstates: [TXIN]
     onRunway: false
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     priority: 77
 
   # PUSH&START departures/local with PUSH groundstate: TXO (taxi out) (GND/TWR/APP/CTR)
@@ -327,7 +347,7 @@ actionRules:
     direction: either
     controller: myself
     groundstates: [PUSH, STUP]
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     priority: 75
 
   # PENDING DEP departures/local without clearance: CLNC (open clearance dialog)
@@ -348,7 +368,7 @@ actionRules:
     controller: myself
     clearance: true
     groundstates: ['', ONFREQ, STUP, NSTS]
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     priority: 70
 
   # === CATCH-ALL ASSUME RULES ===
@@ -367,7 +387,7 @@ actionRules:
     action: ASSUME
     direction: arrival
     controller: not_myself
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     priority: 10
 
 deleteRules:
@@ -398,7 +418,7 @@ moveRules:
     fromSectionId: pending_dep
     toSectionId: cleared
     direction: either
-    myRole: [DEL, TWR, APP, CTR]
+    myRole: [DEL]
     command:
       type: setClearance
       value: true
@@ -408,7 +428,7 @@ moveRules:
     fromSectionId: cleared
     toSectionId: push_start
     direction: either
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     command:
       type: setGroundstate
       value: PUSH
@@ -418,7 +438,7 @@ moveRules:
     fromSectionId: push_start
     toSectionId: taxi
     direction: either
-    myRole: [GND, TWR, APP, CTR]
+    myRole: [GND]
     command:
       type: setGroundstate
       value: TAXI

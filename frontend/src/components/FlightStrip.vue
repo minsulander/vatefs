@@ -137,7 +137,7 @@
           :class="actionButtonClass(action)"
           @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
           <span class="action-text">{{ action === 'GOA' ? 'G/A' : action }}</span>
-          <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
+          <span v-if="action === 'XFER' && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
         </button>
       </div>
       <div v-else class="strip-right strip-right-empty"></div>

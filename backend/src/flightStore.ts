@@ -760,20 +760,13 @@ class FlightStore {
         const isHandoffToMe = flight.handoffTargetController === myCallsign
 
         if (!clearedForTakeoff) {
-            if (isTrackedByMe && (stripType === 'departure' || stripType === 'local') && flight.groundstate === 'TAXI') {
-                // Special case: TAXI departures get LU+CTO (only for TWR)
-                const myRole = this.config.myRole ?? 'TWR'
-                if (myRole === 'TWR') {
-                    actions = ['LU', 'CTO']
-                } else {
-                    // GND/DEL: use rules engine (will return XFER for GND via config rule)
-                    const defaultAction = determineActionForFlight(flight, sectionId, this.config)
-                    if (defaultAction) actions = [defaultAction]
-                }
-            } else if (isTrackedByMe) {
+            if (isTrackedByMe) {
                 // We're the tracking controller - show action from rules
                 const defaultAction = determineActionForFlight(flight, sectionId, this.config)
-                if (defaultAction) {
+                if (defaultAction === 'LU') {
+                    // LU (line up) — show paired with CTO so controller can choose either
+                    actions = ['LU', 'CTO']
+                } else if (defaultAction) {
                     actions = [defaultAction]
                 }
             } else if ((isUntracked || isHandoffToMe) && this.config.isController) {
