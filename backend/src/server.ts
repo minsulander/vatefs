@@ -1875,7 +1875,10 @@ udpIn.on("message", (msg, rinfo) => {
             if (!msg.me && msg.controller) {
                 const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports)
                 if (changed) {
-                    console.log(`Online controllers changed: DEL=${staticConfig.delOnline}, GND=${staticConfig.gndOnline}`)
+                    const rolesLog = staticConfig.myRolesByAirport
+                        ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
+                        : 'unknown'
+                    console.log(`Online controllers changed — effective roles: ${rolesLog}`)
                     regenerateAllStrips()
                 }
             }
@@ -1887,7 +1890,10 @@ udpIn.on("message", (msg, rinfo) => {
             const msg = data as ControllerDisconnectMessage
             const changed = removeOnlineController(msg.callsign)
             if (changed) {
-                console.log(`Controller disconnected: ${msg.callsign}, DEL=${staticConfig.delOnline}, GND=${staticConfig.gndOnline}`)
+                const rolesLog = staticConfig.myRolesByAirport
+                    ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
+                    : 'unknown'
+                console.log(`Controller disconnected: ${msg.callsign} — effective roles: ${rolesLog}`)
                 regenerateAllStrips()
             }
             return

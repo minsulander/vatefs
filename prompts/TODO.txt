@@ -1,3 +1,10 @@
+- Plockar EKDK paket... .ese och GRPluginStands.txt
+EuroScope directory: C:\Users\Viktor\AppData\Roaming\EuroScope
+Loaded 0 stands for 0 airports from C:\Users\Viktor\AppData\Roaming\EuroScope\EKDK\Plugins\GRplugin\GRpluginStands.txt
+Loaded 146 SIDs and 33 COPX entries from C:\Users\Viktor\AppData\Roaming\EuroScope\EKDK-EKDK-Copenhagen_20260222165723-260201-0002.ese
+
+
+
 
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
@@ -13,6 +20,7 @@ Att reda ut:
 
 - Highlight QNH när den ändras, kvittera med klick - borde vi hämta från metsensor istället kanske...
 
+- Auto PARK
 
 Arlanda-specifika saker:
 - Ramen på öst SID
@@ -36,7 +44,7 @@ Tekniskt / icke-funktionellt:
 - Bättre bygge, inte behöva manuellt bygga common först
 - Visa QR-kod för adressen som man kan scanna med sin iPad
 
-
+- Kunna trigga contact me
 
 
 

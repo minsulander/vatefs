@@ -6,6 +6,39 @@
 import type { EfsStaticConfig, ControllerRole } from "./config-types.js"
 
 /**
+ * Top-down controller hierarchy, lowest to highest.
+ * A controller at level X covers all levels below X that have no dedicated online controller.
+ */
+export const ROLE_ORDER: ControllerRole[] = ['DEL', 'GND', 'TWR', 'APP', 'CTR']
+
+/**
+ * Compute my effective roles at a single airport given the roles of other online controllers
+ * at that airport.
+ *
+ * Example: I'm TWR (level 2). GND (level 1) is online.
+ *   → I cover from level 2 down to (level of highest lower controller + 1) = [TWR]
+ * Example: I'm TWR (level 2). Nobody else online.
+ *   → I cover all the way down = [DEL, GND, TWR]
+ */
+export function computeEffectiveRolesForAirport(
+    myRole: ControllerRole,
+    onlineRolesAtAirport: ControllerRole[]
+): ControllerRole[] {
+    const myLevel = ROLE_ORDER.indexOf(myRole)
+    if (myLevel === -1) return [myRole]
+
+    const lowerOnlineLevels = onlineRolesAtAirport
+        .map(r => ROLE_ORDER.indexOf(r))
+        .filter(l => l >= 0 && l < myLevel)
+
+    const coverageStart = lowerOnlineLevels.length > 0
+        ? Math.max(...lowerOnlineLevels) + 1
+        : 0
+
+    return ROLE_ORDER.slice(coverageStart, myLevel + 1)
+}
+
+/**
  * Default configuration - used before config is loaded from file
  */
 const defaultConfig: EfsStaticConfig = {
@@ -26,6 +59,57 @@ const defaultConfig: EfsStaticConfig = {
 export const staticConfig: EfsStaticConfig = { ...defaultConfig }
 
 /**
+ * Recompute myRolesByAirport from myRole + online controllers.
+ * Called whenever myRole, myAirports, or online controllers change.
+ */
+function recomputeMyRolesByAirport() {
+    const myCallsignRole = staticConfig.myRole
+    if (!myCallsignRole || staticConfig.myAirports.length === 0) {
+        staticConfig.myRolesByAirport = undefined
+        return
+    }
+
+    const rolesByAirport = new Map<string, ControllerRole[]>()
+
+    for (const airport of staticConfig.myAirports) {
+        const onlineRolesAtAirport: ControllerRole[] = []
+        if (staticConfig.onlineControllers) {
+            for (const ctrl of staticConfig.onlineControllers.values()) {
+                // CTR covers all airports; DEL/GND/TWR/APP match by callsign prefix
+                const coversAirport =
+                    ctrl.role === 'CTR' ||
+                    ctrl.callsign.toUpperCase().startsWith(airport)
+                if (coversAirport) {
+                    onlineRolesAtAirport.push(ctrl.role)
+                }
+            }
+        }
+        rolesByAirport.set(airport, computeEffectiveRolesForAirport(myCallsignRole, onlineRolesAtAirport))
+    }
+
+    staticConfig.myRolesByAirport = rolesByAirport
+}
+
+/**
+ * Check if two myRolesByAirport maps differ (used to decide whether to regenerate strips).
+ */
+function rolesChanged(
+    prev: Map<string, ControllerRole[]> | undefined,
+    next: Map<string, ControllerRole[]> | undefined
+): boolean {
+    if (!prev && !next) return false
+    if (!prev || !next) return true
+    if (prev.size !== next.size) return true
+    for (const [airport, roles] of prev) {
+        const nextRoles = next.get(airport)
+        if (!nextRoles) return true
+        if (roles.length !== nextRoles.length) return true
+        if (roles.some((r, i) => r !== nextRoles[i])) return true
+    }
+    return false
+}
+
+/**
  * Apply loaded configuration
  */
 export function applyConfig(config: EfsStaticConfig) {
@@ -34,9 +118,6 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentMyAirports = staticConfig.myAirports
     const currentRole = staticConfig.myRole
     const currentOnlineControllers = staticConfig.onlineControllers
-    const currentDelOnline = staticConfig.delOnline
-    const currentGndOnline = staticConfig.gndOnline
-    const currentAppOnline = staticConfig.appOnline
     const currentActiveRunways = staticConfig.activeRunways
     const currentIsController = staticConfig.isController
     const currentMyFrequency = staticConfig.myFrequency
@@ -55,16 +136,14 @@ export function applyConfig(config: EfsStaticConfig) {
     // Restore runtime state
     if (currentCallsign) staticConfig.myCallsign = currentCallsign
     if (currentMyAirports.length > 0) staticConfig.myAirports = currentMyAirports
-
-    // Restore runtime state
     if (currentRole) staticConfig.myRole = currentRole
     if (currentOnlineControllers) staticConfig.onlineControllers = currentOnlineControllers
-    if (currentDelOnline !== undefined) staticConfig.delOnline = currentDelOnline
-    if (currentGndOnline !== undefined) staticConfig.gndOnline = currentGndOnline
-    if (currentAppOnline !== undefined) staticConfig.appOnline = currentAppOnline
     if (currentActiveRunways) staticConfig.activeRunways = currentActiveRunways
     if (currentIsController !== undefined) staticConfig.isController = currentIsController
     if (currentMyFrequency !== undefined) staticConfig.myFrequency = currentMyFrequency
+
+    // Recompute effective roles with restored runtime state
+    recomputeMyRolesByAirport()
 }
 
 /**
@@ -79,6 +158,7 @@ export function setMyCallsign(callsign: string) {
  */
 export function setMyAirports(airports: string[]) {
     staticConfig.myAirports = airports
+    recomputeMyRolesByAirport()
 }
 
 /**
@@ -125,66 +205,41 @@ export function parseControllerRole(callsign: string, myAirports: string[]): Con
 }
 
 /**
- * Set my controller role
+ * Set my controller role and recompute effective roles per airport.
  */
 export function setMyRole(role: ControllerRole) {
     staticConfig.myRole = role
-}
-
-/**
- * Recalculate delOnline/gndOnline flags from the online controllers map
- */
-function recalculateOnlineFlags() {
-    const controllers = staticConfig.onlineControllers
-    if (!controllers || controllers.size === 0) {
-        staticConfig.delOnline = false
-        staticConfig.gndOnline = false
-        staticConfig.appOnline = false
-        return
-    }
-    let del = false
-    let gnd = false
-    let app = false
-    for (const ctrl of controllers.values()) {
-        if (ctrl.role === 'DEL') del = true
-        if (ctrl.role === 'GND') gnd = true
-        if (ctrl.role === 'APP') app = true
-    }
-    staticConfig.delOnline = del
-    staticConfig.gndOnline = gnd
-    staticConfig.appOnline = app
+    recomputeMyRolesByAirport()
 }
 
 /**
  * Update or add an online controller at our airports.
- * Only tracks controllers whose callsign starts with one of our airports.
- * Returns true if delOnline/gndOnline changed (requiring strip regeneration).
+ * Tracks DEL/GND/TWR/APP controllers whose callsign starts with a configured airport,
+ * and CTR controllers universally (they cover all airports).
+ * Returns true if myRolesByAirport changed (requiring strip regeneration).
  */
 export function updateOnlineController(callsign: string, frequency: number, myAirports: string[]): boolean {
     const upper = callsign.toUpperCase()
+    const role = parseControllerRole(callsign, myAirports)
+
+    // Track if: callsign starts with one of our airports (DEL/GND/TWR/APP), OR is CTR
     const matchesAirport = myAirports.some(a => upper.startsWith(a))
-    if (!matchesAirport) return false
+    if (!matchesAirport && role !== 'CTR') return false
 
     if (!staticConfig.onlineControllers) {
         staticConfig.onlineControllers = new Map()
     }
 
-    const role = parseControllerRole(callsign, myAirports)
-    const prevDel = staticConfig.delOnline ?? false
-    const prevGnd = staticConfig.gndOnline ?? false
-    const prevApp = staticConfig.appOnline ?? false
-
+    const prevRoles = staticConfig.myRolesByAirport
     staticConfig.onlineControllers.set(callsign, { role, frequency, callsign })
-    recalculateOnlineFlags()
+    recomputeMyRolesByAirport()
 
-    return (staticConfig.delOnline ?? false) !== prevDel ||
-        (staticConfig.gndOnline ?? false) !== prevGnd ||
-        (staticConfig.appOnline ?? false) !== prevApp
+    return rolesChanged(prevRoles, staticConfig.myRolesByAirport)
 }
 
 /**
  * Remove an online controller.
- * Returns true if delOnline/gndOnline changed (requiring strip regeneration).
+ * Returns true if myRolesByAirport changed (requiring strip regeneration).
  */
 export function removeOnlineController(callsign: string): boolean {
     if (!staticConfig.onlineControllers) return false
@@ -192,15 +247,10 @@ export function removeOnlineController(callsign: string): boolean {
     const had = staticConfig.onlineControllers.delete(callsign)
     if (!had) return false
 
-    const prevDel = staticConfig.delOnline ?? false
-    const prevGnd = staticConfig.gndOnline ?? false
-    const prevApp = staticConfig.appOnline ?? false
+    const prevRoles = staticConfig.myRolesByAirport
+    recomputeMyRolesByAirport()
 
-    recalculateOnlineFlags()
-
-    return (staticConfig.delOnline ?? false) !== prevDel ||
-        (staticConfig.gndOnline ?? false) !== prevGnd ||
-        (staticConfig.appOnline ?? false) !== prevApp
+    return rolesChanged(prevRoles, staticConfig.myRolesByAirport)
 }
 
 /**
@@ -222,7 +272,5 @@ export function clearOnlineControllers() {
     if (staticConfig.onlineControllers) {
         staticConfig.onlineControllers.clear()
     }
-    staticConfig.delOnline = false
-    staticConfig.gndOnline = false
-    staticConfig.appOnline = false
+    recomputeMyRolesByAirport()
 }

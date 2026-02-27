@@ -328,7 +328,7 @@ actionRules:
     myRole: [GND]
     priority: 111
 
-  # TWR/APP/CTR: XFER to GND for on-ground arrivals/local when GND online
+  # TWR/APP/CTR: XFER to GND for on-ground arrivals/local when GND is separately online
   xfer_twr_to_gnd:
     action: XFER
     direction: either
@@ -336,7 +336,7 @@ actionRules:
     groundstates: ['', NSTS, ARR]
     airborne: false
     myRole: [TWR, APP, CTR]
-    gndOnline: true
+    notMyRole: [GND]
     priority: 110
 
   # === EXISTING RULES (with role conditions where needed) ===
@@ -392,14 +392,14 @@ actionRules:
     myRole: [TWR, APP, CTR]
     priority: 95
 
-  # CTR DEP missed approach: XFER to APP when APP is online (TWR top-down)
+  # CTR DEP missed approach: XFER to APP when APP is separately online (TWR top-down)
   xfer_missed_approach:
     action: XFER
     missedApproach: true
     controller: myself
     handoffInitiated: false
-    appOnline: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [APP]
     priority: 102
 
   # CTR DEP airborne: XFER (transfer to next controller) (TWR/APP/CTR top-down)
@@ -424,17 +424,6 @@ actionRules:
     myRole: [GND, TWR, APP, CTR]
     priority: 77
 
-  # On-ground arrivals/local (not airborne): TXI (taxi in) (TWR/APP/CTR top-down, when GND not online)
-  txi_arr_twr:
-    action: TXI
-    direction: either
-    controller: myself
-    groundstates: [ARR]
-    airborne: false
-    myRole: [TWR, APP, CTR]
-    gndOnline: false
-    priority: 76
-
   # PUSH&START departures/local with PUSH groundstate: TXO (taxi out) (GND/TWR/APP/CTR)
   txo_push:
     action: TXO
@@ -446,13 +435,13 @@ actionRules:
     priority: 75
 
   # PENDING DEP departures/local without clearance: CLNC (open clearance dialog)
-  # Suppressed when DEL is online (DEL handles clearances)
+  # Only shown when DEL is not separately online (I'm covering DEL duties)
   clnc_pending_dep:
     action: CLNC
     sectionId: pending_dep
     direction: either
     clearance: false
-    delOnline: false
+    myRole: [DEL]
     priority: 65
 
   # CLEARED departures/local: PUSH (approve startup/pushback) (GND/TWR/APP/CTR)
@@ -468,13 +457,13 @@ actionRules:
 
   # === CATCH-ALL ASSUME RULES ===
 
-  # Assume any untracked departure/local on the ground (suppressed when DEL online)
+  # Assume any departure/local tracked by someone else when I'm covering DEL duties
   assume_departure_ground:
     action: ASSUME
     direction: either
     controller: not_myself
     airborne: false
-    delOnline: false
+    myRole: [DEL]
     priority: 10
 
   # Assume any untracked arrival (GND/TWR/APP/CTR)

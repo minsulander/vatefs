@@ -32,14 +32,49 @@ type CommonRuleConditions = {
     onRunway?: boolean
     depRunway?: boolean
     myRole?: ControllerRole[]
-    delOnline?: boolean
-    gndOnline?: boolean
-    appOnline?: boolean
+    notMyRole?: ControllerRole[]
     missedApproach?: boolean
 }
 
 function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
     return [...rules].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+}
+
+/**
+ * Get the set of my effective roles for a flight's relevant airport(s).
+ * Union across all relevant airports so rules without a direction condition still work.
+ * Falls back to the callsign role when myRolesByAirport is not yet populated.
+ */
+function getEffectiveRolesForFlight(flight: Flight, config: EfsStaticConfig): Set<ControllerRole> {
+    const myAirports = config.myAirports
+    const originIsOurs = flight.origin !== undefined && myAirports.includes(flight.origin)
+    const destIsOurs = flight.destination !== undefined && myAirports.includes(flight.destination)
+
+    let relevantAirports: string[]
+    if (originIsOurs && destIsOurs) {
+        relevantAirports = [...new Set([flight.origin!, flight.destination!])]
+    } else if (originIsOurs) {
+        relevantAirports = [flight.origin!]
+    } else if (destIsOurs) {
+        relevantAirports = [flight.destination!]
+    } else {
+        // Cross/note/unknown — union of all airports
+        relevantAirports = myAirports
+    }
+
+    if (config.myRolesByAirport && relevantAirports.length > 0) {
+        const roles = new Set<ControllerRole>()
+        for (const airport of relevantAirports) {
+            const airportRoles = config.myRolesByAirport.get(airport)
+            if (airportRoles) {
+                for (const r of airportRoles) roles.add(r)
+            }
+        }
+        if (roles.size > 0) return roles
+    }
+
+    // Fallback: callsign role only
+    return new Set([config.myRole ?? 'TWR'])
 }
 
 /**
@@ -255,24 +290,20 @@ function evaluateCommonConditions(
         return false
     }
 
-    // myRole: if specified, config.myRole (default 'TWR') must be in the list
-    if (rule.myRole && !rule.myRole.includes(config.myRole ?? 'TWR')) {
-        return false
+    // myRole: my effective roles for this flight's airport must include at least one of these
+    if (rule.myRole) {
+        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        if (!rule.myRole.some(r => effectiveRoles.has(r))) {
+            return false
+        }
     }
 
-    // delOnline: if specified, must match config.delOnline (default false)
-    if (rule.delOnline !== undefined && (config.delOnline ?? false) !== rule.delOnline) {
-        return false
-    }
-
-    // gndOnline: if specified, must match config.gndOnline (default false)
-    if (rule.gndOnline !== undefined && (config.gndOnline ?? false) !== rule.gndOnline) {
-        return false
-    }
-
-    // appOnline: if specified, must match config.appOnline (default false)
-    if (rule.appOnline !== undefined && (config.appOnline ?? false) !== rule.appOnline) {
-        return false
+    // notMyRole: my effective roles must NOT include any of these
+    if (rule.notMyRole) {
+        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        if (rule.notMyRole.some(r => effectiveRoles.has(r))) {
+            return false
+        }
     }
 
     // missedApproach: if specified, must match flight.missedApproach (default false)
@@ -528,9 +559,12 @@ function evaluateMoveRule(
         return false
     }
 
-    // Check myRole condition
-    if (rule.myRole && !rule.myRole.includes(config.myRole ?? 'TWR')) {
-        return false
+    // Check myRole condition using effective roles
+    if (rule.myRole) {
+        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        if (!rule.myRole.some(r => effectiveRoles.has(r))) {
+            return false
+        }
     }
 
     return true

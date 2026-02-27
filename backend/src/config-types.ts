@@ -115,14 +115,16 @@ export interface SectionRule {
      */
     depRunway?: boolean
 
-    /** My role must be one of these for the rule to match */
+    /**
+     * My effective roles for this flight's relevant airport must include at least one of these.
+     * Effective roles reflect top-down coverage (e.g. TWR alone has [DEL, GND, TWR]).
+     */
     myRole?: ControllerRole[]
 
-    /** Whether a DEL controller is online at our airport */
-    delOnline?: boolean
-
-    /** Whether a GND controller is online at our airport */
-    gndOnline?: boolean
+    /**
+     * My effective roles must NOT include any of these.
+     */
+    notMyRole?: ControllerRole[]
 
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
@@ -180,17 +182,18 @@ export interface ActionRule {
     /** Whether the flight's assigned runway is an active departure runway */
     depRunway?: boolean
 
-    /** My role must be one of these for the rule to match */
+    /**
+     * My effective roles for this flight's relevant airport must include at least one of these.
+     * Effective roles reflect top-down coverage (e.g. TWR alone has [DEL, GND, TWR]).
+     */
     myRole?: ControllerRole[]
 
-    /** Whether a DEL controller is online at our airport */
-    delOnline?: boolean
-
-    /** Whether a GND controller is online at our airport */
-    gndOnline?: boolean
-
-    /** Whether an APP controller is online at our airport */
-    appOnline?: boolean
+    /**
+     * My effective roles must NOT include any of these.
+     * Use to require that a specific controller is separately online
+     * (e.g. notMyRole: [GND] = GND is online, I'm not covering GND duties).
+     */
+    notMyRole?: ControllerRole[]
 
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
@@ -241,17 +244,11 @@ export interface DeleteRule {
     /** Whether the flight's assigned runway is an active departure runway */
     depRunway?: boolean
 
-    /** My role must be one of these for the rule to match */
+    /** My effective roles must include at least one of these */
     myRole?: ControllerRole[]
 
-    /** Whether a DEL controller is online at our airport */
-    delOnline?: boolean
-
-    /** Whether a GND controller is online at our airport */
-    gndOnline?: boolean
-
-    /** Whether an APP controller is online at our airport */
-    appOnline?: boolean
+    /** My effective roles must NOT include any of these */
+    notMyRole?: ControllerRole[]
 }
 
 /**
@@ -343,18 +340,17 @@ export interface EfsStaticConfig {
     /** Active runways per airport, extracted from rwyconfig */
     activeRunways?: Record<string, { arr: string[]; dep: string[] }>
 
-    /** My controller role (DEL, GND, TWR) derived from callsign */
+    /** My controller role (DEL, GND, TWR, APP, CTR) derived from callsign */
     myRole?: ControllerRole
 
     /** Online controllers at our airports, keyed by callsign */
     onlineControllers?: Map<string, { role: ControllerRole; frequency: number; callsign: string }>
 
-    /** Whether a DEL controller is online at our airport */
-    delOnline?: boolean
-
-    /** Whether a GND controller is online at our airport */
-    gndOnline?: boolean
-
-    /** Whether an APP controller is online at our airport */
-    appOnline?: boolean
+    /**
+     * My effective roles per airport, computed from myRole + online controllers.
+     * E.g. if I'm TWR and GND is not online, effectiveRoles[ESGG] = [DEL, GND, TWR].
+     * If GND logs on, effectiveRoles[ESGG] = [TWR].
+     * Recomputed whenever online controllers or myRole changes.
+     */
+    myRolesByAirport?: Map<string, ControllerRole[]>
 }
