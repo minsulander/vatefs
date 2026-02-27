@@ -791,10 +791,16 @@ function tryAutoSendDcl(flight: import("./types.js").Flight): boolean {
 
     // Build template data (no remarks for auto-DCL)
     const templateData = buildDclTemplateData(flight, "")
-    const markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+    let markerClearance: string | undefined
+    let plainClearance: string | undefined
+    try {
+        markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+        plainClearance = fillDclTemplate(dclAirport, templateData)
+    } catch (err) {
+        console.error(`[DCL AUTO] Template error for ${flight.callsign}: ${err instanceof Error ? err.message : err}`)
+        return false
+    }
     if (!markerClearance) return false
-
-    const plainClearance = fillDclTemplate(dclAirport, templateData)
     const dclCallsign = getDclCallsign()
     const { time, date } = formatTimestamp()
     const seq = hoppieService.getNextSeq()
@@ -883,7 +889,12 @@ function handleDclRequest(from: string, packet: string) {
 
     // Build clearance preview
     const templateData = buildDclTemplateData(flight, "")
-    const preview = fillDclTemplate(airport!, templateData)
+    let preview: string | undefined
+    try {
+        preview = fillDclTemplate(airport!, templateData)
+    } catch (err) {
+        console.error(`[DCL] Template preview error: ${err instanceof Error ? err.message : err}`)
+    }
     if (preview) {
         flight.dclClearance = preview
     }
@@ -1357,9 +1368,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         // Update DCL clearance preview if there's an active DCL request
                         if (flight.dclStatus === "REQUEST" && flight.origin) {
                             const templateData = buildDclTemplateData(flight, "")
-                            const preview = fillDclTemplate(flight.origin, templateData)
-                            if (preview) {
-                                flight.dclClearance = preview
+                            try {
+                                const preview = fillDclTemplate(flight.origin, templateData)
+                                if (preview) {
+                                    flight.dclClearance = preview
+                                }
+                            } catch (err) {
+                                console.error(`[DCL] Template preview error: ${err instanceof Error ? err.message : err}`)
                             }
                         }
 
@@ -1484,14 +1499,19 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const templateData = buildDclTemplateData(flight, message.remarks)
 
             // Fill template with @ markers for CPDLC
-            const markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+            let markerClearance: string | undefined
+            let plainClearance: string | undefined
+            try {
+                markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
+                plainClearance = fillDclTemplate(dclAirport, templateData)
+            } catch (err) {
+                console.error(`[DCL] Template error for ${strip.callsign}: ${err instanceof Error ? err.message : err}`)
+                break
+            }
             if (!markerClearance) {
                 console.log(`[DCL] No template found for ${dclAirport}`)
                 break
             }
-
-            // Fill template with plain values for preview
-            const plainClearance = fillDclTemplate(dclAirport, templateData)
 
             // Send CPDLC
             if (hoppieService) {
@@ -2033,7 +2053,12 @@ udpIn.on("message", (msg, rinfo) => {
                     const flight = flightStore.getFlight(result.strip.callsign)
                     if (flight && flight.dclStatus === "REQUEST" && flight.origin) {
                         const templateData = buildDclTemplateData(flight, "")
-                        const preview = fillDclTemplate(flight.origin, templateData)
+                        let preview: string | undefined
+                        try {
+                            preview = fillDclTemplate(flight.origin, templateData)
+                        } catch (err) {
+                            console.error(`[DCL] Template preview error: ${err instanceof Error ? err.message : err}`)
+                        }
                         if (preview && preview !== flight.dclClearance) {
                             flight.dclClearance = preview
                             // Re-broadcast strip with updated preview

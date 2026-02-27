@@ -141,7 +141,7 @@
         </button>
         <button v-if="showGoaButton" class="action-button action-goa"
           @click.stop="onGoaClick" @touchend.stop="onGoaTouch">
-          <span class="action-text">GOA</span>
+          <span class="action-text">G/A</span>
         </button>
       </div>
       <div v-else class="strip-right strip-right-empty"></div>

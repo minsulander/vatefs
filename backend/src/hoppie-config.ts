@@ -106,6 +106,22 @@ export interface DclTemplateData {
 }
 
 /**
+ * Apply substitutions to a DCL template string and validate no tokens remain.
+ * Throws if any unrecognised <...> token is left after substitution.
+ */
+function applyDclSubstitutions(template: string, substitutions: [RegExp, string][]): string {
+    let result = template
+    for (const [pattern, replacement] of substitutions) {
+        result = result.replace(pattern, replacement)
+    }
+    const remaining = result.match(/<[^>]+>/i)
+    if (remaining) {
+        throw new Error(`Unknown DCL template token: ${remaining[0]}`)
+    }
+    return result
+}
+
+/**
  * Fill a DCL template with plain values (for dialog preview).
  * Replaces <ades>, <drwy>, etc. with actual values.
  */
@@ -113,20 +129,21 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
     const template = dclTemplates.get(airport)
     if (!template) return undefined
 
-    return template
-        .replace(/<CALLSIGN>/g, data.callsign)
-        .replace(/<CR\/LF>/g, "\n")
-        .replace(/<ades>/g, data.ades)
-        .replace(/<drwy>/g, data.drwy)
-        .replace(/<sid>/g, data.sid)
-        .replace(/<assr>/g, data.assr)
-        .replace(/<eobt>/g, data.eobt)
-        .replace(/<cfl>/g, data.cfl)
-        .replace(/<freq_own>/g, data.freq_own)
-        .replace(/<freq_next>/g, data.freq_next)
-        .replace(/<atis>/g, `ATIS ${data.atis}`)
-        .replace(/<qnh>/g, `QNH ${data.qnh}`)
-        .replace(/ ?<rmk>/g, data.rmk ? ` ${data.rmk}` : "")
+    return applyDclSubstitutions(template, [
+        [/<callsign>/gi, data.callsign],
+        [/<cr\/lf>/gi, "\n"],
+        [/<ades>/gi, data.ades],
+        [/<drwy>/gi, data.drwy],
+        [/<sid>/gi, data.sid],
+        [/<assr>/gi, data.assr],
+        [/<eobt>/gi, data.eobt],
+        [/<cfl>/gi, data.cfl],
+        [/<freq_own>/gi, data.freq_own],
+        [/<freq_next>/gi, data.freq_next],
+        [/<atis>/gi, `ATIS ${data.atis}`],
+        [/<qnh>/gi, `QNH ${data.qnh}`],
+        [/ ?<rmk>/gi, data.rmk ? ` ${data.rmk}` : ""],
+    ])
 }
 
 /**
@@ -137,18 +154,19 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
     const template = dclTemplates.get(airport)
     if (!template) return undefined
 
-    return template
-        .replace(/<CALLSIGN>/g, `@${data.callsign}@`)
-        .replace(/<CR\/LF>/g, "\n")
-        .replace(/<ades>/g, `@${data.ades}@`)
-        .replace(/<drwy>/g, `@${data.drwy}@`)
-        .replace(/<sid>/g, `@${data.sid}@`)
-        .replace(/<assr>/g, `@${data.assr}@`)
-        .replace(/<eobt>/g, `@${data.eobt}@`)
-        .replace(/<cfl>/g, `@${data.cfl}@`)
-        .replace(/<freq_own>/g, `@${data.freq_own}@`)
-        .replace(/<freq_next>/g, `@${data.freq_next}@`)
-        .replace(/<atis>/g, `ATIS @${data.atis}@`)
-        .replace(/<qnh>/g, `@QNH ${data.qnh}@`)
-        .replace(/ ?<rmk>/g, data.rmk ? ` @${data.rmk}@` : "")
+    return applyDclSubstitutions(template, [
+        [/<callsign>/gi, `@${data.callsign}@`],
+        [/<cr\/lf>/gi, "\n"],
+        [/<ades>/gi, `@${data.ades}@`],
+        [/<drwy>/gi, `@${data.drwy}@`],
+        [/<sid>/gi, `@${data.sid}@`],
+        [/<assr>/gi, `@${data.assr}@`],
+        [/<eobt>/gi, `@${data.eobt}@`],
+        [/<cfl>/gi, `@${data.cfl}@`],
+        [/<freq_own>/gi, `@${data.freq_own}@`],
+        [/<freq_next>/gi, `@${data.freq_next}@`],
+        [/<atis>/gi, `ATIS @${data.atis}@`],
+        [/<qnh>/gi, `@QNH ${data.qnh}@`],
+        [/ ?<rmk>/gi, data.rmk ? ` @${data.rmk}@` : ""],
+    ])
 }
