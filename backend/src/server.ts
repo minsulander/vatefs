@@ -36,7 +36,7 @@ import type {
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao } from "./airport-data.js"
@@ -327,7 +327,7 @@ function applyMoveStateAndBroadcast(callsign: string, _flight: import("./types.j
 type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
     | { type: "setGroundState"; callsign: string; state: string }
-    | { type: "transfer"; callsign: string }
+    | { type: "transfer"; callsign: string; targetCallsign?: string }
     | { type: "release"; callsign: string }
     | { type: "assume"; callsign: string }
     | { type: "toggleClearanceFlag"; callsign: string }
@@ -339,6 +339,28 @@ type OutboundPluginCommand =
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
+
+/**
+ * Determine the callsign of the controller to hand a flight off to.
+ * Based on my callsign role and the strip/flight context.
+ */
+function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): string | undefined {
+    const myRole = staticConfig.myRole ?? 'TWR'
+    switch (myRole) {
+        case 'DEL':
+            return getControllerCallsign('GND') ?? getControllerCallsign('TWR')
+        case 'GND':
+            return getControllerCallsign('TWR')
+        case 'TWR':
+            if (flight?.missedApproach) return getControllerCallsign('APP')
+            if (strip.stripType === 'arrival' || strip.stripType === 'local') return getControllerCallsign('GND')
+            return getControllerCallsign('APP')
+        case 'APP':
+            return getControllerCallsign('CTR')
+        default:
+            return undefined
+    }
+}
 
 function mapStripActionToPluginCommand(action: string, callsign: string): OutboundPluginCommand | null {
     switch (action) {
@@ -695,13 +717,16 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
     const freq = staticConfig.myFrequency
     const freqStr = freq ? freq.toFixed(3) : "---"
 
-    // Format CFL for template (e.g., "5000" -> "A050", or "FL060")
+    // Format CFL for DCL template
+    // At or below transition altitude (5000 ft): "5000 FT"
+    // Above transition altitude: "FL90"
+    const TRANSITION_ALTITUDE = 5000
     let cflStr = "---"
     if (flight.cfl && flight.cfl > 2) {
-        if (flight.cfl >= 10000) {
-            cflStr = `FL${Math.round(flight.cfl / 100)}`
+        if (flight.cfl <= TRANSITION_ALTITUDE) {
+            cflStr = `${flight.cfl} FT`
         } else {
-            cflStr = `A${String(Math.round(flight.cfl / 100)).padStart(3, "0")}`
+            cflStr = `FL${Math.round(flight.cfl / 100)}`
         }
     }
 
@@ -1205,8 +1230,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 // READY is a compound action: set DE-ICE groundstate + transfer
                 if (message.action === "READY") {
+                    const flight = flightStore.getFlight(strip.callsign)
+                    const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
-                    sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign }))
+                    sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                // XFER: initiate handoff to the appropriate next controller
+                } else if (message.action === "XFER") {
+                    const flight = flightStore.getFlight(strip.callsign)
+                    const targetCallsign = resolveXferTarget(strip, flight)
+                    sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
                 // PARK is a compound action: set PARK groundstate + release
                 } else if (message.action === "PARK") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "PARK" }))
@@ -1297,8 +1329,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         store.updateStripFromFlight(updatedStrip)
                         broadcastStrip(updatedStrip)
                     }
-                } else if (message.action === "toggleClearanceFlag") {
-                    // Non-mock: still need to broadcast DCL state clear
+                } else if (message.action === "toggleClearanceFlag" || message.action === "ASSUME") {
+                    // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
+                    if (message.action === "ASSUME" && flight) {
+                        flight.controller = staticConfig.myCallsign
+                        flight.handoffTargetController = ""
+                    }
                     const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                     if (updatedStrip) {
                         store.updateStripFromFlight(updatedStrip)
@@ -1701,6 +1737,22 @@ app.get("/api/flight/:callsign", (req, res) => {
 
 app.get("/api/config", (req, res) => {
     res.json(staticConfig)
+})
+
+app.get("/api/roles", (req, res) => {
+    const rolesByAirport = staticConfig.myRolesByAirport
+        ? Object.fromEntries(staticConfig.myRolesByAirport)
+        : null
+    const onlineControllers = staticConfig.onlineControllers
+        ? Object.fromEntries([...staticConfig.onlineControllers.values()].map(c => [c.callsign, { role: c.role, frequency: c.frequency }]))
+        : null
+    res.json({
+        myCallsign: staticConfig.myCallsign,
+        myRole: staticConfig.myRole,
+        myAirports: staticConfig.myAirports,
+        myRolesByAirport: rolesByAirport,
+        onlineControllers,
+    })
 })
 
 app.get("/api/strips", (req, res) => {

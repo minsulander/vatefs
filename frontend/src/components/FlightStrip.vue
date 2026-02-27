@@ -131,17 +131,13 @@
 
     <!-- Right section: Action button(s) (hidden in observer mode) -->
     <template v-if="store.isController">
-      <div v-if="(strip.actions && strip.actions.length > 0) || showGoaButton" class="strip-right"
+      <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
         :class="{ 'multi-action': effectiveActionCount > 1 }">
         <button v-for="action in strip.actions" :key="action" class="action-button"
           :class="actionButtonClass(action)"
           @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
-          <span class="action-text">{{ action }}</span>
+          <span class="action-text">{{ action === 'GOA' ? 'G/A' : action }}</span>
           <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
-        </button>
-        <button v-if="showGoaButton" class="action-button action-goa"
-          @click.stop="onGoaClick" @touchend.stop="onGoaTouch">
-          <span class="action-text">G/A</span>
         </button>
       </div>
       <div v-else class="strip-right strip-right-empty"></div>
@@ -180,8 +176,7 @@ const deleteDialogOpen = ref(false)
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
 const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
-const showGoaButton = computed(() => !isNote.value && !!props.strip.clearedToLand && !props.strip.missedApproach)
-const effectiveActionCount = computed(() => (props.strip.actions?.length ?? 0) + (showGoaButton.value ? 1 : 0))
+const effectiveActionCount = computed(() => props.strip.actions?.length ?? 0)
 const noteEditing = ref(false)
 const noteText = ref('')
 const noteInitialText = ref('')
@@ -275,6 +270,11 @@ function actionButtonClass(action: string): Record<string, boolean> {
   // ASSUME needs condensed text
   if (action === 'ASSUME') {
     classes['action-assume'] = true
+  }
+
+  // GOA gets its own colour
+  if (action === 'GOA') {
+    classes['action-goa'] = true
   }
 
   // DCL status coloring for CLNC button
@@ -639,14 +639,6 @@ function onActionTouch(event: TouchEvent, action: string) {
   store.sendStripAction(props.strip.id, action)
 }
 
-function onGoaClick() {
-  store.sendStripAction(props.strip.id, 'GOA')
-}
-
-function onGoaTouch(event: TouchEvent) {
-  event.preventDefault()
-  store.sendStripAction(props.strip.id, 'GOA')
-}
 
 function onResetSquawk() {
   store.sendStripAction(props.strip.id, 'resetSquawk')

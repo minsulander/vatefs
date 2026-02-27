@@ -188,14 +188,11 @@ export function setActiveRunways(runways: Record<string, { arr: string[]; dep: s
  * Also detects _APP and _CTR roles (excluding _R_APP and _R_CTR remote tower positions).
  * Everything else defaults to TWR.
  */
-export function parseControllerRole(callsign: string, myAirports: string[]): ControllerRole {
+export function parseControllerRole(callsign: string, _myAirports: string[]): ControllerRole {
     const upper = callsign.toUpperCase()
-    for (const airport of myAirports) {
-        if (upper.startsWith(airport)) {
-            if (upper.endsWith('_DEL')) return 'DEL'
-            if (upper.endsWith('_GND')) return 'GND'
-        }
-    }
+    // DEL and GND are always local positions in VATSIM — no airport prefix needed
+    if (upper.endsWith('_DEL')) return 'DEL'
+    if (upper.endsWith('_GND')) return 'GND'
     // R_APP and R_CTR are remote tower positions — treat as TWR
     if (!upper.endsWith('_R_APP') && !upper.endsWith('_R_CTR')) {
         if (upper.endsWith('_CTR')) return 'CTR'
@@ -220,6 +217,13 @@ export function setMyRole(role: ControllerRole) {
  */
 export function updateOnlineController(callsign: string, frequency: number, myAirports: string[]): boolean {
     const upper = callsign.toUpperCase()
+
+    // Skip ATIS stations — they are not real controllers
+    if (upper.endsWith('_ATIS')) return false
+
+    // Skip unprimed controllers (frequency 199.998 means not yet active online)
+    if (frequency === 199.998) return false
+
     const role = parseControllerRole(callsign, myAirports)
 
     // Track if: callsign starts with one of our airports (DEL/GND/TWR/APP), OR is CTR
@@ -261,6 +265,18 @@ export function getControllerFrequency(role: ControllerRole): number | undefined
     if (!staticConfig.onlineControllers) return undefined
     for (const ctrl of staticConfig.onlineControllers.values()) {
         if (ctrl.role === role) return ctrl.frequency
+    }
+    return undefined
+}
+
+/**
+ * Get the callsign of the first online controller with the given role.
+ * Returns the callsign or undefined if no such controller is online.
+ */
+export function getControllerCallsign(role: ControllerRole): string | undefined {
+    if (!staticConfig.onlineControllers) return undefined
+    for (const ctrl of staticConfig.onlineControllers.values()) {
+        if (ctrl.role === role) return ctrl.callsign
     }
     return undefined
 }

@@ -1284,6 +1284,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             if (handoffToMe) {
                                 fp.AcceptHandoff();
                                 DebugMessage("Accepted handoff for " + callsign);
+                                OnFlightPlanFlightPlanDataUpdate(fp);
                             } else if (untracked) {
                                 bool ok = fp.StartTracking();
                                 if (ok) {
@@ -1307,14 +1308,20 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     if (!callsign.empty()) {
                         auto fp = FlightPlanSelect(callsign.c_str());
                         if (fp.IsValid()) {
+                            // Prefer coordinated next controller; fall back to targetCallsign from backend
+                            std::string targetStr;
                             const char *nextCtr = fp.GetCoordinatedNextController();
-                            bool hasNext = nextCtr && nextCtr[0] != '\0';
-                            if (hasNext) {
-                                bool ok = fp.InitiateHandoff(nextCtr);
+                            if (nextCtr && nextCtr[0] != '\0') {
+                                targetStr = nextCtr;
+                            } else if (message.contains("targetCallsign")) {
+                                targetStr = message["targetCallsign"].get<std::string>();
+                            }
+                            if (!targetStr.empty()) {
+                                bool ok = fp.InitiateHandoff(targetStr.c_str());
                                 if (ok)
-                                    DebugMessage("Handoff initiated to " + std::string(nextCtr) + " for " + callsign);
+                                    DebugMessage("Handoff initiated to " + targetStr + " for " + callsign);
                                 else
-                                    DisplayMessage("Failed to initiate handoff for " + callsign);
+                                    DisplayMessage("Failed to initiate handoff to " + targetStr + " for " + callsign);
                             } else {
                                 bool ok = fp.EndTracking();
                                 if (ok)

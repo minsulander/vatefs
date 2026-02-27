@@ -233,7 +233,8 @@ sectionRules:
 actionRules:
   # === ROLE-SPECIFIC RULES (high priority overrides) ===
 
-  # DEL: READY for cleared departures/local (sets DE-ICE + transfer, instead of PUSH)
+  # DEL: READY for cleared departures/local (sets DE-ICE + transfer to GND, instead of PUSH)
+  # Only when GND is separately online — if DEL is also covering GND, use PUSH instead
   ready_del:
     action: READY
     direction: either
@@ -241,6 +242,7 @@ actionRules:
     clearance: true
     groundstates: ['', ONFREQ, STUP, NSTS]
     myRole: [DEL]
+    notMyRole: [GND]
     priority: 120
 
   # DEL: CLNC always available for pending departures/local

@@ -759,7 +759,7 @@ class FlightStore {
         const isUntracked = !flight.controller || flight.controller === ''
         const isHandoffToMe = flight.handoffTargetController === myCallsign
 
-        if (!clearedForTakeoff && !clearedToLand) {
+        if (!clearedForTakeoff) {
             if (isTrackedByMe && (stripType === 'departure' || stripType === 'local') && flight.groundstate === 'TAXI') {
                 // Special case: TAXI departures get LU+CTO (only for TWR)
                 const myRole = this.config.myRole ?? 'TWR'

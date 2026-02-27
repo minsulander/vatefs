@@ -131,7 +131,7 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
 
     return applyDclSubstitutions(template, [
         [/<callsign>/gi, data.callsign],
-        [/<cr\/lf>/gi, "\n"],
+        [/<cr\/lf>/gi, " "],
         [/<ades>/gi, data.ades],
         [/<drwy>/gi, data.drwy],
         [/<sid>/gi, data.sid],
@@ -156,7 +156,7 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
 
     return applyDclSubstitutions(template, [
         [/<callsign>/gi, `@${data.callsign}@`],
-        [/<cr\/lf>/gi, "\n"],
+        [/<cr\/lf>/gi, " "],
         [/<ades>/gi, `@${data.ades}@`],
         [/<drwy>/gi, `@${data.drwy}@`],
         [/<sid>/gi, `@${data.sid}@`],

@@ -4,6 +4,18 @@ Loaded 0 stands for 0 airports from C:\Users\Viktor\AppData\Roaming\EuroScope\EK
 Loaded 146 SIDs and 33 COPX entries from C:\Users\Viktor\AppData\Roaming\EuroScope\EKDK-EKDK-Copenhagen_20260222165723-260201-0002.ese
 
 
+- Action READY bara om jag inte har GND roll
+- Välja runway section utifrån om det är departure eller arrival. T.ex vid banbyte dep 19R -> 19L nattkonfig
+
+- DCL gick inte fram... såg korrekt ut
+/data2/2//WU/CLD 2105 270226 ESSA PDC 001 @BCS4VA@ CLRD TO @EDDP@ OFF @19L@ VIA @NOSLI6E@ ALT @A050@
+SQUAWK @1000@ NEXT FREQ @121.705@ ATIS @Q@
+@QNH 1008@
+MONITOR @121.705@ AND REPORT READY
+
+/data2/8//WU/CLD 1348 260226 ESSA PDC 003 @DLH24@ CLRD TO @EKCH@ OFF @19R@ VIA @PETEV2G@ ALT @5000 FT@ SQUAWK     @0277@ NEXT FREQ @118.505@ ATIS @X@ @QNH 1006@ MONITOR @118.505@ AND REPORT READY @INFORMATION N Q1006@
+
+-# XFER = free ???
 
 
 Att reda ut:
@@ -21,6 +33,8 @@ Att reda ut:
 - Highlight QNH när den ändras, kvittera med klick - borde vi hämta från metsensor istället kanske...
 
 - Auto PARK
+
+- Korrekt transition altitude (hårdkodat till 5000 ft nu i DCL template och clearance dialog)
 
 Arlanda-specifika saker:
 - Ramen på öst SID

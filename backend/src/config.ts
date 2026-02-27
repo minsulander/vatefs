@@ -35,6 +35,7 @@ export {
     updateOnlineController,
     removeOnlineController,
     getControllerFrequency,
+    getControllerCallsign,
     clearOnlineControllers
 } from "./static-config.js"
 

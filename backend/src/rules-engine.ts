@@ -425,13 +425,6 @@ export function determineActionForFlight(
     sectionId: string,
     config: EfsStaticConfig
 ): StripAction | undefined {
-    // Hardcoded ASSUME: always shown when nobody has the track, or when transferred to me
-    const uncontrolled = !flight.controller
-    const transferredToMe = !!config.myCallsign && flight.nextController === config.myCallsign
-    if (uncontrolled || transferredToMe) {
-        return 'ASSUME'
-    }
-
     const sortedRules = sortByPriorityDesc(config.actionRules)
 
     // Find first matching rule
@@ -441,7 +434,16 @@ export function determineActionForFlight(
         }
     }
 
-    // No action
+    // Fallback: ASSUME when nobody has the track or flight is transferred to me
+    const uncontrolled = !flight.controller
+    const transferredToMe = !!config.myCallsign && (
+        flight.nextController === config.myCallsign ||
+        flight.handoffTargetController === config.myCallsign
+    )
+    if (uncontrolled || transferredToMe) {
+        return 'ASSUME'
+    }
+
     return undefined
 }
 
