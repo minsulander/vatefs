@@ -225,6 +225,13 @@ class EfsStore {
                 return {}
             }
 
+            // Log which fields changed for non-trivial updates (helps trace misbehavior to code)
+            if (!isNew && !result.sectionChanged && !result.restored && stripChanged && existingStrip) {
+                const changed: string[] = STRIP_COMPARE_FIELDS.filter(f => existingStrip[f] !== result.strip[f])
+                if (!actionsEqual(existingStrip.actions, result.strip.actions)) changed.push('actions')
+                if (changed.length > 0) console.log(`Strip ${result.strip.callsign} fields: ${changed.join(', ')}`)
+            }
+
             // If section changed, we need to recompute positions in both old and new sections
             if (result.sectionChanged && result.previousSection) {
                 this.recomputePositions(

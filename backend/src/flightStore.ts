@@ -449,6 +449,12 @@ class FlightStore {
         const flight = this.getOrCreateFlight(callsign)
         const hadRequiredData = flightHasRequiredData(flight)
 
+        // Log significant state changes before applying them
+        if (message.controller !== undefined && message.controller !== flight.controller)
+            console.log(`[DATA] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller}`)
+        if (message.handoffTargetController !== undefined && message.handoffTargetController !== flight.handoffTargetController)
+            console.log(`[DATA] ${callsign} handoff: ${flight.handoffTargetController ?? '-'} -> ${message.handoffTargetController || '(cleared)'}`)
+
         // Update flight data
         if (message.origin !== undefined) flight.origin = message.origin
         if (message.destination !== undefined) flight.destination = message.destination
@@ -493,6 +499,18 @@ class FlightStore {
         const callsign = message.callsign
         const flight = this.getOrCreateFlight(callsign)
         const hadRequiredData = flightHasRequiredData(flight)
+
+        // Log significant state changes before applying them
+        if (message.controller !== undefined && message.controller !== flight.controller)
+            console.log(`[ASSIGN] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller}`)
+        if (message.groundstate !== undefined && message.groundstate !== flight.groundstate)
+            console.log(`[ASSIGN] ${callsign} groundstate: ${flight.groundstate ?? '-'} -> ${message.groundstate}`)
+        if (message.clearedToLand !== undefined && message.clearedToLand !== flight.clearedToLand)
+            console.log(`[ASSIGN] ${callsign} clearedToLand: ${message.clearedToLand}`)
+        if (message.scratch === 'MISAP_' && !flight.missedApproach)
+            console.log(`[ASSIGN] ${callsign} missedApproach`)
+        else if (message.scratch === '' && flight.missedApproach)
+            console.log(`[ASSIGN] ${callsign} missedApproach cleared`)
 
         // Update flight data
         if (message.controller !== undefined) flight.controller = message.controller
@@ -553,6 +571,7 @@ class FlightStore {
     private handleFlightPlanDisconnect(message: { callsign: string }): ProcessMessageResult {
         const callsign = message.callsign
         const flight = this.flights.get(callsign)
+        console.log(`[DISCONNECT] ${callsign}`)
 
         this.flights.delete(callsign)
         this.stripAssignments.delete(callsign)
@@ -569,11 +588,17 @@ class FlightStore {
      */
     private handleFlightStripPushed(message: FlightStripPushedMessage): ProcessMessageResult {
         const flight = this.flights.get(message.callsign)
-        if (!flight) return {}
+        if (!flight) {
+            console.log(`[PUSH] ${message.callsign} -> ${message.target ?? '(no target)'} (unknown flight, ignored)`)
+            return {}
+        }
 
         if (message.target !== undefined) {
+            console.log(`[PUSH] ${message.callsign} -> ${message.target} (from ${message.sender ?? '?'})`)
             flight.handoffTargetController = message.target
             flight.lastUpdate = Date.now()
+        } else {
+            console.log(`[PUSH] ${message.callsign} (from ${message.sender ?? '?'}, no target)`)
         }
 
         return { flight }

@@ -2082,7 +2082,7 @@ udpIn.on("message", (msg, rinfo) => {
                 } else if (result.sectionChanged) {
                     console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
                 } else {
-                    console.log(`Strip ${result.strip.callsign} updated`)
+                    console.log(`Strip ${result.strip.callsign} updated [${(data as { type: string }).type}]`)
                 }
 
                 // Broadcast shifted strips (from add-from-top) - only happens for new strips

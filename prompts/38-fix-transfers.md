@@ -9,3 +9,8 @@ The message is sent with "sender" and "target" controller callsigns, like this (
 
 That message needs to update the flight, setting the handoffTargetController appropriately. Hopefully that will fix all cases
 where users have reported "transfers aren't syncing"..
+
+...
+
+ I'm using the backend log for feedback from users and would like a bit more granularity.. e.g. "flightStripPushed" doesn't log anything, I          see a lot of "Strip SAS123 updated" but would like more traceability to the code. Look through backend logging in general and try to improve
+  where things are logged for a better chance to trace misbehavior to code.                                                                         
