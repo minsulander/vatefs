@@ -20,6 +20,7 @@ import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
+import { parseControllerRole } from "./static-config.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -34,6 +35,7 @@ type CommonRuleConditions = {
     arrRunway?: boolean
     myRole?: ControllerRole[]
     notMyRole?: ControllerRole[]
+    nextControllerRole?: ControllerRole[]
     missedApproach?: boolean
 }
 
@@ -349,6 +351,13 @@ function evaluateCommonConditions(
         }
     }
 
+    // nextControllerRole: flight.nextController callsign must resolve to one of these roles
+    if (rule.nextControllerRole) {
+        if (!flight.nextController) return false
+        const nextRole = parseControllerRole(flight.nextController, config.myAirports)
+        if (!rule.nextControllerRole.includes(nextRole)) return false
+    }
+
     // missedApproach: if specified, must match flight.missedApproach (default false)
     if (rule.missedApproach !== undefined && (flight.missedApproach ?? false) !== rule.missedApproach) {
         return false
@@ -479,10 +488,7 @@ export function determineActionForFlight(
 
     // Fallback: ASSUME when nobody has the track or flight is transferred to me
     const uncontrolled = !flight.controller
-    const transferredToMe = !!config.myCallsign && (
-        flight.nextController === config.myCallsign ||
-        flight.handoffTargetController === config.myCallsign
-    )
+    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
     if (uncontrolled || transferredToMe) {
         return 'ASSUME'
     }
@@ -584,8 +590,11 @@ function evaluateMoveRule(
     rule: MoveRule,
     config: EfsStaticConfig
 ): boolean {
-    // Check section conditions
-    if (rule.fromSectionId !== fromSectionId) {
+    // Check from-section conditions
+    if (rule.fromSectionId !== undefined && rule.fromSectionId !== fromSectionId) {
+        return false
+    }
+    if (rule.fromSectionIdContains !== undefined && !fromSectionId.includes(rule.fromSectionIdContains)) {
         return false
     }
     if (rule.toSectionId !== toSectionId) {

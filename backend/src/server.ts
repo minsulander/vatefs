@@ -1187,8 +1187,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             executeMoveCommand(moveAction.command, result.strip.callsign, flight)
                         }
 
-                        // Moving out of any RUNWAY section clears the cleared-to-land flag
-                        if (fromSectionId.includes('runway') && !message.targetSectionId.includes('runway') && flight.clearedToLand) {
+                        // Moving out of any RUNWAY section clears the cleared-to-land flag,
+                        // unless a move rule already sent setClearedToLand (avoid double UDP send)
+                        const clearedToLandHandledByRule = moveAction?.command.type === 'setClearedToLand'
+                        if (!clearedToLandHandledByRule && fromSectionId.includes('runway') && !message.targetSectionId.includes('runway') && flight.clearedToLand) {
                             console.log(`[MOVE] Clearing clearedToLand for ${result.strip.callsign} (left runway section)`)
                             sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign: result.strip.callsign }))
                             if (cliArgs.mock) {
@@ -1932,7 +1934,7 @@ udpIn.on("message", (msg, rinfo) => {
                     const rolesLog = staticConfig.myRolesByAirport
                         ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
                         : 'unknown'
-                    console.log(`Online controllers changed — effective roles: ${rolesLog}`)
+                    console.log(`Online controllers changed - effective roles: ${rolesLog}`)
                     regenerateAllStrips()
                 }
             }
@@ -1947,7 +1949,7 @@ udpIn.on("message", (msg, rinfo) => {
                 const rolesLog = staticConfig.myRolesByAirport
                     ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
                     : 'unknown'
-                console.log(`Controller disconnected: ${msg.callsign} — effective roles: ${rolesLog}`)
+                console.log(`Controller disconnected: ${msg.callsign} - effective roles: ${rolesLog}`)
                 regenerateAllStrips()
             }
             return

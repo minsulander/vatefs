@@ -179,7 +179,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         }
     }
     for (const rule of moveRules) {
-        if (!sectionToBay.has(rule.fromSectionId)) {
+        if (rule.fromSectionId && !sectionToBay.has(rule.fromSectionId)) {
             throw new Error(`Move rule "${rule.id}" references unknown fromSection "${rule.fromSectionId}"`)
         }
         if (!sectionToBay.has(rule.toSectionId)) {

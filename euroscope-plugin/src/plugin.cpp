@@ -426,6 +426,9 @@ void VatEFSPlugin::OnFlightPlanFlightStripPushed(EuroScopePlugIn::CFlightPlan Fl
     if (sTargetController && strlen(sTargetController) > 0 && strlen(sTargetController) < 20)
         SetJsonIfValidUtf8(message, "target", sTargetController);
     PostJson(message, "OnFlightPlanFlightStripPushed");
+    // The above message gets sent repeatedly from GND -> TWR... not sure when this is supposed to happen,
+    // but it isn't just on transfer...
+    OnFlightPlanFlightPlanDataUpdate(FlightPlan);
 }
 
 void VatEFSPlugin::OnControllerPositionUpdate(EuroScopePlugIn::CController Controller)

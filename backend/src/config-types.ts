@@ -206,6 +206,14 @@ export interface ActionRule {
      */
     notMyRole?: ControllerRole[]
 
+    /**
+     * The flight's next controller (from the plugin) must have one of these roles.
+     * Role is derived from callsign suffix (_DEL, _GND, _TWR, _APP, _CTR).
+     * Use to filter XFER actions based on who the next controller actually is
+     * (e.g. nextControllerRole: [GND] ensures XFER only shows when GND is next).
+     */
+    nextControllerRole?: ControllerRole[]
+
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
 }
@@ -287,8 +295,18 @@ export interface MoveRule {
 
     // === Conditions (all specified conditions must match) ===
 
-    /** Section the strip is moving FROM */
-    fromSectionId: string
+    /**
+     * Section the strip is moving FROM — exact match.
+     * Optional if fromSectionIdContains is used instead.
+     */
+    fromSectionId?: string
+
+    /**
+     * Matches when the from-section ID contains this substring.
+     * Useful for "any runway section" rules in common config (e.g. "runway" matches
+     * "runway", "arr_runway", "dep_runway", etc.)
+     */
+    fromSectionIdContains?: string
 
     /** Section the strip is moving TO */
     toSectionId: string

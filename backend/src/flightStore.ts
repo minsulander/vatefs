@@ -587,21 +587,26 @@ class FlightStore {
      * Sets handoffTargetController so transfers show up immediately without waiting for the next data update
      */
     private handleFlightStripPushed(message: FlightStripPushedMessage): ProcessMessageResult {
-        const flight = this.flights.get(message.callsign)
-        if (!flight) {
-            console.log(`[PUSH] ${message.callsign} -> ${message.target ?? '(no target)'} (unknown flight, ignored)`)
-            return {}
-        }
+        // This gets sent repeatedly from GND -> TWR... not sure when this is supposed to happen,
+        // but it isn't just on transfer... added a flight plan data update in the plugin instead.
+        // TODO maybe remove this dead code?
+        // const flight = this.flights.get(message.callsign)
+        // if (!flight) {
+        //     console.log(`[PUSH] ${message.callsign} -> ${message.target ?? '(no target)'} (unknown flight, ignored)`)
+        //     return {}
+        // }
 
-        if (message.target !== undefined) {
-            console.log(`[PUSH] ${message.callsign} -> ${message.target} (from ${message.sender ?? '?'})`)
-            flight.handoffTargetController = message.target
-            flight.lastUpdate = Date.now()
-        } else {
-            console.log(`[PUSH] ${message.callsign} (from ${message.sender ?? '?'}, no target)`)
-        }
-
-        return { flight }
+        // if (message.target !== undefined) {
+        //     console.log(`[PUSH] ${message.callsign} -> ${message.target} (from ${message.sender ?? '?'})`)
+        //     console.log(`  hmm controller ${flight.controller} handoff ${flight.handoffTargetController}`)
+        //     console.log(`  next ${flight.nextController} frequency ${flight.nextControllerFrequency}`)
+        //     // flight.handoffTargetController = message.target
+        //     // flight.lastUpdate = Date.now()
+        // } else {
+        //     console.log(`[PUSH] ${message.callsign} (from ${message.sender ?? '?'}, no target)`)
+        // }
+        // return { flight }
+        return {}
     }
 
     /**

@@ -240,38 +240,4 @@ moveRules:
 
   # === UNDO OPERATIONS ===
 
-  # ARR RUNWAY -> CTR ARR: Unset cleared to land
-  undo_arr_runway_to_ctr_arr:
-    fromSectionId: arr_runway
-    toSectionId: ctr_arr
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
-
-  # DEP RUNWAY -> CTR ARR: Unset cleared to land
-  undo_dep_runway_to_ctr_arr:
-    fromSectionId: dep_runway
-    toSectionId: ctr_arr
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
-
-  # ARR RUNWAY -> CTR DEP: Unset cleared to land (go-around)
-  arr_runway_to_ctr_dep_go_around:
-    fromSectionId: arr_runway
-    toSectionId: ctr_dep
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
-
-  # DEP RUNWAY -> CTR DEP: Unset cleared to land (go-around)
-  dep_runway_to_ctr_dep_go_around:
-    fromSectionId: dep_runway
-    toSectionId: ctr_dep
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
+  # *_runway -> CTR ARR/DEP: Unset cleared to land — now handled by common-rules.yml (runway_to_ctr_*_clear_ctl)

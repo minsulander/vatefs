@@ -249,6 +249,8 @@ actionRules:
     priority: 111
 
   # TWR/APP/CTR: XFER to GND for on-ground arrivals/local when GND is separately online
+  # nextControllerRole ensures we only show XFER when the plugin says the next controller
+  # is actually a GND position, not e.g. an en-route CTR that happens to be online.
   xfer_twr_to_gnd:
     action: XFER
     direction: either
@@ -257,6 +259,7 @@ actionRules:
     airborne: false
     myRole: [TWR, APP, CTR]
     notMyRole: [GND]
+    nextControllerRole: [GND]
     priority: 110
 
   # === EXISTING RULES (with role conditions where needed) ===
@@ -411,6 +414,26 @@ deleteRules:
     priority: 10
 
 moveRules:
+  # === RUNWAY EXIT — CLEAR CLEARED-TO-LAND ===
+  # These use fromSectionIdContains so they match any runway section ID
+  # (e.g. "runway", "arr_runway", "dep_runway") without needing per-config rules.
+
+  # Any runway section -> CTR ARR: Unset cleared to land (undo/go-around)
+  runway_to_ctr_arr_clear_ctl:
+    fromSectionIdContains: runway
+    toSectionId: ctr_arr
+    command:
+      type: setClearedToLand
+      value: false
+
+  # Any runway section -> CTR DEP: Unset cleared to land (go-around)
+  runway_to_ctr_dep_clear_ctl:
+    fromSectionIdContains: runway
+    toSectionId: ctr_dep
+    command:
+      type: setClearedToLand
+      value: false
+
   # === DEPARTURE/LOCAL FLOW ===
 
   # PENDING DEP -> CLEARED: Set clearance flag (DEL/TWR/APP/CTR)

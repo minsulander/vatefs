@@ -130,20 +130,4 @@ moveRules:
       type: setGroundstate
       value: TXIN
 
-  # RUNWAY -> CTR ARR: Unset cleared to land
-  undo_runway_to_ctr_arr:
-    fromSectionId: runway
-    toSectionId: ctr_arr
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
-
-  # RUNWAY -> CTR DEP: Unset cleared to land (go-around)
-  runway_to_ctr_dep_go_around:
-    fromSectionId: runway
-    toSectionId: ctr_dep
-    direction: either
-    command:
-      type: setClearedToLand
-      value: false
+  # Runway -> CTR ARR/DEP: Unset cleared to land — now handled by common-rules.yml (runway_to_ctr_*_clear_ctl)
