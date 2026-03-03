@@ -5,6 +5,7 @@ import type {
     FlightPlanDataUpdateMessage,
     ControllerAssignedDataUpdateMessage,
     RadarTargetPositionUpdateMessage,
+    FlightStripPushedMessage,
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
@@ -427,6 +428,8 @@ class FlightStore {
                 return this.handleRadarTargetPositionUpdate(message)
 
             case 'flightPlanFlightStripPushed':
+                return this.handleFlightStripPushed(message)
+
             case 'controllerPositionUpdate':
             case 'controllerDisconnect':
             case 'myselfUpdate':
@@ -558,6 +561,22 @@ class FlightStore {
             flight,
             deleteStripId: callsign
         }
+    }
+
+    /**
+     * Handle flightPlanFlightStripPushed message
+     * Sets handoffTargetController so transfers show up immediately without waiting for the next data update
+     */
+    private handleFlightStripPushed(message: FlightStripPushedMessage): ProcessMessageResult {
+        const flight = this.flights.get(message.callsign)
+        if (!flight) return {}
+
+        if (message.target !== undefined) {
+            flight.handoffTargetController = message.target
+            flight.lastUpdate = Date.now()
+        }
+
+        return { flight }
     }
 
     /**

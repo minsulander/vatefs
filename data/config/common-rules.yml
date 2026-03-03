@@ -23,15 +23,15 @@ sectionRules:
     direction: departure
     airborne: false
     clearance: true
-    groundstates: ['', NSTS, ONFREQ]  # Not yet pushing
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]  # Not yet pushing
     priority: 50
 
-  # PUSH&START: Departures with DE-ICE (=READY) or STUP or PUSH
+  # PUSH&START: Departures with STUP or PUSH
   push_start:
     sectionId: push_start
     direction: departure
     airborne: false
-    groundstates: [DE-ICE, STUP, PUSH]
+    groundstates: [STUP, PUSH]
     priority: 60
 
   # TAXI: Departures taxiing (after pushback, before lineup)
