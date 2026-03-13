@@ -1,9 +1,9 @@
 ## Feedback v9 260304 (Ensam på TWR med överliggande öppet)
 
 Första VFR-starten där jag fick skapa en APL, najs! POL5460.
-Startar direkt från Patria, drar från CLEARED (eller kanske PENDING DEP, minns ej) direkt till CTR DEP, när den lämnat CTR så klickar jag XFER, strippen stannade sedan kvar tills jag manuellt fick ta bort den. Om strip flyttas till CTR DEP manuellt så borde xTO sättas automagiskt tänker jag, för att aktivera FPL, verkar inte ha hänt här.
+# Startar direkt från Patria, drar från CLEARED (eller kanske PENDING DEP, minns ej) direkt till CTR DEP, när den lämnat CTR så klickar jag XFER, strippen stannade sedan kvar tills jag manuellt fick ta bort den. Om strip flyttas till CTR DEP manuellt så borde xTO sättas automagiskt tänker jag, för att aktivera FPL, verkar inte ha hänt här.
 
-Jag började med att råka fylla i ATYP med litet b (på B429), det borde den auto-capitalisea. Möjligtvis också visa verifiering.
+# Jag började med att råka fylla i ATYP med litet b (på B429), det borde den auto-capitalisea. Möjligtvis också visa verifiering.
 
 
 Efter banbyte 26/19L -> 26/19R så flyttas EWG7217 felaktigt till RWY26 vid start, borde stannat i 19R(/19L)-bayen:
@@ -82,8 +82,8 @@ SAS170 startar "gamla" banan 19R, när CTO klickas flyttas den först till RWY 2
 DLH1AC får ingen TXI-knapp, eller den dyker upp väldigt sent efter landning, drar honom masnuellt till TAXI-bayen, funkade bra.
 För EZY2EH fungerade det prima och TXI-knappen kom när den skulle tycker jag.
 
-ESOS ACC stängde och hade ATIS. När ATIS saknades så kom det med i DCL men med NA bakom  ATIS och QNH, det borde nog exkluderas helt då ist, eller bara ha QNH (fast från annan källa):
-`SAS434 CLRD TO ENGM OFF 01L VIA ARS6C ALT 5000 FT SQUAWK 3475 NEXT FREQ 118.505 ATIS NA QNH NA MONITOR 118.505 AND REPORT READY`
+# ESOS ACC stängde och hade ATIS. När ATIS saknades så kom det med i DCL men med NA bakom  ATIS och QNH, det borde nog exkluderas helt då ist, eller bara ha QNH (fast från annan källa):
+  `SAS434 CLRD TO ENGM OFF 01L VIA ARS6C ALT 5000 FT SQUAWK 3475 NEXT FREQ 118.505 ATIS NA QNH NA MONITOR 118.505 AND REPORT READY`
 
 
 ---

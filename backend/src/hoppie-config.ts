@@ -140,8 +140,8 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
         [/<cfl>/gi, data.cfl],
         [/<freq_own>/gi, data.freq_own],
         [/<freq_next>/gi, data.freq_next],
-        [/<atis>/gi, `ATIS ${data.atis}`],
-        [/<qnh>/gi, `QNH ${data.qnh}`],
+        [/ ?<atis>/gi, data.atis && data.atis !== "NA" ? ` ATIS ${data.atis}` : ""],
+        [/ ?<qnh>/gi, data.qnh && data.qnh !== "NA" ? ` QNH ${data.qnh}` : ""],
         [/ ?<rmk>/gi, data.rmk ? ` ${data.rmk}` : ""],
     ])
 }
@@ -165,8 +165,8 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
         [/<cfl>/gi, `@${data.cfl}@`],
         [/<freq_own>/gi, `@${data.freq_own}@`],
         [/<freq_next>/gi, `@${data.freq_next}@`],
-        [/<atis>/gi, `ATIS @${data.atis}@`],
-        [/<qnh>/gi, `@QNH ${data.qnh}@`],
+        [/ ?<atis>/gi, data.atis && data.atis !== "NA" ? ` ATIS @${data.atis}@` : ""],
+        [/ ?<qnh>/gi, data.qnh && data.qnh !== "NA" ? ` @QNH ${data.qnh}@` : ""],
         [/ ?<rmk>/gi, data.rmk ? ` @${data.rmk}@` : ""],
     ])
 }

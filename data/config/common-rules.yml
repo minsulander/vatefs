@@ -434,6 +434,13 @@ moveRules:
       type: setClearedToLand
       value: false
 
+  # Any section -> CTR DEP: Set groundstate to DEPA
+  move_to_ctr_dep_set_depa:
+    toSectionId: ctr_dep
+    command:
+      type: setGroundstate
+      value: DEPA
+
   # === DEPARTURE/LOCAL FLOW ===
 
   # PENDING DEP -> CLEARED: Set clearance flag (DEL/TWR/APP/CTR)

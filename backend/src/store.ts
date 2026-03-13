@@ -244,11 +244,11 @@ class EfsStore {
             this.strips.set(result.strip.id, result.strip)
 
             // Handle shifted strips and gaps (from add-from-top)
-            // Only shift when it's a NEW strip (not updates to existing strips)
+            // Shift when a strip enters a section: either new or moved from another section
             let shiftedStrips: FlightStrip[] | undefined
             let shiftedGaps: Gap[] | undefined
             let deletedGapKeys: string[] | undefined
-            if (isNew && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+            if ((isNew || result.sectionChanged) && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
                 shiftedStrips = []
                 for (const callsign of result.shiftedCallsigns) {
                     const regeneratedStrip = flightStore.regenerateStrip(callsign)

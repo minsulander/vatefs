@@ -37,6 +37,7 @@
             class="dialog-input"
             placeholder="e.g. C172"
             maxlength="10"
+            @input="aircraftType = aircraftType.toUpperCase()"
             @keydown.enter="onOk"
             @keydown.escape="onCancel"
           />
@@ -151,7 +152,7 @@ function onCallsignInput() {
         matchFound.value = true
         // Pre-fill aircraft type if available and not already entered
         if (flight.aircraftType && !aircraftType.value) {
-          aircraftType.value = flight.aircraftType
+          aircraftType.value = flight.aircraftType.toUpperCase()
         }
       } else {
         matchFound.value = false
