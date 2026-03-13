@@ -913,12 +913,12 @@ function onTransferClick(targetCallsign: string) {
 /* SID/Clearance section */
 .strip-sid {
   width: 70px;
-  min-width: 60px;
+  min-width: 55px;
   flex-shrink: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 2px 4px;
+  padding: 2px 2px;
   overflow: hidden;
 }
 
@@ -950,12 +950,12 @@ function onTransferClick(targetCallsign: string) {
 /* Airports section - important, try to keep visible */
 .strip-airports {
   width: 80px;
-  min-width: 45px;
+  min-width: 35px;
   flex-shrink: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 2px 4px;
+  padding: 2px 2px;
 }
 
 .airport {

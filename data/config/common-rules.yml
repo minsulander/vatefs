@@ -257,6 +257,7 @@ actionRules:
     controller: myself
     groundstates: ['', NSTS, ARR]
     airborne: false
+    handoffInitiated: false
     myRole: [TWR, APP, CTR]
     notMyRole: [GND]
     nextControllerRole: [GND]

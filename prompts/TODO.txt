@@ -1,4 +1,15 @@
+
+- GND+TWR med APP online (jag satt TWR)... GND->TWR nextController är APP... Manual transfer funkar inte. Release & Assume funkar... Ugh ES WTF.
+
+
 - Vid avvikande bana så hamnar ankomser i ankomstbane-bayen, men namnet på den avvikande banan borde appendas på strip bayens namn tänker jag(?)
+
+- Visa text/receive only
+
+- Kunna få fram context menu för NOTE strip på touch
+
+- Visa CTOT
+- Visa TSAT?
 
 Att reda ut:
 - Kan vi trigga stand auto re-assign? GRP/S/, GRP/M/ funkar ej... kanske får återskapa samma automatik.. och sätta med GRP/S/63
@@ -9,7 +20,7 @@ Att reda ut:
   - Funkar nästan... men atyp sätts inte från början. Men ".efs atyp" funkar... wtf.
 
 
-- Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
+-# Stripparna "hoppar" - efter automove till runway t.ex... hamnar längst ner, sen hoppar upp.. 
   Behöver beskrivas noggrannare när det händer och inte...
 
 - Highlight QNH när den ändras, kvittera med klick - borde vi hämta från metsensor istället kanske...

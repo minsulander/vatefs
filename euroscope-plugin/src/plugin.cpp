@@ -1314,10 +1314,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             // Prefer coordinated next controller; fall back to targetCallsign from backend
                             std::string targetStr;
                             const char *nextCtr = fp.GetCoordinatedNextController();
-                            if (nextCtr && nextCtr[0] != '\0') {
-                                targetStr = nextCtr;
-                            } else if (message.contains("targetCallsign")) {
+                            if (message.contains("targetCallsign")) {
                                 targetStr = message["targetCallsign"].get<std::string>();
+                            } else if (nextCtr && nextCtr[0] != '\0') {
+                                targetStr = nextCtr;
                             }
                             if (!targetStr.empty()) {
                                 bool ok = fp.InitiateHandoff(targetStr.c_str());

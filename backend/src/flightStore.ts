@@ -476,10 +476,15 @@ class FlightStore {
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         flight.lastUpdate = Date.now()
 
+        const deleteState = this.applyDeleteRules(callsign, flight)
+        if (deleteState.shortCircuit) {
+            return deleteState.shortCircuit
+        }
+
         // Check if we should create/update a strip
         const hasRequiredData = flightHasRequiredData(flight)
-        if (!hasRequiredData) {
-            return { flight }
+        if (!hasRequiredData || flight.deleted) {
+            return { flight, softDeleted: flight.deleted }
         }
 
         // Check if eligible for strip (position + airport + range).
@@ -489,7 +494,12 @@ class FlightStore {
             return { flight }
         }
 
-        return this.resolveStripResult(callsign, flight, !hadRequiredData || !this.stripAssignments.get(callsign))
+        return this.resolveStripResult(
+            callsign,
+            flight,
+            !hadRequiredData || !this.stripAssignments.get(callsign),
+            !deleteState.deleteResult.shouldDelete && deleteState.wasDeleted
+        )
     }
 
     /**
@@ -503,7 +513,8 @@ class FlightStore {
         // Log significant state changes before applying them
         if (message.controller !== undefined && message.controller !== flight.controller)
             console.log(`[ASSIGN] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller}`)
-        if (message.groundstate !== undefined && message.groundstate !== flight.groundstate)
+        if (message.groundstate !== undefined && message.groundstate !== flight.groundstate
+                && (message.groundstate !== '' || (flight.groundstate ?? '') !== ''))
             console.log(`[ASSIGN] ${callsign} groundstate: ${flight.groundstate ?? '-'} -> ${message.groundstate}`)
         if (message.clearedToLand !== undefined && message.clearedToLand !== flight.clearedToLand)
             console.log(`[ASSIGN] ${callsign} clearedToLand: ${message.clearedToLand}`)
