@@ -90,6 +90,6 @@ För EZY2EH fungerade det prima och TXI-knappen kom när den skulle tycker jag.
 
 Övriga förslag
 
-1. Lägg till Release (och ev. manual transfer) i vänsterklicks-menyn
+# 1. Lägg till Release (och ev. manual transfer) i vänsterklicks-menyn
 2. Ett förslag för hur man skulle kunna sätta REA ground status via EFS: dra strip längst ner (och/eller med gap?) i CLEARED bay.
 3. På flygplatser med två banor som inte har blandad bananvändning (baserat på invald bana i EuroScope, eller fördefinierad i någon JSON kanske), tänkter huvudsakligen ESMS, ESIB, ESCF, ESKN och såna. Där borde man väl ha en separat bay för varje bana istf en för arr och en för dep. Och att där bayen kan heta tex 17/35 resp 11/29 för att indikera att det är en annan logik. Hoppas du fattar vad jag menar

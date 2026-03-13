@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -29,6 +29,9 @@ export const useEfsStore = defineStore("efs", () => {
     // Configuration
     const availableConfigs = ref<ConfigInfo[]>([])
     const activeConfig = ref('')
+
+    // Online controllers (for manual transfer menu)
+    const controllers = ref<ControllerInfo[]>([])
 
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
@@ -106,6 +109,9 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'configList':
                         availableConfigs.value = message.configs
                         activeConfig.value = message.activeConfig
+                        break
+                    case 'controllers':
+                        controllers.value = message.controllers
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -596,6 +602,21 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function releaseStrip(stripId: string) {
+        sendMessage({
+            type: 'releaseStrip',
+            stripId
+        })
+    }
+
+    function manualTransfer(stripId: string, targetCallsign: string) {
+        sendMessage({
+            type: 'manualTransfer',
+            stripId,
+            targetCallsign
+        })
+    }
+
     function recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
         const sectionStrips = bottom
             ? getBottomStrips(bayId, sectionId)
@@ -654,6 +675,9 @@ export const useEfsStore = defineStore("efs", () => {
         connect,
         refresh,
         createStrip,
-        updateNote
+        updateNote,
+        controllers,
+        releaseStrip,
+        manualTransfer
     }
 })

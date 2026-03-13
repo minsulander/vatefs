@@ -78,6 +78,9 @@ export interface FlightStrip {
     // Special strip fields
     noteText?: string            // Text content for note strips
     hasMatchingFlight?: boolean  // Whether a matching flight was found (false = greyed-out callsign)
+
+    // Controller state
+    isAssumed?: boolean          // Whether the strip is assumed/tracked by me
 }
 
 export interface Section {

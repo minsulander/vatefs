@@ -20,8 +20,32 @@
       <v-list-item v-if="!isNote" @click="onFplClick">
         <v-list-item-title>Flightplan</v-list-item-title>
       </v-list-item>
+      <v-list-item v-if="strip.isAssumed && !isNote" @click="onReleaseClick">
+        <v-list-item-title>Release</v-list-item-title>
+      </v-list-item>
+      <template v-if="strip.isAssumed && !isNote && store.controllers.length > 0">
+        <v-list-item @click.stop="transferMenuOpen = true">
+          <v-list-item-title>
+            Transfer to...
+            <v-icon size="small" class="ml-1">mdi-chevron-right</v-icon>
+          </v-list-item-title>
+        </v-list-item>
+      </template>
       <v-list-item @click="onDeleteClick">
         <v-list-item-title>Delete</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
+  <!-- Transfer submenu -->
+  <v-menu v-model="transferMenuOpen" :target="menuPosition" location="end" offset="150" :close-on-content-click="true">
+    <v-list density="compact" class="strip-context-menu transfer-submenu">
+      <v-list-item
+        v-for="ctrl in store.controllers"
+        :key="ctrl.callsign"
+        @click="onTransferClick(ctrl.callsign)"
+      >
+        <v-list-item-title>{{ ctrl.callsign }} <span class="transfer-freq">{{ ctrl.frequency }}</span></v-list-item-title>
       </v-list-item>
     </v-list>
   </v-menu>
@@ -167,6 +191,7 @@ const isDragging = ref(false)
 // Context menu state
 const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
+const transferMenuOpen = ref(false)
 
 // Dialog state
 const clncDialogOpen = ref(false)
@@ -689,6 +714,17 @@ function onDeleteConfirm() {
   store.deleteStrip(props.strip.id)
   deleteDialogOpen.value = false
 }
+
+function onReleaseClick() {
+  menuOpen.value = false
+  store.releaseStrip(props.strip.id)
+}
+
+function onTransferClick(targetCallsign: string) {
+  menuOpen.value = false
+  transferMenuOpen.value = false
+  store.manualTransfer(props.strip.id, targetCallsign)
+}
 </script>
 
 <style scoped>
@@ -1161,6 +1197,18 @@ function onDeleteConfirm() {
 
 .strip-context-menu .v-list-item {
   min-height: 32px;
+}
+
+.transfer-submenu {
+  min-width: 150px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.transfer-freq {
+  color: #666;
+  font-size: 11px;
+  margin-left: 8px;
 }
 
 

@@ -27,6 +27,8 @@ export type {
     DclStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
+    ControllerInfo,
+    ControllersMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,
@@ -43,6 +45,8 @@ export type {
     SwitchConfigMessage,
     CreateStripMessage,
     UpdateNoteMessage,
+    ReleaseStripMessage,
+    ManualTransferMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

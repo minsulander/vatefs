@@ -940,7 +940,8 @@ class FlightStore {
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,
             isSlow,
-            highlightActions: highlightActions.length > 0 ? highlightActions : undefined
+            highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
+            isAssumed: isTrackedByMe || undefined
         }
     }
 

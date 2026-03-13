@@ -82,7 +82,17 @@ export interface ConfigListMessage {
     activeConfig: string  // file basename of the currently active config
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage
+export interface ControllerInfo {
+    callsign: string
+    frequency: string  // Formatted frequency e.g. "118.505"
+}
+
+export interface ControllersMessage {
+    type: 'controllers'
+    controllers: ControllerInfo[]
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage
 
 // Client -> Server messages
 
@@ -179,7 +189,18 @@ export interface UpdateNoteMessage {
     text: string
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage
+export interface ReleaseStripMessage {
+    type: 'releaseStrip'
+    stripId: string
+}
+
+export interface ManualTransferMessage {
+    type: 'manualTransfer'
+    stripId: string
+    targetCallsign: string
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | ReleaseStripMessage | ManualTransferMessage
 
 // Type guards for message parsing
 
@@ -191,7 +212,8 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
-           type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList'
+           type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
+           type === 'controllers'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -199,5 +221,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'releaseStrip' || type === 'manualTransfer'
 }

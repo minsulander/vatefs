@@ -29,6 +29,8 @@ import type {
     HoppieMessage,
     AtisUpdateMessage,
     ConfigListMessage,
+    ControllersMessage,
+    ControllerInfo,
     ServerMessage,
     ClientMessage,
     AirportAtisInfo,
@@ -583,6 +585,54 @@ function broadcastConfigList() {
         type: "configList",
         configs: availableConfigs.map(c => ({ file: c.file, name: c.name })),
         activeConfig: activeConfigFile,
+    }
+    broadcast(message)
+}
+
+// Build sorted controllers list for transfer menu
+function buildControllersList(): ControllerInfo[] {
+    const onlineControllers = staticConfig.onlineControllers
+    if (!onlineControllers) return []
+
+    const myAirports = staticConfig.myAirports
+    const myCallsign = staticConfig.myCallsign
+
+    // Collect controllers, excluding myself
+    const controllers: ControllerInfo[] = []
+    for (const ctrl of onlineControllers.values()) {
+        if (ctrl.callsign === myCallsign) continue
+        controllers.push({
+            callsign: ctrl.callsign,
+            frequency: ctrl.frequency.toFixed(3)
+        })
+    }
+
+    // Sort: my airports first, then alphabetically
+    controllers.sort((a, b) => {
+        const aMatchesAirport = myAirports.some(apt => a.callsign.toUpperCase().startsWith(apt))
+        const bMatchesAirport = myAirports.some(apt => b.callsign.toUpperCase().startsWith(apt))
+        if (aMatchesAirport && !bMatchesAirport) return -1
+        if (!aMatchesAirport && bMatchesAirport) return 1
+        return a.callsign.localeCompare(b.callsign)
+    })
+
+    return controllers
+}
+
+// Send controllers list to a single client
+function sendControllers(socket: WebSocket) {
+    const message: ControllersMessage = {
+        type: "controllers",
+        controllers: buildControllersList()
+    }
+    sendMessage(socket, message)
+}
+
+// Broadcast controllers list to all clients
+function broadcastControllers() {
+    const message: ControllersMessage = {
+        type: "controllers",
+        controllers: buildControllersList()
     }
     broadcast(message)
 }
@@ -1442,6 +1492,47 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "releaseStrip": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip) {
+                console.log(`[RELEASE] Strip ${message.stripId} not found`)
+                break
+            }
+
+            // Send release command to plugin
+            sendUdp(JSON.stringify({ type: "release", callsign: strip.callsign } satisfies OutboundPluginCommand))
+            console.log(`[RELEASE] Released ${strip.callsign}`)
+
+            // Clear controller field on flight
+            const flight = flightStore.getFlight(strip.callsign)
+            if (flight) {
+                flight.controller = undefined
+                const updatedStrip = flightStore.regenerateStrip(strip.callsign)
+                if (updatedStrip) {
+                    store.updateStripFromFlight(updatedStrip)
+                    broadcastStrip(updatedStrip)
+                }
+            }
+            break
+        }
+
+        case "manualTransfer": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip) {
+                console.log(`[TRANSFER] Strip ${message.stripId} not found`)
+                break
+            }
+
+            // Send transfer command to plugin with target callsign
+            sendUdp(JSON.stringify({
+                type: "transfer",
+                callsign: strip.callsign,
+                targetCallsign: message.targetCallsign
+            } satisfies OutboundPluginCommand))
+            console.log(`[TRANSFER] Transferred ${strip.callsign} to ${message.targetCallsign}`)
+            break
+        }
+
         case "dclAction": {
             if (message.action === "login") {
                 const logonCode = getLogonCode()
@@ -1709,6 +1800,7 @@ wsServer.on("connection", (socket) => {
     sendDclStatus(socket)
     sendAtisUpdate(socket)
     sendConfigList(socket)
+    sendControllers(socket)
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -1930,6 +2022,8 @@ udpIn.on("message", (msg, rinfo) => {
             const msg = data as ControllerPositionUpdateMessage
             if (!msg.me && msg.controller) {
                 const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports)
+                // Always broadcast controllers list when a controller connects (even if roles didn't change)
+                broadcastControllers()
                 if (changed) {
                     const rolesLog = staticConfig.myRolesByAirport
                         ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
@@ -1945,6 +2039,8 @@ udpIn.on("message", (msg, rinfo) => {
         if (data.type === "controllerDisconnect") {
             const msg = data as ControllerDisconnectMessage
             const changed = removeOnlineController(msg.callsign)
+            // Always broadcast controllers list when a controller disconnects
+            broadcastControllers()
             if (changed) {
                 const rolesLog = staticConfig.myRolesByAirport
                     ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
