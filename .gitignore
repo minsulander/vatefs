@@ -32,3 +32,4 @@ coverage
 *.zip
 /backend/public/fdp/*.*json
 /vatefs*.msi
+/notes
