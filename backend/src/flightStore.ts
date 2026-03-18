@@ -732,6 +732,10 @@ class FlightStore {
             if (assignment.bayId === bayId &&
                 assignment.sectionId === sectionId &&
                 !assignment.bottom) {  // Only shift top zone strips
+                // Skip deleted flights - they should not affect active strip positions
+                // and must not appear in shiftedCallsigns (would briefly un-delete them)
+                const flight = this.flights.get(callsign)
+                if (flight?.deleted) return
                 assignment.position += 1
                 shifted.push(callsign)
             }
@@ -1337,7 +1341,7 @@ class FlightStore {
      */
     regenerateStrip(callsign: string): FlightStrip | undefined {
         const flight = this.flights.get(callsign)
-        if (!flight || !flightHasRequiredData(flight)) {
+        if (!flight || !flightHasRequiredData(flight) || flight.deleted) {
             return undefined
         }
 
