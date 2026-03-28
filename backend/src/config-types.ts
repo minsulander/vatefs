@@ -345,6 +345,9 @@ export interface EfsStaticConfig {
     /** Radar range in nautical miles for strip filtering (default: 25) */
     radarRangeNm: number
 
+    /** Ground range in nautical miles - tighter range for ground-based rules (airborne=false) (default: 3) */
+    groundRangeNm: number
+
     /** Bay/section layout configuration */
     layout: EfsLayout
 

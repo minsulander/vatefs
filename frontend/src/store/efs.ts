@@ -602,6 +602,20 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function updateRemarks(stripId: string, text: string) {
+        // Optimistic update
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strips.value.set(stripId, { ...strip, remarks: text || undefined })
+        }
+
+        sendMessage({
+            type: 'updateRemarks',
+            stripId,
+            text
+        })
+    }
+
     function releaseStrip(stripId: string) {
         sendMessage({
             type: 'releaseStrip',
@@ -676,6 +690,7 @@ export const useEfsStore = defineStore("efs", () => {
         refresh,
         createStrip,
         updateNote,
+        updateRemarks,
         controllers,
         releaseStrip,
         manualTransfer

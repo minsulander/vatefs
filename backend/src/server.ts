@@ -40,7 +40,7 @@ import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
-import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage } from "./types.js"
+import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
@@ -280,7 +280,7 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
  * Execute a move rule command: send the appropriate UDP message to EuroScope
  * and apply the state change locally in mock mode.
  */
-function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight: import("./types.js").Flight) {
+function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight: Flight) {
     switch (command.type) {
         case "setGroundstate":
             sendUdp(JSON.stringify({ type: "setGroundState", callsign, state: command.value }))
@@ -320,7 +320,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
 /**
  * After a move command changes flight state in mock mode, regenerate and broadcast the strip.
  */
-function applyMoveStateAndBroadcast(callsign: string, _flight: import("./types.js").Flight) {
+function applyMoveStateAndBroadcast(callsign: string, _flight: Flight) {
     const updatedStrip = flightStore.regenerateStrip(callsign)
     if (updatedStrip) {
         store.updateStripFromFlight(updatedStrip)
@@ -343,6 +343,7 @@ type OutboundPluginCommand =
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
+    | { type: "setScratch"; callsign: string; value: string }
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -380,6 +381,18 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "setGroundState", callsign, state: "TAXI" }
         case "TXI":
             return { type: "setGroundState", callsign, state: "TXIN" }
+        case "FRQ":
+            return { type: "setGroundState", callsign, state: "ONFREQ" }
+        case "STUP":
+            return { type: "setGroundState", callsign, state: "STUP" }
+        case "DEICE":
+            return { type: "setGroundState", callsign, state: "DE-ICE" }
+        case "ARR":
+            return { type: "setGroundState", callsign, state: "ARR" }
+        case "PARK":
+            return { type: "setGroundState", callsign, state: "PARK" }
+        case "NOGS":
+            return { type: "setGroundState", callsign, state: "" }
         case "XFER":
             return { type: "transfer", callsign }
         case "ASSUME":
@@ -765,7 +778,7 @@ function formatTimestamp(): { time: string; date: string } {
 /**
  * Build DCL template data from a flight for template filling.
  */
-function buildDclTemplateData(flight: import("./types.js").Flight, remarks: string): DclTemplateData {
+function buildDclTemplateData(flight: Flight, remarks: string): DclTemplateData {
     const freq = staticConfig.myFrequency
     const freqStr = freq ? freq.toFixed(3) : "---"
 
@@ -817,7 +830,7 @@ function buildDclTemplateData(flight: import("./types.js").Flight, remarks: stri
  * Check whether a flight has all required fields for an automatic DCL send.
  * Returns true if SID is valid, CFL is set, and squawk is assigned.
  */
-function canAutoSendDcl(flight: import("./types.js").Flight): boolean {
+function canAutoSendDcl(flight: Flight): boolean {
     // SID must be assigned and look like a standard SID (letters/digits, no special chars like · or spaces)
     const sidValid = !!flight.sid && /^[A-Z0-9]+$/.test(flight.sid)
     const cflValid = !!flight.cfl && flight.cfl > 2
@@ -829,7 +842,7 @@ function canAutoSendDcl(flight: import("./types.js").Flight): boolean {
  * Attempt to automatically assign CFL and squawk for a flight (AUTO mode).
  * Replicates the same logic as the clearance dialog's applyDefaultCfl + applyDefaultSquawk.
  */
-function autoAssignCflAndSquawk(flight: import("./types.js").Flight) {
+function autoAssignCflAndSquawk(flight: Flight) {
     // Auto-assign CFL from SID altitude if not already set
     if (flight.sid && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
         const sidAlt = getSidAltitude(flight.origin, flight.sid)
@@ -859,7 +872,7 @@ function autoAssignCflAndSquawk(flight: import("./types.js").Flight) {
  *
  * Returns true if the clearance was sent automatically.
  */
-function tryAutoSendDcl(flight: import("./types.js").Flight): boolean {
+function tryAutoSendDcl(flight: Flight): boolean {
     if (!hoppieService || flight.dclStatus !== "REQUEST") return false
     if (!canAutoSendDcl(flight)) return false
 
@@ -1297,6 +1310,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "PARK") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "PARK" }))
                     sendUdp(JSON.stringify({ type: "release", callsign: strip.callsign }))
+                // CTL_GS: set ARR groundstate + set cleared-to-land (from ground state menu)
+                } else if (message.action === "CTL_GS") {
+                    sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
+                    sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
@@ -1375,6 +1392,26 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.groundstate = "DE-ICE"
                             flight.controller = ""
                             flight.handoffTargetController = ""
+                            break
+                        case "FRQ":
+                            flight.groundstate = "ONFREQ"
+                            break
+                        case "STUP":
+                            flight.groundstate = "STUP"
+                            break
+                        case "DEICE":
+                            flight.groundstate = "DE-ICE"
+                            break
+                        case "ARR":
+                            flight.groundstate = "ARR"
+                            break
+                        case "CTL_GS":
+                            flight.groundstate = "ARR"
+                            flight.clearedToLand = true
+                            flight.missedApproach = false
+                            break
+                        case "NOGS":
+                            flight.groundstate = ""
                             break
                     }
 
@@ -1768,6 +1805,28 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             }
                         }
                     }
+                }
+            }
+            break
+        }
+
+        case "updateRemarks": {
+            const remarkStrip = store.getStrip(message.stripId)
+            if (remarkStrip) {
+                const flight = flightStore.getFlight(remarkStrip.callsign)
+                if (flight) {
+                    const text = message.text.trim()
+                    flight.remarks = text || undefined
+                    // Set scratchpad in plugin: prepend "." for remarks, or clear if empty
+                    const scratchValue = text ? `.${text}` : ''
+                    sendUdp(JSON.stringify({ type: "setScratch", callsign: remarkStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
+                    // Regenerate and broadcast strip
+                    const updatedStrip = flightStore.regenerateStrip(remarkStrip.callsign)
+                    if (updatedStrip) {
+                        store.updateStripFromFlight(updatedStrip)
+                        broadcastStrip(updatedStrip)
+                    }
+                    console.log(`[REMARKS] ${remarkStrip.callsign}: "${text}"`)
                 }
             }
             break

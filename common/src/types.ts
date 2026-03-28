@@ -81,6 +81,7 @@ export interface FlightStrip {
 
     // Controller state
     isAssumed?: boolean          // Whether the strip is assumed/tracked by me
+    groundstate?: string         // Current ground state (NSTS, STUP, PUSH, TAXI, etc.)
 }
 
 export interface Section {

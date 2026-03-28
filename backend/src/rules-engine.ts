@@ -374,6 +374,14 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         return false
     }
 
+    // Ground-based rules (airborne: false) use a tighter range check
+    // to avoid matching flights at nearby airports
+    if (rule.airborne === false && flight.latitude !== undefined && flight.longitude !== undefined) {
+        if (!isWithinRangeOfAnyAirport(flight.latitude, flight.longitude, config.myAirports, config.groundRangeNm, getAirportCoords)) {
+            return false
+        }
+    }
+
     // Check maxAltitudeAboveField condition
     if (rule.maxAltitudeAboveField !== undefined) {
         const currentAltitude = flight.currentAltitude

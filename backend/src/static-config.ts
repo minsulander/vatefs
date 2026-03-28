@@ -44,6 +44,7 @@ export function computeEffectiveRolesForAirport(
 const defaultConfig: EfsStaticConfig = {
     myAirports: [],
     radarRangeNm: 25,
+    groundRangeNm: 3,
     layout: { bays: [] },
     sectionToBay: new Map(),
     sectionRules: [],
@@ -125,6 +126,7 @@ export function applyConfig(config: EfsStaticConfig) {
     // Replace all config properties
     staticConfig.myAirports = config.myAirports
     staticConfig.radarRangeNm = config.radarRangeNm
+    staticConfig.groundRangeNm = config.groundRangeNm
     staticConfig.layout = config.layout
     staticConfig.sectionToBay = config.sectionToBay
     staticConfig.sectionRules = config.sectionRules

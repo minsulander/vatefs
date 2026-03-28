@@ -86,7 +86,8 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "dclMessage",
     "dclClearance",
     "noteText",
-    "hasMatchingFlight"
+    "hasMatchingFlight",
+    "groundstate"
 ]
 
 /**

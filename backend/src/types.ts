@@ -58,6 +58,9 @@ export interface Flight {
     dclSentAt?: number            // Timestamp when clearance was sent (for timeout)
     dclRequestedAt?: number       // Timestamp when DCL request was received (for request timeout)
 
+    // Controller remarks (from scratchpad values starting with ".")
+    remarks?: string
+
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
     missedApproach?: boolean  // Aircraft on missed approach (scratchpad MISAP_)

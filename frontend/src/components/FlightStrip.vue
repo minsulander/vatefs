@@ -31,8 +31,31 @@
           </v-list-item-title>
         </v-list-item>
       </template>
+      <v-list-item v-if="!isNote && store.isController" @click.stop="groundStateMenuOpen = true">
+        <v-list-item-title>
+          State: {{ groundStateLabel }}
+          <v-icon size="small" class="ml-1">mdi-chevron-right</v-icon>
+        </v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="!isNote && store.isController" @click="onRemarksMenuClick">
+        <v-list-item-title>Remarks</v-list-item-title>
+      </v-list-item>
       <v-list-item @click="onDeleteClick">
         <v-list-item-title>Delete</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
+  <!-- Ground state submenu -->
+  <v-menu v-model="groundStateMenuOpen" :target="menuPosition" location="end" offset="150" :close-on-content-click="true">
+    <v-list density="compact" class="strip-context-menu groundstate-submenu">
+      <v-list-item
+        v-for="gs in groundStateOptions"
+        :key="gs.action"
+        :class="{ 'v-list-item--active': gs.groundstate === (strip.groundstate ?? '') && !gs.extra }"
+        @click="onGroundStateClick(gs.action)"
+      >
+        <v-list-item-title><span class="gs-code">{{ gs.code }}</span> {{ gs.label }}</v-list-item-title>
       </v-list-item>
     </v-list>
   </v-menu>
@@ -97,6 +120,21 @@
 
     <!-- Middle section (truncatable) -->
     <div class="strip-middle">
+      <!-- Remarks row (above other fields, spans full width) -->
+      <div v-if="remarksEditing || strip.remarks" class="remarks-row" @click.stop>
+        <input
+          v-if="remarksEditing"
+          ref="remarksInput"
+          v-model="remarksText"
+          class="remarks-input"
+          placeholder="Remarks..."
+          @input="onRemarksInput"
+          @blur="onRemarksBlur"
+          @keydown.enter="onRemarksBlur"
+          @keydown.escape="onRemarksCancel"
+        />
+        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ strip.remarks }}</span>
+      </div>
       <div class="strip-middle-content">
         <!-- Time section / clearance triangle -->
         <div class="strip-section strip-time">
@@ -192,6 +230,29 @@ const isDragging = ref(false)
 const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
 const transferMenuOpen = ref(false)
+const groundStateMenuOpen = ref(false)
+
+// Ground state options: code (shown in menu), label, action (sent to backend), groundstate (for highlighting current)
+const groundStateOptions = [
+  { code: 'FRQ', label: 'On Freq', action: 'FRQ', groundstate: 'ONFREQ' },
+  { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },
+  { code: 'REA', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
+  { code: 'S/P', label: 'Push', action: 'PUSH', groundstate: 'PUSH' },
+  { code: 'TXO', label: 'Taxi Out', action: 'TXO', groundstate: 'TAXI' },
+  { code: 'L/U', label: 'Lineup', action: 'LU', groundstate: 'LINEUP' },
+  { code: 'CTO', label: 'Takeoff', action: 'CTO', groundstate: 'DEPA' },
+  { code: 'ARR', label: 'Arrived', action: 'ARR', groundstate: 'ARR' },
+  { code: 'CTL', label: 'Cleared to Land', action: 'CTL_GS', groundstate: 'ARR', extra: true },
+  { code: 'TXI', label: 'Taxi In', action: 'TXI', groundstate: 'TXIN' },
+  { code: 'PRK', label: 'Parked', action: 'PARK', groundstate: 'PARK' },
+  { code: '---', label: 'No State', action: 'NOGS', groundstate: '' },
+]
+
+const groundStateLabel = computed(() => {
+  const gs = props.strip.groundstate ?? ''
+  const match = groundStateOptions.find(o => o.groundstate === gs && !o.extra)
+  return match ? match.code : gs || '---'
+})
 
 // Dialog state
 const clncDialogOpen = ref(false)
@@ -207,6 +268,13 @@ const noteText = ref('')
 const noteInitialText = ref('')
 const noteDirty = ref(false)
 const noteInput = ref<HTMLInputElement | null>(null)
+
+// Remarks state
+const remarksEditing = ref(false)
+const remarksText = ref('')
+const remarksInitialText = ref('')
+const remarksDirty = ref(false)
+const remarksInput = ref<HTMLInputElement | null>(null)
 
 function onNoteClick() {
   // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
@@ -258,6 +326,49 @@ onMounted(() => {
     onNoteClick()
   }
 })
+
+// Remarks handlers
+function startRemarksEditing() {
+  remarksText.value = props.strip.remarks ?? ''
+  remarksInitialText.value = remarksText.value
+  remarksDirty.value = false
+  remarksEditing.value = true
+  nextTick(() => {
+    remarksInput.value?.focus()
+  })
+}
+
+function onRemarksClick() {
+  if (remarksEditing.value) {
+    nextTick(() => remarksInput.value?.focus())
+    return
+  }
+  startRemarksEditing()
+}
+
+function onRemarksMenuClick() {
+  menuOpen.value = false
+  startRemarksEditing()
+}
+
+function onRemarksInput() {
+  remarksText.value = remarksText.value.toUpperCase()
+  remarksDirty.value = true
+}
+
+function onRemarksBlur() {
+  remarksEditing.value = false
+  if (!remarksDirty.value) return
+  const text = remarksText.value.trim()
+  if (text !== remarksInitialText.value) {
+    store.updateRemarks(props.strip.id, text)
+  }
+}
+
+function onRemarksCancel() {
+  remarksDirty.value = false
+  remarksEditing.value = false
+}
 
 // Touch drag state
 let touchStarted = false
@@ -725,6 +836,12 @@ function onTransferClick(targetCallsign: string) {
   transferMenuOpen.value = false
   store.manualTransfer(props.strip.id, targetCallsign)
 }
+
+function onGroundStateClick(action: string) {
+  menuOpen.value = false
+  groundStateMenuOpen.value = false
+  store.sendStripAction(props.strip.id, action)
+}
 </script>
 
 <style scoped>
@@ -864,13 +981,59 @@ function onTransferClick(targetCallsign: string) {
   overflow: hidden;
   background: #f5f2ea;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   /* Allow shrinking below content size */
+}
+
+/* Remarks row - sits above the strip content fields */
+.remarks-row {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  min-height: 14px;
+  border-bottom: 1px solid #ddd;
+}
+
+.remarks-display {
+  font-style: italic;
+  font-size: 10px;
+  color: #2244aa;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 14px;
+}
+
+.remarks-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  font-style: italic;
+  font-size: 10px;
+  color: #2244aa;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  outline: none;
+  padding: 0 2px;
+  line-height: 14px;
+}
+
+.remarks-input::placeholder {
+  color: #999;
+  font-style: italic;
+  text-transform: none;
 }
 
 .strip-middle-content {
   display: flex;
   align-items: stretch;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Vertical dividers */
@@ -1209,6 +1372,19 @@ function onTransferClick(targetCallsign: string) {
   color: #666;
   font-size: 11px;
   margin-left: 8px;
+}
+
+.groundstate-submenu {
+  min-width: 160px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.gs-code {
+  display: inline-block;
+  width: 28px;
+  font-weight: bold;
+  font-size: 11px;
 }
 
 

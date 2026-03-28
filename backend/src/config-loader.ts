@@ -29,6 +29,7 @@ interface YamlConfig {
     name?: string
     include?: string[]
     radarRange?: number
+    groundRange?: number
     layout?: {
         bays: Record<string, {
             sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
@@ -191,6 +192,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     const config: EfsStaticConfig = {
         myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
+        groundRangeNm: yamlConfig.groundRange ?? 3,
         layout,
         sectionToBay,
         sectionRules,
@@ -200,7 +202,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     }
 
     console.log(`Loaded config from ${configPath}:`)
-    console.log(`  Radar range: ${config.radarRangeNm}nm`)
+    console.log(`  Radar range: ${config.radarRangeNm}nm, ground range: ${config.groundRangeNm}nm`)
     console.log(`  Bays: ${config.layout.bays.length}`)
     console.log(`  Sections: ${sectionToBay.size}`)
     console.log(`  Section rules: ${config.sectionRules.length}`)

@@ -539,6 +539,11 @@ class FlightStore {
         } else if (message.scratch === '') {
             flight.missedApproach = false
         }
+        // Process scratchpad-based remarks:
+        // Scratch values starting with "." are user remarks (e.g. ".SLOW" -> "SLOW")
+        if (message.scratch !== undefined && message.scratch.startsWith('.')) {
+            flight.remarks = message.scratch.substring(1)
+        }
         if (message.stand !== undefined) flight.stand = message.stand
         if (message.asp !== undefined) flight.asp = message.asp
         if (message.mach !== undefined) flight.mach = message.mach
@@ -656,12 +661,13 @@ class FlightStore {
         const wasAirborne = flight.airborne ?? false
         const fieldElevation = getFieldElevationForFlight(flight, this.config)
         const airborneThreshold = fieldElevation + 200
+        const defNotAirborneThreshold = fieldElevation + 30
         const groundSpeedThreshold = 55
 
         // Set airborne flag for both departures and arrivals
         if (!wasAirborne && message.altitude > airborneThreshold) {
             flight.airborne = true
-        } else if (wasAirborne && message.altitude <= airborneThreshold && message.groundSpeed <= groundSpeedThreshold) {
+        } else if (wasAirborne && message.altitude <= airborneThreshold && (message.groundSpeed <= groundSpeedThreshold || message.altitude <= defNotAirborneThreshold)) {
             // Aircraft has landed
             flight.airborne = false
         }
@@ -954,9 +960,11 @@ class FlightStore {
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,
+            remarks: flight.remarks || undefined,
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
-            isAssumed: isTrackedByMe || undefined
+            isAssumed: isTrackedByMe || undefined,
+            groundstate: flight.groundstate || undefined
         }
     }
 
