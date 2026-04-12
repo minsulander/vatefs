@@ -335,9 +335,9 @@ function reevaluateAndBroadcast(callsign: string) {
     }
 
     store.updateStripFromFlight(result.strip)
-    broadcastStrip(result.strip)
 
-    // Handle shifted strips (from add-from-top)
+    // Broadcast shifted strips BEFORE the auto-moved strip so positions are settled
+    // by the time the frontend mounts the moved strip and measures its target position
     if (result.sectionChanged && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
         for (const shifted of result.shiftedCallsigns) {
             const shiftedStrip = flightStore.regenerateStrip(shifted)
@@ -347,6 +347,8 @@ function reevaluateAndBroadcast(callsign: string) {
             }
         }
     }
+
+    broadcastStrip(result.strip, result.sectionChanged ? { autoMoved: true } : undefined)
 }
 
 type OutboundPluginCommand =
@@ -476,9 +478,10 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
 }
 
 // Broadcast a strip update
-function broadcastStrip(strip: FlightStrip, exclude?: WebSocket) {
+function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; autoMoved?: boolean }) {
     const message: StripMessage = { type: "strip", strip }
-    broadcast(message, exclude)
+    if (options?.autoMoved) message.autoMoved = true
+    broadcast(message, options?.exclude)
 }
 
 // Broadcast a strip delete
@@ -1240,7 +1243,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             )
             if (result) {
                 // Broadcast the moved strip
-                broadcastStrip(result.strip, socket)
+                broadcastStrip(result.strip, { exclude: socket })
 
                 // Broadcast affected gaps
                 result.affectedGaps.forEach((gap) => {
@@ -2242,28 +2245,17 @@ udpIn.on("message", (msg, rinfo) => {
                     console.log(`Strip ${result.deleteStripId} disconnected`)
                 }
             } else if (result.strip) {
-                broadcastStrip(result.strip)
+                // Auto-move: section changed on an existing strip that wasn't just restored
+                const autoMoved = result.sectionChanged && !result.isNew && !result.restored
 
-                // Log based on what kind of change occurred
-                if (result.restored) {
-                    console.log(`Strip ${result.strip.callsign} restored -> ${result.strip.sectionId}`)
-                } else if (result.isNew) {
-                    console.log(`Strip ${result.strip.callsign} created -> ${result.strip.sectionId}`)
-                } else if (result.sectionChanged) {
-                    console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
-                } else {
-                    console.log(`Strip ${result.strip.callsign} updated [${(data as { type: string }).type}]`)
-                }
-
-                // Broadcast shifted strips (from add-from-top) - only happens for new strips
+                // Broadcast shifted strips and gaps BEFORE the main strip so positions
+                // are settled by the time the frontend mounts the moved strip
                 if (result.shiftedStrips && result.shiftedStrips.length > 0) {
                     for (const shiftedStrip of result.shiftedStrips) {
                         broadcastStrip(shiftedStrip)
                     }
                     console.log(`  Shifted ${result.shiftedStrips.length} strips in ${result.strip.sectionId}`)
                 }
-
-                // Broadcast gap deletes first, then shifted gaps (from add-from-top)
                 if (result.deletedGapKeys && result.deletedGapKeys.length > 0) {
                     for (const key of result.deletedGapKeys) {
                         const parsed = parseGapKey(key)
@@ -2276,6 +2268,19 @@ udpIn.on("message", (msg, rinfo) => {
                     for (const shiftedGap of result.shiftedGaps) {
                         broadcastGap(shiftedGap)
                     }
+                }
+
+                broadcastStrip(result.strip, autoMoved ? { autoMoved: true } : undefined)
+
+                // Log based on what kind of change occurred
+                if (result.restored) {
+                    console.log(`Strip ${result.strip.callsign} restored -> ${result.strip.sectionId}`)
+                } else if (result.isNew) {
+                    console.log(`Strip ${result.strip.callsign} created -> ${result.strip.sectionId}`)
+                } else if (result.sectionChanged) {
+                    console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
+                } else {
+                    console.log(`Strip ${result.strip.callsign} updated [${(data as { type: string }).type}]`)
                 }
 
                 // Update DCL clearance preview when flight data changes (non-mock mode)

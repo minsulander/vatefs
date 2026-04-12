@@ -12,6 +12,7 @@ export interface LayoutMessage {
 export interface StripMessage {
     type: 'strip'
     strip: FlightStrip
+    autoMoved?: boolean
 }
 
 export interface StripDeleteMessage {

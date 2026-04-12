@@ -74,7 +74,7 @@
   </v-menu>
 
   <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote }]" :style="stripStyle"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving }]" :style="stripStyle"
     :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
     @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
@@ -209,7 +209,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUpdated } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
@@ -225,6 +225,65 @@ const props = defineProps<{
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
+
+// Fly-across animation for auto-moved strips
+const AUTO_MOVE_DURATION = 500 // ms
+
+// Check synchronously during setup so the strip renders hidden from the first frame (no flash)
+const isAutoMoving = ref(store.autoMoveData.has(props.strip.id))
+
+function tryAutoMoveAnimation() {
+  const data = store.autoMoveData.get(props.strip.id)
+  if (!data) return
+  store.autoMoveData.delete(props.strip.id)
+
+  const el = stripElement.value
+  if (!el) return
+
+  const { rect: oldRect, clone } = data
+
+  // Position clone at old location as a fixed overlay
+  clone.style.position = 'fixed'
+  clone.style.left = `${oldRect.left}px`
+  clone.style.top = `${oldRect.top}px`
+  clone.style.width = `${oldRect.width}px`
+  clone.style.height = `${oldRect.height}px`
+  clone.style.zIndex = '9999'
+  clone.style.pointerEvents = 'none'
+  clone.style.margin = '0'
+  clone.style.transition = 'none'
+  document.body.appendChild(clone)
+
+  // Defer measurement so shifted strips settle first (they arrive as separate WS messages)
+  requestAnimationFrame(() => {
+    const newRect = el.getBoundingClientRect()
+
+    // Skip if no visible movement
+    if (Math.abs(oldRect.left - newRect.left) < 1 && Math.abs(oldRect.top - newRect.top) < 1) {
+      clone.remove()
+      isAutoMoving.value = false
+      return
+    }
+
+    const anim = clone.animate([
+      { left: `${oldRect.left}px`, top: `${oldRect.top}px` },
+      { left: `${newRect.left}px`, top: `${newRect.top}px` }
+    ], {
+      duration: AUTO_MOVE_DURATION,
+      easing: 'ease-in-out',
+      fill: 'forwards'
+    })
+
+    anim.onfinish = () => {
+      clone.remove()
+      isAutoMoving.value = false
+    }
+  })
+}
+
+// Strip may be remounted (new parent section) or updated in place
+onMounted(tryAutoMoveAnimation)
+onUpdated(tryAutoMoveAnimation)
 
 // Context menu state
 const menuOpen = ref(false)
@@ -870,6 +929,10 @@ function onGroundStateClick(action: string) {
 .flight-strip.dragging {
   opacity: 0.4;
   transform: scale(0.98);
+}
+
+.flight-strip.auto-move-hidden {
+  opacity: 0;
 }
 
 /* Strip type color indicators */

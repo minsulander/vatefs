@@ -77,7 +77,7 @@ export const useEfsStore = defineStore("efs", () => {
                         handleLayoutMessage(message.layout)
                         break
                     case 'strip':
-                        handleStripMessage(message.strip)
+                        handleStripMessage(message.strip, message.autoMoved)
                         break
                     case 'stripDelete':
                         handleStripDeleteMessage(message.stripId)
@@ -138,9 +138,23 @@ export const useEfsStore = defineStore("efs", () => {
         layout.value = newLayout
     }
 
+    // Auto-move animation: maps strip ID -> old rect + cloned DOM node (non-reactive, consumed once)
+    const autoMoveData = new Map<string, { rect: DOMRect; clone: HTMLElement }>()
+
     // Handle strip message from server
-    function handleStripMessage(strip: FlightStrip) {
+    function handleStripMessage(strip: FlightStrip, autoMoved?: boolean) {
         console.log("received strip:", strip.callsign)
+
+        // Capture old position and clone for fly-across animation before updating
+        if (autoMoved) {
+            const el = document.querySelector(`[data-strip-id="${strip.id}"]`) as HTMLElement | null
+            if (el) {
+                const rect = el.getBoundingClientRect()
+                const clone = el.cloneNode(true) as HTMLElement
+                autoMoveData.set(strip.id, { rect, clone })
+            }
+        }
+
         strips.value.set(strip.id, strip)
     }
 
@@ -691,6 +705,7 @@ export const useEfsStore = defineStore("efs", () => {
         createStrip,
         updateNote,
         updateRemarks,
+        autoMoveData,
         controllers,
         releaseStrip,
         manualTransfer
