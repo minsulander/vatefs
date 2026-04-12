@@ -155,6 +155,15 @@ class EfsStore {
                 if (result.strip) {
                     this.strips.set(result.strip.id, result.strip)
                 }
+                // Regenerate shifted strips so their positions stay in sync
+                if (result.shiftedCallsigns) {
+                    for (const callsign of result.shiftedCallsigns) {
+                        const shifted = flightStore.regenerateStrip(callsign)
+                        if (shifted) {
+                            this.strips.set(shifted.id, shifted)
+                        }
+                    }
+                }
             }
 
             // Apply backend state updates (clearedToLand, airborne flags)
