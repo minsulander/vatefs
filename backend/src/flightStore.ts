@@ -1345,6 +1345,18 @@ class FlightStore {
     }
 
     /**
+     * Re-evaluate section rules for an existing flight and return the updated result.
+     * Used when flight state changes outside the plugin message pipeline (e.g. mock mode actions).
+     */
+    reevaluateStrip(callsign: string): ProcessMessageResult {
+        const flight = this.flights.get(callsign)
+        if (!flight || !flightHasRequiredData(flight) || flight.deleted) {
+            return { flight }
+        }
+        return this.resolveStripResult(callsign, flight, false)
+    }
+
+    /**
      * Regenerate a strip for a flight (used when positions are shifted)
      */
     regenerateStrip(callsign: string): FlightStrip | undefined {

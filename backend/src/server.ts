@@ -286,7 +286,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
             sendUdp(JSON.stringify({ type: "setGroundState", callsign, state: command.value }))
             if (cliArgs.mock) {
                 flight.groundstate = command.value
-                applyMoveStateAndBroadcast(callsign, flight)
+                reevaluateAndBroadcast(callsign)
             }
             break
 
@@ -294,7 +294,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
             sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign }))
             if (cliArgs.mock) {
                 flight.clearance = command.value
-                applyMoveStateAndBroadcast(callsign, flight)
+                reevaluateAndBroadcast(callsign)
             }
             break
 
@@ -307,7 +307,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
             }
             if (cliArgs.mock) {
                 flight.clearedToLand = command.value
-                applyMoveStateAndBroadcast(callsign, flight)
+                reevaluateAndBroadcast(callsign)
             }
             break
 
@@ -318,13 +318,34 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
 }
 
 /**
- * After a move command changes flight state in mock mode, regenerate and broadcast the strip.
+ * After flight state changes in mock mode, re-evaluate section rules and broadcast.
+ * Handles section moves, position shifts, and gap adjustments.
  */
-function applyMoveStateAndBroadcast(callsign: string, _flight: Flight) {
-    const updatedStrip = flightStore.regenerateStrip(callsign)
-    if (updatedStrip) {
-        store.updateStripFromFlight(updatedStrip)
-        broadcastStrip(updatedStrip)
+function reevaluateAndBroadcast(callsign: string) {
+    const result = flightStore.reevaluateStrip(callsign)
+    if (!result.strip) return
+
+    // Handle section change: recompute positions in old section
+    if (result.sectionChanged && result.previousSection) {
+        store.recomputePositions(
+            result.previousSection.bayId,
+            result.previousSection.sectionId,
+            false
+        )
+    }
+
+    store.updateStripFromFlight(result.strip)
+    broadcastStrip(result.strip)
+
+    // Handle shifted strips (from add-from-top)
+    if (result.sectionChanged && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+        for (const shifted of result.shiftedCallsigns) {
+            const shiftedStrip = flightStore.regenerateStrip(shifted)
+            if (shiftedStrip) {
+                store.updateStripFromFlight(shiftedStrip)
+                broadcastStrip(shiftedStrip)
+            }
+        }
     }
 }
 
@@ -1258,7 +1279,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign: result.strip.callsign }))
                             if (cliArgs.mock) {
                                 flight.clearedToLand = false
-                                applyMoveStateAndBroadcast(result.strip.callsign, flight)
+                                reevaluateAndBroadcast(result.strip.callsign)
                             }
                         }
                     }
@@ -1415,22 +1436,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                     }
 
-                    const updatedStrip = flightStore.regenerateStrip(strip.callsign)
-                    if (updatedStrip) {
-                        store.updateStripFromFlight(updatedStrip)
-                        broadcastStrip(updatedStrip)
-                    }
+                    reevaluateAndBroadcast(strip.callsign)
                 } else if (message.action === "toggleClearanceFlag" || message.action === "ASSUME") {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
                         flight.controller = staticConfig.myCallsign
                         flight.handoffTargetController = ""
                     }
-                    const updatedStrip = flightStore.regenerateStrip(strip.callsign)
-                    if (updatedStrip) {
-                        store.updateStripFromFlight(updatedStrip)
-                        broadcastStrip(updatedStrip)
-                    }
+                    reevaluateAndBroadcast(strip.callsign)
                 }
             } else {
                 console.log(`[ACTION] ${message.action} on unknown strip ${message.stripId}`)

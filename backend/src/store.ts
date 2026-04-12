@@ -675,7 +675,7 @@ class EfsStore {
     }
 
     // Recompute strip positions
-    private recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
+    recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
         const strips = this.getStripsForSection(bayId, sectionId, bottom)
         strips.forEach((strip, index) => {
             strip.position = index
