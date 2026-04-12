@@ -336,7 +336,7 @@ function reevaluateAndBroadcast(callsign: string) {
 
     store.updateStripFromFlight(result.strip)
 
-    // Broadcast shifted strips BEFORE the auto-moved strip so positions are settled
+    // Broadcast shifted strips and gaps BEFORE the auto-moved strip so positions are settled
     // by the time the frontend mounts the moved strip and measures its target position
     if (result.sectionChanged && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
         for (const shifted of result.shiftedCallsigns) {
@@ -345,6 +345,18 @@ function reevaluateAndBroadcast(callsign: string) {
                 store.updateStripFromFlight(shiftedStrip)
                 broadcastStrip(shiftedStrip)
             }
+        }
+
+        // Shift gap indices to match the shifted strip positions
+        const gapResult = store.shiftGapsDown(result.strip.bayId, result.strip.sectionId)
+        for (const key of gapResult.deletedGapKeys) {
+            const parsed = parseGapKey(key)
+            if (parsed) {
+                broadcastGapDelete(parsed.bayId, parsed.sectionId, parsed.index)
+            }
+        }
+        for (const gap of gapResult.shiftedGaps) {
+            broadcastGap(gap)
         }
     }
 

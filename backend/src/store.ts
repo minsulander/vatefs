@@ -645,7 +645,7 @@ class EfsStore {
 
     // Shift all gap indices in a section down by 1 (for add-from-top)
     // Returns the new gaps and the keys of deleted gaps (for client notification)
-    private shiftGapsDown(bayId: string, sectionId: string): { shiftedGaps: Gap[], deletedGapKeys: string[] } {
+    shiftGapsDown(bayId: string, sectionId: string): { shiftedGaps: Gap[], deletedGapKeys: string[] } {
         const sectionGaps = this.getGapsForSection(bayId, sectionId)
         const shiftedGaps: Gap[] = []
         const deletedGapKeys: string[] = []

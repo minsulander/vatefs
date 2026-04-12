@@ -109,18 +109,10 @@ class FlightStore {
      * Update strip assignment (called when strip is moved manually)
      */
     setStripAssignment(callsign: string, bayId: string, sectionId: string, position: number, bottom: boolean) {
-        // Record the from-section before updating (for sticky rule)
-        const oldAssignment = this.stripAssignments.get(callsign)
-
         this.stripAssignments.set(callsign, { bayId, sectionId, position, bottom })
-        // Mark as manually moved
         const flight = this.flights.get(callsign)
         if (flight) {
             flight.lastSectionRule = 'manual'
-            // Track which section we moved FROM (prevents auto-move back)
-            if (oldAssignment && oldAssignment.sectionId !== sectionId) {
-                flight.manualMoveFromSection = oldAssignment.sectionId
-            }
         }
     }
 
@@ -329,19 +321,6 @@ class FlightStore {
         if (flight.noSectionFound) {
             flight.noSectionFound = false
             flight.deleted = false
-        }
-
-        // STICKY RULE: If manually moved, prevent auto-move back to the from-section
-        if (currentAssignment && flight.manualMoveFromSection) {
-            if (targetSection.sectionId === flight.manualMoveFromSection) {
-                // Rules engine wants to move back to the section we moved FROM — suppress
-                const strip = this.createStrip(flight, currentAssignment.bayId, currentAssignment.sectionId, currentAssignment.position, currentAssignment.bottom)
-                return { flight, strip }
-            }
-            // Target is a different section (not the from-section) — clear sticky flag
-            if (targetSection.sectionId !== currentAssignment.sectionId) {
-                flight.manualMoveFromSection = undefined
-            }
         }
 
         const sectionChanged = currentAssignment &&
@@ -1073,7 +1052,6 @@ class FlightStore {
         for (const flight of this.flights.values()) {
             flight.lastSectionRule = undefined
             flight.noSectionFound = false
-            flight.manualMoveFromSection = undefined
         }
     }
 
@@ -1150,19 +1128,6 @@ class FlightStore {
         // Determine section based on rules
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
-
-        // STICKY RULE: If manually moved, prevent auto-move back to the from-section
-        if (currentAssignment && flight.manualMoveFromSection) {
-            if (targetSection.sectionId === flight.manualMoveFromSection) {
-                // Rules engine wants to move back to the section we moved FROM — suppress
-                const strip = this.createStrip(flight, currentAssignment.bayId, currentAssignment.sectionId, currentAssignment.position, currentAssignment.bottom)
-                return { flight, strip }
-            }
-            // Target is a different section (not the from-section) — clear sticky flag
-            if (targetSection.sectionId !== currentAssignment.sectionId) {
-                flight.manualMoveFromSection = undefined
-            }
-        }
 
         const sectionChanged = currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||

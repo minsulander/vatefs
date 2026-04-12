@@ -73,7 +73,6 @@ export interface Flight {
     // Rule tracking
     lastSectionRule?: string  // ID of the last section rule that matched, or 'manual' for manual drag, 'default' for default section
     lastDeleteRule?: string   // ID of the delete rule that caused soft-deletion
-    manualMoveFromSection?: string  // Section the strip was manually dragged FROM (prevents auto-move back)
 
     // Special strip tracking
     synthetic?: boolean       // Flight was created from UI (VFR DEP/ARR/CROSS), not from EuroScope
