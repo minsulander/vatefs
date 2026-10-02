@@ -33,6 +33,11 @@ export interface FlightStrip {
     atd?: string               // Actual Time of Departure
     ata?: string               // Actual Time of Arrival
 
+    // vIFF / CDM (departing IFR)
+    ctot?: string              // Calculated Take Off Time (HHmm) when regulated
+    cdmSts?: string            // Network status e.g. 'REA', 'FLS-CDM', 'FLS-NRA'
+    ctotReason?: string        // mostPenalisingRegulation (optional tooltip)
+
     // Additional info
     stand?: string             // Parking stand/gate
     runway?: string            // Assigned runway

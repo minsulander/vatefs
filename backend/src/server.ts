@@ -55,6 +55,8 @@ import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
+import { ViffService } from "./viff-service.js"
+import type { ViffPollResult } from "./viff-service.js"
 import { loadDclSound, playDclSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
@@ -73,9 +75,9 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } {
+function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } {
     const args = process.argv.slice(2)
-    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } = {}
+    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } = {}
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === "--config" && args[i + 1]) {
@@ -87,6 +89,8 @@ function parseArgs(): { config?: string; callsign?: string; airports?: string[];
             result.airports = args[++i].split(",").map((a) => a.trim().toUpperCase())
         } else if (args[i] === "--record" && args[i + 1]) {
             result.recordFile = args[++i]
+        } else if (args[i] === "--viff-base-url" && args[i + 1]) {
+            result.viffBaseUrl = args[++i]
         } else if (args[i] === "--mock") {
             result.mock = true
         }
@@ -379,6 +383,7 @@ type OutboundPluginCommand =
     | { type: "goaround"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
     | { type: "setScratch"; callsign: string; value: string }
+    | { type: "setEobt"; callsign: string; eobt: string }
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -1870,6 +1875,63 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
+        case "viffRea": {
+            const reaStrip = store.getStrip(message.stripId)
+            if (!reaStrip) break
+            if (reaStrip.stripType !== "departure") break
+            if (reaStrip.flightRules !== "I" && reaStrip.flightRules !== "Y") break
+            if (!reaStrip.ctot && message.set) {
+                console.log(`[VIFF] Ignoring REA set for ${reaStrip.callsign}: no CTOT`)
+                break
+            }
+            const ok = await viffService.setRea(reaStrip.callsign, message.set)
+            if (ok) {
+                const flight = flightStore.getFlight(reaStrip.callsign)
+                if (flight) {
+                    flight.cdmSts = message.set ? "REA" : undefined
+                    const updated = flightStore.regenerateStrip(reaStrip.callsign)
+                    if (updated) {
+                        store.updateStripFromFlight(updated)
+                        broadcastStrip(updated)
+                    }
+                }
+            }
+            break
+        }
+
+        case "viffUpdateEobt": {
+            const eobtStrip = store.getStrip(message.stripId)
+            if (!eobtStrip) break
+            const eobt = message.eobt.trim()
+            if (!/^\d{4}$/.test(eobt)) {
+                console.log(`[VIFF] Invalid EOBT "${message.eobt}" for ${eobtStrip.callsign}`)
+                break
+            }
+            const ok = await viffService.updateEobt(eobtStrip.callsign, eobt)
+            if (ok) {
+                const flight = flightStore.getFlight(eobtStrip.callsign)
+                if (flight) {
+                    flight.eobt = eobt
+                    // Clear FLS optimistically; next poll reconciles
+                    if (flight.cdmSts?.startsWith("FLS")) {
+                        flight.cdmSts = undefined
+                    }
+                    sendUdp(JSON.stringify({
+                        type: "setEobt",
+                        callsign: eobtStrip.callsign,
+                        eobt,
+                    } satisfies OutboundPluginCommand))
+                    const updated = flightStore.regenerateStrip(eobtStrip.callsign)
+                    if (updated) {
+                        store.updateStripFromFlight(updated)
+                        broadcastStrip(updated)
+                    }
+                    console.log(`[VIFF] EOBT updated ${eobtStrip.callsign} → ${eobt}`)
+                }
+            }
+            break
+        }
     }
 }
 
@@ -2433,3 +2495,67 @@ setInterval(checkDclTimeouts, DCL_CHECK_INTERVAL_MS)
 
 // Calculate initial DCL availability (must be after hoppieService is declared)
 recalculateDclAvailability()
+
+// ─── vIFF / CDM via Vatiris proxy ───────────────────────────────────────────
+
+function isDepartingIfrStrip(strip: FlightStrip): boolean {
+    return strip.stripType === "departure" && (strip.flightRules === "I" || strip.flightRules === "Y")
+}
+
+function applyViffPoll(result: ViffPollResult) {
+    const ctotByCs = new Map<string, { ctot: string; reason?: string }>()
+    for (const entry of result.restricted) {
+        ctotByCs.set(entry.callsign.toUpperCase(), {
+            ctot: entry.ctot,
+            reason: entry.mostPenalisingRegulation,
+        })
+    }
+    const stsByCs = new Map<string, string>()
+    for (const entry of result.statuses) {
+        stsByCs.set(entry.callsign.toUpperCase(), entry.cdmSts)
+    }
+
+    for (const strip of store.getAllStrips()) {
+        const flight = flightStore.getFlight(strip.callsign)
+        if (!flight) continue
+
+        const cs = strip.callsign.toUpperCase()
+        let changed = false
+
+        if (isDepartingIfrStrip(strip)) {
+            const ctotEntry = ctotByCs.get(cs)
+            const newCtot = ctotEntry?.ctot
+            const newReason = ctotEntry?.reason
+            const newSts = stsByCs.get(cs)
+
+            if (flight.ctot !== newCtot) {
+                flight.ctot = newCtot
+                changed = true
+            }
+            if (flight.ctotReason !== newReason) {
+                flight.ctotReason = newReason
+                changed = true
+            }
+            if (flight.cdmSts !== newSts) {
+                flight.cdmSts = newSts
+                changed = true
+            }
+        } else if (flight.ctot || flight.cdmSts || flight.ctotReason) {
+            flight.ctot = undefined
+            flight.cdmSts = undefined
+            flight.ctotReason = undefined
+            changed = true
+        }
+
+        if (changed) {
+            const updated = flightStore.regenerateStrip(strip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+        }
+    }
+}
+
+const viffService = new ViffService(applyViffPoll, cliArgs.viffBaseUrl)
+viffService.start()

@@ -58,6 +58,11 @@ export interface Flight {
     dclSentAt?: number            // Timestamp when clearance was sent (for timeout)
     dclRequestedAt?: number       // Timestamp when DCL request was received (for request timeout)
 
+    // vIFF / CDM (departing IFR)
+    ctot?: string                 // Calculated Take Off Time (HHmm)
+    cdmSts?: string               // Network status e.g. 'REA', 'FLS-CDM'
+    ctotReason?: string           // mostPenalisingRegulation
+
     // Controller remarks (from scratchpad values starting with ".")
     remarks?: string
 

@@ -137,7 +137,7 @@
       </div>
       <div class="strip-middle-content">
         <!-- Time section / clearance triangle -->
-        <div class="strip-section strip-time">
+        <div class="strip-section strip-time" :class="{ 'has-ctot': showCtot, 'is-fls': isFls }">
           <template v-if="strip.clearedForTakeoff || strip.clearedToLand">
             <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
               <polygon points="12,4 22,20 2,20" />
@@ -146,10 +146,42 @@
               <polygon points="12,20 22,4 2,4" />
             </svg>
           </template>
+          <template v-else-if="eobtEditing">
+            <input
+              ref="eobtInput"
+              v-model="eobtEditText"
+              class="eobt-edit-input"
+              maxlength="4"
+              @click.stop
+              @blur="onEobtEditBlur"
+              @keydown.enter="onEobtEditBlur"
+              @keydown.escape="onEobtEditCancel"
+            />
+            <div class="time-label">EOBT</div>
+          </template>
           <template v-else>
-            <div class="time-value">{{ displayTime }}</div>
-            <div class="time-label" v-if="strip.stripType === 'departure' || strip.stripType === 'local'">EOBT</div>
-            <div class="time-label" v-else>ETA</div>
+            <div class="time-pair">
+              <div
+                class="time-col"
+                :class="{ 'eobt-fls': isFls, 'eobt-clickable': isFls && store.isController }"
+                @click.stop="onEobtClick"
+              >
+                <div class="time-value" :class="{ 'time-fls': isFls }">{{ displayTime }}</div>
+                <div class="time-label" :class="{ 'label-fls': isFls }">
+                  {{ isFls ? 'FLS' : ((strip.stripType === 'departure' || strip.stripType === 'local') ? 'EOBT' : 'ETA') }}
+                </div>
+              </div>
+              <div
+                v-if="showCtot"
+                class="time-col ctot-col"
+                :class="{ 'ctot-clickable': canSendRea }"
+                :title="strip.ctotReason || 'CTOT — click to send REA'"
+                @click.stop="onCtotClick"
+              >
+                <div class="time-value time-ctot">{{ strip.ctot }}</div>
+                <div class="time-label time-label-ctot">CTOT</div>
+              </div>
+            </div>
           </template>
         </div>
         <div class="strip-divider"></div>
@@ -193,13 +225,22 @@
 
     <!-- Right section: Action button(s) (hidden in observer mode) -->
     <template v-if="store.isController">
-      <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
-        :class="{ 'multi-action': effectiveActionCount > 1 }">
+      <div v-if="(strip.actions && strip.actions.length > 0) || showReaIndicator" class="strip-right"
+        :class="{ 'multi-action': effectiveActionCount > 1 || (showReaIndicator && strip.actions && strip.actions.length > 0) }">
         <button v-for="action in strip.actions" :key="action" class="action-button"
           :class="actionButtonClass(action)"
           @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
           <span class="action-text">{{ action === 'GOA' ? 'G/A' : action }}</span>
           <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
+        </button>
+        <button
+          v-if="showReaIndicator"
+          class="action-button action-rea"
+          title="Clear REA"
+          @click.stop="onReaClick"
+          @touchend.stop="(e) => { e.preventDefault(); onReaClick() }"
+        >
+          <span class="action-text">REA</span>
         </button>
       </div>
       <div v-else class="strip-right strip-right-empty"></div>
@@ -295,7 +336,7 @@ const groundStateMenuOpen = ref(false)
 const groundStateOptions = [
   { code: 'FRQ', label: 'On Freq', action: 'FRQ', groundstate: 'ONFREQ' },
   { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },
-  { code: 'REA', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
+  { code: 'RDY', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
   { code: 'S/P', label: 'Push', action: 'PUSH', groundstate: 'PUSH' },
   { code: 'TXO', label: 'Taxi Out', action: 'TXO', groundstate: 'TAXI' },
   { code: 'L/U', label: 'Lineup', action: 'LU', groundstate: 'LINEUP' },
@@ -452,6 +493,63 @@ const displayTime = computed(() => {
   }
   return props.strip.eta || ''
 })
+
+const isDepartingIfr = computed(() =>
+  props.strip.stripType === 'departure' &&
+  (props.strip.flightRules === 'I' || props.strip.flightRules === 'Y')
+)
+
+const showCtot = computed(() =>
+  isDepartingIfr.value && !!props.strip.ctot && !props.strip.clearedForTakeoff
+)
+
+const isFls = computed(() =>
+  isDepartingIfr.value && !!props.strip.cdmSts?.startsWith('FLS')
+)
+
+const isRea = computed(() => props.strip.cdmSts === 'REA')
+
+const showReaIndicator = computed(() =>
+  store.isController && isDepartingIfr.value && isRea.value && !!props.strip.ctot
+)
+
+const canSendRea = computed(() =>
+  store.isController && showCtot.value && !isRea.value
+)
+
+const eobtEditing = ref(false)
+const eobtEditText = ref('')
+const eobtInput = ref<HTMLInputElement | null>(null)
+
+function onEobtClick() {
+  if (!store.isController || !isFls.value) return
+  eobtEditText.value = props.strip.eobt || ''
+  eobtEditing.value = true
+  nextTick(() => eobtInput.value?.focus())
+}
+
+function onEobtEditCancel() {
+  eobtEditing.value = false
+}
+
+function onEobtEditBlur() {
+  if (!eobtEditing.value) return
+  const value = eobtEditText.value.trim()
+  eobtEditing.value = false
+  if (/^\d{4}$/.test(value) && value !== props.strip.eobt) {
+    store.viffUpdateEobt(props.strip.id, value)
+  }
+}
+
+function onCtotClick() {
+  if (!canSendRea.value) return
+  store.viffRea(props.strip.id, true)
+}
+
+function onReaClick() {
+  if (!showReaIndicator.value) return
+  store.viffRea(props.strip.id, false)
+}
 
 // DCL button coloring + action highlight
 function actionButtonClass(action: string): Record<string, boolean> {
@@ -1123,6 +1221,25 @@ function onGroundStateClick(action: string) {
   padding: 2px;
 }
 
+.strip-time.has-ctot {
+  width: 58px;
+  min-width: 58px;
+}
+
+.time-pair {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.time-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .time-value {
   font-weight: 600;
   font-size: 11px;
@@ -1134,6 +1251,50 @@ function onGroundStateClick(action: string) {
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.time-ctot {
+  color: #00a000;
+}
+
+.time-label-ctot {
+  color: #00a000;
+}
+
+.time-fls {
+  color: #c00000;
+}
+
+.label-fls {
+  color: #c00000;
+}
+
+.eobt-clickable {
+  cursor: pointer;
+}
+
+.eobt-clickable:hover .time-value {
+  text-decoration: underline;
+}
+
+.ctot-clickable {
+  cursor: pointer;
+}
+
+.ctot-clickable:hover .time-ctot {
+  text-decoration: underline;
+}
+
+.eobt-edit-input {
+  width: 34px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid #c00000;
+  background: #fff;
+  color: #c00000;
+  padding: 0;
+  outline: none;
 }
 
 /* SID/Clearance section */
@@ -1306,6 +1467,20 @@ function onGroundStateClick(action: string) {
   font-size: 10px;
   letter-spacing: -0.8px;
   font-stretch: condensed;
+}
+
+.action-rea {
+  background: #d0d0d0 !important;
+  cursor: pointer;
+}
+
+.action-rea .action-text {
+  color: #666;
+  font-weight: 600;
+}
+
+.action-rea:hover {
+  background: #c0c0c0 !important;
 }
 
 .action-freq {

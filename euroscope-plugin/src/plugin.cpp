@@ -1554,6 +1554,30 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         bool ok = fp.GetControllerAssignedData().SetClearedAltitude(altitude);
                         if (!ok) DisplayMessage("assignCfl: Failed for " + callsign);
                     }
+                } else if (message["type"] == "setEobt") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto eobt = message["eobt"].get<std::string>();
+                    DebugMessage("setEobt: " + callsign + " -> " + eobt);
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty() || eobt.size() != 4) {
+                        DisplayMessage("setEobt: Invalid callsign or eobt");
+                    } else {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (!fp.IsValid()) {
+                            DisplayMessage("setEobt: Flight plan not found: " + callsign);
+                        } else {
+                            auto fpData = fp.GetFlightPlanData();
+                            fpData.SetEstimatedDepartureTime(eobt.c_str());
+                            bool amended = fpData.AmendFlightPlan();
+                            if (!amended) {
+                                DisplayMessage("setEobt: Failed to amend for " + callsign);
+                            } else {
+                                DebugMessage("setEobt: Amended " + callsign + " EOBT=" + eobt);
+                                OnFlightPlanFlightPlanDataUpdate(fp);
+                            }
+                        }
+                    }
                 } else if (message["type"] == "createFlightPlan") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto stripType = message["stripType"].get<std::string>();

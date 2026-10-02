@@ -47,6 +47,8 @@ export type {
     UpdateNoteMessage,
     ReleaseStripMessage,
     ManualTransferMessage,
+    ViffReaMessage,
+    ViffUpdateEobtMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

@@ -564,6 +564,14 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclSetMode', mode })
     }
 
+    function viffRea(stripId: string, set: boolean) {
+        sendMessage({ type: 'viffRea', stripId, set })
+    }
+
+    function viffUpdateEobt(stripId: string, eobt: string) {
+        sendMessage({ type: 'viffUpdateEobt', stripId, eobt })
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -696,6 +704,8 @@ export const useEfsStore = defineStore("efs", () => {
         dclSend,
         dclReject,
         dclSetMode,
+        viffRea,
+        viffUpdateEobt,
         availableConfigs,
         activeConfig,
         switchConfig,
