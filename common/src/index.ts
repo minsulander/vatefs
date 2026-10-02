@@ -47,6 +47,10 @@ export type {
     UpdateNoteMessage,
     ReleaseStripMessage,
     ManualTransferMessage,
+    SetColumnAirportMessage,
+    AddActiveAirportMessage,
+    RemoveActiveAirportMessage,
+    SetColumnCountMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

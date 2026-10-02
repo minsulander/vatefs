@@ -1,0 +1,471 @@
+# VatEFS RTC layout (IRIS multipel RT style)
+# One column per visible airport: CTR / RWY / TWY / DEP
+# Active airports are always processed; column slots only control visibility.
+# Note: Airports are selected via column pickers / active set (not rwyconfig overwrite)
+
+name: RTC
+radarRange: 25
+layoutMode: multiAirport
+
+# Logical bay template — expanded at runtime into bay1..bayN (+ idle)
+bayTemplate:
+  sections:
+    app:
+      title: CTR
+      addFromTop: true
+    rwy:
+      title: RWY
+    twy:
+      title: TWY
+    dep:
+      title: DEP
+      addFromTop: false
+
+# Default number of visible column slots (togglable 2–6 at runtime)
+columnCount: 4
+
+sectionRules:
+  # === RUNWAY (highest priority) ===
+  on_runway_geographic:
+    sectionId: rwy
+    onRunway: true
+    priority: 200
+
+  runway_lineup_depa:
+    sectionId: rwy
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    priority: 90
+
+  runway_cleared_to_land:
+    sectionId: rwy
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
+
+  # === APP (airborne CTR / inbound) ===
+  app_missed_approach:
+    sectionId: app
+    missedApproach: true
+    controller: myself
+    airborne: true
+    priority: 105
+
+  app_airborne_dep:
+    sectionId: app
+    direction: departure
+    airborne: true
+    priority: 100
+
+  app_airborne_local:
+    sectionId: app
+    direction: local
+    airborne: true
+    priority: 100
+
+  app_inbound_not_myself:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    priority: 70
+
+  app_arr_assumed:
+    sectionId: app
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 80
+
+  app_arr_within_ctr:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    priority: 76
+
+  app_arr_low_altitude:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    maxAltitudeAboveField: 1500
+    priority: 75
+
+  app_fallback_arrival:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    priority: 5
+
+  # === TWY (taxi + push/start) ===
+  twy_push_start:
+    sectionId: twy
+    direction: departure
+    airborne: false
+    groundstates: [STUP, PUSH]
+    priority: 60
+
+  twy_push_start_local:
+    sectionId: twy
+    direction: local
+    airborne: false
+    groundstates: [DE-ICE, STUP, PUSH]
+    priority: 60
+
+  twy_taxi_dep:
+    sectionId: twy
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    priority: 30
+
+  twy_taxi_dep_local:
+    sectionId: twy
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    priority: 30
+
+  twy_taxi_arr_local:
+    sectionId: twy
+    direction: local
+    airborne: false
+    groundstates: [ARR, TXIN]
+    priority: 35
+
+  twy_taxi_arr:
+    sectionId: twy
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR, TAXI, TXIN]
+    priority: 30
+
+  # === DEP (pending + cleared) ===
+  dep_pending:
+    sectionId: dep
+    direction: departure
+    airborne: false
+    groundstates: ['', NSTS, ONFREQ]
+    clearance: false
+    priority: 40
+
+  dep_cleared:
+    sectionId: dep
+    direction: departure
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    priority: 50
+
+  dep_pending_local:
+    sectionId: dep
+    direction: local
+    airborne: false
+    groundstates: ['', NSTS, ONFREQ]
+    clearance: false
+    priority: 40
+
+  dep_cleared_local:
+    sectionId: dep
+    direction: local
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ]
+    priority: 50
+
+  dep_fallback_departure:
+    sectionId: dep
+    direction: departure
+    priority: 5
+
+  dep_fallback_local:
+    sectionId: dep
+    direction: local
+    priority: 5
+
+actionRules:
+  ready_del:
+    action: READY
+    direction: either
+    controller: myself
+    clearance: true
+    groundstates: ['', ONFREQ, STUP, NSTS]
+    myRole: [DEL]
+    notMyRole: [GND]
+    priority: 120
+
+  clnc_del:
+    action: CLNC
+    sectionId: dep
+    direction: either
+    clearance: false
+    myRole: [DEL]
+    priority: 115
+
+  assume_dep_del:
+    action: ASSUME
+    direction: either
+    controller: not_myself
+    airborne: false
+    myRole: [DEL]
+    priority: 110
+
+  xfer_gnd_taxi_dep:
+    action: XFER
+    direction: either
+    controller: myself
+    groundstates: [TAXI]
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 115
+
+  push_deice_gnd:
+    action: PUSH
+    sectionId: twy
+    direction: either
+    controller: myself
+    groundstates: [DE-ICE]
+    myRole: [GND, TWR, APP, CTR]
+    priority: 113
+
+  txi_arr_gnd:
+    action: TXI
+    direction: either
+    controller: myself
+    groundstates: [ARR]
+    airborne: false
+    myRole: [GND]
+    priority: 112
+
+  assume_arr_gnd:
+    action: ASSUME
+    direction: arrival
+    controller: not_myself
+    airborne: false
+    myRole: [GND]
+    priority: 111
+
+  xfer_twr_to_gnd:
+    action: XFER
+    direction: either
+    controller: myself
+    groundstates: ['', NSTS, ARR]
+    airborne: false
+    handoffInitiated: false
+    myRole: [TWR, APP, CTR]
+    notMyRole: [GND]
+    nextControllerRole: [GND]
+    priority: 110
+
+  assume_app:
+    action: ASSUME
+    sectionId: app
+    direction: arrival
+    controller: not_myself
+    myRole: [TWR, APP, CTR]
+    priority: 100
+
+  ctl_app:
+    action: CTL
+    sectionId: app
+    direction: either
+    controller: myself
+    clearedToLand: false
+    myRole: [TWR]
+    priority: 90
+
+  goa_rwy:
+    action: GOA
+    sectionId: rwy
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  cto_lineup:
+    action: CTO
+    direction: either
+    controller: myself
+    groundstates: [LINEUP]
+    myRole: [TWR]
+    priority: 90
+
+  lu_taxi_dep:
+    action: LU
+    direction: departure
+    controller: myself
+    groundstates: [TAXI]
+    myRole: [TWR]
+    priority: 85
+
+  lu_taxi_local:
+    action: LU
+    direction: local
+    controller: myself
+    groundstates: [TAXI]
+    myRole: [TWR]
+    priority: 85
+
+  xfer_missed_approach:
+    action: XFER
+    missedApproach: true
+    controller: myself
+    handoffInitiated: false
+    myRole: [TWR]
+    notMyRole: [APP, CTR]
+    priority: 102
+
+  xfer_app_dep:
+    action: XFER
+    sectionId: app
+    direction: departure
+    controller: myself
+    airborne: true
+    handoffInitiated: false
+    myRole: [TWR]
+    priority: 80
+
+  park_arr:
+    action: PARK
+    direction: either
+    controller: myself
+    groundstates: [TXIN]
+    onRunway: false
+    myRole: [GND]
+    priority: 77
+
+  txo_push:
+    action: TXO
+    sectionId: twy
+    direction: either
+    controller: myself
+    groundstates: [PUSH, STUP]
+    myRole: [GND]
+    priority: 75
+
+  clnc_dep:
+    action: CLNC
+    sectionId: dep
+    direction: either
+    clearance: false
+    myRole: [DEL]
+    priority: 65
+
+  push_dep_cleared:
+    action: PUSH
+    sectionId: dep
+    direction: either
+    controller: myself
+    clearance: true
+    groundstates: ['', ONFREQ, STUP, NSTS]
+    myRole: [GND]
+    priority: 70
+
+  assume_departure_ground:
+    action: ASSUME
+    direction: either
+    controller: not_myself
+    airborne: false
+    myRole: [DEL]
+    priority: 10
+
+  assume_arrival:
+    action: ASSUME
+    direction: arrival
+    controller: not_myself
+    myRole: [GND]
+    priority: 10
+
+deleteRules:
+  delete_dep_high_transferred:
+    direction: departure
+    controller: not_myself
+    minAltitudeAboveField: 2500
+    priority: 100
+
+  delete_parked:
+    direction: either
+    groundstates: [PARK]
+    priority: 100
+
+  delete_beyond_range:
+    beyondRange: true
+    priority: 10
+
+moveRules:
+  # APP <-> RWY
+  move_app_to_rwy_ctl:
+    fromSectionId: app
+    toSectionId: rwy
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_rwy_to_app_clear_ctl:
+    fromSectionId: rwy
+    toSectionId: app
+    command:
+      type: setClearedToLand
+      value: false
+
+  move_to_app_set_depa:
+    toSectionId: app
+    command:
+      type: setGroundstate
+      value: DEPA
+
+  # TWY <-> RWY
+  move_twy_to_rwy:
+    fromSectionId: twy
+    toSectionId: rwy
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_rwy_to_twy_dep:
+    fromSectionId: rwy
+    toSectionId: twy
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_rwy_to_twy_arr:
+    fromSectionId: rwy
+    toSectionId: twy
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN
+
+  # DEP <-> TWY (clearance stays via CLNC; push/taxi via drag)
+  move_dep_to_twy_push:
+    fromSectionId: dep
+    toSectionId: twy
+    direction: either
+    myRole: [GND]
+    command:
+      type: setGroundstate
+      value: PUSH
+
+  move_twy_to_dep:
+    fromSectionId: twy
+    toSectionId: dep
+    direction: either
+    command:
+      type: setGroundstate
+      value: ONFREQ

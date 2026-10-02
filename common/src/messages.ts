@@ -46,9 +46,17 @@ export interface RefreshMessage {
 export interface StatusMessage {
     type: 'status'
     callsign: string      // Controller callsign (e.g., 'ESGG_TWR')
-    airports: string[]    // Configured airports (e.g., ['ESGG', 'ESGT'])
+    airports: string[]    // Configured / active airports (e.g., ['ESGG', 'ESGT'])
     role?: string         // Controller role (e.g., 'DEL', 'GND', 'TWR')
     isController?: boolean // Whether connected as a controller (false = observer)
+    /** Multi-airport: all airports being processed */
+    activeAirports?: string[]
+    /** Multi-airport: ICAO per visible column slot (null = empty) */
+    columnAirports?: (string | null)[]
+    /** Multi-airport: number of visible column slots */
+    columnCount?: number
+    /** Multi-airport mode active */
+    multiAirport?: boolean
 }
 
 export interface DclStatusMessage {
@@ -177,7 +185,7 @@ export interface CreateStripMessage {
     stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note'
     callsign?: string           // For VFR DEP/ARR/CROSS
     aircraftType?: string       // For VFR DEP/ARR
-    airport?: string            // Origin (VFR DEP) or destination (VFR ARR) when multiple airports
+    airport?: string            // Airport for VFR origin/dest, CROSS/NOTE column placement
     targetBayId?: string        // If dragged to a specific section
     targetSectionId?: string
     position?: number
@@ -207,7 +215,28 @@ export interface ManualTransferMessage {
     targetCallsign: string
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage
+export interface SetColumnAirportMessage {
+    type: 'setColumnAirport'
+    columnIndex: number
+    airport: string | null
+}
+
+export interface AddActiveAirportMessage {
+    type: 'addActiveAirport'
+    airport: string
+}
+
+export interface RemoveActiveAirportMessage {
+    type: 'removeActiveAirport'
+    airport: string
+}
+
+export interface SetColumnCountMessage {
+    type: 'setColumnCount'
+    count: number
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage
 
 // Type guards for message parsing
 
@@ -228,5 +257,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount'
 }

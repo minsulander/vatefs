@@ -295,7 +295,7 @@ const groundStateMenuOpen = ref(false)
 const groundStateOptions = [
   { code: 'FRQ', label: 'On Freq', action: 'FRQ', groundstate: 'ONFREQ' },
   { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },
-  { code: 'REA', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
+  { code: 'RDY', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
   { code: 'S/P', label: 'Push', action: 'PUSH', groundstate: 'PUSH' },
   { code: 'TXO', label: 'Taxi Out', action: 'TXO', groundstate: 'TAXI' },
   { code: 'L/U', label: 'Lineup', action: 'LU', groundstate: 'LINEUP' },

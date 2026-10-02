@@ -1,6 +1,7 @@
 /**
  * Configuration loader - loads EFS configuration from YAML files.
  * Supports `include:` to compose configs from shared rule fragments.
+ * Supports `layoutMode: multiAirport` with `bayTemplate` for IRIS-style columns.
  */
 
 import fs from "fs"
@@ -8,6 +9,15 @@ import path from "path"
 import yaml from "js-yaml"
 import type { EfsStaticConfig, SectionRule, ActionRule, DeleteRule, MoveRule } from "./config-types.js"
 import type { EfsLayout, Bay, Section } from "@vatefs/common"
+import {
+    buildMultiAirportLayout,
+    DEFAULT_COLUMN_COUNT,
+    MIN_COLUMN_COUNT,
+    MAX_COLUMN_COUNT,
+    LOGICAL_SECTIONS,
+    normalizeColumnAirports,
+    type BayTemplate
+} from "./multi-airport.js"
 
 /**
  * Metadata for a discovered config file
@@ -30,6 +40,9 @@ interface YamlConfig {
     include?: string[]
     radarRange?: number
     groundRange?: number
+    layoutMode?: 'standard' | 'multiAirport'
+    columnCount?: number
+    bayTemplate?: BayTemplate
     layout?: {
         bays: Record<string, {
             sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
@@ -53,7 +66,6 @@ function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layou
         const sections: Section[] = []
 
         for (const [sectionId, sectionData] of Object.entries(bayData.sections)) {
-            // Check for duplicate section IDs
             if (sectionToBay.has(sectionId)) {
                 throw new Error(`Duplicate section ID "${sectionId}" found in bay "${bayId}" (already exists in bay "${sectionToBay.get(sectionId)}")`)
             }
@@ -76,9 +88,6 @@ function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layou
     return { layout: { bays }, sectionToBay }
 }
 
-/**
- * Transform YAML rules (key-based) to internal format (id-based)
- */
 function transformRules<T extends { id: string }>(
     yamlRules: Record<string, Omit<T, 'id'>>
 ): T[] {
@@ -94,11 +103,6 @@ function transformRules<T extends { id: string }>(
     return rules
 }
 
-/**
- * Recursively load a YAML file and merge all `include:` fragments into it.
- * Rules from included files are the base; the main file's rules override on key conflict.
- * `visited` tracks resolved paths to detect circular includes.
- */
 function loadYamlWithIncludes(configPath: string, visited = new Set<string>()): YamlConfig {
     const resolved = path.resolve(configPath)
 
@@ -115,7 +119,6 @@ function loadYamlWithIncludes(configPath: string, visited = new Set<string>()): 
     const raw = yaml.load(content) as YamlConfig
     const dir = path.dirname(resolved)
 
-    // Accumulate rules from all includes in order
     let sectionRules: Record<string, Omit<SectionRule, 'id'>> = {}
     let actionRules: Record<string, Omit<ActionRule, 'id'>> = {}
     let deleteRules: Record<string, Omit<DeleteRule, 'id'>> = {}
@@ -130,7 +133,6 @@ function loadYamlWithIncludes(configPath: string, visited = new Set<string>()): 
         moveRules    = { ...moveRules,    ...included.moveRules    }
     }
 
-    // Main file rules overlay on top (same key = main file wins)
     return {
         ...raw,
         sectionRules: { ...sectionRules, ...raw.sectionRules },
@@ -140,21 +142,44 @@ function loadYamlWithIncludes(configPath: string, visited = new Set<string>()): 
     }
 }
 
+function isLogicalSectionId(id: string): boolean {
+    return (LOGICAL_SECTIONS as readonly string[]).includes(id)
+}
+
 /**
  * Load configuration from a YAML file
  */
 export function loadConfig(configPath: string): EfsStaticConfig {
     const yamlConfig = loadYamlWithIncludes(configPath)
+    const layoutMode = yamlConfig.layoutMode ?? 'standard'
+    const isMulti = layoutMode === 'multiAirport'
 
-    // Validate required fields
-    if (!yamlConfig.layout?.bays) {
-        throw new Error('Configuration must specify layout.bays')
+    let layout: EfsLayout
+    let sectionToBay: Map<string, string>
+    let bayTemplate: BayTemplate | undefined
+    let columnCount: number | undefined
+
+    if (isMulti) {
+        if (!yamlConfig.bayTemplate?.sections) {
+            throw new Error('multiAirport config must specify bayTemplate.sections')
+        }
+        bayTemplate = yamlConfig.bayTemplate
+        const rawCount = yamlConfig.columnCount ?? DEFAULT_COLUMN_COUNT
+        columnCount = Math.max(MIN_COLUMN_COUNT, Math.min(MAX_COLUMN_COUNT, rawCount))
+        const columnAirports = normalizeColumnAirports([], columnCount)
+        const built = buildMultiAirportLayout(bayTemplate, columnCount, columnAirports)
+        // Include idle bay in internal layout so sectionToBay covers idle_* sections
+        layout = { bays: [...built.layout.bays, ...built.idleLayout.bays] }
+        sectionToBay = built.sectionToBay
+    } else {
+        if (!yamlConfig.layout?.bays) {
+            throw new Error('Configuration must specify layout.bays')
+        }
+        const transformed = transformLayout(yamlConfig.layout)
+        layout = transformed.layout
+        sectionToBay = transformed.sectionToBay
     }
 
-    // Transform layout and build sectionToBay lookup
-    const { layout, sectionToBay } = transformLayout(yamlConfig.layout)
-
-    // Transform rules
     const sectionRules = yamlConfig.sectionRules
         ? transformRules<SectionRule>(yamlConfig.sectionRules)
         : []
@@ -168,27 +193,50 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         ? transformRules<MoveRule>(yamlConfig.moveRules)
         : []
 
-    // Validate that all sectionIds in rules exist in the layout
-    for (const rule of sectionRules) {
-        if (!sectionToBay.has(rule.sectionId)) {
-            throw new Error(`Section rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+    if (isMulti) {
+        // Rules use logical section IDs (app/rwy/twy/dep)
+        for (const rule of sectionRules) {
+            if (!isLogicalSectionId(rule.sectionId)) {
+                throw new Error(`Section rule "${rule.id}" references non-logical section "${rule.sectionId}"`)
+            }
         }
-    }
-    for (const rule of actionRules) {
-        if (rule.sectionId && !sectionToBay.has(rule.sectionId)) {
-            throw new Error(`Action rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+        for (const rule of actionRules) {
+            if (rule.sectionId && !isLogicalSectionId(rule.sectionId)) {
+                throw new Error(`Action rule "${rule.id}" references non-logical section "${rule.sectionId}"`)
+            }
         }
-    }
-    for (const rule of moveRules) {
-        if (rule.fromSectionId && !sectionToBay.has(rule.fromSectionId)) {
-            throw new Error(`Move rule "${rule.id}" references unknown fromSection "${rule.fromSectionId}"`)
+        for (const rule of moveRules) {
+            if (rule.fromSectionId && !isLogicalSectionId(rule.fromSectionId)) {
+                throw new Error(`Move rule "${rule.id}" references non-logical fromSection "${rule.fromSectionId}"`)
+            }
+            if (!isLogicalSectionId(rule.toSectionId) && !rule.fromSectionIdContains) {
+                // toSectionId must be logical in multi mode
+                if (!isLogicalSectionId(rule.toSectionId)) {
+                    throw new Error(`Move rule "${rule.id}" references non-logical toSection "${rule.toSectionId}"`)
+                }
+            }
         }
-        if (!sectionToBay.has(rule.toSectionId)) {
-            throw new Error(`Move rule "${rule.id}" references unknown toSection "${rule.toSectionId}"`)
+    } else {
+        for (const rule of sectionRules) {
+            if (!sectionToBay.has(rule.sectionId)) {
+                throw new Error(`Section rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+            }
+        }
+        for (const rule of actionRules) {
+            if (rule.sectionId && !sectionToBay.has(rule.sectionId)) {
+                throw new Error(`Action rule "${rule.id}" references unknown section "${rule.sectionId}"`)
+            }
+        }
+        for (const rule of moveRules) {
+            if (rule.fromSectionId && !sectionToBay.has(rule.fromSectionId)) {
+                throw new Error(`Move rule "${rule.id}" references unknown fromSection "${rule.fromSectionId}"`)
+            }
+            if (!sectionToBay.has(rule.toSectionId)) {
+                throw new Error(`Move rule "${rule.id}" references unknown toSection "${rule.toSectionId}"`)
+            }
         }
     }
 
-    // Note: myAirports is set at runtime from myselfUpdate or CLI args, not from config
     const config: EfsStaticConfig = {
         myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
@@ -198,10 +246,16 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         sectionRules,
         actionRules,
         deleteRules,
-        moveRules
+        moveRules,
+        layoutMode,
+        bayTemplate,
+        columnCount,
+        activeAirports: isMulti ? [] : undefined,
+        columnAirports: isMulti ? normalizeColumnAirports([], columnCount ?? DEFAULT_COLUMN_COUNT) : undefined
     }
 
     console.log(`Loaded config from ${configPath}:`)
+    console.log(`  Mode: ${layoutMode}`)
     console.log(`  Radar range: ${config.radarRangeNm}nm, ground range: ${config.groundRangeNm}nm`)
     console.log(`  Bays: ${config.layout.bays.length}`)
     console.log(`  Sections: ${sectionToBay.size}`)
@@ -213,17 +267,13 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     return config
 }
 
-/**
- * Get default config path
- */
 export function getDefaultConfigPath(dataDir: string): string {
     return `${dataDir}/config/singlerwy4bays.yml`
 }
 
 /**
  * Scan a directory for selectable YAML config files and extract their names.
- * Files without a `layout` key are include fragments and are skipped.
- * Returns an array of config file info sorted by name.
+ * Files without a `layout` or `bayTemplate` key are include fragments and are skipped.
  */
 export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
     if (!fs.existsSync(configDir)) {
@@ -238,12 +288,11 @@ export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
         try {
             const content = fs.readFileSync(fullPath, 'utf8')
             const yamlConfig = yaml.load(content) as YamlConfig
-            // Skip include fragments (no layout key)
-            if (!yamlConfig?.layout) continue
+            // Skip include fragments (no layout and no bayTemplate)
+            if (!yamlConfig?.layout && !yamlConfig?.bayTemplate) continue
             const name = yamlConfig?.name ?? file.replace(/\.(yml|yaml)$/, '')
             configs.push({ file, name, fullPath })
         } catch {
-            // Skip files that can't be parsed
             console.warn(`Skipping config file ${file}: failed to parse`)
         }
     }

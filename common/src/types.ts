@@ -82,6 +82,9 @@ export interface FlightStrip {
     // Controller state
     isAssumed?: boolean          // Whether the strip is assumed/tracked by me
     groundstate?: string         // Current ground state (NSTS, STUP, PUSH, TAXI, etc.)
+
+    // Multi-airport column mode: which airport this strip instance belongs to
+    airport?: string
 }
 
 export interface Section {
@@ -101,6 +104,10 @@ export interface Gap {
 export interface Bay {
     id: string
     sections: Section[]
+    /** Display title (e.g. ICAO in multi-airport mode) */
+    title?: string
+    /** Bound airport ICAO when this bay is a multi-airport column */
+    airport?: string
 }
 
 export interface EfsLayout {

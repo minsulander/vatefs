@@ -2,6 +2,7 @@
   <StripCreationDialog
     v-model="dialogOpen"
     :strip-type="dialogStripType"
+    :initial-airport="dialogInitialAirport"
     @create="onDialogCreate"
   />
 
@@ -83,6 +84,7 @@ const store = useEfsStore()
 
 const dialogOpen = ref(false)
 const dialogStripType = ref<SpecialStripType>('vfrDep')
+const dialogInitialAirport = ref<string | undefined>(undefined)
 const dialogTargetBayId = ref<string | undefined>(undefined)
 const dialogTargetSectionId = ref<string | undefined>(undefined)
 const dialogTargetPosition = ref<number | undefined>(undefined)
@@ -98,24 +100,38 @@ let touchStartX = 0
 let touchStartY = 0
 const DRAG_THRESHOLD = 10
 
-function onTinyClick(type: SpecialStripType) {
-  if (type === 'note') {
-    store.createStrip('note')
-    return
-  }
+function airportForBay(bayId: string | undefined): string | undefined {
+  if (!bayId) return undefined
+  const bay = store.layout.bays.find(b => b.id === bayId)
+  return bay?.airport ?? undefined
+}
+
+function openCreateDialog(type: SpecialStripType, target?: {
+  bayId?: string
+  sectionId?: string
+  position?: number
+  isBottom?: boolean
+  gapIndex?: number
+  gapSize?: number
+}) {
   dialogStripType.value = type
-  dialogTargetBayId.value = undefined
-  dialogTargetSectionId.value = undefined
-  dialogTargetPosition.value = undefined
-  dialogTargetIsBottom.value = false
-  dialogTargetGapIndex.value = undefined
-  dialogTargetGapSize.value = 0
+  dialogTargetBayId.value = target?.bayId
+  dialogTargetSectionId.value = target?.sectionId
+  dialogTargetPosition.value = target?.position
+  dialogTargetIsBottom.value = target?.isBottom ?? false
+  dialogTargetGapIndex.value = target?.gapIndex
+  dialogTargetGapSize.value = target?.gapSize ?? 0
+  dialogInitialAirport.value = airportForBay(target?.bayId)
   dialogOpen.value = true
+}
+
+function onTinyClick(type: SpecialStripType) {
+  openCreateDialog(type)
 }
 
 function onDialogCreate(data: { callsign: string; aircraftType?: string; airport?: string }) {
   store.createStrip(
-    dialogStripType.value, data.callsign, data.aircraftType, data.airport,
+    dialogStripType.value, data.callsign || undefined, data.aircraftType, data.airport,
     dialogTargetBayId.value, dialogTargetSectionId.value,
     dialogTargetPosition.value, dialogTargetIsBottom.value
   )
@@ -191,24 +207,14 @@ function onTinyTouchEnd(event: TouchEvent, type: SpecialStripType) {
     if (touch) {
       const target = findDropTarget(touch.clientX, touch.clientY)
       if (target) {
-        if (type === 'note') {
-          store.createStrip(
-            'note', undefined, undefined, undefined,
-            target.bayId, target.sectionId, target.position, target.isBottom
-          )
-          if (target.gapIndex !== undefined && target.gapSize >= store.GAP_BUFFER) {
-            store.setGapAtIndex(target.bayId, target.sectionId, target.gapIndex, target.gapSize)
-          }
-        } else {
-          dialogStripType.value = type
-          dialogTargetBayId.value = target.bayId
-          dialogTargetSectionId.value = target.sectionId
-          dialogTargetPosition.value = target.position
-          dialogTargetIsBottom.value = target.isBottom
-          dialogTargetGapIndex.value = target.gapIndex
-          dialogTargetGapSize.value = target.gapSize
-          dialogOpen.value = true
-        }
+        openCreateDialog(type, {
+          bayId: target.bayId,
+          sectionId: target.sectionId,
+          position: target.position,
+          isBottom: target.isBottom,
+          gapIndex: target.gapIndex,
+          gapSize: target.gapSize,
+        })
       }
     }
     cleanupTouchDrag()

@@ -385,4 +385,27 @@ export interface EfsStaticConfig {
      * Recomputed whenever online controllers or myRole changes.
      */
     myRolesByAirport?: Map<string, ControllerRole[]>
+
+    /** Layout mode — multiAirport expands bayTemplate into column slots */
+    layoutMode?: 'standard' | 'multiAirport'
+
+    /** Bay template for multiAirport mode (logical section ids) */
+    bayTemplate?: {
+        sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
+    }
+
+    /** Number of visible column slots in multiAirport mode */
+    columnCount?: number
+
+    /**
+     * Multi-airport: all airports being processed (may be more than visible columns).
+     * When set, this is the source of truth for myAirports in multiAirport mode.
+     */
+    activeAirports?: string[]
+
+    /**
+     * Multi-airport: ICAO bound to each visible column slot (null = empty column).
+     * Length === columnCount.
+     */
+    columnAirports?: (string | null)[]
 }

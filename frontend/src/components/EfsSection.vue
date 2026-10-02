@@ -2,6 +2,7 @@
   <StripCreationDialog
     v-model="createDialogOpen"
     :strip-type="createDialogType"
+    :initial-airport="createDialogAirport"
     @create="onDialogCreate"
   />
   <div
@@ -102,6 +103,7 @@ const props = withDefaults(defineProps<{
 
 const createDialogOpen = ref(false)
 const createDialogType = ref<SpecialStripType>('vfrDep')
+const createDialogAirport = ref<string | undefined>(undefined)
 
 // Pending create info (stored while dialog is open, applied on dialog OK)
 const pendingCreatePosition = ref<number | undefined>(undefined)
@@ -111,6 +113,11 @@ const pendingCreateGapSize = ref<number>(0)
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
+
+const bayAirport = computed(() => {
+  const bay = store.layout.bays.find(b => b.id === props.bayId)
+  return bay?.airport
+})
 
 const isDragOver = ref(false)
 const isBottomDragOver = ref(false)
@@ -291,6 +298,7 @@ function onDialogCreate(data: { callsign: string; aircraftType?: string; airport
 // Open the dialog with pending position/gap info
 function openCreateDialog(type: SpecialStripType, position?: number, isBottom = false, gapIndex?: number, gapSize = 0) {
   createDialogType.value = type
+  createDialogAirport.value = bayAirport.value
   pendingCreatePosition.value = position
   pendingCreateIsBottom.value = isBottom
   pendingCreateGapIndex.value = gapIndex
@@ -331,11 +339,7 @@ function onTopDrop(event: DragEvent) {
   if (createType) {
     const type = createType as SpecialStripType
     const { position, gapIndex, gapSize } = computeTopZoneCreateDrop(event)
-    if (type === 'note') {
-      applyCreate('note', undefined, undefined, undefined, position, false, gapIndex, gapSize)
-    } else {
-      openCreateDialog(type, position, false, gapIndex, gapSize)
-    }
+    openCreateDialog(type, position, false, gapIndex, gapSize)
     return
   }
 
@@ -588,11 +592,7 @@ function onBottomDrop(event: DragEvent) {
   const createType = event.dataTransfer.getData('application/efs-create')
   if (createType) {
     const type = createType as SpecialStripType
-    if (type === 'note') {
-      applyCreate('note', undefined, undefined, undefined, 0, true)
-    } else {
-      openCreateDialog(type, 0, true)
-    }
+    openCreateDialog(type, 0, true)
     return
   }
 
@@ -626,11 +626,7 @@ function onBottomStripsDrop(event: DragEvent) {
   if (createType) {
     const type = createType as SpecialStripType
     const position = computeBottomStripsDrop(event)
-    if (type === 'note') {
-      applyCreate('note', undefined, undefined, undefined, position, true)
-    } else {
-      openCreateDialog(type, position, true)
-    }
+    openCreateDialog(type, position, true)
     return
   }
 
