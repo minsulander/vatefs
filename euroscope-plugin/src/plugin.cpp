@@ -1027,6 +1027,21 @@ std::string VatEFSPlugin::GetCdmAsrt(const std::string &callsign)
     return "";
 }
 
+std::string VatEFSPlugin::GetCdmTsat(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        // ASRT/TSAC/TOBT/TSAT/... — field 3 is what EuroScope CDM displays
+        if (parts.size() <= 3) return "";
+        return NormalizeCdmHhmm(parts[3]);
+    } catch (...) {
+    }
+    return "";
+}
+
 bool VatEFSPlugin::SetCdmStripFields(const std::string &callsign, const std::map<int, std::string> &fields)
 {
     try {
@@ -1180,21 +1195,26 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
                 std::string tsat = NormalizeCdmHhmm(fields[2]);
                 std::string ttot = NormalizeCdmHhmm(fields[3]);
                 std::string ctot = NormalizeCdmHhmm(fields[4]);
-                // Require at least TOBT or TSAT to accept the row (reject torn numeric junk)
-                if (tobt.empty() && tsat.empty()) continue;
 
                 std::string reason = fields.size() > 5 ? fields[5] : "";
                 if (reason == "flowRestriction") reason.clear();
-                // TOBT-SET-BY + ASRT from CDM strip annotation (not in CDM_data_*.txt)
+                // TOBT-SET-BY / ASRT / TSAT from CDM strip annotation (ES display source)
                 std::string setBy = GetCdmTobtSetBy(callsign);
                 std::string asrt = GetCdmAsrt(callsign);
+                // Annotation TSAT leads CDM_data_*.txt (file often has TOBT before TSAT is written)
+                std::string annTsat = GetCdmTsat(callsign);
+                if (!annTsat.empty()) tsat = annTsat;
+
+                // Require at least TOBT or TSAT to accept the row (reject torn numeric junk)
+                if (tobt.empty() && tsat.empty()) continue;
 
                 std::string key = tobt + "|" + tsat + "|" + ttot + "|" + ctot + "|" + reason + "|" + setBy + "|" + asrt;
                 snapshot[callsign] = key;
                 auto prev = lastCdmFileSnapshot.find(callsign);
                 if (prev != lastCdmFileSnapshot.end() && prev->second == key) continue;
 
-                DebugMessage("cdmLocal " + callsign + " TOBT=" + tobt + " setBy=" + (setBy.empty() ? "-" : setBy) +
+                DebugMessage("cdmLocal " + callsign + " TOBT=" + tobt + " TSAT=" + (tsat.empty() ? "-" : tsat) +
+                             " setBy=" + (setBy.empty() ? "-" : setBy) +
                              " ASRT=" + (asrt.empty() ? "-" : asrt));
 
                 nlohmann::json f = nlohmann::json::object();
@@ -2023,8 +2043,9 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                 if (fp.IsValid()) {
                                     const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
                                     auto parts = SplitCdmAnnotation(ann);
-                                    if (parts.size() > 3 && parts[3].size() >= 4) {
-                                        f["tsat"] = parts[3].substr(0, 4);
+                                    if (parts.size() > 3) {
+                                        std::string tsat = NormalizeCdmHhmm(parts[3]);
+                                        if (!tsat.empty()) f["tsat"] = tsat;
                                     }
                                 }
                             } catch (...) {

@@ -166,11 +166,10 @@ const onlyEssa = computed(() => {
   const airports = store.myAirports.map((a) => a.toUpperCase())
   return airports.length === 1 && airports[0] === 'ESSA'
 })
-/** No E/TOBT–TSAT sort UI or auto-sort in RTC (multi-airport) */
+/** Time-sort UI/auto-sort: single-airport dep sections (not RTC). EOBT works anywhere; TSAT toggle needs ESSA. */
 const timeSortEnabled = computed(
-  () => isTimeSortedSection.value && !store.multiAirport && hasEssa.value,
+  () => isTimeSortedSection.value && !store.multiAirport,
 )
-/** Sort controls only when ESSA is active (CDM times); TSAT↔E/TOBT toggle needs ESSA */
 const showTimeSortControls = computed(() => timeSortEnabled.value)
 const showTsatSortOption = computed(() => hasEssa.value && !store.multiAirport)
 /** GNG-style: PENDING DEP → TSAT when only ESSA and sort controls are shown */
@@ -178,7 +177,8 @@ const sectionDisplayTitle = computed(() => {
   if (
     props.section.id === 'pending_dep' &&
     onlyEssa.value &&
-    showTimeSortControls.value
+    showTimeSortControls.value &&
+    activeTimeSortField() === 'tsat'
   ) {
     return 'TSAT'
   }
@@ -197,10 +197,11 @@ function loadTimeSortDir(): TimeSortDir {
 
 const timeSortField = ref<TimeSortField>(loadTimeSortField())
 const timeSortDir = ref<TimeSortDir>(loadTimeSortDir())
-const lastSortKeys = ref<Map<string, number>>(new Map())
+/** Last preferred HHMM per strip — used to detect real time changes (not clock wrap) */
+const lastSortTimes = ref<Map<string, string>>(new Map())
 
 function activeTimeSortField(): TimeSortField {
-  return hasEssa.value ? timeSortField.value : 'etobt'
+  return showTsatSortOption.value ? timeSortField.value : 'etobt'
 }
 
 const timeSortFieldLabel = computed(() =>
@@ -208,10 +209,12 @@ const timeSortFieldLabel = computed(() =>
 )
 
 const timeSortFieldTitle = computed(() => {
-  if (!showTsatSortOption.value) return 'Sorting by E/TOBT'
+  if (!showTsatSortOption.value) {
+    return 'Sorting by TOBT when set, else EOBT'
+  }
   return activeTimeSortField() === 'tsat'
-    ? 'Sorting by TSAT — click to sort by E/TOBT'
-    : 'Sorting by E/TOBT — click to sort by TSAT'
+    ? 'Sorting by TSAT (else TOBT/EOBT) — click for E/TOBT'
+    : 'Sorting by TOBT (else EOBT) — click for TSAT'
 })
 
 const timeSortDirTitle = computed(() =>
@@ -241,21 +244,59 @@ function toggleTimeSortDir() {
   clearManualAndPersist()
 }
 
-/** Minutes since midnight for HHMM / HHMMSS; missing/invalid → +∞ (sort last in asc) */
-function hhmmSortKey(hhmm: string | undefined): number {
-  if (!hhmm) return Number.POSITIVE_INFINITY
+/** Current UTC minutes since midnight */
+function utcNowMinutes(): number {
+  const now = new Date()
+  return now.getUTCHours() * 60 + now.getUTCMinutes()
+}
+
+/**
+ * Parse HHMM / HHMMSS → minutes since midnight, or null if missing/invalid.
+ */
+function parseHhmmMinutes(hhmm: string | undefined): number | null {
+  if (!hhmm) return null
   const digits = hhmm.replace(/\D/g, '')
-  if (digits.length < 3) return Number.POSITIVE_INFINITY
+  if (digits.length < 3) return null
   const normalized = digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
   const h = Number(normalized.slice(0, 2))
   const m = Number(normalized.slice(2, 4))
-  if (h > 23 || m > 59) return Number.POSITIVE_INFINITY
+  if (h > 23 || m > 59) return null
   return h * 60 + m
 }
 
-function depTimeSortKey(strip: FlightStripData, field: TimeSortField): number {
-  if (field === 'tsat') return hhmmSortKey(strip.tsat)
-  return hhmmSortKey(strip.tobt || strip.eobt)
+/**
+ * Sort key relative to "now" with midnight wrap (±12h).
+ * Missing/invalid → +∞ so strips without a usable time stay at the bottom in both directions.
+ */
+function hhmmSortKey(hhmm: string | undefined, nowMin: number = utcNowMinutes()): number {
+  const abs = parseHhmmMinutes(hhmm)
+  if (abs == null) return Number.POSITIVE_INFINITY
+  // Map onto a continuous timeline around now so 2350 sorts before 0010 overnight
+  let delta = abs - nowMin
+  if (delta > 720) delta -= 1440
+  if (delta < -720) delta += 1440
+  return nowMin + delta
+}
+
+/**
+ * Preferred departure time for the active sort mode, with CDM fallbacks so
+ * strips that only have EOBT (or TOBT without TSAT) still interleave correctly:
+ * - TSAT mode: TSAT → TOBT → EOBT
+ * - E/TOBT mode: TOBT → EOBT
+ */
+function preferredDepTime(strip: FlightStripData, field: TimeSortField): string | undefined {
+  if (field === 'tsat') {
+    return strip.tsat || strip.tobt || strip.eobt || undefined
+  }
+  return strip.tobt || strip.eobt || undefined
+}
+
+function depTimeSortKey(
+  strip: FlightStripData,
+  field: TimeSortField,
+  nowMin: number = utcNowMinutes(),
+): number {
+  return hhmmSortKey(preferredDepTime(strip, field), nowMin)
 }
 
 function collectTopStrips(): FlightStripData[] {
@@ -273,11 +314,16 @@ function sortByDepTime(
   field: TimeSortField,
   dir: TimeSortDir,
 ): FlightStripData[] {
+  const nowMin = utcNowMinutes()
   return [...list].sort((a, b) => {
-    // asc: earliest at top; desc: earliest at bottom; missing times stay at the far end
-    const d = dir === 'asc'
-      ? depTimeSortKey(a, field) - depTimeSortKey(b, field)
-      : depTimeSortKey(b, field) - depTimeSortKey(a, field)
+    const ka = depTimeSortKey(a, field, nowMin)
+    const kb = depTimeSortKey(b, field, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    // Missing times always at the bottom, regardless of asc/desc
+    if (aMiss !== bMiss) return aMiss ? 1 : -1
+    // asc: earliest at top; desc: earliest at bottom
+    const d = dir === 'asc' ? ka - kb : kb - ka
     if (d !== 0) return d
     const cs = a.callsign.localeCompare(b.callsign)
     if (cs !== 0) return cs
@@ -299,24 +345,24 @@ const topStrips = computed(() => {
   return list.sort((a, b) => a.position - b.position)
 })
 
-// When E/TOBT or TSAT changes for a strip in this section, drop manual order and re-sort by time
+// When preferred dep time (TSAT/TOBT/EOBT) changes, drop manual order and re-sort
 watch(
   () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value, store.multiAirport] as const,
   () => {
     if (!timeSortEnabled.value) return
     const field = activeTimeSortField()
     const list = collectTopStrips()
-    const nextKeys = new Map<string, number>()
-    let keyChanged = false
+    const nextTimes = new Map<string, string>()
+    let timeChanged = false
     for (const strip of list) {
-      const key = depTimeSortKey(strip, field)
-      nextKeys.set(strip.id, key)
-      if (lastSortKeys.value.has(strip.id) && lastSortKeys.value.get(strip.id) !== key) {
-        keyChanged = true
+      const time = preferredDepTime(strip, field) || ''
+      nextTimes.set(strip.id, time)
+      if (lastSortTimes.value.has(strip.id) && lastSortTimes.value.get(strip.id) !== time) {
+        timeChanged = true
       }
     }
-    lastSortKeys.value = nextKeys
-    if (keyChanged) {
+    lastSortTimes.value = nextTimes
+    if (timeChanged) {
       store.clearManualOrder(props.bayId, props.section.id)
     }
   },

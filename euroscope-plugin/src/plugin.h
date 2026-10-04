@@ -79,6 +79,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::string GetCdmTobtSetBy(const std::string &callsign);
     /** CDM ASRT / Ready Startup — annotation field 0 (HHMM or empty) */
     std::string GetCdmAsrt(const std::string &callsign);
+    /** CDM TSAT — annotation field 3 (HHMM); what ES displays, may lead CDM_data_*.txt */
+    std::string GetCdmTsat(const std::string &callsign);
     /** Write CDM slash-fields in annotation 0 (e.g. TOBT=2, setBy=9, ASRT=0) */
     bool SetCdmStripFields(const std::string &callsign, const std::map<int, std::string> &fields);
 

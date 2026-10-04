@@ -254,7 +254,8 @@ export class ViffService {
                     : {}
                 const eobt = normalizeHhmm((item as any).eobt)
                 const tobt = normalizeHhmm((item as any).tobt) ?? normalizeHhmm(cdmData.tobt)
-                const tsat = normalizeHhmm(cdmData.tsat)
+                // TSAT may be top-level (like TOBT) or nested under cdmData
+                const tsat = normalizeHhmm((item as any).tsat) ?? normalizeHhmm(cdmData.tsat)
                 const ctot = normalizeHhmm((item as any).ctot) ?? normalizeHhmm(cdmData.ctot)
                 const cdmSts = String((item as any).cdmSts ?? "").trim() || undefined
                 const taxiRaw = (item as any).taxi
