@@ -41,11 +41,43 @@ export const useEfsStore = defineStore("efs", () => {
         return manualOrderSections.value.has(sectionOrderKey(bayId, sectionId))
     }
 
+    /** Section heights preserved across server refresh until the next layout arrives */
+    const pendingLayoutHeights = ref<Map<string, number> | null>(null)
+
+    function snapshotSectionHeights(): Map<string, number> {
+        const m = new Map<string, number>()
+        for (const bay of layout.value.bays) {
+            for (const section of bay.sections) {
+                if (section.height !== undefined) {
+                    m.set(`${bay.id}:${section.id}`, section.height)
+                }
+            }
+        }
+        return m
+    }
+
+    function applyPreservedSectionHeights(target: EfsLayout, preserved: Map<string, number>) {
+        for (const bay of target.bays) {
+            for (const section of bay.sections) {
+                if (section.height !== undefined) continue
+                const h = preserved.get(`${bay.id}:${section.id}`)
+                if (h !== undefined) section.height = h
+            }
+        }
+    }
+
     // Controller status
     const myCallsign = ref('')
     const myAirports = ref<string[]>([])
     const myRole = ref<string | undefined>(undefined)
     const isController = ref(false)
+
+    // Multi-airport mode
+    const multiAirport = ref(false)
+    const activeAirports = ref<string[]>([])
+    const columnAirports = ref<(string | null)[]>([])
+    const columnCount = ref(4)
+    const airportOptions = ref<string[]>([])
 
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
@@ -125,7 +157,7 @@ export const useEfsStore = defineStore("efs", () => {
                         refresh(true)
                         break
                     case 'status':
-                        handleStatusMessage(message.callsign, message.airports, message.role, message.isController)
+                        handleStatusMessage(message)
                         break
                     case 'dclStatus':
                         dclStatus.value = message.status
@@ -164,6 +196,9 @@ export const useEfsStore = defineStore("efs", () => {
     // Handle layout message from server
     function handleLayoutMessage(newLayout: EfsLayout) {
         console.log("received layout:", newLayout)
+        const preserved = pendingLayoutHeights.value ?? snapshotSectionHeights()
+        pendingLayoutHeights.value = null
+        applyPreservedSectionHeights(newLayout, preserved)
         layout.value = newLayout
     }
 
@@ -226,6 +261,7 @@ export const useEfsStore = defineStore("efs", () => {
     // Refresh all data from server
     function refresh(serverRequested: boolean = false) {
         console.log("Refreshing all data from server")
+        pendingLayoutHeights.value = snapshotSectionHeights()
         // Clear local state
         layout.value = { bays: [] }
         strips.value.clear()
@@ -240,11 +276,196 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Handle status message from server
-    function handleStatusMessage(callsign: string, airports: string[], role?: string, controller?: boolean) {
-        myCallsign.value = callsign
-        myAirports.value = airports
-        myRole.value = role
-        isController.value = controller ?? false
+    function handleStatusMessage(message: {
+        callsign: string
+        airports: string[]
+        role?: string
+        isController?: boolean
+        multiAirport?: boolean
+        activeAirports?: string[]
+        columnAirports?: (string | null)[]
+        columnCount?: number
+    }) {
+        myCallsign.value = message.callsign
+        myAirports.value = message.airports
+        myRole.value = message.role
+        isController.value = message.isController ?? false
+        multiAirport.value = message.multiAirport ?? false
+        const nextActive = message.activeAirports ?? message.airports
+        markNewlyActiveAirports(nextActive)
+        activeAirports.value = nextActive
+        columnAirports.value = message.columnAirports ?? []
+        if (typeof message.columnCount === 'number') {
+            columnCount.value = message.columnCount
+        } else if (message.columnAirports) {
+            columnCount.value = message.columnAirports.length
+        }
+        if (multiAirport.value && airportOptions.value.length === 0) {
+            void fetchAirportOptions()
+        }
+    }
+
+    async function fetchAirportOptions() {
+        try {
+            const res = await fetch('/api/airports?prefix=ES')
+            if (!res.ok) return
+            const data = await res.json() as { airports?: string[] }
+            if (data.airports) airportOptions.value = data.airports
+        } catch (err) {
+            console.warn('Failed to fetch airport list', err)
+        }
+    }
+
+    function setColumnAirport(columnIndex: number, airport: string | null) {
+        sendMessage({ type: 'setColumnAirport', columnIndex, airport })
+        // Optimistic local update
+        const next = [...columnAirports.value]
+        while (next.length <= columnIndex) next.push(null)
+        if (airport) {
+            const previous = next[columnIndex] ?? null
+            // Already in another column → swap with this column's current airport
+            for (let i = 0; i < next.length; i++) {
+                if (i !== columnIndex && next[i] === airport) next[i] = previous
+            }
+        }
+        next[columnIndex] = airport
+        columnAirports.value = next
+    }
+
+    function addActiveAirport(airport: string) {
+        sendMessage({ type: 'addActiveAirport', airport })
+        if (!activeAirports.value.includes(airport)) {
+            markNewlyActiveAirports([...activeAirports.value, airport])
+            activeAirports.value = [...activeAirports.value, airport]
+        }
+    }
+
+    function removeActiveAirport(airport: string) {
+        sendMessage({ type: 'removeActiveAirport', airport })
+        activeAirports.value = activeAirports.value.filter(a => a !== airport)
+        columnAirports.value = columnAirports.value.map(a => (a === airport ? null : a))
+        if (pendingIdleSwap.value === airport) pendingIdleSwap.value = null
+    }
+
+    function setColumnCount(count: number) {
+        const n = Math.max(2, Math.min(6, Math.floor(count)))
+        if (n === columnCount.value) return
+        sendMessage({ type: 'setColumnCount', count: n })
+        // Optimistic local update until status/layout arrives
+        columnCount.value = n
+        const next = [...columnAirports.value]
+        while (next.length < n) next.push(null)
+        columnAirports.value = next.slice(0, n)
+    }
+
+    function adjustColumnCount(delta: number) {
+        setColumnCount(columnCount.value + delta)
+    }
+
+    /** True if any strip instance exists for this airport (including idle-bay strips). */
+    function airportHasTraffic(icao: string): boolean {
+        for (const strip of strips.value.values()) {
+            if (strip.airport === icao) return true
+        }
+        return false
+    }
+
+    /** Arrival/departure strip counts for a multi-airport ICAO (notes/cross ignored). */
+    function airportTrafficCounts(icao: string): { arr: number; dep: number } {
+        let arr = 0
+        let dep = 0
+        for (const strip of strips.value.values()) {
+            if (strip.airport !== icao) continue
+            if (strip.stripType === 'arrival') arr++
+            else if (strip.stripType === 'departure' || strip.stripType === 'local') dep++
+        }
+        return { arr, dep }
+    }
+
+    /**
+     * Idle = active, not shown in any column, and has traffic.
+     * Empty closed airports stay in activeAirports but are hidden from the idle bar
+     * until traffic appears — then they show up for one-click swap.
+     */
+    const idleAirports = computed(() => {
+        const visible = new Set(columnAirports.value.filter((a): a is string => !!a))
+        return activeAirports.value.filter(a => !visible.has(a) && airportHasTraffic(a))
+    })
+
+    /** Idle airport selected for column swap (click idle, then click column). */
+    const pendingIdleSwap = ref<string | null>(null)
+    /** Column index briefly highlighted when its airport is clicked in the top bar. */
+    const flashingColumnIndex = ref<number | null>(null)
+    let flashTimer: ReturnType<typeof setTimeout> | null = null
+    /** Airports that just became active — shown/blink on top bar briefly. */
+    const newlyActiveAirports = ref<string[]>([])
+    const newlyActiveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+    function markNewlyActiveAirports(nextActive: string[]) {
+        // Skip initial populate (nothing to compare against yet)
+        if (activeAirports.value.length === 0) return
+        const prev = new Set(activeAirports.value)
+        for (const icao of nextActive) {
+            if (prev.has(icao)) continue
+            if (!newlyActiveAirports.value.includes(icao)) {
+                newlyActiveAirports.value = [...newlyActiveAirports.value, icao]
+            }
+            const existing = newlyActiveTimers.get(icao)
+            if (existing) clearTimeout(existing)
+            newlyActiveTimers.set(icao, setTimeout(() => {
+                newlyActiveAirports.value = newlyActiveAirports.value.filter(a => a !== icao)
+                newlyActiveTimers.delete(icao)
+            }, 4000))
+        }
+    }
+
+    function isNewlyActiveAirport(icao: string): boolean {
+        return newlyActiveAirports.value.includes(icao)
+    }
+
+    function selectIdleForSwap(icao: string) {
+        pendingIdleSwap.value = pendingIdleSwap.value === icao ? null : icao
+    }
+
+    function clearPendingIdleSwap() {
+        pendingIdleSwap.value = null
+    }
+
+    function flashColumnForAirport(icao: string) {
+        const index = columnAirports.value.findIndex(a => a === icao)
+        if (index < 0) return false
+        if (flashTimer) clearTimeout(flashTimer)
+        flashingColumnIndex.value = index
+        flashTimer = setTimeout(() => {
+            flashingColumnIndex.value = null
+            flashTimer = null
+        }, 1200)
+        return true
+    }
+
+    /**
+     * Assign airport to a column.
+     * Previous occupant stays in activeAirports: with traffic → idle bar;
+     * without traffic → stays active but hidden from idle until traffic appears.
+     */
+    function assignAirportToColumn(columnIndex: number, airport: string | null) {
+        setColumnAirport(columnIndex, airport)
+    }
+
+    /** Complete idle→column swap when a pending idle airport is selected. */
+    function applyPendingIdleToColumn(columnIndex: number): boolean {
+        const icao = pendingIdleSwap.value
+        if (!icao) return false
+        if (!activeAirports.value.includes(icao)) addActiveAirport(icao)
+        assignAirportToColumn(columnIndex, icao)
+        pendingIdleSwap.value = null
+        return true
+    }
+
+    const COLUMN_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#00897b'] as const
+
+    function columnColor(index: number): string {
+        return COLUMN_COLORS[index % COLUMN_COLORS.length]!
     }
 
     // Computed: airports that are not part of the callsign (for display)
@@ -764,6 +985,30 @@ export const useEfsStore = defineStore("efs", () => {
         myAirports,
         myRole,
         isController,
+        multiAirport,
+        activeAirports,
+        columnAirports,
+        columnCount,
+        airportOptions,
+        idleAirports,
+        pendingIdleSwap,
+        flashingColumnIndex,
+        newlyActiveAirports,
+        columnColor,
+        setColumnAirport,
+        assignAirportToColumn,
+        addActiveAirport,
+        removeActiveAirport,
+        setColumnCount,
+        adjustColumnCount,
+        selectIdleForSwap,
+        clearPendingIdleSwap,
+        applyPendingIdleToColumn,
+        flashColumnForAirport,
+        isNewlyActiveAirport,
+        airportHasTraffic,
+        airportTrafficCounts,
+        fetchAirportOptions,
         displayAirports,
         getStripsBySection,
         getTopStrips,

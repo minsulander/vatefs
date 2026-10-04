@@ -49,6 +49,10 @@ export type {
     ManualTransferMessage,
     ViffReaMessage,
     ViffUpdateEobtMessage,
+    SetColumnAirportMessage,
+    AddActiveAirportMessage,
+    RemoveActiveAirportMessage,
+    SetColumnCountMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

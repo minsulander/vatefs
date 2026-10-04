@@ -21,6 +21,7 @@ import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole } from "./static-config.js"
+import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -413,17 +414,28 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
 }
 
 /**
- * Determine which section a flight should be in based on rules
+ * Determine which section a flight should be in based on rules.
+ * @param airport When set in multiAirport mode, maps logical section IDs onto that airport's bay.
  */
 export function determineSectionForFlight(
     flight: Flight,
-    config: EfsStaticConfig
+    config: EfsStaticConfig,
+    airport?: string
 ): { bayId: string; sectionId: string; ruleId?: string } | undefined {
     const sortedRules = sortByPriorityDesc(config.sectionRules)
+    const isMulti = config.layoutMode === 'multiAirport'
 
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateSectionRule(flight, rule, config)) {
+            if (isMulti && airport) {
+                const bayId = resolveBayForAirport(airport, config.columnAirports)
+                return {
+                    bayId,
+                    sectionId: prefixedSectionId(bayId, rule.sectionId),
+                    ruleId: rule.id
+                }
+            }
             const bayId = config.sectionToBay.get(rule.sectionId)
             if (!bayId) {
                 console.error(`Section "${rule.sectionId}" from rule "${rule.id}" not found in layout`)
@@ -439,6 +451,13 @@ export function determineSectionForFlight(
 
     // No rule matched, use default if configured
     if (config.defaultSection) {
+        if (isMulti && airport) {
+            const bayId = resolveBayForAirport(airport, config.columnAirports)
+            return {
+                bayId,
+                sectionId: prefixedSectionId(bayId, config.defaultSection)
+            }
+        }
         const bayId = config.sectionToBay.get(config.defaultSection)
         if (bayId) {
             return { bayId, sectionId: config.defaultSection }
@@ -457,9 +476,14 @@ function evaluateActionRule(
     rule: ActionRule,
     config: EfsStaticConfig
 ): boolean {
-    // Check section condition
-    if (rule.sectionId !== undefined && rule.sectionId !== sectionId) {
-        return false
+    // Check section condition (compare logical IDs in multiAirport mode)
+    if (rule.sectionId !== undefined) {
+        const effectiveSection = config.layoutMode === 'multiAirport'
+            ? logicalSectionId(sectionId)
+            : sectionId
+        if (rule.sectionId !== effectiveSection) {
+            return false
+        }
     }
 
     if (!evaluateCommonConditions(flight, rule, config)) {
@@ -598,14 +622,17 @@ function evaluateMoveRule(
     rule: MoveRule,
     config: EfsStaticConfig
 ): boolean {
+    const fromId = config.layoutMode === 'multiAirport' ? logicalSectionId(fromSectionId) : fromSectionId
+    const toId = config.layoutMode === 'multiAirport' ? logicalSectionId(toSectionId) : toSectionId
+
     // Check from-section conditions
-    if (rule.fromSectionId !== undefined && rule.fromSectionId !== fromSectionId) {
+    if (rule.fromSectionId !== undefined && rule.fromSectionId !== fromId) {
         return false
     }
-    if (rule.fromSectionIdContains !== undefined && !fromSectionId.includes(rule.fromSectionIdContains)) {
+    if (rule.fromSectionIdContains !== undefined && !fromSectionId.includes(rule.fromSectionIdContains) && !fromId.includes(rule.fromSectionIdContains)) {
         return false
     }
-    if (rule.toSectionId !== toSectionId) {
+    if (rule.toSectionId !== toId) {
         return false
     }
 
