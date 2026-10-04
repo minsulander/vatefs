@@ -15,8 +15,7 @@ Work in progress, experimental software, use at your own risk, yadiyada...
 
 ![Allow the plugin to draw on the radar screen](frontend/public/screenshots/draw-permissions.png)
 4. Connect to VATSIM, then type `.efs start`. You should get a message from VatEFS with a link.
-5. Open that link in a web browser (port 17770).
-  - On the same PC, `http://localhost:17770/` works too.
+5. Open that link in a web browser (port 17770). On the same PC, `http://localhost:17770/` works too.
 
 ## Building & Running
 
