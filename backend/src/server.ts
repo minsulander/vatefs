@@ -924,6 +924,8 @@ function buildDclTemplateData(flight: Flight, remarks: string): DclTemplateData 
         atis: atisStr,
         qnh: qnhStr,
         rmk: remarks,
+        ctot: flight.ctot || undefined,
+        tsat: flight.tsat || undefined,
     }
 }
 

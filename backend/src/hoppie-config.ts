@@ -103,6 +103,10 @@ export interface DclTemplateData {
     atis: string
     qnh: string
     rmk: string
+    /** Calculated Take-Off Time (HHmm) — VatEFS injection, not a TopSky token */
+    ctot?: string
+    /** Target Start-Up Approval Time (HHmm) — ESSA CDM only; VatEFS injection */
+    tsat?: string
 }
 
 /**
@@ -121,6 +125,47 @@ function applyDclSubstitutions(template: string, substitutions: [RegExp, string]
     return result
 }
 
+function formatInjectedTime(label: "TSAT" | "CTOT", hhmm: string, markers: boolean): string {
+    return markers ? ` ${label} @${hhmm}@` : ` ${label} ${hhmm}`
+}
+
+/**
+ * VatEFS-only: inject CTOT/TSAT into a filled TopSky DCL clearance.
+ * Does not require <ctot>/<tsat> tokens in TopSkyCPDLC.txt.
+ *
+ * - ESSA-style (MONITOR … AND REPORT READY): insert before MONITOR;
+ *   when TSAT present, rewrite to AND ON TSAT REPORT READY.
+ * - ESGG-style (EOBT … REQUEST START-UP): insert CTOT between EOBT and REQUEST START-UP.
+ */
+export function injectCtotTsatIntoDcl(text: string, data: DclTemplateData, markers: boolean): string {
+    const tsat = data.tsat?.trim()
+    const ctot = data.ctot?.trim()
+    if (!tsat && !ctot) return text
+
+    // ESSA / CDM template shape
+    if (/MONITOR\b.+\bAND REPORT READY\b/i.test(text)) {
+        let result = text
+        if (tsat) {
+            result = result.replace(/\bAND REPORT READY\b/i, "AND ON TSAT REPORT READY")
+        }
+        const insert =
+            (tsat ? formatInjectedTime("TSAT", tsat, markers) : "") +
+            (ctot ? formatInjectedTime("CTOT", ctot, markers) : "")
+        if (insert) {
+            result = result.replace(/(\s*)(MONITOR\b)/i, `${insert}$1$2`)
+        }
+        return result
+    }
+
+    // ESGG template shape — CTOT only between EOBT and REQUEST START-UP
+    if (ctot && /\bEOBT\b/i.test(text) && /\bREQUEST START-UP\b/i.test(text)) {
+        const insert = formatInjectedTime("CTOT", ctot, markers)
+        return text.replace(/(\bEOBT\s+\S+)(\s+REQUEST START-UP)/i, `$1${insert}$2`)
+    }
+
+    return text
+}
+
 /**
  * Fill a DCL template with plain values (for dialog preview).
  * Replaces <ades>, <drwy>, etc. with actual values.
@@ -129,7 +174,7 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
     const template = dclTemplates.get(airport)
     if (!template) return undefined
 
-    return applyDclSubstitutions(template, [
+    const filled = applyDclSubstitutions(template, [
         [/<callsign>/gi, data.callsign],
         [/<cr\/lf>/gi, " "],
         [/<ades>/gi, data.ades],
@@ -144,6 +189,7 @@ export function fillDclTemplate(airport: string, data: DclTemplateData): string 
         [/ ?<qnh>/gi, data.qnh && data.qnh !== "NA" ? ` QNH ${data.qnh}` : ""],
         [/ ?<rmk>/gi, data.rmk ? ` ${data.rmk}` : ""],
     ])
+    return injectCtotTsatIntoDcl(filled, data, false)
 }
 
 /**
@@ -154,7 +200,7 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
     const template = dclTemplates.get(airport)
     if (!template) return undefined
 
-    return applyDclSubstitutions(template, [
+    const filled = applyDclSubstitutions(template, [
         [/<callsign>/gi, `@${data.callsign}@`],
         [/<cr\/lf>/gi, " "],
         [/<ades>/gi, `@${data.ades}@`],
@@ -169,4 +215,5 @@ export function fillDclTemplateWithMarkers(airport: string, data: DclTemplateDat
         [/ ?<qnh>/gi, data.qnh && data.qnh !== "NA" ? ` @QNH ${data.qnh}@` : ""],
         [/ ?<rmk>/gi, data.rmk ? ` @${data.rmk}@` : ""],
     ])
+    return injectCtotTsatIntoDcl(filled, data, true)
 }

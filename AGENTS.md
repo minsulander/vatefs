@@ -393,6 +393,12 @@ VatEFS integrates with the [Hoppie ACARS network](http://hoppie.nl/acars/system/
 - `fillDclTemplate()` replaces with plain values (for dialog preview)
 - `fillDclTemplateWithMarkers()` replaces with `@value@` (for CPDLC send)
 
+**VatEFS CTOT/TSAT injection** (not TopSky template tokens — TopSky has no vIFF support):
+- After template fill, `injectCtotTsatIntoDcl()` inserts times from `flight.ctot` / `flight.tsat` when present
+- **ESSA** (CDM): insert `TSAT HHmm` and/or `CTOT HHmm` before `MONITOR`; when TSAT present, rewrite `AND REPORT READY` → `AND ON TSAT REPORT READY`
+- **ESGG** (non-CDM): insert `CTOT HHmm` between `EOBT` and `REQUEST START-UP` (TSAT never applies)
+- Clearance dialog shows read-only **E/TOBT** (TOBT at ESSA when available, else EOBT) and **CTOT** when present
+
 **Frequency storage**: `staticConfig.myFrequency` set from `myselfUpdate.frequency` (or 118.505 in mock mode)
 
 **WebSocket messages** (additional):

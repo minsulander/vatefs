@@ -24,6 +24,14 @@
         <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
         <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value clnc-clickable" @click="openDropdown('cfl')">{{ strip.clearedAltitude || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
+        <div v-if="etobtValue" class="clnc-row">
+          <span class="clnc-label">{{ etobtLabel }}</span>
+          <span class="clnc-value">{{ etobtValue }}</span>
+        </div>
+        <div v-if="strip.ctot" class="clnc-row">
+          <span class="clnc-label">CTOT</span>
+          <span class="clnc-value">{{ strip.ctot }}</span>
+        </div>
       </div>
 
       <!-- DCL section (shown when there's a DCL request) -->
@@ -116,6 +124,18 @@ const dclStatusClass = computed(() => {
     case 'REJECTED': return 'dcl-status-error'
     default: return ''
   }
+})
+
+/** CDM (TOBT) is only available at ESSA */
+const CDM_AIRPORTS = new Set(['ESSA'])
+const isCdmAirport = computed(() => CDM_AIRPORTS.has(props.strip.adep))
+
+const etobtLabel = computed(() => (isCdmAirport.value ? 'E/TOBT' : 'EOBT'))
+const etobtValue = computed(() => {
+  if (isCdmAirport.value) {
+    return props.strip.tobt || props.strip.eobt || ''
+  }
+  return props.strip.eobt || ''
 })
 
 // Airport name lookups
