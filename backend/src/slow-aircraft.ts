@@ -32,19 +32,37 @@ export function loadSlowAircraft(filePath: string) {
  * Check if an aircraft is considered "slow" based on its wake turbulence and type.
  */
 export function isSlowAircraft(wakeTurbulence: string, aircraftType: string): boolean {
+    const type = aircraftType.toUpperCase()
+    const wtc = wakeTurbulence.toUpperCase()
+
     for (const rule of rules) {
-        if (rule.wakeTurbulence !== wakeTurbulence) continue
+        if (rule.wakeTurbulence.toUpperCase() !== wtc) continue
 
         if (rule.includeTypes) {
             // Only match specific types
-            if (rule.includeTypes.includes(aircraftType)) return true
+            if (rule.includeTypes.some(t => t.toUpperCase() === type)) return true
         } else if (rule.excludeTypes) {
             // Match all of this WTC except excluded types
-            if (!rule.excludeTypes.includes(aircraftType)) return true
+            if (!rule.excludeTypes.some(t => t.toUpperCase() === type)) return true
         } else {
             // Match all of this WTC
             return true
         }
     }
     return false
+}
+
+/**
+ * ESSA auto-SLOW is only applied 06:00–22:00 local time (Europe/Stockholm).
+ * Window is [06:00, 22:00).
+ */
+export function isEssaAutoSlowHours(now: Date = new Date()): boolean {
+    const hourStr = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Europe/Stockholm",
+        hour: "2-digit",
+        hour12: false
+    }).format(now)
+    const hour = Number(hourStr)
+    const h = hour === 24 ? 0 : hour
+    return h >= 6 && h < 22
 }

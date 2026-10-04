@@ -1975,7 +1975,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 const flight = flightStore.getFlight(remarkStrip.callsign)
                 if (flight) {
                     const text = message.text.trim()
-                    flight.remarks = text || undefined
+                    const nextRemarks = text || undefined
+                    flightStore.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
+                    flight.remarks = nextRemarks
                     // Set scratchpad in plugin: prepend "." for remarks, or clear if empty
                     const scratchValue = text ? `.${text}` : ''
                     sendUdp(JSON.stringify({ type: "setScratch", callsign: remarkStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
@@ -2616,6 +2618,13 @@ udpIn.on("message", (msg, rinfo) => {
                     broadcastStrip(strip)
                 }
                 console.log(`Strips updated: ${result.strips.map(s => s.id).join(", ")}`)
+                if (result.setScratchValue !== undefined && result.strip) {
+                    sendUdp(JSON.stringify({
+                        type: "setScratch",
+                        callsign: result.strip.callsign,
+                        value: result.setScratchValue
+                    } satisfies OutboundPluginCommand))
+                }
             } else if (result.strip) {
                 // Auto-move: section changed on an existing strip that wasn't just restored
                 const autoMoved = result.sectionChanged && !result.isNew && !result.restored
@@ -2653,6 +2662,14 @@ udpIn.on("message", (msg, rinfo) => {
                     console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
                 } else {
                     console.log(`Strip ${result.strip.callsign} updated [${(data as { type: string }).type}]`)
+                }
+
+                if (result.setScratchValue !== undefined) {
+                    sendUdp(JSON.stringify({
+                        type: "setScratch",
+                        callsign: result.strip.callsign,
+                        value: result.setScratchValue
+                    } satisfies OutboundPluginCommand))
                 }
 
                 // Update DCL clearance preview when flight data changes (non-mock mode)

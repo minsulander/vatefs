@@ -79,6 +79,8 @@ export interface Flight {
 
     // Controller remarks (from scratchpad values starting with ".")
     remarks?: string
+    /** True after controller manually clears an auto-SLOW remark — do not re-add */
+    autoSlowDismissed?: boolean
 
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)

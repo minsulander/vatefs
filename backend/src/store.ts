@@ -210,6 +210,7 @@ class EfsStore {
         shiftedStrips?: FlightStrip[]
         shiftedGaps?: Gap[]
         deletedGapKeys?: string[]
+        setScratchValue?: string
         multiUpdates?: ProcessMessageResult['multiUpdates']
     } {
         const result = flightStore.processMessage(message)
@@ -266,6 +267,7 @@ class EfsStore {
                 shiftedStrips,
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
+                setScratchValue: result.setScratchValue,
                 multiUpdates: result.multiUpdates
             }
         }
@@ -373,7 +375,8 @@ class EfsStore {
                 restored: result.restored,
                 shiftedStrips,
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
-                deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined
+                deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
+                setScratchValue: result.setScratchValue
             }
         }
 

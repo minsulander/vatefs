@@ -16,7 +16,7 @@ import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
 import { findStandForPosition } from "./stand-data.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
-import { isSlowAircraft } from "./slow-aircraft.js"
+import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { getRtfCallsign } from "./icao-airlines.js"
 import {
     getRelevantActiveAirports,
@@ -64,6 +64,9 @@ export interface ProcessMessageResult {
 
     /** Callsigns/strip IDs of strips whose positions were shifted (for add-from-top) */
     shiftedCallsigns?: string[]
+
+    /** Scratchpad value to push to EuroScope (e.g. auto-SLOW remark) */
+    setScratchValue?: string
 
     /** Per-strip update details in multi-airport mode */
     multiUpdates?: Array<{
@@ -289,6 +292,7 @@ class FlightStore {
         const multiUpdates: NonNullable<ProcessMessageResult['multiUpdates']> = []
         const strips: FlightStrip[] = []
         const deletedStripIds: string[] = []
+        let setScratchValue: string | undefined
 
         // Remove strip instances for airports no longer relevant
         for (const stripId of [...this.stripAssignments.keys()]) {
@@ -395,6 +399,13 @@ class FlightStore {
                 })
             }
 
+            // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
+            if (!setScratchValue && this.tryClearAutoSlowRemark(flight)) {
+                setScratchValue = ''
+            } else if (!setScratchValue && this.tryAutoSlowRemark(flight)) {
+                setScratchValue = '.SLOW'
+            }
+
             const strip = this.createStrip(
                 flight,
                 targetSection.bayId,
@@ -421,6 +432,7 @@ class FlightStore {
             strips: strips.length ? strips : undefined,
             deletedStripIds: deletedStripIds.length ? deletedStripIds : undefined,
             softDeleted: deletedStripIds.length > 0 && strips.length === 0,
+            setScratchValue,
             multiUpdates: multiUpdates.length ? multiUpdates : undefined
         }
     }
@@ -575,6 +587,7 @@ class FlightStore {
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         const ruleSource = targetSection.ruleId ?? 'default'
+        let setScratchValue: string | undefined
 
         if (isNewStrip) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
@@ -619,6 +632,13 @@ class FlightStore {
             console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, recovered assignment)`)
         }
 
+        // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
+        if (this.tryClearAutoSlowRemark(flight)) {
+            setScratchValue = ''
+        } else if (this.tryAutoSlowRemark(flight)) {
+            setScratchValue = '.SLOW'
+        }
+
         const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
         const shiftedCallsigns = this.getLastShiftedCallsigns()
 
@@ -628,8 +648,59 @@ class FlightStore {
             sectionChanged: sectionChanged ?? false,
             previousSection,
             restored,
+            setScratchValue,
             shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
         }
+    }
+
+    /**
+     * Auto-add SLOW remark for ESSA IFR departure strips.
+     * Arrivals/locals ignored; not re-added after manual clear; only 06:00–22:00 LT.
+     */
+    private tryAutoSlowRemark(flight: Flight): boolean {
+        // ESSA IFR DEP only — not ARR, not ESSA–ESSA local
+        if (flight.origin !== 'ESSA') return false
+        if (!flight.destination || flight.destination === 'ESSA') return false
+        if (flight.flightRules !== 'I' && flight.flightRules !== 'Y') return false
+        if (flight.remarks) return false
+        if (flight.autoSlowDismissed) return false
+        if (!isEssaAutoSlowHours()) return false
+
+        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
+        if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return false
+
+        flight.remarks = 'SLOW'
+        console.log(`[REMARKS] ${flight.callsign}: - -> SLOW (auto)`)
+        return true
+    }
+
+    /**
+     * Remove auto-SLOW remark when ATYP/WTC is no longer a slow type.
+     * Only clears an exact "SLOW" remark (leaves other controller remarks alone).
+     */
+    private tryClearAutoSlowRemark(flight: Flight): boolean {
+        if (flight.remarks !== 'SLOW') return false
+
+        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
+        if (isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return false
+
+        flight.remarks = undefined
+        console.log(`[REMARKS] ${flight.callsign}: SLOW -> - (auto, not slow)`)
+        return true
+    }
+
+    /**
+     * Remember that the controller cleared SLOW so we do not auto-add it again.
+     * Skips dismissal when the aircraft is no longer slow (auto-removal from ATYP change).
+     */
+    markAutoSlowDismissed(flight: Flight, previousRemarks: string | undefined, nextRemarks: string | undefined) {
+        if (previousRemarks !== 'SLOW' || nextRemarks === 'SLOW') return
+
+        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
+        if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return
+
+        flight.autoSlowDismissed = true
+        console.log(`[REMARKS] ${flight.callsign}: auto-SLOW dismissed`)
     }
 
     /**
@@ -905,6 +976,7 @@ class FlightStore {
                 : undefined
             if (nextRemarks !== flight.remarks) {
                 console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
+                this.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
                 flight.remarks = nextRemarks
             }
         }
