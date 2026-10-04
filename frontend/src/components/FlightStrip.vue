@@ -52,6 +52,33 @@
     </v-list>
   </v-menu>
 
+  <!-- CTOT menu (reason + REA) -->
+  <v-menu v-model="ctotMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+    <v-list density="compact" class="strip-context-menu ctot-menu">
+      <v-list-item class="ctot-reason-item" disabled>
+        <v-list-item-title class="ctot-reason-title">
+          {{ strip.ctotReason || 'No regulation reason' }}
+        </v-list-item-title>
+      </v-list-item>
+      <v-divider v-if="canSendRea || canClearRea" />
+      <v-list-item v-if="canSendRea" @click="onSendReaClick">
+        <v-list-item-title>Set REA</v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="canClearRea" @click="onClearReaClick">
+        <v-list-item-title>Remove REA</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
+  <!-- REA badge menu (above TOBT when no CTOT) -->
+  <v-menu v-model="reaMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+    <v-list density="compact" class="strip-context-menu ctot-menu">
+      <v-list-item v-if="canClearRea" @click="onClearReaClick">
+        <v-list-item-title>Remove REA</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
   <!-- Ground state submenu -->
   <v-menu v-model="groundStateMenuOpen" :target="menuPosition" location="end" offset="150" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu groundstate-submenu">
@@ -143,7 +170,7 @@
       </div>
       <div class="strip-middle-content">
         <!-- Time section / clearance triangle -->
-        <div class="strip-section strip-time" :class="{ 'has-ctot': showCtot, 'is-fls': isFls }">
+        <div class="strip-section strip-time" :class="{ 'has-ctot': showCtot, 'has-cdm': showCdm, 'is-fls': isFls }">
           <template v-if="strip.clearedForTakeoff || strip.clearedToLand">
             <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
               <polygon points="12,4 22,20 2,20" />
@@ -152,38 +179,98 @@
               <polygon points="12,20 22,4 2,4" />
             </svg>
           </template>
-          <template v-else-if="eobtEditing">
-            <input
-              ref="eobtInput"
-              v-model="eobtEditText"
-              class="eobt-edit-input"
-              maxlength="4"
-              @click.stop
-              @blur="onEobtEditBlur"
-              @keydown.enter="onEobtEditBlur"
-              @keydown.escape="onEobtEditCancel"
-            />
-            <div class="time-label">EOBT</div>
+          <template v-else-if="timeEditing">
+            <div
+              class="time-edit-panel"
+              :class="{ 'time-edit-tobt': timeEditMode === 'tobt' }"
+            >
+              <div class="time-edit-half time-edit-top">
+                <input
+                  ref="timeEditInput"
+                  v-model="timeEditText"
+                  class="eobt-edit-input"
+                  :class="{ 'eobt-edit-fls': timeEditMode === 'eobt' && isFls }"
+                  type="text"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  enterkeyhint="done"
+                  autocomplete="off"
+                  maxlength="4"
+                  @click.stop
+                  @blur="onTimeEditBlur"
+                  @keydown.enter="onTimeEditBlur"
+                  @keydown.escape="onTimeEditCancel"
+                />
+              </div>
+              <div v-if="timeEditMode === 'tobt'" class="time-edit-half time-edit-bottom">
+                <button
+                  type="button"
+                  class="ready-tobt-btn"
+                  title="Ready TOBT"
+                  @mousedown.prevent
+                  @click.stop="onReadyTobtClick"
+                >READY TOBT</button>
+              </div>
+              <div v-else class="time-edit-half time-edit-bottom">
+                <div class="time-label">EOBT</div>
+              </div>
+            </div>
           </template>
           <template v-else>
             <div class="time-pair">
               <div
+                v-if="showPrimaryTime"
                 class="time-col"
-                :class="{ 'eobt-fls': isFls, 'eobt-clickable': isFls && store.isController }"
-                @click.stop="onEobtClick"
+                :class="{
+                  'eobt-fls': isFls,
+                  'eobt-clickable': canEditPrimaryTime,
+                }"
+                :title="isFls ? primaryTimeLabelTitle : undefined"
+                @click.stop="onPrimaryTimeClick"
               >
-                <div class="time-value" :class="{ 'time-fls': isFls }">{{ displayTime }}</div>
-                <div class="time-label" :class="{ 'label-fls': isFls }">
-                  {{ isFls ? 'FLS' : ((strip.stripType === 'departure' || strip.stripType === 'local') ? 'EOBT' : 'ETA') }}
+                <div
+                  v-if="networkStatusBadge && !showCtot"
+                  class="time-sts-label"
+                  :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
+                  :title="canClearRea ? 'Remove REA' : undefined"
+                  @click.stop="onReaBadgeClick"
+                >{{ networkStatusBadge }}</div>
+                <div
+                  class="time-value"
+                  :class="{ 'time-fls': isFls, 'time-changed': tobtChanged }"
+                >
+                  {{ primaryTimeValue }}
                 </div>
+                <div class="time-label" :class="{ 'label-fls': isFls }" :title="primaryTimeLabelTitle">
+                  {{ primaryTimeLabel }}<span v-if="showTobtSetBy" class="tobt-setby"> ({{ strip.tobtSetBy }})</span>
+                </div>
+              </div>
+              <div
+                v-if="showCdm"
+                class="time-col tsat-col"
+                title="TSAT"
+              >
+                <div
+                  class="time-value"
+                  :class="[tsatColorClass, { 'time-changed': tsatChanged }]"
+                >{{ displayTsat }}</div>
+                <div class="time-label">TSAT</div>
               </div>
               <div
                 v-if="showCtot"
                 class="time-col ctot-col"
+                :class="{ 'ctot-clickable': store.isController }"
                 :title="strip.ctotReason || 'CTOT'"
+                @click.stop="onCtotClick"
               >
-                <div v-if="isRea" class="time-rea-label">REA</div>
-                <div class="time-value time-ctot">{{ strip.ctot }}</div>
+                <div
+                  v-if="networkStatusBadge"
+                  class="time-sts-label"
+                  :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
+                  :title="canClearRea ? 'Remove REA' : undefined"
+                  @click.stop="onReaBadgeClick"
+                >{{ networkStatusBadge }}</div>
+                <div class="time-value time-ctot" :class="{ 'time-changed': ctotChanged }">{{ strip.ctot }}</div>
                 <div class="time-label time-label-ctot">CTOT</div>
               </div>
             </div>
@@ -246,7 +333,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUpdated } from 'vue'
+import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
@@ -327,6 +414,8 @@ const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
+const ctotMenuOpen = ref(false)
+const reaMenuOpen = ref(false)
 
 // Ground state options: code (shown in menu), label, action (sent to backend), groundstate (for highlighting current)
 const groundStateOptions = [
@@ -483,70 +572,379 @@ const stripStyle = computed(() => {
   return style
 })
 
-const displayTime = computed(() => {
-  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
-    return props.strip.eobt || ''
-  }
-  return props.strip.eta || ''
-})
+/** CDM (TOBT/TSAT) is only available at ESSA */
+const CDM_AIRPORTS = new Set(['ESSA'])
+/** Sections where TOBT/TSAT are relevant (ground clearance flow) */
+const CDM_SECTIONS = new Set(['pending_dep', 'cleared', 'push_start'])
+/** Taxi and later — hide EOBT when a CTOT is present */
+const TAXI_ONWARD_SECTIONS = new Set(['taxi', 'runway', 'dep_runway', 'arr_runway', 'ctr_dep'])
 
 const isDepartingIfr = computed(() =>
   props.strip.stripType === 'departure' &&
   (props.strip.flightRules === 'I' || props.strip.flightRules === 'Y')
 )
 
+const showCdm = computed(() =>
+  isDepartingIfr.value &&
+  CDM_AIRPORTS.has(props.strip.adep) &&
+  CDM_SECTIONS.has(props.strip.sectionId) &&
+  !props.strip.clearedForTakeoff
+)
+
+/** CTOT shown for any bay/section while still a ground IFR departure */
 const showCtot = computed(() =>
   isDepartingIfr.value && !!props.strip.ctot && !props.strip.clearedForTakeoff
 )
 
-const isFls = computed(() =>
-  isDepartingIfr.value && !!props.strip.cdmSts?.startsWith('FLS')
+/** Hide EOBT on taxi+ when CTOT is shown (CDM primary times already gated by showCdm) */
+const showPrimaryTime = computed(() =>
+  !(showCtot.value && TAXI_ONWARD_SECTIONS.has(props.strip.sectionId))
 )
 
-const isRea = computed(() => props.strip.cdmSts === 'REA')
+/**
+ * Parse vIFF/CDM network status for strip UI.
+ * Shown: REA (badge), FLS variants (time label + tooltip).
+ * Not shown: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC, etc.
+ */
+function parseCdmSts(sts: string | undefined): {
+  kind: 'rea' | 'fls'
+  raw: string
+  flsType?: string
+  badge: string
+} | null {
+  if (!sts) return null
+  const raw = sts.trim().toUpperCase()
+  if (!raw) return null
+  if (raw === 'REA') return { kind: 'rea', raw, badge: 'REA' }
+
+  if (raw === 'SUSP' || raw === 'FLS') {
+    return { kind: 'fls', raw, badge: 'FLS' }
+  }
+  const flsPrefix = raw.match(/^FLS[-_/](.+)$/)
+  const flsSuffix = raw.match(/^(.+)[-_/]FLS$/)
+  if (flsPrefix || flsSuffix || raw.includes('FLS')) {
+    const type = (flsPrefix?.[1] || flsSuffix?.[1] || '').replace(/^[-_/]+|[-_/]+$/g, '')
+    return {
+      kind: 'fls',
+      raw,
+      flsType: type && type !== 'FLS' ? type : undefined,
+      badge: 'FLS',
+    }
+  }
+
+  return null
+}
+
+/** Tooltip text for FLS / FLS-subtype */
+function flsTooltip(raw: string, flsType?: string): string {
+  const subtypeHelp: Record<string, string> = {
+    CDM: 'CDM (TOBT/TSAT related suspension)',
+    NRA: 'No Regulation Available / not ready',
+    MR: 'Mandatory Route non-compliance',
+    GS: 'Ground Stop',
+  }
+  if (flsType) {
+    const help = subtypeHelp[flsType] || flsType
+    return `FLS — ${help} (${raw})`
+  }
+  if (raw === 'SUSP') return 'FLS — Suspended (SUSP)'
+  return 'FLS — Flight Suspended'
+}
+
+const cdmStatus = computed(() =>
+  isDepartingIfr.value ? parseCdmSts(props.strip.cdmSts) : null
+)
+
+const isFls = computed(() => cdmStatus.value?.kind === 'fls')
+const isRea = computed(() => cdmStatus.value?.kind === 'rea')
+
+/** Badge above CTOT (or primary time if no CTOT). FLS uses primary label instead. */
+const networkStatusBadge = computed(() => {
+  const sts = cdmStatus.value
+  if (!sts || sts.kind === 'fls') return null
+  return sts.badge
+})
+
+const networkStatusClass = computed(() => {
+  const sts = cdmStatus.value
+  if (!sts || sts.kind !== 'rea') return {}
+  return { 'sts-rea': true }
+})
 
 const canSendRea = computed(() =>
   store.isController && showCtot.value && !isRea.value
 )
 
+/** REA can appear above TOBT (no CTOT) or CTOT — allow clear in both cases */
 const canClearRea = computed(() =>
-  store.isController && showCtot.value && isRea.value
+  store.isController && isRea.value
 )
 
-const eobtEditing = ref(false)
-const eobtEditText = ref('')
-const eobtInput = ref<HTMLInputElement | null>(null)
+/** UTC clock tick for TSAT window / FLS label blink */
+const nowUtcMs = ref(Date.now())
+let tsatWindowTimer: ReturnType<typeof setInterval> | undefined
 
-function onEobtClick() {
-  if (!store.isController || !isFls.value) return
-  eobtEditText.value = props.strip.eobt || ''
-  eobtEditing.value = true
-  nextTick(() => eobtInput.value?.focus())
+const primaryTimeValue = computed(() => {
+  if (showCdm.value) {
+    return props.strip.tobt || props.strip.eobt || ''
+  }
+  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
+    return props.strip.eobt || ''
+  }
+  return props.strip.eta || ''
+})
+
+/** CDM plugin: alternate FLS ↔ subtype (CDM/NRA/MR/GS) every 2s */
+const primaryTimeLabel = computed(() => {
+  if (isFls.value) {
+    const type = cdmStatus.value?.flsType
+    if (type) {
+      const phase = Math.floor(nowUtcMs.value / 2000) % 2
+      return phase === 0 ? 'FLS' : type
+    }
+    return 'FLS'
+  }
+  if (showCdm.value) return 'TOBT'
+  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') return 'EOBT'
+  return 'ETA'
+})
+
+const canEditPrimaryTime = computed(() =>
+  store.isController && (isFls.value || showCdm.value)
+)
+
+const showTobtSetBy = computed(() =>
+  showCdm.value && !isFls.value && (props.strip.tobtSetBy === 'P' || props.strip.tobtSetBy === 'A')
+)
+
+const tobtSetByTitle = computed(() => {
+  if (!showTobtSetBy.value) return undefined
+  return props.strip.tobtSetBy === 'P' ? 'TOBT set by Pilot' : 'TOBT set by ATC'
+})
+
+const primaryTimeLabelTitle = computed(() => {
+  if (isFls.value) {
+    return flsTooltip(cdmStatus.value?.raw || 'FLS', cdmStatus.value?.flsType)
+  }
+  return tobtSetByTitle.value
+})
+
+/** Brief flash when TOBT/TSAT/CTOT values change (incl. pilot TOBT updates) */
+const TIME_CHANGED_FLASH_MS = 5000
+const tobtChanged = ref(false)
+const tsatChanged = ref(false)
+const ctotChanged = ref(false)
+let tobtChangedTimer: ReturnType<typeof setTimeout> | undefined
+let tsatChangedTimer: ReturnType<typeof setTimeout> | undefined
+let ctotChangedTimer: ReturnType<typeof setTimeout> | undefined
+
+function triggerTimeChangedFlash(which: 'tobt' | 'tsat' | 'ctot') {
+  if (which === 'tobt') {
+    tobtChanged.value = true
+    if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
+    tobtChangedTimer = setTimeout(() => {
+      tobtChanged.value = false
+      tobtChangedTimer = undefined
+    }, TIME_CHANGED_FLASH_MS)
+  } else if (which === 'tsat') {
+    tsatChanged.value = true
+    if (tsatChangedTimer) clearTimeout(tsatChangedTimer)
+    tsatChangedTimer = setTimeout(() => {
+      tsatChanged.value = false
+      tsatChangedTimer = undefined
+    }, TIME_CHANGED_FLASH_MS)
+  } else {
+    ctotChanged.value = true
+    if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
+    ctotChangedTimer = setTimeout(() => {
+      ctotChanged.value = false
+      ctotChangedTimer = undefined
+    }, TIME_CHANGED_FLASH_MS)
+  }
 }
 
-function onEobtEditCancel() {
-  eobtEditing.value = false
+onMounted(() => {
+  tsatWindowTimer = setInterval(() => {
+    nowUtcMs.value = Date.now()
+  }, 1000)
+})
+onUnmounted(() => {
+  if (tsatWindowTimer) clearInterval(tsatWindowTimer)
+  if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
+  if (tsatChangedTimer) clearTimeout(tsatChangedTimer)
+  if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
+})
+
+/** Normalize CDM times (HHMM or HHMMSS) to minutes since midnight */
+function hhmmToMinutes(hhmm: string | undefined): number | null {
+  if (!hhmm) return null
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return null
+  const normalized = digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+  const h = Number(normalized.slice(0, 2))
+  const m = Number(normalized.slice(2, 4))
+  if (h > 23 || m > 59) return null
+  return h * 60 + m
 }
 
-function onEobtEditBlur() {
-  if (!eobtEditing.value) return
-  const value = eobtEditText.value.trim()
-  eobtEditing.value = false
-  if (/^\d{4}$/.test(value) && value !== props.strip.eobt) {
+function normalizeHhmmDisplay(hhmm: string | undefined): string {
+  if (!hhmm) return ''
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return ''
+  return digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+}
+
+const displayTsat = computed(() => normalizeHhmmDisplay(props.strip.tsat))
+
+// Non-immediate: flash only on real HHMM→HHMM changes.
+// Ignore appear/clear during strip refresh (e.g. REA remove + vIFF poll).
+// ATC-set TOBT (setBy A) — no highlight; still flash for pilot (P).
+watch(
+  () => normalizeHhmmDisplay(props.strip.tobt),
+  (next, prev) => {
+    if (!next || !prev || next === prev) return
+    if (props.strip.tobtSetBy === 'A') return
+    triggerTimeChangedFlash('tobt')
+  },
+)
+
+watch(
+  () => displayTsat.value,
+  (next, prev) => {
+    if (!next || !prev || next === prev) return
+    triggerTimeChangedFlash('tsat')
+  },
+)
+
+watch(
+  () => {
+    const c = props.strip.ctot || ''
+    const digits = c.replace(/\D/g, '')
+    if (digits.length < 3) return ''
+    return digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+  },
+  (next, prev) => {
+    if (!next || !prev || next === prev) return
+    triggerTimeChangedFlash('ctot')
+  },
+)
+
+/**
+ * GNG-style TSAT colours (UTC / Zulu), minute-inclusive:
+ * - green: TSAT−5:00 … TSAT+5:00  (startup window)
+ * - flash green↔yellow: last clock minute (TSAT+5:00 … TSAT+6:00)
+ * - yellow + strikethrough: after window (TSAT+6:00 …)
+ * - no colour before TSAT−5
+ */
+const tsatColorClass = computed(() => {
+  if (!showCdm.value || !props.strip.tsat) return {}
+  const tsatMin = hhmmToMinutes(props.strip.tsat)
+  if (tsatMin == null) return {}
+
+  const now = new Date(nowUtcMs.value)
+  const nowMin = now.getUTCHours() * 60 + now.getUTCMinutes()
+  const nowSec = nowMin * 60 + now.getUTCSeconds()
+  const tsatSec = tsatMin * 60
+  let deltaSec = nowSec - tsatSec
+  if (deltaSec > 12 * 3600) deltaSec -= 24 * 3600
+  if (deltaSec < -12 * 3600) deltaSec += 24 * 3600
+
+  // Past window: expired TSAT
+  if (deltaSec >= 6 * 60) return { 'tsat-expired': true }
+  // Last clock minute of ±5 window (e.g. TSAT 1052 → flash all of 1057z)
+  if (deltaSec >= 5 * 60 && deltaSec < 6 * 60) return { 'tsat-flash': true }
+  // Inside TSAT±5 (before last minute): green
+  if (deltaSec >= -5 * 60 && deltaSec < 5 * 60) return { 'tsat-window': true }
+
+  return {}
+})
+
+const timeEditing = ref(false)
+const timeEditMode = ref<'eobt' | 'tobt'>('eobt')
+const timeEditText = ref('')
+const timeEditInput = ref<HTMLInputElement | null>(null)
+
+function onPrimaryTimeClick() {
+  if (!canEditPrimaryTime.value) return
+  if (isFls.value) {
+    timeEditMode.value = 'eobt'
+    timeEditText.value = props.strip.eobt || ''
+  } else if (showCdm.value) {
+    timeEditMode.value = 'tobt'
+    timeEditText.value = props.strip.tobt || props.strip.eobt || ''
+  } else {
+    return
+  }
+  timeEditing.value = true
+  nextTick(() => timeEditInput.value?.focus())
+}
+
+function onReadyTobtClick() {
+  if (!store.isController || !showCdm.value || isFls.value) return
+  timeEditing.value = false
+  // Server sets TOBT=now then REA sequentially (avoids REA-only races)
+  store.viffReadyTobt(props.strip.id)
+}
+
+function onTimeEditCancel() {
+  timeEditing.value = false
+}
+
+function onTimeEditBlur() {
+  if (!timeEditing.value) return
+  const value = timeEditText.value.trim()
+  const mode = timeEditMode.value
+  timeEditing.value = false
+  if (!/^\d{4}$/.test(value)) return
+  if (mode === 'tobt') {
+    if (value !== (props.strip.tobt || props.strip.eobt || '')) {
+      store.viffUpdateTobt(props.strip.id, value)
+    }
+  } else if (value !== props.strip.eobt) {
     store.viffUpdateEobt(props.strip.id, value)
   }
 }
 
+function onCtotClick(event: MouseEvent) {
+  if (!store.isController || !showCtot.value) return
+  menuPosition.value = [event.clientX, event.clientY]
+  menuOpen.value = false
+  transferMenuOpen.value = false
+  groundStateMenuOpen.value = false
+  reaMenuOpen.value = false
+  ctotMenuOpen.value = true
+}
+
 function onSendReaClick() {
+  ctotMenuOpen.value = false
+  reaMenuOpen.value = false
   menuOpen.value = false
   if (!canSendRea.value) return
   store.viffRea(props.strip.id, true)
 }
 
 function onClearReaClick() {
+  ctotMenuOpen.value = false
+  reaMenuOpen.value = false
   menuOpen.value = false
   if (!canClearRea.value) return
   store.viffRea(props.strip.id, false)
+}
+
+function onReaBadgeClick(event: MouseEvent) {
+  if (!canClearRea.value) return
+  menuPosition.value = [event.clientX, event.clientY]
+  menuOpen.value = false
+  transferMenuOpen.value = false
+  groundStateMenuOpen.value = false
+  // With CTOT, reuse the CTOT menu (reason + Remove REA); otherwise REA-only menu
+  if (showCtot.value) {
+    reaMenuOpen.value = false
+    ctotMenuOpen.value = true
+  } else {
+    ctotMenuOpen.value = false
+    reaMenuOpen.value = true
+  }
 }
 
 // DCL button coloring + action highlight
@@ -708,6 +1106,9 @@ function handleTouchDropWithGaps(
     store.moveStripToSection(stripId, targetBayId, targetSectionId, 0)
     return
   }
+
+  // If section is auto time-sorted, align store positions to what the user sees
+  store.syncTimeSortSectionFromDom(targetBayId, targetSectionId, container)
 
   // Only consider "same section" if strip is in top zone of same section
   // Strips from bottom zone don't leave a space in top zone, so treat as cross-section move
@@ -941,11 +1342,15 @@ function onStripClick() {
 
 function onContextMenu(event: MouseEvent) {
   menuPosition.value = [event.clientX, event.clientY]
+  ctotMenuOpen.value = false
+  reaMenuOpen.value = false
   menuOpen.value = true
 }
 
 function onCallsignClick(event: MouseEvent) {
   menuPosition.value = [event.clientX, event.clientY]
+  ctotMenuOpen.value = false
+  reaMenuOpen.value = false
   menuOpen.value = true
 }
 
@@ -953,6 +1358,8 @@ function onCallsignTouch(event: TouchEvent) {
   const touch = event.changedTouches[0]
   if (touch) {
     menuPosition.value = [touch.clientX, touch.clientY]
+    ctotMenuOpen.value = false
+    reaMenuOpen.value = false
     menuOpen.value = true
   }
 }
@@ -1224,6 +1631,16 @@ function onGroundStateClick(action: string) {
   min-width: 58px;
 }
 
+.strip-time.has-cdm {
+  width: 58px;
+  min-width: 58px;
+}
+
+.strip-time.has-cdm.has-ctot {
+  width: 88px;
+  min-width: 88px;
+}
+
 .time-pair {
   display: flex;
   flex-direction: row;
@@ -1249,6 +1666,12 @@ function onGroundStateClick(action: string) {
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.tobt-setby {
+  font-size: 6px;
+  letter-spacing: 0;
 }
 
 .time-ctot {
@@ -1259,41 +1682,145 @@ function onGroundStateClick(action: string) {
   color: #d97706;
 }
 
-.time-rea-label {
+.time-sts-label {
   font-size: 7px;
   font-weight: 700;
-  color: #d97706;
   letter-spacing: 0.5px;
   line-height: 1;
   margin-bottom: 1px;
 }
 
-.time-fls {
+.time-sts-label.sts-rea {
+  color: #d97706;
+}
+
+.time-sts-label.sts-clickable {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.time-fls,
+.label-fls {
   color: #c00000;
 }
 
-.label-fls {
-  color: #c00000;
+/* GNG-style TSAT colours — time value only */
+.time-value.tsat-window {
+  color: #00a000; /* TSAT±5 startup window — bright green vs black */
+}
+
+.time-value.tsat-flash {
+  animation: tsat-flash 0.8s step-end infinite;
+}
+
+@keyframes tsat-flash {
+  0%, 49% { color: #00a000; } /* green — same as TSAT±5 window */
+  50%, 100% { color: #d4a017; } /* yellow */
+}
+
+.time-value.tsat-expired {
+  color: #d4a017;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* Brief highlight when TSAT/CTOT value changes */
+.time-value.time-changed {
+  color: #b45309 !important;
+  animation: time-changed-flash 0.8s ease-in-out infinite;
+}
+
+@keyframes time-changed-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .eobt-clickable {
   cursor: pointer;
 }
 
-.eobt-clickable:hover .time-value {
+.eobt-clickable:hover:not(:has(.time-sts-label:hover)) .time-value {
   text-decoration: underline;
 }
 
+.ctot-clickable {
+  cursor: pointer;
+}
+
+.ctot-clickable:hover:not(:has(.time-sts-label:hover)) .time-ctot {
+  text-decoration: underline;
+}
+
+.time-edit-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 40px;
+  align-self: stretch;
+}
+
+.time-edit-half {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.time-edit-tobt .time-edit-top {
+  border-bottom: 1px solid #bbb;
+}
+
+.time-edit-tobt .time-edit-bottom {
+  background: #e8e4dc;
+}
+
 .eobt-edit-input {
-  width: 34px;
-  font-size: 11px;
-  font-weight: 600;
+  width: 100%;
+  max-width: 48px;
+  height: 100%;
+  min-height: 18px;
+  font-size: 12px;
+  font-weight: 700;
   text-align: center;
-  border: 1px solid #c00000;
+  border: 1px solid #666;
   background: #fff;
-  color: #c00000;
+  color: #222;
   padding: 0;
   outline: none;
+  box-sizing: border-box;
+}
+
+.eobt-edit-input.eobt-edit-fls {
+  border-color: #c00000;
+  color: #c00000;
+}
+
+.ready-tobt-btn {
+  width: 100%;
+  max-width: 48px;
+  height: 100%;
+  min-height: 18px;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  line-height: 1.05;
+  padding: 0 1px;
+  border: none;
+  background: transparent;
+  color: #222;
+  cursor: pointer;
+  white-space: normal;
+}
+
+.ready-tobt-btn:hover {
+  background: #ddd8ce;
+}
+
+.strip-time:has(.time-edit-panel) {
+  padding: 0;
+  justify-content: stretch;
 }
 
 /* SID/Clearance section */
@@ -1583,6 +2110,23 @@ function onGroundStateClick(action: string) {
 
 .strip-context-menu .v-list-item {
   min-height: 32px;
+}
+
+.ctot-menu {
+  min-width: 160px;
+  max-width: 280px;
+}
+
+.ctot-reason-item {
+  opacity: 1 !important;
+}
+
+.ctot-reason-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #d97706;
+  white-space: normal;
+  line-height: 1.3;
 }
 
 .transfer-submenu {

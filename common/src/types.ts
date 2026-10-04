@@ -34,8 +34,13 @@ export interface FlightStrip {
     ata?: string               // Actual Time of Arrival
 
     // vIFF / CDM (departing IFR)
+    tobt?: string              // Target Off Block Time (HHmm) — CDM airports (ESSA)
+    tsat?: string              // Target Startup Approval Time (HHmm) — CDM airports (ESSA)
+    tobtSetBy?: 'P' | 'A'      // Who set TOBT: Pilot or ATC (blank if TOBT==EOBT)
+    /** Actual Start-up Request Time (HHmm) — CDM annotation ASRT / Ready Startup */
+    asrt?: string
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
-    cdmSts?: string            // Network status e.g. 'REA', 'FLS-CDM', 'FLS-NRA'
+    cdmSts?: string            // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
     ctotReason?: string        // mostPenalisingRegulation (optional tooltip)
 
     // Additional info
