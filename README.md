@@ -7,6 +7,16 @@ Work in progress, experimental software, use at your own risk, yadiyada...
 
 ![teaser](frontend/public/screenshots/teaser.png)
 
+## For controllers
+
+1. Install the `.msi` package.
+2. In EuroScope: **OTHER SET** → **Plug-ins…** → load `C:\Program Files\VatEFS\VatEFS.dll`.
+3. Allow the plugin to draw on the radar screen.
+
+![Allow the plugin to draw on the radar screen](frontend/public/screenshots/draw-permissions.png)
+4. Connect, then type `.efs start`. You should get a message from VatEFS with a link.
+5. Open that link in a web browser (port 17770). On the same PC, `http://localhost:17770/` works too.
+
 ## Building & Running
 
 Run with mock data:
