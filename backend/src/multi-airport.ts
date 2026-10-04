@@ -21,14 +21,14 @@ export interface BayTemplate {
     sections: Record<string, BayTemplateSection>
 }
 
-/** Column accent colors by slot index (cycles if more than length) */
+/** Column accent colors by slot index (unique for up to MAX_COLUMN_COUNT) */
 export const COLUMN_COLORS = [
-    "#e53935",
-    "#1e88e5",
-    "#43a047",
-    "#fb8c00",
-    "#8e24aa",
-    "#00897b",
+    "#4d9eab",
+    "#f3b84b",
+    "#9e6dc2",
+    "#e57373",
+    "#81c784",
+    "#64b5f6",
 ] as const
 
 export const MIN_COLUMN_COUNT = 2

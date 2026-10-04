@@ -462,10 +462,18 @@ export const useEfsStore = defineStore("efs", () => {
         return true
     }
 
-    const COLUMN_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#00897b'] as const
+    // Unique accents for up to MAX columns (2–6); no reuse within a layout
+    const COLUMN_COLORS = [
+        '#4d9eab',
+        '#f3b84b',
+        '#9e6dc2',
+        '#e57373',
+        '#81c784',
+        '#64b5f6',
+    ] as const
 
     function columnColor(index: number): string {
-        return COLUMN_COLORS[index % COLUMN_COLORS.length]!
+        return COLUMN_COLORS[index] ?? COLUMN_COLORS[COLUMN_COLORS.length - 1]!
     }
 
     // Computed: airports that are not part of the callsign (for display)
