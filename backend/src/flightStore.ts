@@ -897,9 +897,16 @@ class FlightStore {
             flight.missedApproach = false
         }
         // Process scratchpad-based remarks:
-        // Scratch values starting with "." are user remarks (e.g. ".SLOW" -> "SLOW")
-        if (message.scratch !== undefined && message.scratch.startsWith('.')) {
-            flight.remarks = message.scratch.substring(1)
+        // Scratch values starting with "." are user remarks (e.g. ".SLOW" -> "SLOW").
+        // Any other scratch value, including "", means the remark was removed in EuroScope.
+        if (message.scratch !== undefined) {
+            const nextRemarks = message.scratch.startsWith('.')
+                ? (message.scratch.substring(1).trim() || undefined)
+                : undefined
+            if (nextRemarks !== flight.remarks) {
+                console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
+                flight.remarks = nextRemarks
+            }
         }
         if (message.stand !== undefined) flight.stand = message.stand
         if (message.asp !== undefined) flight.asp = message.asp
