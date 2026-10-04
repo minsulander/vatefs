@@ -7,7 +7,7 @@ Work in progress, experimental software, use at your own risk, yadiyada...
 
 ![teaser](frontend/public/screenshots/teaser.png)
 
-## For controllers
+## Instructions for controllers
 
 1. Install the `.msi` package.
 2. In EuroScope: **OTHER SET** → **Plug-ins…** → load `C:\Program Files\VatEFS\VatEFS.dll`.
