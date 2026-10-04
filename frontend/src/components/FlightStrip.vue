@@ -40,6 +40,12 @@
       <v-list-item v-if="!isNote && store.isController" @click="onRemarksMenuClick">
         <v-list-item-title>Remarks</v-list-item-title>
       </v-list-item>
+      <v-list-item v-if="canSendRea" @click="onSendReaClick">
+        <v-list-item-title>Set REA</v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="canClearRea" @click="onClearReaClick">
+        <v-list-item-title>Remove REA</v-list-item-title>
+      </v-list-item>
       <v-list-item @click="onDeleteClick">
         <v-list-item-title>Delete</v-list-item-title>
       </v-list-item>
@@ -174,10 +180,9 @@
               <div
                 v-if="showCtot"
                 class="time-col ctot-col"
-                :class="{ 'ctot-clickable': canSendRea }"
-                :title="strip.ctotReason || 'CTOT — click to send REA'"
-                @click.stop="onCtotClick"
+                :title="strip.ctotReason || 'CTOT'"
               >
+                <div v-if="isRea" class="time-rea-label">REA</div>
                 <div class="time-value time-ctot">{{ strip.ctot }}</div>
                 <div class="time-label time-label-ctot">CTOT</div>
               </div>
@@ -225,22 +230,13 @@
 
     <!-- Right section: Action button(s) (hidden in observer mode) -->
     <template v-if="store.isController">
-      <div v-if="(strip.actions && strip.actions.length > 0) || showReaIndicator" class="strip-right"
-        :class="{ 'multi-action': effectiveActionCount > 1 || (showReaIndicator && strip.actions && strip.actions.length > 0) }">
+      <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
+        :class="{ 'multi-action': effectiveActionCount > 1 }">
         <button v-for="action in strip.actions" :key="action" class="action-button"
           :class="actionButtonClass(action)"
           @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
           <span class="action-text">{{ action === 'GOA' ? 'G/A' : action }}</span>
           <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
-        </button>
-        <button
-          v-if="showReaIndicator"
-          class="action-button action-rea"
-          title="Clear REA"
-          @click.stop="onReaClick"
-          @touchend.stop="(e) => { e.preventDefault(); onReaClick() }"
-        >
-          <span class="action-text">REA</span>
         </button>
       </div>
       <div v-else class="strip-right strip-right-empty"></div>
@@ -509,12 +505,12 @@ const isFls = computed(() =>
 
 const isRea = computed(() => props.strip.cdmSts === 'REA')
 
-const showReaIndicator = computed(() =>
-  store.isController && isDepartingIfr.value && isRea.value && !!props.strip.ctot
-)
-
 const canSendRea = computed(() =>
   store.isController && showCtot.value && !isRea.value
+)
+
+const canClearRea = computed(() =>
+  store.isController && showCtot.value && isRea.value
 )
 
 const eobtEditing = ref(false)
@@ -541,13 +537,15 @@ function onEobtEditBlur() {
   }
 }
 
-function onCtotClick() {
+function onSendReaClick() {
+  menuOpen.value = false
   if (!canSendRea.value) return
   store.viffRea(props.strip.id, true)
 }
 
-function onReaClick() {
-  if (!showReaIndicator.value) return
+function onClearReaClick() {
+  menuOpen.value = false
+  if (!canClearRea.value) return
   store.viffRea(props.strip.id, false)
 }
 
@@ -1230,7 +1228,7 @@ function onGroundStateClick(action: string) {
   display: flex;
   flex-direction: row;
   gap: 4px;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
 }
 
@@ -1254,11 +1252,20 @@ function onGroundStateClick(action: string) {
 }
 
 .time-ctot {
-  color: #00a000;
+  color: #d97706;
 }
 
 .time-label-ctot {
-  color: #00a000;
+  color: #d97706;
+}
+
+.time-rea-label {
+  font-size: 7px;
+  font-weight: 700;
+  color: #d97706;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  margin-bottom: 1px;
 }
 
 .time-fls {
@@ -1274,14 +1281,6 @@ function onGroundStateClick(action: string) {
 }
 
 .eobt-clickable:hover .time-value {
-  text-decoration: underline;
-}
-
-.ctot-clickable {
-  cursor: pointer;
-}
-
-.ctot-clickable:hover .time-ctot {
   text-decoration: underline;
 }
 
@@ -1467,20 +1466,6 @@ function onGroundStateClick(action: string) {
   font-size: 10px;
   letter-spacing: -0.8px;
   font-stretch: condensed;
-}
-
-.action-rea {
-  background: #d0d0d0 !important;
-  cursor: pointer;
-}
-
-.action-rea .action-text {
-  color: #666;
-  font-weight: 600;
-}
-
-.action-rea:hover {
-  background: #c0c0c0 !important;
 }
 
 .action-freq {

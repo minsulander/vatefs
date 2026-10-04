@@ -178,10 +178,20 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (sidName && *sidName && strlen(sidName) < 50)
             message["sid"] = AnsiToUtf8(sidName);
 
-        const char *eobt = fpData.GetEstimatedDepartureTime();
-        if (eobt && strlen(eobt) == 4) { // Valid EOBT is always 4 digits
-            out << " eobt " << eobt;
-            message["eobt"] = eobt;
+        const char *eobtRaw = fpData.GetEstimatedDepartureTime();
+        if (eobtRaw && eobtRaw[0] != '\0') {
+            // EuroScope returns uncompiled EOBT which is often < 4 digits (e.g. "945").
+            // Pad/truncate to HHmm so the backend always receives a usable value.
+            std::string eobtDigits;
+            for (const char *p = eobtRaw; *p; ++p) {
+                if (*p >= '0' && *p <= '9') eobtDigits.push_back(*p);
+            }
+            if (!eobtDigits.empty()) {
+                if (eobtDigits.size() > 4) eobtDigits = eobtDigits.substr(0, 4);
+                while (eobtDigits.size() < 4) eobtDigits.insert(eobtDigits.begin(), '0');
+                out << " eobt " << eobtDigits;
+                message["eobt"] = eobtDigits;
+            }
         }
 
         int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
