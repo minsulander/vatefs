@@ -117,7 +117,13 @@ type TimeSortDir = 'asc' | 'desc'
 
 const TIME_SORT_FIELD_KEY = 'efs/depTimeSort'
 const TIME_SORT_DIR_KEY = 'efs/depTimeSortDir'
-const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared'])
+const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared', 'dep'])
+
+/** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
+function isTimeSortSectionId(sectionId: string): boolean {
+  if (TIME_SORT_SECTIONS.has(sectionId)) return true
+  return /^(bay\d+|idle)_dep$/.test(sectionId)
+}
 
 const props = withDefaults(defineProps<{
   section: Section
@@ -151,7 +157,7 @@ const isDragOver = ref(false)
 const isBottomDragOver = ref(false)
 const topContainer = ref<HTMLElement | null>(null)
 
-const isTimeSortedSection = computed(() => TIME_SORT_SECTIONS.has(props.section.id))
+const isTimeSortedSection = computed(() => isTimeSortSectionId(props.section.id))
 const hasEssa = computed(() =>
   store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
@@ -160,9 +166,13 @@ const onlyEssa = computed(() => {
   const airports = store.myAirports.map((a) => a.toUpperCase())
   return airports.length === 1 && airports[0] === 'ESSA'
 })
+/** No E/TOBT–TSAT sort UI or auto-sort in RTC (multi-airport) */
+const timeSortEnabled = computed(
+  () => isTimeSortedSection.value && !store.multiAirport && hasEssa.value,
+)
 /** Sort controls only when ESSA is active (CDM times); TSAT↔E/TOBT toggle needs ESSA */
-const showTimeSortControls = computed(() => isTimeSortedSection.value && hasEssa.value)
-const showTsatSortOption = computed(() => hasEssa.value)
+const showTimeSortControls = computed(() => timeSortEnabled.value)
+const showTsatSortOption = computed(() => hasEssa.value && !store.multiAirport)
 /** GNG-style: PENDING DEP → TSAT when only ESSA and sort controls are shown */
 const sectionDisplayTitle = computed(() => {
   if (
@@ -276,13 +286,13 @@ function sortByDepTime(
 }
 
 /** Gaps only when not in auto time-sort mode */
-const showGaps = computed(() => !isTimeSortedSection.value || preferManualOrder.value)
+const showGaps = computed(() => !timeSortEnabled.value || preferManualOrder.value)
 
 const topStrips = computed(() => {
   void store.stripsVersion
   const list = collectTopStrips()
 
-  if (isTimeSortedSection.value && !preferManualOrder.value) {
+  if (timeSortEnabled.value && !preferManualOrder.value) {
     return sortByDepTime(list, activeTimeSortField(), timeSortDir.value)
   }
 
@@ -291,9 +301,9 @@ const topStrips = computed(() => {
 
 // When E/TOBT or TSAT changes for a strip in this section, drop manual order and re-sort by time
 watch(
-  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value] as const,
+  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value, store.multiAirport] as const,
   () => {
-    if (!isTimeSortedSection.value) return
+    if (!timeSortEnabled.value) return
     const field = activeTimeSortField()
     const list = collectTopStrips()
     const nextKeys = new Map<string, number>()

@@ -16,14 +16,20 @@ export const useEfsStore = defineStore("efs", () => {
     const manualOrderSections = ref<Set<string>>(new Set())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
 
-    const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared'])
+    const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
+
+    /** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
+    function isTimeSortSectionId(sectionId: string): boolean {
+        if (TIME_SORT_SECTION_IDS.has(sectionId)) return true
+        return /^(bay\d+|idle)_dep$/.test(sectionId)
+    }
 
     function sectionOrderKey(bayId: string, sectionId: string): string {
         return `${bayId}:${sectionId}`
     }
 
     function markManualOrder(bayId: string, sectionId: string) {
-        if (!TIME_SORT_SECTION_IDS.has(sectionId)) return
+        if (!isTimeSortSectionId(sectionId)) return
         const next = new Set(manualOrderSections.value)
         next.add(sectionOrderKey(bayId, sectionId))
         manualOrderSections.value = next
@@ -75,6 +81,8 @@ export const useEfsStore = defineStore("efs", () => {
     // Multi-airport mode
     const multiAirport = ref(false)
     const activeAirports = ref<string[]>([])
+    /** Airports ARR/DEP in EuroScope rwyselect — always "relevant" in the picker */
+    const esAirports = ref<string[]>([])
     const columnAirports = ref<(string | null)[]>([])
     const columnCount = ref(4)
     const airportOptions = ref<string[]>([])
@@ -283,6 +291,7 @@ export const useEfsStore = defineStore("efs", () => {
         isController?: boolean
         multiAirport?: boolean
         activeAirports?: string[]
+        esAirports?: string[]
         columnAirports?: (string | null)[]
         columnCount?: number
     }) {
@@ -294,6 +303,7 @@ export const useEfsStore = defineStore("efs", () => {
         const nextActive = message.activeAirports ?? message.airports
         markNewlyActiveAirports(nextActive)
         activeAirports.value = nextActive
+        esAirports.value = message.esAirports ?? []
         columnAirports.value = message.columnAirports ?? []
         if (typeof message.columnCount === 'number') {
             columnCount.value = message.columnCount
@@ -330,6 +340,21 @@ export const useEfsStore = defineStore("efs", () => {
         }
         next[columnIndex] = airport
         columnAirports.value = next
+
+        // Drop user-picked airports that are no longer relevant (not ES, not in a column, no traffic)
+        const es = new Set(esAirports.value)
+        const inColumn = new Set(next.filter((a): a is string => !!a))
+        activeAirports.value = activeAirports.value.filter(
+            a => es.has(a) || inColumn.has(a) || airportHasTraffic(a),
+        )
+    }
+
+    /** Whether an airport should appear relevant/active in the column picker. */
+    function isAirportRelevant(icao: string): boolean {
+        if (esAirports.value.includes(icao)) return true
+        if (columnAirports.value.includes(icao)) return true
+        if (activeAirports.value.includes(icao) && airportHasTraffic(icao)) return true
+        return false
     }
 
     function addActiveAirport(airport: string) {
@@ -537,7 +562,7 @@ export const useEfsStore = defineStore("efs", () => {
      * align store positions to the current DOM order so insert indices match what the user sees.
      */
     function syncTimeSortSectionFromDom(bayId: string, sectionId: string, container: Element | null) {
-        if (!TIME_SORT_SECTION_IDS.has(sectionId)) return
+        if (!isTimeSortSectionId(sectionId)) return
         if (hasManualOrder(bayId, sectionId)) return
         if (!container) return
         const ids = Array.from(container.querySelectorAll<HTMLElement>('[data-strip-id]'))
@@ -995,6 +1020,7 @@ export const useEfsStore = defineStore("efs", () => {
         isController,
         multiAirport,
         activeAirports,
+        esAirports,
         columnAirports,
         columnCount,
         airportOptions,
@@ -1014,6 +1040,7 @@ export const useEfsStore = defineStore("efs", () => {
         applyPendingIdleToColumn,
         flashColumnForAirport,
         isNewlyActiveAirport,
+        isAirportRelevant,
         airportHasTraffic,
         airportTrafficCounts,
         fetchAirportOptions,

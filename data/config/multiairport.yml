@@ -1,5 +1,5 @@
 # VatEFS RTC layout (IRIS multipel RT style)
-# One column per visible airport: CTR / RWY / TWY / DEP
+# One column per visible airport: ARR / CTR / RWY / TWY / DEP
 # Active airports are always processed; column slots only control visibility.
 # Note: Airports are selected via column pickers / active set (not rwyconfig overwrite)
 
@@ -10,6 +10,9 @@ layoutMode: multiAirport
 # Logical bay template — expanded at runtime into bay1..bayN (+ idle)
 bayTemplate:
   sections:
+    arr:
+      title: ARR
+      addFromTop: true
     app:
       title: CTR
       addFromTop: true
@@ -45,7 +48,46 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 95
 
-  # === APP (airborne CTR / inbound) ===
+  # === ARR (inbound arrivals still outside CTR) ===
+  arr_inbound_not_myself:
+    sectionId: arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    priority: 70
+
+  arr_assumed:
+    sectionId: arr
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 80
+
+  arr_low_altitude:
+    sectionId: arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    maxAltitudeAboveField: 1500
+    priority: 75
+
+  arr_fallback:
+    sectionId: arr
+    direction: arrival
+    airborne: true
+    priority: 5
+
+  # === CTR (inside CTR arrivals + airborne dep / local / missed) ===
+  app_arr_within_ctr:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    priority: 90
+
   app_missed_approach:
     sectionId: app
     missedApproach: true
@@ -64,44 +106,6 @@ sectionRules:
     direction: local
     airborne: true
     priority: 100
-
-  app_inbound_not_myself:
-    sectionId: app
-    direction: arrival
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    controller: not_myself
-    priority: 70
-
-  app_arr_assumed:
-    sectionId: app
-    direction: arrival
-    controller: myself
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    priority: 80
-
-  app_arr_within_ctr:
-    sectionId: app
-    direction: arrival
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    withinCtr: true
-    priority: 76
-
-  app_arr_low_altitude:
-    sectionId: app
-    direction: arrival
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    maxAltitudeAboveField: 1500
-    priority: 75
-
-  app_fallback_arrival:
-    sectionId: app
-    direction: arrival
-    airborne: true
-    priority: 5
 
   # === TWY (taxi + push/start) ===
   twy_push_start:
@@ -263,7 +267,15 @@ actionRules:
     nextControllerRole: [GND]
     priority: 110
 
-  assume_app:
+  assume_arr:
+    action: ASSUME
+    sectionId: arr
+    direction: arrival
+    controller: not_myself
+    myRole: [TWR, APP, CTR]
+    priority: 100
+
+  assume_arr_ctr:
     action: ASSUME
     sectionId: app
     direction: arrival
@@ -271,10 +283,19 @@ actionRules:
     myRole: [TWR, APP, CTR]
     priority: 100
 
-  ctl_app:
+  ctl_arr:
+    action: CTL
+    sectionId: arr
+    direction: either
+    controller: myself
+    clearedToLand: false
+    myRole: [TWR]
+    priority: 90
+
+  ctl_arr_ctr:
     action: CTL
     sectionId: app
-    direction: either
+    direction: arrival
     controller: myself
     clearedToLand: false
     myRole: [TWR]
@@ -401,9 +422,9 @@ deleteRules:
     priority: 10
 
 moveRules:
-  # APP <-> RWY
-  move_app_to_rwy_ctl:
-    fromSectionId: app
+  # ARR/CTR <-> RWY (CTL)
+  move_arr_to_rwy_ctl:
+    fromSectionId: arr
     toSectionId: rwy
     direction: either
     myRole: [TWR, APP, CTR]
@@ -411,13 +432,31 @@ moveRules:
       type: setClearedToLand
       value: true
 
-  move_rwy_to_app_clear_ctl:
+  move_ctr_arr_to_rwy_ctl:
+    fromSectionId: app
+    toSectionId: rwy
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_rwy_to_arr_clear_ctl:
     fromSectionId: rwy
-    toSectionId: app
+    toSectionId: arr
     command:
       type: setClearedToLand
       value: false
 
+  move_rwy_to_ctr_clear_ctl:
+    fromSectionId: rwy
+    toSectionId: app
+    direction: arrival
+    command:
+      type: setClearedToLand
+      value: false
+
+  # CTR (dep airborne)
   move_to_app_set_depa:
     toSectionId: app
     command:

@@ -131,7 +131,6 @@ const accent = computed(() =>
 )
 
 const pickerOptions = computed(() => {
-  const activeSet = new Set(store.activeAirports)
   const opts = new Set<string>([
     ...store.airportOptions,
     ...store.activeAirports,
@@ -139,12 +138,12 @@ const pickerOptions = computed(() => {
   ])
   return [...opts]
     .map(icao => {
-      const isActive = activeSet.has(icao)
+      const isActive = store.isAirportRelevant(icao)
       const counts = isActive ? store.airportTrafficCounts(icao) : { arr: 0, dep: 0 }
       const { arr, dep } = counts
       const total = arr + dep
       const taken = isTakenElsewhere(icao)
-      // Active first; traffic only affects sort among active airports
+      // Relevant/ES first; traffic only affects sort among relevant airports
       const priority = (isActive ? 0 : 2) + (isActive && total > 0 ? 0 : 1)
       return { icao, arr, dep, total, isActive, taken, priority }
     })
@@ -185,11 +184,11 @@ function onPickerClick(event: MouseEvent) {
 
 function onSearchEnter() {
   const q = searchQuery.value.trim().toUpperCase()
-  if (!q) return
+  if (!/^[A-Z]{4}$/.test(q)) return
   const exact = filteredOptions.value.find(o => o.icao === q)
   const first = filteredOptions.value[0]
-  const pick = exact ?? (first && first.icao.startsWith(q) ? first : null)
-  if (pick) selectAirport(pick.icao)
+  const pick = exact?.icao ?? (first && first.icao.startsWith(q) ? first.icao : q)
+  selectAirport(pick)
 }
 
 function closePicker() {

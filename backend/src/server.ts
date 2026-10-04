@@ -565,6 +565,7 @@ function sendStatus(socket: WebSocket) {
         isController: staticConfig.isController,
         multiAirport: isMultiAirportConfig(staticConfig) || undefined,
         activeAirports: staticConfig.activeAirports,
+        esAirports: isMultiAirportConfig(staticConfig) ? esRwySelectAirports : undefined,
         columnAirports: staticConfig.columnAirports,
         columnCount: staticConfig.columnCount,
     }
@@ -581,6 +582,7 @@ function broadcastStatus() {
         isController: staticConfig.isController,
         multiAirport: isMultiAirportConfig(staticConfig) || undefined,
         activeAirports: staticConfig.activeAirports,
+        esAirports: isMultiAirportConfig(staticConfig) ? esRwySelectAirports : undefined,
         columnAirports: staticConfig.columnAirports,
         columnCount: staticConfig.columnCount,
     }
@@ -751,6 +753,32 @@ function switchConfig(file: string) {
     } catch (err) {
         console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
     }
+}
+
+/** Airports currently ARR/DEP in EuroScope rwyselect (RTC relevance) */
+let esRwySelectAirports: string[] = []
+
+/**
+ * Drop user-picked airports that are no longer relevant:
+ * not in ES rwyselect, not assigned to a column, and no strips.
+ */
+function pruneOrphanUserAirports(): boolean {
+    if (!isMultiAirportConfig(staticConfig)) return false
+    const es = new Set(esRwySelectAirports)
+    const inColumn = new Set(
+        (staticConfig.columnAirports ?? []).filter((a): a is string => !!a),
+    )
+    const withStrips = new Set<string>()
+    for (const strip of store.getAllStrips()) {
+        if (strip.airport) withStrips.add(strip.airport)
+    }
+    const active = staticConfig.activeAirports ?? []
+    const next = active.filter(a => es.has(a) || inColumn.has(a) || withStrips.has(a))
+    if (next.length === active.length) return false
+    const removed = active.filter(a => !next.includes(a))
+    setActiveAirports(next)
+    console.log(`[MULTI] Pruned inactive airports: ${removed.join(", ")}`)
+    return true
 }
 
 /**
@@ -1590,6 +1618,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     sendUdp(JSON.stringify(pluginCommand))
                 }
 
+                // Persist controller SID choice for strip display (overrides first-FPL-point fallback)
+                const flightForAssign = flightStore.getFlight(strip.callsign)
+                if (flightForAssign && message.assignType === "assignSid") {
+                    flightForAssign.sidDisplayOverride = message.value || undefined
+                    if (message.value) flightForAssign.sid = message.value
+                    if (mockCflAuto !== undefined) flightForAssign.cfl = mockCflAuto
+                }
+                if (flightForAssign && message.assignType === "assignDepartureRunway") {
+                    // Runway change clears SID in ES — drop override too
+                    flightForAssign.sidDisplayOverride = undefined
+                }
+
                 // In mock mode, apply assignments locally since there's no ES plugin roundtrip
                 if (cliArgs.mock) {
                     const flight = flightStore.getFlight(strip.callsign)
@@ -1630,6 +1670,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             store.updateStripFromFlight(updatedStrip)
                             broadcastStrip(updatedStrip)
                         }
+                    }
+                } else if (message.assignType === "assignSid" || message.assignType === "assignDepartureRunway") {
+                    // Optimistic strip SID display before EuroScope roundtrip
+                    const updatedStrip = flightStore.regenerateStrip(strip.callsign)
+                    if (updatedStrip) {
+                        store.updateStripFromFlight(updatedStrip)
+                        broadcastStrip(updatedStrip)
                     }
                 }
             } else {
@@ -1852,7 +1899,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "setColumnAirport": {
             if (setColumnAirport(message.columnIndex, message.airport)) {
                 console.log(`[MULTI] Column ${message.columnIndex} -> ${message.airport ?? "(empty)"}`)
-                applyMultiAirportViewChange({ reprocess: false })
+                const pruned = pruneOrphanUserAirports()
+                applyMultiAirportViewChange({ reprocess: pruned })
             }
             break
         }
@@ -2512,13 +2560,20 @@ udpIn.on("message", (msg, rinfo) => {
                 const knownAirports = discoveredAirports.filter((a) => getAirportByIcao(a))
                 if (knownAirports.length > 0) {
                     if (isMultiAirportConfig(staticConfig)) {
-                        // RTC: active set mirrors EuroScope rwyselect (not merge-only).
-                        const next = [...new Set(knownAirports.map(a => a.toUpperCase()))]
-                        const prev = [...(staticConfig.activeAirports ?? [])].sort()
-                        const nextSorted = [...next].sort()
-                        if (JSON.stringify(prev) !== JSON.stringify(nextSorted)) {
-                            setActiveAirports(next)
-                            console.log(`[MULTI] Active airports from rwyselect: ${next.join(", ")}`)
+                        // RTC: merge ES rwyselect into active set — never wipe user-selected
+                        // airports that are not (yet) active in EuroScope.
+                        const fromEs = [...new Set(knownAirports.map(a => a.toUpperCase()))]
+                        esRwySelectAirports = fromEs
+                        const current = staticConfig.activeAirports ?? []
+                        const added = fromEs.filter(a => !current.includes(a))
+                        let changed = false
+                        if (added.length > 0) {
+                            setActiveAirports([...current, ...added])
+                            console.log(`[MULTI] Active airports from rwyselect: +${added.join(", ")}`)
+                            changed = true
+                        }
+                        if (pruneOrphanUserAirports()) changed = true
+                        if (changed) {
                             applyMultiAirportViewChange({ reprocess: true })
                         }
                     } else {

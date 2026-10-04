@@ -8,7 +8,7 @@ import type { Flight } from "./types.js"
 
 export const IDLE_BAY_ID = "idle"
 export const DEFAULT_COLUMN_COUNT = 4
-export const LOGICAL_SECTIONS = ["app", "rwy", "twy", "dep"] as const
+export const LOGICAL_SECTIONS = ["arr", "app", "rwy", "twy", "dep"] as const
 export type LogicalSectionId = (typeof LOGICAL_SECTIONS)[number]
 
 export interface BayTemplateSection {

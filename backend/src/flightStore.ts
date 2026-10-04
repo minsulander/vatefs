@@ -18,6 +18,7 @@ import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { getRtfCallsign } from "./icao-airlines.js"
+import { hasSidInEse, getSidInfo } from "./sid-data.js"
 import {
     getRelevantActiveAirports,
     isMultiAirportConfig,
@@ -82,22 +83,96 @@ export interface ProcessMessageResult {
 }
 
 /**
- * Extract display SID from a flight. EuroScope's GetSid() doesn't return
- * special SID names (e.g. "040·330·RESNA" at ESSA, "VFR·HALL" at ESGG),
- * but they appear as the first term of the route (before the /runway).
- * Falls back to flight.sid if route doesn't contain a special SID.
+ * First significant FPL route fix for display when no ESE SID applies.
+ * Skips DCT and airport/runway tokens (e.g. ESGJ/01); returns just the fix (RESNA).
+ */
+function firstSignificantRouteFix(route: string): string | undefined {
+    for (const raw of route.split(/\s+/)) {
+        if (!raw) continue
+        const upper = raw.toUpperCase()
+        if (upper === "DCT") continue
+        // ICAO/rwy or SID/rwy style — skip airport/rwy; keep special SIDs handled elsewhere
+        const slashIdx = upper.indexOf("/")
+        const token = slashIdx >= 0 ? upper.substring(0, slashIdx) : upper
+        if (!token) continue
+        // Pure runway-like (digits optional L/R/C)
+        if (/^\d{1,2}[LRC]?$/i.test(token)) continue
+        // Airport/rwy prefix (4-letter ICAO)
+        if (slashIdx >= 0 && /^[A-Z]{4}$/.test(token)) continue
+        return token
+    }
+    return undefined
+}
+
+/**
+ * Departure runway for strip display: ES depRwy, else /rwy suffix on the first route term
+ * (e.g. ESSA/19R or TOVRI1A/19R) when GetDepartureRwy is empty.
+ */
+function extractDisplayDepRunway(flight: Flight): string | undefined {
+    if (flight.depRwy) return flight.depRwy
+    if (!flight.route) return undefined
+    const firstTerm = flight.route.split(/\s+/)[0]!
+    const slashIdx = firstTerm.indexOf("/")
+    if (slashIdx < 0) return undefined
+    const rwy = firstTerm.substring(slashIdx + 1).toUpperCase()
+    if (/^\d{1,2}[LRC]?$/.test(rwy)) return rwy
+    return undefined
+}
+
+/**
+ * Extract display SID from a flight.
+ * - Controller SID override (manual pick in CLNC) wins
+ * - Special SIDs in route (e.g. "040·330·RESNA/01L") take priority
+ * - Else first significant FPL fix when it is not part of the ESE SID (e.g. DCT NTL)
+ * - Else ESE-matched flight.sid (major airports: route often starts with SID first waypoint)
+ * - Else first significant FPL fix / flight.sid
  */
 function extractDisplaySid(flight: Flight): string | undefined {
+    if (flight.sidDisplayOverride) {
+        return flight.sidDisplayOverride
+    }
+
     if (flight.route) {
-        const firstTerm = flight.route.split(' ')[0]!
-        const slashIdx = firstTerm.indexOf('/')
-        if (slashIdx < 0) return flight.sid
-        const prefix = firstTerm.substring(0, slashIdx)
-        if (flight.origin && flight.sid && prefix != flight.origin && prefix != flight.sid) {
-            return prefix
+        const firstTerm = flight.route.split(/\s+/)[0]!
+        const slashIdx = firstTerm.indexOf("/")
+        if (slashIdx >= 0) {
+            const prefix = firstTerm.substring(0, slashIdx)
+            // EuroScope special SIDs appear as PREFIX/rwy and are not GetSid()
+            if (
+                flight.origin &&
+                prefix !== flight.origin &&
+                prefix !== flight.sid &&
+                !/^[A-Z]{4}$/.test(prefix)
+            ) {
+                return prefix
+            }
         }
     }
-    return flight.sid
+
+    const firstFix = flight.route ? firstSignificantRouteFix(flight.route) : undefined
+    const sidInfo =
+        flight.sid && flight.origin
+            ? getSidInfo(flight.origin, flight.sid, flight.depRwy)
+            : undefined
+
+    if (firstFix) {
+        // Route names the SID itself
+        if (flight.origin && hasSidInEse(flight.origin, firstFix, flight.depRwy)) {
+            return firstFix
+        }
+        // Stale GetSid() after FPL edit to a DCT/fix (e.g. NTL) that is not on the SID
+        if (sidInfo && !sidInfo.waypoints.includes(firstFix) && firstFix !== flight.sid) {
+            return firstFix
+        }
+        // No ESE SID — show first FPL point (regional DCT)
+        if (!sidInfo) {
+            return firstFix
+        }
+        // firstFix is the SID's initial waypoint (e.g. KAJAN for KAJAN1D) → keep SID name
+    }
+
+    if (sidInfo) return flight.sid
+    return firstFix ?? flight.sid
 }
 
 /**
@@ -1362,7 +1437,7 @@ class FlightStore {
             assignedSpeed: flight.asp ? String(flight.asp) : undefined,
             stand: flight.stand,
             runway: stripType === 'departure' || stripType === 'local'
-                ? (flight.depRwy || flight.arrRwy)
+                ? (extractDisplayDepRunway(flight) || flight.arrRwy)
                 : flight.arrRwy,
             stripType,
             bayId,

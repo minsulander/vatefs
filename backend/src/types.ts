@@ -28,6 +28,8 @@ export interface Flight {
 
     // Route assignments
     sid?: string              // Standard Instrument Departure
+    /** Controller-selected SID for strip display (wins over first-FPL-point fallback) */
+    sidDisplayOverride?: string
     star?: string             // Standard Terminal Arrival Route
     depRwy?: string           // Departure runway
     arrRwy?: string           // Arrival runway

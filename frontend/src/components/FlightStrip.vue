@@ -574,10 +574,23 @@ const stripStyle = computed(() => {
 
 /** CDM (TOBT/TSAT) is only available at ESSA */
 const CDM_AIRPORTS = new Set(['ESSA'])
-/** Sections where TOBT/TSAT are relevant (ground clearance flow) */
-const CDM_SECTIONS = new Set(['pending_dep', 'cleared', 'push_start'])
+/** Single-airport CDM ground sections */
+const CDM_SECTIONS_EXACT = new Set(['pending_dep', 'cleared', 'push_start'])
 /** Taxi and later — hide EOBT when a CTOT is present */
-const TAXI_ONWARD_SECTIONS = new Set(['taxi', 'runway', 'dep_runway', 'arr_runway', 'ctr_dep'])
+const TAXI_ONWARD_SECTIONS = new Set(['taxi', 'runway', 'dep_runway', 'arr_runway', 'ctr_dep', 'rwy'])
+
+/** Ground clearance sections where TOBT/TSAT apply (not CTR DEP). */
+function isCdmGroundSection(sectionId: string): boolean {
+  if (CDM_SECTIONS_EXACT.has(sectionId)) return true
+  // RTC columns: bay1_dep / bay1_twy / idle_dep — never ctr_dep
+  return /^(bay\d+|idle)_(dep|twy)$/.test(sectionId)
+}
+
+function sectionIdMatches(sectionId: string, allowed: Set<string>): boolean {
+  if (allowed.has(sectionId)) return true
+  const logical = sectionId.includes('_') ? sectionId.slice(sectionId.lastIndexOf('_') + 1) : sectionId
+  return allowed.has(logical)
+}
 
 const isDepartingIfr = computed(() =>
   props.strip.stripType === 'departure' &&
@@ -587,7 +600,7 @@ const isDepartingIfr = computed(() =>
 const showCdm = computed(() =>
   isDepartingIfr.value &&
   CDM_AIRPORTS.has(props.strip.adep) &&
-  CDM_SECTIONS.has(props.strip.sectionId) &&
+  isCdmGroundSection(props.strip.sectionId) &&
   !props.strip.clearedForTakeoff
 )
 
@@ -598,7 +611,7 @@ const showCtot = computed(() =>
 
 /** Hide EOBT on taxi+ when CTOT is shown (CDM primary times already gated by showCdm) */
 const showPrimaryTime = computed(() =>
-  !(showCtot.value && TAXI_ONWARD_SECTIONS.has(props.strip.sectionId))
+  !(showCtot.value && sectionIdMatches(props.strip.sectionId, TAXI_ONWARD_SECTIONS))
 )
 
 /**

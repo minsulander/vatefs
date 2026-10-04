@@ -51,6 +51,8 @@ export interface StatusMessage {
     isController?: boolean // Whether connected as a controller (false = observer)
     /** Multi-airport: all airports being processed */
     activeAirports?: string[]
+    /** Multi-airport: airports currently ARR/DEP in EuroScope rwyselect */
+    esAirports?: string[]
     /** Multi-airport: ICAO per visible column slot (null = empty) */
     columnAirports?: (string | null)[]
     /** Multi-airport: number of visible column slots */

@@ -135,9 +135,73 @@ export function loadSidData(euroscopeDir: string, packageFilter?: string): { sid
 
 /**
  * Get all SIDs for a specific airport and runway.
+ * Matches ES runway ids (e.g. 19R) against ESE keys that may omit L/R/C (19).
  */
 export function getSidsForRunway(airport: string, runway: string): SidInfo[] {
-    return sids.get(airport)?.get(runway) ?? []
+    const airportSids = sids.get(airport)
+    if (!airportSids || !runway) return []
+
+    const exact = airportSids.get(runway)
+    if (exact && exact.length > 0) return exact
+
+    const base = runway.replace(/[LRC]$/i, "")
+    const suffix = /[LRC]$/i.test(runway) ? runway.slice(-1).toUpperCase() : ""
+
+    // ESE often lists "19" while EuroScope reports "19R"
+    if (base !== runway) {
+        const byBase = airportSids.get(base)
+        if (byBase && byBase.length > 0) return byBase
+    }
+
+    // ESE lists "19R" while strip has "19"
+    if (!suffix) {
+        for (const s of ["L", "R", "C"] as const) {
+            const bySuffix = airportSids.get(base + s)
+            if (bySuffix && bySuffix.length > 0) return bySuffix
+        }
+    }
+
+    // Collect every ESE key that shares the same runway number
+    const merged: SidInfo[] = []
+    const seen = new Set<string>()
+    for (const [key, list] of airportSids) {
+        if (key.replace(/[LRC]$/i, "") !== base) continue
+        for (const sid of list) {
+            if (seen.has(sid.name)) continue
+            seen.add(sid.name)
+            merged.push(sid)
+        }
+    }
+    return merged
+}
+
+/**
+ * True if `sidName` exists in the ESE SID list for the airport
+ * (any runway, or the given runway when provided).
+ */
+export function hasSidInEse(airport: string, sidName: string, runway?: string): boolean {
+    return getSidInfo(airport, sidName, runway) !== undefined
+}
+
+/**
+ * Look up SID definition from ESE data.
+ */
+export function getSidInfo(airport: string, sidName: string, runway?: string): SidInfo | undefined {
+    if (!airport || !sidName) return undefined
+    const airportSids = sids.get(airport)
+    if (!airportSids) return undefined
+
+    if (runway) {
+        const forRwy = getSidsForRunway(airport, runway)
+        const match = forRwy.find(s => s.name === sidName)
+        if (match) return match
+    }
+
+    for (const [, runwaySids] of airportSids) {
+        const match = runwaySids.find(s => s.name === sidName)
+        if (match) return match
+    }
+    return undefined
 }
 
 /**

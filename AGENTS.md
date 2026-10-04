@@ -397,7 +397,7 @@ VatEFS integrates with the [Hoppie ACARS network](http://hoppie.nl/acars/system/
 - After template fill, `injectCtotTsatIntoDcl()` inserts times from `flight.ctot` / `flight.tsat` when present
 - **ESSA** (CDM): insert `TSAT HHmm` and/or `CTOT HHmm` before `MONITOR`; when TSAT present, rewrite `AND REPORT READY` → `AND ON TSAT REPORT READY`
 - **ESGG** (non-CDM): insert `CTOT HHmm` between `EOBT` and `REQUEST START-UP` (TSAT never applies)
-- Clearance dialog shows read-only **E/TOBT** (TOBT at ESSA when available, else EOBT) and **CTOT** when present
+- Clearance dialog shows read-only **TSAT** and/or **CTOT** when present (no EOBT)
 
 **Frequency storage**: `staticConfig.myFrequency` set from `myselfUpdate.frequency` (or 118.505 in mock mode)
 
