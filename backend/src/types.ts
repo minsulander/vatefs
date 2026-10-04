@@ -58,6 +58,23 @@ export interface Flight {
     dclSentAt?: number            // Timestamp when clearance was sent (for timeout)
     dclRequestedAt?: number       // Timestamp when DCL request was received (for request timeout)
 
+    // vIFF / CDM (departing IFR)
+    tobt?: string                 // Target Off Block Time (HHmm) — CDM airports (ESSA)
+    tsat?: string                 // Target Startup Approval Time (HHmm) — CDM airports (ESSA)
+    tobtSetBy?: 'P' | 'A'         // Who set TOBT: Pilot or ATC
+    /** Timestamp when EFS set tobtSetBy (keep optimistic A briefly across HTTP polls) */
+    tobtSetByAt?: number
+    /** Actual Start-up Request Time (HHmm) — CDM ASRT / Ready Startup */
+    asrt?: string
+    taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
+    ctot?: string                 // Calculated Take Off Time (HHmm)
+    cdmSts?: string               // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
+    ctotReason?: string           // mostPenalisingRegulation
+    /** Last TOBT from local CDM_data_*.txt (EuroScope) — preferred over lagging HTTP */
+    localCdmTobt?: string
+    localCdmTsat?: string
+    localCdmAt?: number
+
     // Controller remarks (from scratchpad values starting with ".")
     remarks?: string
 
@@ -204,6 +221,31 @@ export interface RadarTargetPositionUpdateMessage {
     squawk?: string       // Transponder code (optional)
 }
 
+/** Fast-path CDM times from local CDM_data_*.txt (written by CDM plugin) */
+export interface CdmLocalFlightUpdate {
+    callsign: string
+    airport?: string
+    tobt?: string
+    tsat?: string
+    ttot?: string
+    ctot?: string
+    ctotReason?: string
+    /** From CDM strip annotation (TOBT-SET-BY); not in vIFF depAirport. Empty string = clear. */
+    tobtSetBy?: 'P' | 'A' | ''
+    /** From CDM strip annotation field 0 (ASRT). Empty string = clear. */
+    asrt?: string
+}
+
+export interface CdmLocalUpdateMessage {
+    type: 'cdmLocalUpdate'
+    flights: CdmLocalFlightUpdate[]
+}
+
+/** Keeps local CDM prefer-TTL alive without re-applying times (avoids torn-file corruption) */
+export interface CdmLocalHeartbeatMessage {
+    type: 'cdmLocalHeartbeat'
+}
+
 export type PluginMessage =
     | FlightPlanDataUpdateMessage
     | ControllerAssignedDataUpdateMessage
@@ -213,6 +255,8 @@ export type PluginMessage =
     | ControllerDisconnectMessage
     | MyselfUpdateMessage
     | RadarTargetPositionUpdateMessage
+    | CdmLocalUpdateMessage
+    | CdmLocalHeartbeatMessage
 
 /**
  * Type guard for plugin messages
@@ -230,6 +274,8 @@ export function isPluginMessage(data: unknown): data is PluginMessage {
         type === 'controllerPositionUpdate' ||
         type === 'controllerDisconnect' ||
         type === 'myselfUpdate' ||
-        type === 'radarTargetPositionUpdate'
+        type === 'radarTargetPositionUpdate' ||
+        type === 'cdmLocalUpdate' ||
+        type === 'cdmLocalHeartbeat'
     )
 }

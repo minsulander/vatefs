@@ -29,6 +29,9 @@ export interface ProcessMessageResult {
     /** Strip to create or update (if flight has required data) */
     strip?: FlightStrip
 
+    /** Multiple strips to update (e.g. batch CDM local file poll) */
+    strips?: FlightStrip[]
+
     /** Strip ID to delete (if flight disconnected) */
     deleteStripId?: string
 
@@ -409,6 +412,12 @@ class FlightStore {
             case 'flightPlanFlightStripPushed':
                 return this.handleFlightStripPushed(message)
 
+            case 'cdmLocalUpdate':
+                return this.handleCdmLocalUpdate(message)
+
+            case 'cdmLocalHeartbeat':
+                return this.handleCdmLocalHeartbeat()
+
             case 'controllerPositionUpdate':
             case 'controllerDisconnect':
             case 'myselfUpdate':
@@ -418,6 +427,153 @@ class FlightStore {
             default:
                 return {}
         }
+    }
+
+    /** Accept only valid HHMM times from CDM_data (reject torn/mid-write garbage). */
+    private normalizeCdmHhmm(raw: string | undefined): string | undefined {
+        if (!raw) return undefined
+        const digits = raw.replace(/\D/g, '')
+        if (digits.length !== 3 && digits.length !== 4 && digits.length !== 6) return undefined
+        const normalized = digits.length === 3
+            ? digits.padStart(4, '0')
+            : digits.slice(0, 4)
+        const h = Number(normalized.slice(0, 2))
+        const m = Number(normalized.slice(2, 4))
+        if (h > 23 || m > 59) return undefined
+        return normalized
+    }
+
+    /** Refresh local-CDM prefer TTL without changing times. */
+    private handleCdmLocalHeartbeat(): ProcessMessageResult {
+        const now = Date.now()
+        for (const flight of this.flights.values()) {
+            if (flight.localCdmAt != null) {
+                flight.localCdmAt = now
+            }
+        }
+        return {}
+    }
+
+    /**
+     * Apply TOBT/TSAT/CTOT from local CDM_data_*.txt (via EuroScope plugin).
+     * Faster than HTTP poll; does not clear fields when absent in the file.
+     */
+    private handleCdmLocalUpdate(message: import('./types.js').CdmLocalUpdateMessage): ProcessMessageResult {
+        const strips: FlightStrip[] = []
+        const now = Date.now()
+        const entries = message.flights ?? []
+
+        // Detect likely torn-file swaps: two callsigns exchanging TOBT in one batch
+        const tobtByCs = new Map<string, string>()
+        for (const entry of entries) {
+            const cs = entry.callsign?.toUpperCase()
+            const tobt = this.normalizeCdmHhmm(entry.tobt)
+            if (cs && tobt) tobtByCs.set(cs, tobt)
+        }
+        const rejected = new Set<string>()
+        for (const [csA, tobtA] of tobtByCs) {
+            const flightA = this.flights.get(csA)
+            if (!flightA?.tobt || flightA.tobt === tobtA) continue
+            for (const [csB, tobtB] of tobtByCs) {
+                if (csA >= csB) continue
+                const flightB = this.flights.get(csB)
+                if (!flightB?.tobt || flightB.tobt === tobtB) continue
+                if (tobtA === flightB.tobt && tobtB === flightA.tobt) {
+                    rejected.add(csA)
+                    rejected.add(csB)
+                    console.warn(`[CDM] Ignoring swapped TOBT batch for ${csA}/${csB}`)
+                }
+            }
+        }
+
+        for (const entry of entries) {
+            const callsign = entry.callsign?.toUpperCase()
+            if (!callsign || rejected.has(callsign)) continue
+            const flight = this.flights.get(callsign)
+            if (!flight) continue
+
+            let changed = false
+            // Pin local ES CDM_data values so the slower HTTP poll cannot overwrite them
+            if (entry.tobt !== undefined) {
+                const tobt = this.normalizeCdmHhmm(entry.tobt)
+                if (tobt) {
+                    flight.localCdmTobt = tobt
+                    flight.localCdmAt = now
+                    if (tobt !== flight.tobt) {
+                        flight.tobt = tobt
+                        changed = true
+                    }
+                }
+            }
+            // CDM TOBT-SET-BY from ES strip annotation (plugin reads CDM field 9).
+            // vIFF depAirport does not expose setBy — ES annotation is the source of truth.
+            if (entry.tobtSetBy === 'P' || entry.tobtSetBy === 'A') {
+                if (flight.tobtSetBy !== entry.tobtSetBy) {
+                    flight.tobtSetBy = entry.tobtSetBy
+                    flight.tobtSetByAt = entry.tobtSetBy === 'A' ? now : undefined
+                    changed = true
+                }
+            } else if (
+                // Only clear when CDM says blank AND TOBT==EOBT (or TOBT cleared).
+                // Empty setBy alone must not wipe A — annotation can lag CDM_data by a poll.
+                entry.tobtSetBy === '' &&
+                flight.tobtSetBy !== undefined &&
+                (!flight.tobt || !flight.eobt || flight.tobt === flight.eobt)
+            ) {
+                flight.tobtSetBy = undefined
+                flight.tobtSetByAt = undefined
+                changed = true
+            } else if (
+                entry.tobt !== undefined &&
+                flight.tobt &&
+                flight.eobt &&
+                flight.tobt === flight.eobt &&
+                flight.tobtSetBy !== undefined
+            ) {
+                flight.tobtSetBy = undefined
+                flight.tobtSetByAt = undefined
+                changed = true
+            }
+            if (entry.tsat !== undefined) {
+                const tsat = this.normalizeCdmHhmm(entry.tsat)
+                if (tsat) {
+                    flight.localCdmTsat = tsat
+                    flight.localCdmAt = now
+                    if (tsat !== flight.tsat) {
+                        flight.tsat = tsat
+                        changed = true
+                    }
+                }
+            }
+            // ASRT (Ready Startup) from CDM strip annotation field 0
+            if (entry.asrt !== undefined) {
+                const asrt = entry.asrt === '' ? undefined : this.normalizeCdmHhmm(entry.asrt)
+                if (asrt !== flight.asrt) {
+                    flight.asrt = asrt
+                    changed = true
+                }
+            }
+            // Only apply CTOT when non-empty — empty file field must not wipe HTTP CTOT
+            const ctot = this.normalizeCdmHhmm(entry.ctot)
+            if (ctot && ctot !== flight.ctot) {
+                flight.ctot = ctot
+                changed = true
+            }
+            if (entry.ctotReason !== undefined && entry.ctotReason !== flight.ctotReason) {
+                flight.ctotReason = entry.ctotReason || undefined
+                changed = true
+            }
+            if (!changed) {
+                // Still refresh pin TTL when we saw a valid local row for this flight
+                if (flight.localCdmAt != null) flight.localCdmAt = now
+                continue
+            }
+
+            flight.lastUpdate = now
+            const strip = this.regenerateStrip(callsign)
+            if (strip) strips.push(strip)
+        }
+        return strips.length > 0 ? { strips } : {}
     }
 
     /**
@@ -939,6 +1095,13 @@ class FlightStore {
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,
+            tobt: flight.tobt,
+            tsat: flight.tsat,
+            tobtSetBy: flight.tobtSetBy,
+            asrt: flight.asrt,
+            ctot: flight.ctot,
+            cdmSts: flight.cdmSts,
+            ctotReason: flight.ctotReason,
             remarks: flight.remarks || undefined,
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,

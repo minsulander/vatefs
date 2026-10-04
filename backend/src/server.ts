@@ -55,6 +55,8 @@ import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
+import { ViffService } from "./viff-service.js"
+import type { ViffPollResult } from "./viff-service.js"
 import { loadDclSound, playDclSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
@@ -73,9 +75,9 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } {
+function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } {
     const args = process.argv.slice(2)
-    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean } = {}
+    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } = {}
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === "--config" && args[i + 1]) {
@@ -87,6 +89,8 @@ function parseArgs(): { config?: string; callsign?: string; airports?: string[];
             result.airports = args[++i].split(",").map((a) => a.trim().toUpperCase())
         } else if (args[i] === "--record" && args[i + 1]) {
             result.recordFile = args[++i]
+        } else if (args[i] === "--viff-base-url" && args[i + 1]) {
+            result.viffBaseUrl = args[++i]
         } else if (args[i] === "--mock") {
             result.mock = true
         }
@@ -379,6 +383,9 @@ type OutboundPluginCommand =
     | { type: "goaround"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
     | { type: "setScratch"; callsign: string; value: string }
+    | { type: "setEobt"; callsign: string; eobt: string }
+    | { type: "setTobt"; callsign: string; tobt: string; setBy?: "A" | "P" }
+    | { type: "setAsrt"; callsign: string; asrt: string }
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -1205,12 +1212,23 @@ function sendGaps(socket: WebSocket) {
     console.log(`Sent ${gaps.length} gaps to client`)
 }
 
+/** Serialize async WS handlers per socket so Ready TOBT (TOBT+REA) cannot race */
+const clientMessageTail = new WeakMap<WebSocket, Promise<void>>()
+
+function enqueueClientMessage(socket: WebSocket, text: string) {
+    const prev = clientMessageTail.get(socket) ?? Promise.resolve()
+    const next = prev
+        .catch(() => {})
+        .then(() => handleClientMessage(socket, text))
+    clientMessageTail.set(socket, next)
+}
+
 // Handle incoming client messages
-function handleClientMessage(socket: WebSocket, text: string) {
+async function handleClientMessage(socket: WebSocket, text: string) {
     try {
         const data = JSON.parse(text)
         if (isClientMessage(data)) {
-            handleTypedMessage(socket, data)
+            await handleTypedMessage(socket, data)
         }
     } catch {
         // Not a JSON message, check for legacy "?" request
@@ -1224,6 +1242,20 @@ function handleClientMessage(socket: WebSocket, text: string) {
             sendUdp(text + "\n")
             console.log("WS -> UDP:", text)
         }
+    }
+}
+
+/** Apply EFS-originated TOBT and pin local CDM so ES file poll cannot overwrite it. */
+function applyEfsTobt(flight: Flight, tobt: string) {
+    flight.tobt = tobt
+    flight.localCdmTobt = tobt
+    flight.localCdmAt = Date.now()
+    if (tobt === flight.eobt) {
+        flight.tobtSetBy = undefined
+        flight.tobtSetByAt = undefined
+    } else {
+        flight.tobtSetBy = "A"
+        flight.tobtSetByAt = Date.now()
     }
 }
 
@@ -1870,6 +1902,187 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
         }
+
+        case "viffRea": {
+            const reaStrip = store.getStrip(message.stripId)
+            if (!reaStrip) break
+            if (reaStrip.stripType !== "departure") break
+            if (reaStrip.flightRules !== "I" && reaStrip.flightRules !== "Y") break
+            const ok = await viffService.setRea(reaStrip.callsign, message.set)
+            if (ok) {
+                const flight = flightStore.getFlight(reaStrip.callsign)
+                if (flight) {
+                    flight.cdmSts = message.set ? "REA" : undefined
+                    const updated = flightStore.regenerateStrip(reaStrip.callsign)
+                    if (updated) {
+                        store.updateStripFromFlight(updated)
+                        broadcastStrip(updated)
+                    }
+                }
+                viffService.pollSoon()
+            }
+            break
+        }
+
+        case "viffUpdateEobt": {
+            const eobtStrip = store.getStrip(message.stripId)
+            if (!eobtStrip) break
+            const eobt = message.eobt.trim()
+            if (!/^\d{4}$/.test(eobt)) {
+                console.log(`[VIFF] Invalid EOBT "${message.eobt}" for ${eobtStrip.callsign}`)
+                break
+            }
+            const ok = await viffService.updateEobt(eobtStrip.callsign, eobt)
+            if (ok) {
+                const flight = flightStore.getFlight(eobtStrip.callsign)
+                if (flight) {
+                    flight.eobt = eobt
+                    // Clear FLS optimistically; next poll reconciles
+                    if (flight.cdmSts?.startsWith("FLS")) {
+                        flight.cdmSts = undefined
+                    }
+                    sendUdp(JSON.stringify({
+                        type: "setEobt",
+                        callsign: eobtStrip.callsign,
+                        eobt,
+                    } satisfies OutboundPluginCommand))
+                    const updated = flightStore.regenerateStrip(eobtStrip.callsign)
+                    if (updated) {
+                        store.updateStripFromFlight(updated)
+                        broadcastStrip(updated)
+                    }
+                    console.log(`[VIFF] EOBT updated ${eobtStrip.callsign} → ${eobt}`)
+                    viffService.pollSoon()
+                }
+            }
+            break
+        }
+
+        case "viffUpdateTobt": {
+            const tobtStrip = store.getStrip(message.stripId)
+            if (!tobtStrip) break
+            if (tobtStrip.stripType !== "departure") break
+            if (tobtStrip.adep !== "ESSA") break
+            const tobt = message.tobt.trim()
+            if (!/^\d{4}$/.test(tobt)) {
+                console.log(`[VIFF] Invalid TOBT "${message.tobt}" for ${tobtStrip.callsign}`)
+                break
+            }
+            const flight = flightStore.getFlight(tobtStrip.callsign)
+            if (!flight) break
+            const taxi = flight.taxiMinutes && flight.taxiMinutes > 0 ? flight.taxiMinutes : 15
+            const setBy = tobt === flight.eobt ? undefined : "A" as const
+            // ES-first: annotation via plugin (instant ES + cdmLocalUpdate echo), then vIFF
+            sendUdp(JSON.stringify({
+                type: "setTobt",
+                callsign: tobtStrip.callsign,
+                tobt,
+                setBy,
+            } satisfies OutboundPluginCommand))
+            applyEfsTobt(flight, tobt)
+            const updated = flightStore.regenerateStrip(tobtStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            console.log(`[CDM] TOBT via ES ${tobtStrip.callsign} → ${tobt}`)
+            // Network catch-up (CDM master may also sync; this keeps vIFF aligned)
+            const ok = await viffService.updateTobt(
+                tobtStrip.callsign,
+                tobt,
+                taxi,
+                flight.cdmSts ?? "",
+            )
+            if (!ok) {
+                console.warn(`[VIFF] TOBT network sync failed for ${tobtStrip.callsign} (ES already updated)`)
+            }
+            viffService.pollSoon()
+            break
+        }
+
+        case "viffReadyTobt": {
+            const readyStrip = store.getStrip(message.stripId)
+            if (!readyStrip) break
+            if (readyStrip.stripType !== "departure") break
+            if (readyStrip.adep !== "ESSA") break
+            if (readyStrip.flightRules !== "I" && readyStrip.flightRules !== "Y") break
+            const flight = flightStore.getFlight(readyStrip.callsign)
+            if (!flight) break
+            const now = new Date()
+            const tobt =
+                String(now.getUTCHours()).padStart(2, "0") +
+                String(now.getUTCMinutes()).padStart(2, "0")
+            const taxi = flight.taxiMinutes && flight.taxiMinutes > 0 ? flight.taxiMinutes : 15
+            // ES-first TOBT, then REA on network
+            sendUdp(JSON.stringify({
+                type: "setTobt",
+                callsign: readyStrip.callsign,
+                tobt,
+                setBy: "A",
+            } satisfies OutboundPluginCommand))
+            applyEfsTobt(flight, tobt)
+            console.log(`[CDM] Ready TOBT via ES ${readyStrip.callsign} → ${tobt}`)
+            const tobtOk = await viffService.updateTobt(
+                readyStrip.callsign,
+                tobt,
+                taxi,
+                "",
+            )
+            if (!tobtOk) {
+                console.warn(`[VIFF] Ready TOBT network sync failed for ${readyStrip.callsign} (ES already updated)`)
+            }
+            const reaOk = await viffService.setRea(readyStrip.callsign, true)
+            if (reaOk) {
+                flight.cdmSts = "REA"
+                console.log(`[VIFF] Ready REA set ${readyStrip.callsign}`)
+            } else {
+                console.error(`[VIFF] Ready REA failed for ${readyStrip.callsign}`)
+            }
+            const updated = flightStore.regenerateStrip(readyStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            viffService.pollSoon()
+            break
+        }
+
+        case "viffToggleReadyStartup": {
+            // CDM Ready Startup / TOGGLEASRTREA: toggle ASRT + REA
+            const rsStrip = store.getStrip(message.stripId)
+            if (!rsStrip) break
+            if (rsStrip.stripType !== "departure") break
+            if (rsStrip.flightRules !== "I" && rsStrip.flightRules !== "Y") break
+            if (!staticConfig.isController) break
+            const flight = flightStore.getFlight(rsStrip.callsign)
+            if (!flight) break
+            const enable = !flight.asrt
+            const now = new Date()
+            const asrt = enable
+                ? String(now.getUTCHours()).padStart(2, "0") + String(now.getUTCMinutes()).padStart(2, "0")
+                : ""
+            sendUdp(JSON.stringify({
+                type: "setAsrt",
+                callsign: rsStrip.callsign,
+                asrt,
+            } satisfies OutboundPluginCommand))
+            flight.asrt = enable ? asrt : undefined
+            const reaOk = await viffService.setRea(rsStrip.callsign, enable)
+            if (reaOk) {
+                flight.cdmSts = enable ? "REA" : (flight.cdmSts === "REA" ? undefined : flight.cdmSts)
+            } else {
+                console.error(`[VIFF] Ready Startup REA ${enable ? "set" : "clear"} failed for ${rsStrip.callsign}`)
+            }
+            console.log(`[CDM] Ready Startup ${enable ? "ON" : "OFF"} ${rsStrip.callsign}${enable ? ` ASRT=${asrt}` : ""}`)
+            const updated = flightStore.regenerateStrip(rsStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            viffService.pollSoon()
+            break
+        }
+
     }
 }
 
@@ -1891,7 +2104,7 @@ wsServer.on("connection", (socket) => {
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
-        handleClientMessage(socket, text)
+        enqueueClientMessage(socket, text)
     })
 
     socket.on("close", () => {
@@ -2249,7 +2462,11 @@ udpIn.on("message", (msg, rinfo) => {
 
         if (result) {
             // Plugin message was processed - only broadcast/log if there was an actual change
-            if (result.deleteStripId) {
+            if (result.strips && result.strips.length > 0) {
+                for (const strip of result.strips) {
+                    broadcastStrip(strip)
+                }
+            } else if (result.deleteStripId) {
                 broadcastStripDelete(result.deleteStripId)
                 if (result.softDeleted) {
                     console.log(`Strip ${result.deleteStripId} soft-deleted`)
@@ -2433,3 +2650,260 @@ setInterval(checkDclTimeouts, DCL_CHECK_INTERVAL_MS)
 
 // Calculate initial DCL availability (must be after hoppieService is declared)
 recalculateDclAvailability()
+
+// ─── vIFF / CDM via Vatiris proxy ───────────────────────────────────────────
+
+function isDepartingIfrStrip(strip: FlightStrip): boolean {
+    return strip.stripType === "departure" && (strip.flightRules === "I" || strip.flightRules === "Y")
+}
+
+function applyViffPoll(result: ViffPollResult) {
+    const ctotByCs = new Map<string, { ctot: string; reason?: string }>()
+    for (const entry of result.restricted) {
+        ctotByCs.set(entry.callsign.toUpperCase(), {
+            ctot: entry.ctot,
+            reason: entry.mostPenalisingRegulation,
+        })
+    }
+    const stsByCs = new Map<string, string>()
+    for (const entry of result.statuses) {
+        stsByCs.set(entry.callsign.toUpperCase(), entry.cdmSts)
+    }
+    const cdmByCs = new Map<string, ViffPollResult["cdm"][number]>()
+    for (const entry of result.cdm) {
+        cdmByCs.set(entry.callsign.toUpperCase(), entry)
+    }
+
+    for (const strip of store.getAllStrips()) {
+        const flight = flightStore.getFlight(strip.callsign)
+        if (!flight) continue
+
+        const cs = strip.callsign.toUpperCase()
+        let changed = false
+
+        if (isDepartingIfrStrip(strip)) {
+            const ctotEntry = ctotByCs.get(cs)
+            const cdmEntry = cdmByCs.get(cs)
+            // Prefer network restricted CTOT; fall back to CDM airport CTOT
+            const newCtot = ctotEntry?.ctot ?? cdmEntry?.ctot
+            const newReason = ctotEntry?.reason
+            const newSts = stsByCs.get(cs) ?? cdmEntry?.cdmSts
+            // TOBT/TSAT from CDM airport feed (ESSA), but prefer recent local CDM_data from ES
+            const LOCAL_CDM_PREFER_MS = 120_000
+            const localFresh = flight.localCdmAt != null && (Date.now() - flight.localCdmAt) < LOCAL_CDM_PREFER_MS
+            let newTobt = cdmEntry?.tobt
+            let newTsat = cdmEntry?.tsat
+            if (localFresh) {
+                if (flight.localCdmTobt !== undefined) newTobt = flight.localCdmTobt
+                if (flight.localCdmTsat !== undefined) newTsat = flight.localCdmTsat
+            } else if (flight.localCdmAt != null) {
+                // Local pin expired — fall back to HTTP
+                flight.localCdmTobt = undefined
+                flight.localCdmTsat = undefined
+                flight.localCdmAt = undefined
+            }
+            // HTTP caught up to local ES values — drop the pin
+            if (
+                flight.localCdmAt != null &&
+                cdmEntry &&
+                cdmEntry.tobt === flight.localCdmTobt &&
+                cdmEntry.tsat === flight.localCdmTsat
+            ) {
+                flight.localCdmTobt = undefined
+                flight.localCdmTsat = undefined
+                flight.localCdmAt = undefined
+            }
+            const newTobtSetBy = cdmEntry?.tobtSetBy
+            const newTaxi = cdmEntry?.taxiMinutes
+
+            if (flight.ctot !== newCtot) {
+                flight.ctot = newCtot
+                changed = true
+            }
+            if (flight.ctotReason !== newReason) {
+                flight.ctotReason = newReason
+                changed = true
+            }
+            if (flight.cdmSts !== newSts) {
+                flight.cdmSts = newSts
+                changed = true
+            }
+            // Do not clear TOBT/TSAT when HTTP omits the flight
+            if (newTobt !== undefined && flight.tobt !== newTobt) {
+                flight.tobt = newTobt
+                changed = true
+            }
+            if (newTsat !== undefined && flight.tsat !== newTsat) {
+                flight.tsat = newTsat
+                changed = true
+            }
+            // Sync set-by:
+            // - TOBT==EOBT → clear
+            // - API explicit P/A → take it
+            // - API silent → keep existing (EFS/ES optimistic A must not vanish on poll)
+            if (cdmEntry) {
+                const tobtForSetBy = newTobt ?? flight.tobt
+                const eobtForSetBy = flight.eobt
+                if (tobtForSetBy && eobtForSetBy && tobtForSetBy === eobtForSetBy) {
+                    if (flight.tobtSetBy !== undefined) {
+                        flight.tobtSetBy = undefined
+                        flight.tobtSetByAt = undefined
+                        changed = true
+                    }
+                } else if (newTobtSetBy !== undefined && flight.tobtSetBy !== newTobtSetBy) {
+                    flight.tobtSetBy = newTobtSetBy
+                    flight.tobtSetByAt = newTobtSetBy === "A" ? Date.now() : undefined
+                    changed = true
+                }
+            }
+            if (newTaxi != null && flight.taxiMinutes !== newTaxi) {
+                flight.taxiMinutes = newTaxi
+                changed = true
+            }
+        } else if (flight.ctot || flight.cdmSts || flight.ctotReason || flight.tobt || flight.tsat || flight.tobtSetBy) {
+            flight.ctot = undefined
+            flight.cdmSts = undefined
+            flight.ctotReason = undefined
+            flight.tobt = undefined
+            flight.tsat = undefined
+            flight.tobtSetBy = undefined
+            flight.localCdmTobt = undefined
+            flight.localCdmTsat = undefined
+            flight.localCdmAt = undefined
+            changed = true
+        }
+
+        if (changed) {
+            const updated = flightStore.regenerateStrip(strip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+        }
+    }
+}
+
+const viffService = new ViffService(
+    applyViffPoll,
+    () => staticConfig.myAirports,
+    cliArgs.viffBaseUrl,
+)
+viffService.start()
+
+// ─── Local CDM_data_*.txt (written by CDM plugin next to CDM.dll) ───────────
+// VatEFS.dll may load from Program Files and miss these files; poll them here too.
+const CDM_DATA_POLL_MS = 1000
+let lastCdmDataSnapshot = new Map<string, string>()
+
+function findCdmDataDir(): string | undefined {
+    if (!EUROSCOPE_DIR) return undefined
+    const plugins = path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "Plugins")
+    if (!fs.existsSync(plugins)) return undefined
+    try {
+        const has = fs.readdirSync(plugins).some((f) => /^CDM_data_.*\.txt$/i.test(f))
+        return has ? plugins : undefined
+    } catch {
+        return undefined
+    }
+}
+
+function readCdmFileStable(filePath: string): string | undefined {
+    try {
+        const s1 = fs.statSync(filePath)
+        const c1 = fs.readFileSync(filePath, "utf8")
+        const s2 = fs.statSync(filePath)
+        if (s1.size !== s2.size || s1.mtimeMs !== s2.mtimeMs) return undefined
+        const c2 = fs.readFileSync(filePath, "utf8")
+        if (c1 !== c2) return undefined
+        return c1
+    } catch {
+        return undefined
+    }
+}
+
+function normalizeCdmHhmmField(raw: string): string | undefined {
+    const digits = raw.replace(/\D/g, "")
+    if (digits.length !== 3 && digits.length !== 4 && digits.length !== 6) return undefined
+    const normalized = digits.length === 3 ? digits.padStart(4, "0") : digits.slice(0, 4)
+    const h = Number(normalized.slice(0, 2))
+    const m = Number(normalized.slice(2, 4))
+    if (h > 23 || m > 59) return undefined
+    return normalized
+}
+
+function pollLocalCdmDataFiles() {
+    const dir = findCdmDataDir()
+    if (!dir) return
+
+    let files: string[]
+    try {
+        files = fs.readdirSync(dir).filter((f) => /^CDM_data_.*\.txt$/i.test(f))
+    } catch {
+        return
+    }
+
+    const snapshot = new Map<string, string>()
+    const flights: import("./types.js").CdmLocalFlightUpdate[] = []
+    let readOk = true
+
+    for (const file of files) {
+        const content = readCdmFileStable(path.join(dir, file))
+        if (content === undefined) {
+            readOk = false
+            break
+        }
+        const airportMatch = file.match(/^CDM_data_(.+)\.txt$/i)
+        const airport = airportMatch?.[1]?.toUpperCase()
+
+        for (const line of content.split(/\r?\n/)) {
+            if (!line.trim()) continue
+            const fields = line.split(",")
+            if (fields.length < 5) continue
+            const callsign = fields[0].trim().toUpperCase()
+            if (!/^[A-Z0-9]{2,8}$/.test(callsign)) continue
+            const tobt = normalizeCdmHhmmField(fields[1] || "")
+            const tsat = normalizeCdmHhmmField(fields[2] || "")
+            const ttot = normalizeCdmHhmmField(fields[3] || "")
+            const ctot = normalizeCdmHhmmField(fields[4] || "")
+            if (!tobt && !tsat) continue
+            let reason = (fields[5] || "").trim()
+            if (reason === "flowRestriction") reason = ""
+
+            const key = `${tobt || ""}|${tsat || ""}|${ttot || ""}|${ctot || ""}|${reason}`
+            snapshot.set(callsign, key)
+            if (lastCdmDataSnapshot.get(callsign) === key) continue
+
+            flights.push({
+                callsign,
+                airport,
+                tobt,
+                tsat,
+                ttot,
+                ctot,
+                ctotReason: reason || undefined,
+                // setBy comes from ES strip annotation via plugin — omit here
+            })
+        }
+    }
+
+    if (!readOk) return
+    lastCdmDataSnapshot = snapshot
+    if (flights.length === 0) return
+
+    const result = store.tryProcessPluginMessage({ type: "cdmLocalUpdate", flights })
+    if (result?.strips) {
+        for (const strip of result.strips) {
+            broadcastStrip(strip)
+            console.log(`[CDM] Local file update ${strip.callsign} TOBT=${strip.tobt || "-"} TSAT=${strip.tsat || "-"}`)
+        }
+    }
+}
+
+const cdmDataDir = findCdmDataDir()
+if (cdmDataDir) {
+    console.log(`CDM_data directory: ${cdmDataDir}`)
+    setInterval(pollLocalCdmDataFiles, CDM_DATA_POLL_MS)
+    pollLocalCdmDataFiles()
+} else {
+    console.warn("CDM_data directory not found under EuroScope package Plugins")
+}

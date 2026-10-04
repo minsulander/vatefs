@@ -15,8 +15,30 @@
       @mousedown="onResizeStart"
       @touchstart="onResizeStart"
     >
-      <span class="section-title">{{ section.title }}</span>
-      <div v-if="!isFirstSection" class="resize-handle"></div>
+      <span class="section-title">{{ sectionDisplayTitle }}</span>
+      <div class="section-header-right">
+        <div
+          v-if="showTimeSortControls"
+          class="section-sort-controls"
+          @mousedown.stop
+          @touchstart.stop
+        >
+          <button
+            type="button"
+            class="section-sort-btn"
+            :title="timeSortFieldTitle"
+            :disabled="!showTsatSortOption"
+            @click.stop="toggleTimeSortField"
+          >SORT {{ timeSortFieldLabel }}</button>
+          <button
+            type="button"
+            class="section-sort-btn section-sort-dir-btn"
+            :title="timeSortDirTitle"
+            @click.stop="toggleTimeSortDir"
+          >{{ timeSortDir === 'asc' ? '▲' : '▼' }}</button>
+        </div>
+        <div v-if="!isFirstSection" class="resize-handle"></div>
+      </div>
     </div>
     <div
       class="section-content"
@@ -32,9 +54,9 @@
         @drop="onTopDrop"
       >
         <template v-for="(strip, index) in topStrips" :key="strip.id">
-          <!-- Gap before this strip (if any) -->
+          <!-- Gap before this strip (if any); skipped while auto time-sorted -->
           <div
-            v-if="sectionGaps[index]"
+            v-if="showGaps && sectionGaps[index]"
             class="strip-gap"
             :data-gap-index="index"
             :style="{ height: sectionGaps[index] + 'px' }"
@@ -81,14 +103,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import type { Section } from '@/types/efs'
+import { ref, computed, watch } from 'vue'
+import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import FlightStrip from './FlightStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+type TimeSortField = 'etobt' | 'tsat'
+type TimeSortDir = 'asc' | 'desc'
+
+const TIME_SORT_FIELD_KEY = 'efs/depTimeSort'
+const TIME_SORT_DIR_KEY = 'efs/depTimeSortDir'
+const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared'])
 
 const props = withDefaults(defineProps<{
   section: Section
@@ -116,9 +144,170 @@ const isDragOver = ref(false)
 const isBottomDragOver = ref(false)
 const topContainer = ref<HTMLElement | null>(null)
 
-const topStrips = computed(() => store.getTopStrips(props.bayId, props.section.id))
+const isTimeSortedSection = computed(() => TIME_SORT_SECTIONS.has(props.section.id))
+const hasEssa = computed(() =>
+  store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
+)
+/** Exactly ESSA — not multi-airport or another field */
+const onlyEssa = computed(() => {
+  const airports = store.myAirports.map((a) => a.toUpperCase())
+  return airports.length === 1 && airports[0] === 'ESSA'
+})
+/** Sort controls only when ESSA is active (CDM times); TSAT↔E/TOBT toggle needs ESSA */
+const showTimeSortControls = computed(() => isTimeSortedSection.value && hasEssa.value)
+const showTsatSortOption = computed(() => hasEssa.value)
+/** GNG-style: PENDING DEP → TSAT when only ESSA and sort controls are shown */
+const sectionDisplayTitle = computed(() => {
+  if (
+    props.section.id === 'pending_dep' &&
+    onlyEssa.value &&
+    showTimeSortControls.value
+  ) {
+    return 'TSAT'
+  }
+  return props.section.title
+})
+
+function loadTimeSortField(): TimeSortField {
+  // Migrate older pending-dep-only key if present
+  const stored = localStorage.getItem(TIME_SORT_FIELD_KEY) ?? localStorage.getItem('efs/pendingDepSort')
+  return stored === 'tsat' ? 'tsat' : 'etobt'
+}
+
+function loadTimeSortDir(): TimeSortDir {
+  return localStorage.getItem(TIME_SORT_DIR_KEY) === 'desc' ? 'desc' : 'asc'
+}
+
+const timeSortField = ref<TimeSortField>(loadTimeSortField())
+const timeSortDir = ref<TimeSortDir>(loadTimeSortDir())
+const lastSortKeys = ref<Map<string, number>>(new Map())
+
+function activeTimeSortField(): TimeSortField {
+  return hasEssa.value ? timeSortField.value : 'etobt'
+}
+
+const timeSortFieldLabel = computed(() =>
+  activeTimeSortField() === 'tsat' ? 'TSAT' : 'E/TOBT',
+)
+
+const timeSortFieldTitle = computed(() => {
+  if (!showTsatSortOption.value) return 'Sorting by E/TOBT'
+  return activeTimeSortField() === 'tsat'
+    ? 'Sorting by TSAT — click to sort by E/TOBT'
+    : 'Sorting by E/TOBT — click to sort by TSAT'
+})
+
+const timeSortDirTitle = computed(() =>
+  timeSortDir.value === 'asc'
+    ? 'Earliest at top — click for earliest at bottom'
+    : 'Earliest at bottom — click for earliest at top',
+)
+
+const preferManualOrder = computed(() =>
+  isTimeSortedSection.value && store.hasManualOrder(props.bayId, props.section.id),
+)
+
+function clearManualAndPersist() {
+  store.clearManualOrder(props.bayId, props.section.id)
+}
+
+function toggleTimeSortField() {
+  if (!showTsatSortOption.value) return
+  timeSortField.value = timeSortField.value === 'tsat' ? 'etobt' : 'tsat'
+  localStorage.setItem(TIME_SORT_FIELD_KEY, timeSortField.value)
+  clearManualAndPersist()
+}
+
+function toggleTimeSortDir() {
+  timeSortDir.value = timeSortDir.value === 'asc' ? 'desc' : 'asc'
+  localStorage.setItem(TIME_SORT_DIR_KEY, timeSortDir.value)
+  clearManualAndPersist()
+}
+
+/** Minutes since midnight for HHMM / HHMMSS; missing/invalid → +∞ (sort last in asc) */
+function hhmmSortKey(hhmm: string | undefined): number {
+  if (!hhmm) return Number.POSITIVE_INFINITY
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return Number.POSITIVE_INFINITY
+  const normalized = digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+  const h = Number(normalized.slice(0, 2))
+  const m = Number(normalized.slice(2, 4))
+  if (h > 23 || m > 59) return Number.POSITIVE_INFINITY
+  return h * 60 + m
+}
+
+function depTimeSortKey(strip: FlightStripData, field: TimeSortField): number {
+  if (field === 'tsat') return hhmmSortKey(strip.tsat)
+  return hhmmSortKey(strip.tobt || strip.eobt)
+}
+
+function collectTopStrips(): FlightStripData[] {
+  const list: FlightStripData[] = []
+  store.strips.forEach((strip) => {
+    if (strip.bayId === props.bayId && strip.sectionId === props.section.id && !strip.bottom) {
+      list.push(strip)
+    }
+  })
+  return list
+}
+
+function sortByDepTime(
+  list: FlightStripData[],
+  field: TimeSortField,
+  dir: TimeSortDir,
+): FlightStripData[] {
+  return [...list].sort((a, b) => {
+    // asc: earliest at top; desc: earliest at bottom; missing times stay at the far end
+    const d = dir === 'asc'
+      ? depTimeSortKey(a, field) - depTimeSortKey(b, field)
+      : depTimeSortKey(b, field) - depTimeSortKey(a, field)
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/** Gaps only when not in auto time-sort mode */
+const showGaps = computed(() => !isTimeSortedSection.value || preferManualOrder.value)
+
+const topStrips = computed(() => {
+  void store.stripsVersion
+  const list = collectTopStrips()
+
+  if (isTimeSortedSection.value && !preferManualOrder.value) {
+    return sortByDepTime(list, activeTimeSortField(), timeSortDir.value)
+  }
+
+  return list.sort((a, b) => a.position - b.position)
+})
+
+// When E/TOBT or TSAT changes for a strip in this section, drop manual order and re-sort by time
+watch(
+  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value] as const,
+  () => {
+    if (!isTimeSortedSection.value) return
+    const field = activeTimeSortField()
+    const list = collectTopStrips()
+    const nextKeys = new Map<string, number>()
+    let keyChanged = false
+    for (const strip of list) {
+      const key = depTimeSortKey(strip, field)
+      nextKeys.set(strip.id, key)
+      if (lastSortKeys.value.has(strip.id) && lastSortKeys.value.get(strip.id) !== key) {
+        keyChanged = true
+      }
+    }
+    lastSortKeys.value = nextKeys
+    if (keyChanged) {
+      store.clearManualOrder(props.bayId, props.section.id)
+    }
+  },
+)
+
 const bottomStrips = computed(() => store.getBottomStrips(props.bayId, props.section.id))
 const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.section.id))
+
 
 const sectionStyle = computed(() => {
   // Last section always flexes to fill remaining space
@@ -430,7 +619,7 @@ function onTopDrop(event: DragEvent) {
         }
       }
 
-      // Move the strip
+      store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
       store.moveStripToSection(stripId, props.bayId, props.section.id, insertPosition)
 
       // Re-add the gap at the correct position with the new size
@@ -533,7 +722,7 @@ function onTopDrop(event: DragEvent) {
       }
     }
 
-    // Move the strip
+    store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
     store.moveStripToSection(stripId, props.bayId, props.section.id, position)
 
     // Create gap if dropped below last strip with enough distance
@@ -686,6 +875,51 @@ function onBottomStripsDrop(event: DragEvent) {
   color: #8a9199;
   text-transform: uppercase;
   font-family: 'Segoe UI', 'Arial', sans-serif;
+}
+
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.section-sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.section-sort-btn {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #c5ccd3;
+  background: #2a2e33;
+  border: 1px solid #4a5058;
+  border-radius: 2px;
+  padding: 1px 6px;
+  cursor: pointer;
+  line-height: 1.3;
+  font-family: 'Segoe UI', 'Arial', sans-serif;
+}
+
+.section-sort-dir-btn {
+  min-width: 1.4rem;
+  padding-left: 4px;
+  padding-right: 4px;
+  font-size: 0.65rem;
+}
+
+.section-sort-btn:hover:not(:disabled) {
+  background: #3a4048;
+  color: #fff;
+}
+
+.section-sort-btn:disabled {
+  cursor: default;
+  opacity: 0.85;
 }
 
 .resize-handle {

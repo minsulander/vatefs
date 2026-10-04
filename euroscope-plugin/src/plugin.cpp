@@ -8,11 +8,14 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <windows.h>
+#include <shlwapi.h>
 // #include <winsock2.h>
 // #include <ws2tcpip.h>
 
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "Shlwapi.lib")
 
 // Convert an ANSI code page string (from EuroScope) to UTF-8 (for JSON).
 // For example, the middle dot '·' is 0xB7 in Windows-1252 but must become 0xC2 0xB7 in UTF-8.
@@ -178,10 +181,20 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (sidName && *sidName && strlen(sidName) < 50)
             message["sid"] = AnsiToUtf8(sidName);
 
-        const char *eobt = fpData.GetEstimatedDepartureTime();
-        if (eobt && strlen(eobt) == 4) { // Valid EOBT is always 4 digits
-            out << " eobt " << eobt;
-            message["eobt"] = eobt;
+        const char *eobtRaw = fpData.GetEstimatedDepartureTime();
+        if (eobtRaw && eobtRaw[0] != '\0') {
+            // EuroScope returns uncompiled EOBT which is often < 4 digits (e.g. "945").
+            // Pad/truncate to HHmm so the backend always receives a usable value.
+            std::string eobtDigits;
+            for (const char *p = eobtRaw; *p; ++p) {
+                if (*p >= '0' && *p <= '9') eobtDigits.push_back(*p);
+            }
+            if (!eobtDigits.empty()) {
+                if (eobtDigits.size() > 4) eobtDigits = eobtDigits.substr(0, 4);
+                while (eobtDigits.size() < 4) eobtDigits.insert(eobtDigits.begin(), '0');
+                out << " eobt " << eobtDigits;
+                message["eobt"] = eobtDigits;
+            }
         }
 
         int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
@@ -856,10 +869,366 @@ void VatEFSPlugin::OnTimer(int counter)
 
         if (std::time(NULL) - enabledTime < 10) return;
         if (counter % 5 == 0) UpdateMyself();
+        // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.
+        // Heartbeat every 5s refreshes backend local-prefer TTL without re-sending all times
+        // (avoids locking in a corrupt mid-write read for untouched callsigns).
+        PollCdmDataFiles(counter % 5 == 0);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnTimer exception: ") + e.what());
     } catch (...) {
         DisplayMessage("OnTimer: Unknown exception");
+    }
+}
+
+namespace {
+std::string NormalizeCdmHhmm(const std::string &raw)
+{
+    std::string digits;
+    for (char c : raw) {
+        if (c >= '0' && c <= '9') digits.push_back(c);
+    }
+    // Reject non-time garbage (and refuse HHMMSS truncation of odd lengths)
+    if (digits.size() != 3 && digits.size() != 4 && digits.size() != 6) return "";
+    if (digits.size() == 3) digits.insert(digits.begin(), '0');
+    if (digits.size() == 6) digits = digits.substr(0, 4);
+    if (digits.size() != 4) return "";
+    int h = (digits[0] - '0') * 10 + (digits[1] - '0');
+    int m = (digits[2] - '0') * 10 + (digits[3] - '0');
+    if (h > 23 || m > 59) return "";
+    return digits;
+}
+
+bool IsValidCdmCallsign(const std::string &cs)
+{
+    if (cs.size() < 2 || cs.size() > 10) return false;
+    for (char c : cs) {
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
+    }
+    // Must contain at least one letter (reject pure numeric garbage from torn lines)
+    bool hasLetter = false;
+    for (char c : cs) {
+        if (c >= 'A' && c <= 'Z') { hasLetter = true; break; }
+    }
+    return hasLetter;
+}
+
+/** Read file twice; only accept if size+mtime stable and contents identical (CDM rewrite race). */
+bool ReadCdmFileStable(const std::string &path, std::string &out)
+{
+    for (int attempt = 0; attempt < 4; attempt++) {
+        WIN32_FILE_ATTRIBUTE_DATA attr1{};
+        if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attr1)) return false;
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) return false;
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+
+        WIN32_FILE_ATTRIBUTE_DATA attr2{};
+        if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attr2)) return false;
+
+        const bool sameMeta =
+            attr1.nFileSizeLow == attr2.nFileSizeLow &&
+            attr1.nFileSizeHigh == attr2.nFileSizeHigh &&
+            attr1.ftLastWriteTime.dwLowDateTime == attr2.ftLastWriteTime.dwLowDateTime &&
+            attr1.ftLastWriteTime.dwHighDateTime == attr2.ftLastWriteTime.dwHighDateTime;
+
+        if (sameMeta) {
+            // Second full read must match (torn content with unchanged mtime is rare but possible)
+            std::ifstream in2(path, std::ios::binary);
+            if (!in2.is_open()) return false;
+            std::string content2((std::istreambuf_iterator<char>(in2)), std::istreambuf_iterator<char>());
+            if (content == content2) {
+                out = std::move(content);
+                return true;
+            }
+        }
+        Sleep(15);
+    }
+    return false;
+}
+} // namespace
+
+/**
+ * CDM slash-fields in EuroScope strip annotation 0:
+ * ASRT/TSAC/TOBT/TSAT/TTOT/deIce/ecfmpId/manualCtot/CTOC/setBy/
+ */
+static std::vector<std::string> SplitCdmAnnotation(const char *ann)
+{
+    std::vector<std::string> parts;
+    if (!ann) ann = "";
+    std::string cur;
+    for (const char *p = ann; ; ++p) {
+        if (*p == '/' || *p == '\0') {
+            parts.push_back(cur);
+            cur.clear();
+            if (*p == '\0') break;
+        } else {
+            cur.push_back(*p);
+        }
+    }
+    return parts;
+}
+
+static std::string JoinCdmAnnotation(const std::vector<std::string> &parts)
+{
+    std::string out;
+    for (std::size_t i = 0; i < parts.size(); i++) {
+        if (i > 0) out.push_back('/');
+        out += parts[i];
+    }
+    return out;
+}
+
+std::string VatEFSPlugin::GetCdmTobtSetBy(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        if (parts.size() <= 9) return "";
+        std::string s = parts[9];
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+        if (s.empty()) return "";
+        char c = (char)std::toupper((unsigned char)s[0]);
+        if (c == 'A' || c == 'P') return std::string(1, c);
+    } catch (...) {
+    }
+    return "";
+}
+
+std::string VatEFSPlugin::GetCdmAsrt(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        if (parts.empty()) return "";
+        std::string s = parts[0];
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+        // ASRT is HHMM (CDM GetActualTime)
+        std::string digits;
+        for (char c : s) {
+            if (c >= '0' && c <= '9') digits.push_back(c);
+        }
+        if (digits.size() == 3) digits = "0" + digits;
+        if (digits.size() >= 4) return digits.substr(0, 4);
+    } catch (...) {
+    }
+    return "";
+}
+
+bool VatEFSPlugin::SetCdmStripFields(const std::string &callsign, const std::map<int, std::string> &fields)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        auto cad = fp.GetControllerAssignedData();
+        const char *ann = cad.GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation((ann && *ann) ? ann : "///////////");
+        // Ensure slots 0..9 exist (CDM layout)
+        while (parts.size() < 10) parts.push_back("");
+        for (const auto &kv : fields) {
+            if (kv.first < 0) continue;
+            while ((int)parts.size() <= kv.first) parts.push_back("");
+            parts[kv.first] = kv.second;
+        }
+        std::string finalString = JoinCdmAnnotation(parts);
+        return cad.SetFlightStripAnnotation(0, finalString.c_str());
+    } catch (...) {
+        return false;
+    }
+}
+
+/** Directory where CDM writes CDM_data_*.txt (next to CDM.dll, not VatEFS.dll). */
+static bool ResolveCdmDataDirectory(char *dir, size_t dirSize)
+{
+    if (!dir || dirSize == 0) return false;
+    dir[0] = '\0';
+
+    // Preferred: folder of the loaded CDM plugin (same place CDM_data_*.txt is written)
+    HMODULE hCdm = GetModuleHandleA("CDM.dll");
+    if (hCdm) {
+        if (GetModuleFileNameA(hCdm, dir, (DWORD)dirSize) != 0) {
+            PathRemoveFileSpecA(dir);
+            std::string probe = std::string(dir) + "\\CDM_data_*.txt";
+            WIN32_FIND_DATAA fd{};
+            HANDLE hFind = FindFirstFileA(probe.c_str(), &fd);
+            if (hFind != INVALID_HANDLE_VALUE) {
+                FindClose(hFind);
+                return true;
+            }
+        }
+    }
+
+    // Fallback: %APPDATA%\EuroScope\*\Plugins (sector package layout)
+    char appdata[MAX_PATH]{};
+    if (GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH) > 0) {
+        std::string esRoot = std::string(appdata) + "\\EuroScope";
+        std::string pat = esRoot + "\\*";
+        WIN32_FIND_DATAA fd{};
+        HANDLE hFind = FindFirstFileA(pat.c_str(), &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+                if (fd.cFileName[0] == '.') continue;
+                std::string plugins = esRoot + "\\" + fd.cFileName + "\\Plugins";
+                std::string probe = plugins + "\\CDM_data_*.txt";
+                WIN32_FIND_DATAA fd2{};
+                HANDLE hFind2 = FindFirstFileA(probe.c_str(), &fd2);
+                if (hFind2 != INVALID_HANDLE_VALUE) {
+                    FindClose(hFind2);
+                    FindClose(hFind);
+                    strncpy_s(dir, dirSize, plugins.c_str(), _TRUNCATE);
+                    return true;
+                }
+            } while (FindNextFileA(hFind, &fd));
+            FindClose(hFind);
+        }
+    }
+
+    // Last resort: next to VatEFS.dll (only works if co-located with CDM)
+    strncpy_s(dir, dirSize, DllPathFile, _TRUNCATE);
+    PathRemoveFileSpecA(dir);
+    return dir[0] != '\0';
+}
+
+void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
+{
+    try {
+        char dir[_MAX_PATH];
+        if (!ResolveCdmDataDirectory(dir, sizeof(dir))) return;
+
+        static std::string lastCdmDirLogged;
+        if (lastCdmDirLogged != dir) {
+            lastCdmDirLogged = dir;
+            DebugMessage(std::string("CDM_data dir: ") + dir);
+        }
+
+        std::string pattern = std::string(dir) + "\\CDM_data_*.txt";
+        WIN32_FIND_DATAA fd{};
+        HANDLE hFind = FindFirstFileA(pattern.c_str(), &fd);
+        if (hFind == INVALID_HANDLE_VALUE) return;
+
+        std::map<std::string, std::string> snapshot;
+        nlohmann::json flights = nlohmann::json::array();
+        bool readOk = true;
+
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            std::string path = std::string(dir) + "\\" + fd.cFileName;
+            // Airport from CDM_data_ESSA.txt
+            std::string airport;
+            {
+                std::string name = fd.cFileName;
+                const std::string prefix = "CDM_data_";
+                const std::string suffix = ".txt";
+                if (name.size() > prefix.size() + suffix.size() &&
+                    name.compare(0, prefix.size(), prefix) == 0 &&
+                    name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                    airport = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+                }
+            }
+
+            std::string content;
+            if (!ReadCdmFileStable(path, content)) {
+                // Mid-write — skip this entire poll; keep previous snapshot
+                readOk = false;
+                break;
+            }
+
+            std::size_t start = 0;
+            while (start < content.size()) {
+                std::size_t end = content.find_first_of("\r\n", start);
+                if (end == std::string::npos) end = content.size();
+                std::string line = content.substr(start, end - start);
+                start = content.find_first_not_of("\r\n", end);
+                if (start == std::string::npos) start = content.size();
+
+                if (line.empty()) continue;
+                // Ignore incomplete last line without trailing newline during torn reads
+                // (stable read should already reject; keep as safety)
+                // CALLSIGN,TOBT,TSAT,TTOT,CTOT,reason,
+                std::vector<std::string> fields;
+                {
+                    std::string cur;
+                    for (char c : line) {
+                        if (c == ',') {
+                            fields.push_back(cur);
+                            cur.clear();
+                        } else {
+                            cur.push_back(c);
+                        }
+                    }
+                    fields.push_back(cur);
+                }
+                if (fields.size() < 5) continue;
+                std::string callsign = fields[0];
+                for (auto &c : callsign) c = (char)std::toupper((unsigned char)c);
+                if (!IsValidCdmCallsign(callsign)) continue;
+
+                std::string tobt = NormalizeCdmHhmm(fields[1]);
+                std::string tsat = NormalizeCdmHhmm(fields[2]);
+                std::string ttot = NormalizeCdmHhmm(fields[3]);
+                std::string ctot = NormalizeCdmHhmm(fields[4]);
+                // Require at least TOBT or TSAT to accept the row (reject torn numeric junk)
+                if (tobt.empty() && tsat.empty()) continue;
+
+                std::string reason = fields.size() > 5 ? fields[5] : "";
+                if (reason == "flowRestriction") reason.clear();
+                // TOBT-SET-BY + ASRT from CDM strip annotation (not in CDM_data_*.txt)
+                std::string setBy = GetCdmTobtSetBy(callsign);
+                std::string asrt = GetCdmAsrt(callsign);
+
+                std::string key = tobt + "|" + tsat + "|" + ttot + "|" + ctot + "|" + reason + "|" + setBy + "|" + asrt;
+                snapshot[callsign] = key;
+                auto prev = lastCdmFileSnapshot.find(callsign);
+                if (prev != lastCdmFileSnapshot.end() && prev->second == key) continue;
+
+                DebugMessage("cdmLocal " + callsign + " TOBT=" + tobt + " setBy=" + (setBy.empty() ? "-" : setBy) +
+                             " ASRT=" + (asrt.empty() ? "-" : asrt));
+
+                nlohmann::json f = nlohmann::json::object();
+                f["callsign"] = callsign;
+                if (!airport.empty()) f["airport"] = airport;
+                if (!tobt.empty()) f["tobt"] = tobt;
+                if (!tsat.empty()) f["tsat"] = tsat;
+                if (!ttot.empty()) f["ttot"] = ttot;
+                if (!ctot.empty()) f["ctot"] = ctot;
+                if (!reason.empty()) f["ctotReason"] = reason;
+                // Always include so backend can clear when CDM blank (TOBT==EOBT)
+                f["tobtSetBy"] = setBy;
+                f["asrt"] = asrt;
+                flights.push_back(f);
+            }
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+
+        if (!readOk) {
+            // Do not swap snapshot or apply partial/torn data
+            return;
+        }
+
+        lastCdmFileSnapshot.swap(snapshot);
+
+        if (!flights.empty()) {
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "cdmLocalUpdate";
+            message["flights"] = flights;
+            PostJson(message, "PollCdmDataFiles");
+        } else if (sendHeartbeat) {
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "cdmLocalHeartbeat";
+            PostJson(message, "PollCdmDataFiles");
+        }
+    } catch (const std::exception &e) {
+        DebugMessage(std::string("PollCdmDataFiles: ") + e.what());
+    } catch (...) {
+        DebugMessage("PollCdmDataFiles: Unknown exception");
     }
 }
 
@@ -1553,6 +1922,113 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         bool ok = fp.GetControllerAssignedData().SetClearedAltitude(altitude);
                         if (!ok) DisplayMessage("assignCfl: Failed for " + callsign);
+                    }
+                } else if (message["type"] == "setEobt") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto eobt = message["eobt"].get<std::string>();
+                    DebugMessage("setEobt: " + callsign + " -> " + eobt);
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty() || eobt.size() != 4) {
+                        DisplayMessage("setEobt: Invalid callsign or eobt");
+                    } else {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (!fp.IsValid()) {
+                            DisplayMessage("setEobt: Flight plan not found: " + callsign);
+                        } else {
+                            auto fpData = fp.GetFlightPlanData();
+                            fpData.SetEstimatedDepartureTime(eobt.c_str());
+                            bool amended = fpData.AmendFlightPlan();
+                            if (!amended) {
+                                DisplayMessage("setEobt: Failed to amend for " + callsign);
+                            } else {
+                                DebugMessage("setEobt: Amended " + callsign + " EOBT=" + eobt);
+                                OnFlightPlanFlightPlanDataUpdate(fp);
+                            }
+                        }
+                    }
+                } else if (message["type"] == "setAsrt") {
+                    // Ready Startup / ASRT — annotation field 0 (HHMM or empty to clear)
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto asrt = message.contains("asrt") && message["asrt"].is_string()
+                                    ? message["asrt"].get<std::string>()
+                                    : "";
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    // Normalize to HHMM or empty
+                    std::string digits;
+                    for (char c : asrt) {
+                        if (c >= '0' && c <= '9') digits.push_back(c);
+                    }
+                    if (digits.size() == 3) digits = "0" + digits;
+                    if (digits.size() > 4) digits = digits.substr(0, 4);
+                    if (!digits.empty() && digits.size() != 4) {
+                        DisplayMessage("setAsrt: Invalid asrt for " + callsign);
+                    } else {
+                        std::map<int, std::string> fields;
+                        fields[0] = digits;
+                        if (!SetCdmStripFields(callsign, fields)) {
+                            DisplayMessage("setAsrt: Failed for " + callsign);
+                        } else {
+                            DebugMessage("setAsrt: " + callsign + " -> " + (digits.empty() ? "(clear)" : digits));
+                            lastCdmFileSnapshot.erase(callsign);
+                            nlohmann::json f = nlohmann::json::object();
+                            f["callsign"] = callsign;
+                            f["asrt"] = digits;
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "cdmLocalUpdate";
+                            echo["flights"] = nlohmann::json::array({f});
+                            PostJson(echo, "setAsrt");
+                        }
+                    }
+                } else if (message["type"] == "setTobt") {
+                    // ES-first: write CDM annotation (TOBT/setBy), echo to EFS immediately.
+                    // CDM master / backend then syncs vIFF — avoids ES↔EFS desync.
+                    // Fields: 2=TOBT, 9=setBy (A/P)
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto tobt = message["tobt"].get<std::string>();
+                    std::string setBy = "A";
+                    if (message.contains("setBy") && message["setBy"].is_string()) {
+                        setBy = message["setBy"].get<std::string>();
+                    }
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (!setBy.empty())
+                        setBy[0] = (char)std::toupper((unsigned char)setBy[0]);
+                    DebugMessage("setTobt: " + callsign + " -> " + tobt + " setBy=" + setBy);
+                    if (callsign.empty() || tobt.size() != 4) {
+                        DisplayMessage("setTobt: Invalid callsign or tobt");
+                    } else {
+                        std::map<int, std::string> fields;
+                        fields[2] = tobt;
+                        if (setBy == "A" || setBy == "P") fields[9] = setBy;
+                        if (!SetCdmStripFields(callsign, fields)) {
+                            DisplayMessage("setTobt: Failed for " + callsign);
+                        } else {
+                            DebugMessage("setTobt: Updated CDM annotation for " + callsign);
+                            // Force next CDM_data poll to re-read this callsign
+                            lastCdmFileSnapshot.erase(callsign);
+                            // Immediate EFS update (don't wait for CDM_data_*.txt rewrite)
+                            nlohmann::json f = nlohmann::json::object();
+                            f["callsign"] = callsign;
+                            f["tobt"] = tobt;
+                            f["tobtSetBy"] = (setBy == "A" || setBy == "P") ? setBy : "";
+                            try {
+                                auto fp = FlightPlanSelect(callsign.c_str());
+                                if (fp.IsValid()) {
+                                    const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+                                    auto parts = SplitCdmAnnotation(ann);
+                                    if (parts.size() > 3 && parts[3].size() >= 4) {
+                                        f["tsat"] = parts[3].substr(0, 4);
+                                    }
+                                }
+                            } catch (...) {
+                            }
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "cdmLocalUpdate";
+                            echo["flights"] = nlohmann::json::array({f});
+                            PostJson(echo, "setTobt");
+                        }
                     }
                 } else if (message["type"] == "createFlightPlan") {
                     auto callsign = message["callsign"].get<std::string>();

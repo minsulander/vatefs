@@ -87,7 +87,15 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "dclClearance",
     "noteText",
     "hasMatchingFlight",
-    "groundstate"
+    "groundstate",
+    // CDM / vIFF — must be compared or TOBT/TSAT/REA-only updates are dropped
+    "tobt",
+    "tsat",
+    "tobtSetBy",
+    "asrt",
+    "cdmSts",
+    "ctot",
+    "ctotReason",
 ]
 
 /**
@@ -188,6 +196,7 @@ class EfsStore {
      */
     processPluginMessage(message: PluginMessage): {
         strip?: FlightStrip
+        strips?: FlightStrip[]
         deleteStripId?: string
         isNew?: boolean
         sectionChanged?: boolean
@@ -199,6 +208,19 @@ class EfsStore {
         deletedGapKeys?: string[]
     } {
         const result = flightStore.processMessage(message)
+
+        // Batch strip updates (CDM local file poll)
+        if (result.strips && result.strips.length > 0) {
+            const changed: FlightStrip[] = []
+            for (const strip of result.strips) {
+                const existing = this.strips.get(strip.id)
+                if (!existing || !stripsEqual(existing, strip)) {
+                    this.strips.set(strip.id, strip)
+                    changed.push(strip)
+                }
+            }
+            return changed.length > 0 ? { strips: changed } : {}
+        }
 
         if (result.deleteStripId) {
             this.strips.delete(result.deleteStripId)

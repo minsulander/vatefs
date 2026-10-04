@@ -207,7 +207,37 @@ export interface ManualTransferMessage {
     targetCallsign: string
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage
+export interface ViffReaMessage {
+    type: 'viffRea'
+    stripId: string
+    set: boolean
+}
+
+export interface ViffUpdateEobtMessage {
+    type: 'viffUpdateEobt'
+    stripId: string
+    eobt: string  // HHMM
+}
+
+export interface ViffUpdateTobtMessage {
+    type: 'viffUpdateTobt'
+    stripId: string
+    tobt: string  // HHMM
+}
+
+/** Set TOBT=now then REA (sequential on server) */
+export interface ViffReadyTobtMessage {
+    type: 'viffReadyTobt'
+    stripId: string
+}
+
+/** Toggle Ready Startup: ASRT + REA (CDM TAG_FUNC_TOGGLEASRTREA) */
+export interface ViffToggleReadyStartupMessage {
+    type: 'viffToggleReadyStartup'
+    stripId: string
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage
 
 // Type guards for message parsing
 
@@ -228,5 +258,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup'
 }

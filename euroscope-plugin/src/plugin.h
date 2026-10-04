@@ -5,6 +5,7 @@
 #pragma warning(pop)
 
 #include "json.hpp"
+#include <map>
 #include <string>
 
 namespace VatEFS
@@ -73,6 +74,16 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void CleanupUdpReceiveSocket();
     void ReceiveUdpMessages();
     void PostJson(const nlohmann::json& jsonData, const char *whereaboutsInDaCode);
+    void PollCdmDataFiles(bool sendHeartbeat = false);
+    /** CDM plugin stores setBy in strip annotation 0 field 9: ASRT/.../setBy/ */
+    std::string GetCdmTobtSetBy(const std::string &callsign);
+    /** CDM ASRT / Ready Startup — annotation field 0 (HHMM or empty) */
+    std::string GetCdmAsrt(const std::string &callsign);
+    /** Write CDM slash-fields in annotation 0 (e.g. TOBT=2, setBy=9, ASRT=0) */
+    bool SetCdmStripFields(const std::string &callsign, const std::map<int, std::string> &fields);
+
+    // Last snapshot of CDM_data_*.txt lines: callsign -> "tobt|tsat|ttot|ctot|reason|setBy"
+    std::map<std::string, std::string> lastCdmFileSnapshot;
 
     static bool IsValidUtf8(const char* str);
     static std::string SanitizeUtf8(const char* str);

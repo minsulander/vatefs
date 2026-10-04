@@ -10,7 +10,36 @@ export const useEfsStore = defineStore("efs", () => {
     const connected = ref(false)
     const layout = ref<EfsLayout>({ bays: [] })
     const strips = ref<Map<string, FlightStrip>>(new Map())
+    /** Bumps on every strip add/update/delete so list computeds (e.g. time-sort) always re-run */
+    const stripsVersion = ref(0)
+    /** Sections where the user manually reordered; time-sort resumes when E/TOBT or TSAT changes */
+    const manualOrderSections = ref<Set<string>>(new Set())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
+
+    const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared'])
+
+    function sectionOrderKey(bayId: string, sectionId: string): string {
+        return `${bayId}:${sectionId}`
+    }
+
+    function markManualOrder(bayId: string, sectionId: string) {
+        if (!TIME_SORT_SECTION_IDS.has(sectionId)) return
+        const next = new Set(manualOrderSections.value)
+        next.add(sectionOrderKey(bayId, sectionId))
+        manualOrderSections.value = next
+    }
+
+    function clearManualOrder(bayId: string, sectionId: string) {
+        const key = sectionOrderKey(bayId, sectionId)
+        if (!manualOrderSections.value.has(key)) return
+        const next = new Set(manualOrderSections.value)
+        next.delete(key)
+        manualOrderSections.value = next
+    }
+
+    function hasManualOrder(bayId: string, sectionId: string): boolean {
+        return manualOrderSections.value.has(sectionOrderKey(bayId, sectionId))
+    }
 
     // Controller status
     const myCallsign = ref('')
@@ -156,12 +185,14 @@ export const useEfsStore = defineStore("efs", () => {
         }
 
         strips.value.set(strip.id, strip)
+        stripsVersion.value++
     }
 
     // Handle strip delete message from server
     function handleStripDeleteMessage(stripId: string) {
         console.log("received strip delete:", stripId)
         strips.value.delete(stripId)
+        stripsVersion.value++
     }
 
     // Handle gap message from server
@@ -198,6 +229,8 @@ export const useEfsStore = defineStore("efs", () => {
         // Clear local state
         layout.value = { bays: [] }
         strips.value.clear()
+        stripsVersion.value++
+        manualOrderSections.value = new Set()
         gaps.value.clear()
 
         // Request fresh data from server
@@ -253,6 +286,35 @@ export const useEfsStore = defineStore("efs", () => {
         sectionStrips.forEach((s, index) => {
             s.position = index
         })
+    }
+
+    function bumpStripsVersion() {
+        stripsVersion.value++
+    }
+
+    /** Reindex top-zone strips to match a visual/DOM order (ids top→bottom). */
+    function reindexTopStripsByIds(bayId: string, sectionId: string, orderedIds: string[]) {
+        orderedIds.forEach((id, index) => {
+            const strip = strips.value.get(id)
+            if (strip && strip.bayId === bayId && strip.sectionId === sectionId && !strip.bottom) {
+                strip.position = index
+            }
+        })
+        stripsVersion.value++
+    }
+
+    /**
+     * Before a manual move into a time-sorted section still in auto-sort mode,
+     * align store positions to the current DOM order so insert indices match what the user sees.
+     */
+    function syncTimeSortSectionFromDom(bayId: string, sectionId: string, container: Element | null) {
+        if (!TIME_SORT_SECTION_IDS.has(sectionId)) return
+        if (hasManualOrder(bayId, sectionId)) return
+        if (!container) return
+        const ids = Array.from(container.querySelectorAll<HTMLElement>('[data-strip-id]'))
+            .map((el) => el.getAttribute('data-strip-id'))
+            .filter((id): id is string => !!id)
+        if (ids.length > 0) reindexTopStripsByIds(bayId, sectionId, ids)
     }
 
     function resolveTargetPosition(position: number | undefined, stripCount: number): number {
@@ -328,6 +390,9 @@ export const useEfsStore = defineStore("efs", () => {
             cleanupGaps(oldBayId, oldSectionId)
         }
 
+        stripsVersion.value++
+        markManualOrder(targetBayId, targetSectionId)
+
         // Send update to server
         sendMessage({
             type: 'moveStrip',
@@ -375,6 +440,8 @@ export const useEfsStore = defineStore("efs", () => {
         if (!oldBottom) {
             cleanupGaps(oldBayId, oldSectionId)
         }
+
+        stripsVersion.value++
 
         // Send update to server
         sendMessage({
@@ -564,6 +631,22 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclSetMode', mode })
     }
 
+    function viffRea(stripId: string, set: boolean) {
+        sendMessage({ type: 'viffRea', stripId, set })
+    }
+
+    function viffUpdateEobt(stripId: string, eobt: string) {
+        sendMessage({ type: 'viffUpdateEobt', stripId, eobt })
+    }
+
+    function viffUpdateTobt(stripId: string, tobt: string) {
+        sendMessage({ type: 'viffUpdateTobt', stripId, tobt })
+    }
+
+    function viffReadyTobt(stripId: string) {
+        sendMessage({ type: 'viffReadyTobt', stripId })
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -571,6 +654,7 @@ export const useEfsStore = defineStore("efs", () => {
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
+        stripsVersion.value++
 
         // Send delete request to server
         sendMessage({
@@ -607,6 +691,7 @@ export const useEfsStore = defineStore("efs", () => {
         const strip = strips.value.get(stripId)
         if (strip) {
             strips.value.set(stripId, { ...strip, noteText: text })
+            stripsVersion.value++
         }
 
         sendMessage({
@@ -621,6 +706,7 @@ export const useEfsStore = defineStore("efs", () => {
         const strip = strips.value.get(stripId)
         if (strip) {
             strips.value.set(stripId, { ...strip, remarks: text || undefined })
+            stripsVersion.value++
         }
 
         sendMessage({
@@ -666,6 +752,13 @@ export const useEfsStore = defineStore("efs", () => {
         getBays,
         layout,
         strips,
+        stripsVersion,
+        markManualOrder,
+        clearManualOrder,
+        hasManualOrder,
+        reindexTopStripsByIds,
+        syncTimeSortSectionFromDom,
+        bumpStripsVersion,
         gaps,
         myCallsign,
         myAirports,
@@ -696,6 +789,10 @@ export const useEfsStore = defineStore("efs", () => {
         dclSend,
         dclReject,
         dclSetMode,
+        viffRea,
+        viffUpdateEobt,
+        viffUpdateTobt,
+        viffReadyTobt,
         availableConfigs,
         activeConfig,
         switchConfig,
