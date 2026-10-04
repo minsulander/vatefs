@@ -122,6 +122,29 @@ function openCreateDialog(type: SpecialStripType, target?: {
   dialogTargetGapIndex.value = target?.gapIndex
   dialogTargetGapSize.value = target?.gapSize ?? 0
   dialogInitialAirport.value = airportForBay(target?.bayId)
+
+  // Note dialog only asks for airport (RTC). Otherwise create immediately.
+  if (type === 'note' && !store.multiAirport) {
+    store.createStrip(
+      'note',
+      undefined,
+      undefined,
+      dialogInitialAirport.value ?? store.myAirports[0],
+      dialogTargetBayId.value,
+      dialogTargetSectionId.value,
+      dialogTargetPosition.value,
+      dialogTargetIsBottom.value
+    )
+    if (
+      dialogTargetGapIndex.value !== undefined &&
+      dialogTargetGapSize.value >= store.GAP_BUFFER &&
+      dialogTargetBayId.value && dialogTargetSectionId.value
+    ) {
+      store.setGapAtIndex(dialogTargetBayId.value, dialogTargetSectionId.value, dialogTargetGapIndex.value, dialogTargetGapSize.value)
+    }
+    return
+  }
+
   dialogOpen.value = true
 }
 

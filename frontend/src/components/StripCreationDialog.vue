@@ -105,8 +105,9 @@ const airports = computed(() => {
 
 const showAirportSelector = computed(() => {
   if (airports.value.length === 0) return false
+  // CROSS/NOTE airport choice is only meaningful in RTC (multi-airport) columns
   if (props.stripType === 'cross' || props.stripType === 'note') {
-    return store.multiAirport || airports.value.length > 1
+    return store.multiAirport
   }
   // VFR DEP/ARR
   return airports.value.length > 1

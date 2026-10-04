@@ -492,6 +492,13 @@ function openCreateDialog(type: SpecialStripType, position?: number, isBottom = 
   pendingCreateIsBottom.value = isBottom
   pendingCreateGapIndex.value = gapIndex
   pendingCreateGapSize.value = gapSize
+
+  // Note dialog only asks for airport (RTC). Otherwise create immediately.
+  if (type === 'note' && !store.multiAirport) {
+    applyCreate('note', undefined, undefined, bayAirport.value, position, isBottom, gapIndex, gapSize)
+    return
+  }
+
   createDialogOpen.value = true
 }
 

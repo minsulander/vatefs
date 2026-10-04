@@ -7,31 +7,30 @@
   >
     <div
       v-if="store.multiAirport"
+      ref="bayHeader"
       class="bay-header"
       :class="{ 'bay-header--empty': isEmpty }"
       :style="{ background: accent }"
     >
-      <v-menu
-        v-model="pickerOpen"
-        :close-on-content-click="false"
-        location="bottom"
-        offset="4"
-        max-height="360"
+      <button
+        ref="pickerBtn"
+        type="button"
+        class="airport-picker-btn"
+        :class="{ 'airport-picker-btn--empty': isEmpty, 'airport-picker-btn--open': pickerOpen }"
+        @click="onPickerClick"
       >
-        <template #activator="{ props: menuProps }">
-          <button
-            type="button"
-            class="airport-picker-btn"
-            :class="{ 'airport-picker-btn--empty': isEmpty, 'airport-picker-btn--open': pickerOpen }"
-            v-bind="store.pendingIdleSwap ? {} : menuProps"
-            @click="onPickerClick"
-          >
-            <span class="airport-picker-icao">{{ selectedAirport ?? '—' }}</span>
-            <v-icon size="16" class="airport-picker-chevron">mdi-chevron-down</v-icon>
-          </button>
-        </template>
+        <span class="airport-picker-icao">{{ selectedAirport ?? '—' }}</span>
+        <v-icon size="12" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
+      </button>
 
-        <div class="airport-picker-panel" @click.stop>
+      <Teleport to="body">
+        <div
+          v-if="pickerOpen"
+          ref="pickerPanel"
+          class="airport-picker-panel"
+          :style="pickerStyle"
+          @click.stop
+        >
           <div class="airport-picker-search">
             <v-icon size="14" class="search-icon">mdi-magnify</v-icon>
             <input
@@ -88,7 +87,7 @@
             </div>
           </div>
         </div>
-      </v-menu>
+      </Teleport>
     </div>
     <EfsSection
       v-for="(section, index) in bay.sections"
@@ -102,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import type { Bay } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import EfsSection from './EfsSection.vue'
@@ -114,9 +113,13 @@ const props = defineProps<{
 
 const store = useEfsStore()
 const bayEl = ref<HTMLElement | null>(null)
+const bayHeader = ref<HTMLElement | null>(null)
 const pickerOpen = ref(false)
 const searchQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
+const pickerBtn = ref<HTMLButtonElement | null>(null)
+const pickerPanel = ref<HTMLElement | null>(null)
+const pickerStyle = ref<Record<string, string>>({})
 
 const columnIndex = computed(() => props.columnIndex ?? 0)
 const selectedAirport = computed(() =>
@@ -177,6 +180,7 @@ function onPickerClick(event: MouseEvent) {
   // During idle→column placement, let the click bubble to the column
   if (store.pendingIdleSwap) return
   event.stopPropagation()
+  pickerOpen.value = !pickerOpen.value
 }
 
 function onSearchEnter() {
@@ -193,6 +197,19 @@ function closePicker() {
   searchQuery.value = ''
 }
 
+function updatePickerPosition() {
+  const header = bayHeader.value
+  if (!header) return
+  const rect = header.getBoundingClientRect()
+  pickerStyle.value = {
+    position: 'fixed',
+    top: `${Math.round(rect.bottom + 4)}px`,
+    left: `${Math.round(rect.left + rect.width / 2)}px`,
+    transform: 'translateX(-50%)',
+    zIndex: '2000',
+  }
+}
+
 function focusSearchField() {
   const el = searchInput.value
   if (!el) return
@@ -200,17 +217,48 @@ function focusSearchField() {
   el.select()
 }
 
+/** Capture-phase: strip clicks use stopPropagation and block bubble-phase outside-close. */
+function onOutsidePointerDown(event: PointerEvent) {
+  if (!pickerOpen.value) return
+  const target = event.target as Node | null
+  if (!target) return
+  if (pickerBtn.value?.contains(target)) return
+  if (pickerPanel.value?.contains(target)) return
+  closePicker()
+}
+
+function bindPickerListeners() {
+  document.addEventListener('pointerdown', onOutsidePointerDown, true)
+  window.addEventListener('resize', updatePickerPosition)
+  window.addEventListener('scroll', updatePickerPosition, true)
+}
+
+function unbindPickerListeners() {
+  document.removeEventListener('pointerdown', onOutsidePointerDown, true)
+  window.removeEventListener('resize', updatePickerPosition)
+  window.removeEventListener('scroll', updatePickerPosition, true)
+}
+
 watch(pickerOpen, (open) => {
   if (!open) {
     searchQuery.value = ''
+    unbindPickerListeners()
     return
   }
-  // Menu content is teleported; focus after it mounts and after activator blur
+  bindPickerListeners()
   nextTick(() => {
+    updatePickerPosition()
     focusSearchField()
-    requestAnimationFrame(() => focusSearchField())
+    requestAnimationFrame(() => {
+      updatePickerPosition()
+      focusSearchField()
+    })
     setTimeout(focusSearchField, 50)
   })
+})
+
+onBeforeUnmount(() => {
+  unbindPickerListeners()
 })
 
 // After first render, lock all non-last sections to their actual pixel heights
@@ -246,9 +294,10 @@ onMounted(() => {
 .bay-header {
   display: flex;
   align-items: center;
-  padding: 3px 4px;
+  justify-content: center;
+  padding: 4px 6px;
   flex-shrink: 0;
-  min-height: 30px;
+  min-height: 28px;
 }
 
 .airport-picker-btn {
@@ -256,28 +305,24 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
+  gap: 2px;
   min-width: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: transparent;
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 3px;
+  border: none;
+  border-radius: 0;
   font-family: inherit;
-  padding: 2px 22px;
+  padding: 0;
   cursor: pointer;
   text-align: center;
 }
 
-.airport-picker-btn:hover,
-.airport-picker-btn--open {
-  background: rgba(0, 0, 0, 0.5);
-  border-color: rgba(255, 255, 255, 0.4);
+.airport-picker-btn--empty {
+  color: rgba(255, 255, 255, 0.55);
 }
 
-.airport-picker-btn--empty {
-  color: #9e9e9e;
-  background: rgba(0, 0, 0, 0.2);
-  border-color: rgba(255, 255, 255, 0.12);
+.airport-picker-btn--open .airport-picker-menu-icon {
+  opacity: 0.9;
 }
 
 .airport-picker-icao {
@@ -287,12 +332,10 @@ onMounted(() => {
   line-height: 1.1;
 }
 
-.airport-picker-chevron {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  opacity: 0.65;
+.airport-picker-menu-icon {
+  opacity: 0.55;
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .traffic-dep {
@@ -311,10 +354,12 @@ onMounted(() => {
   background: #1e2126;
   border: 1px solid #3a3f46;
   border-radius: 4px;
-  min-width: 200px;
-  max-width: 280px;
+  width: min(240px, calc(100vw - 16px));
+  max-height: 360px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .airport-picker-search {
