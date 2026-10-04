@@ -10,9 +10,15 @@ fi
 
 cd "$(dirname $0)/.."
 
-if [ -d /c/Program\ Files\ \(x86\)/WiX\ Toolset\ v3.11/bin ]; then
-    which heat 2>/dev/null || export PATH=/c/Program\ Files\ \(x86\)/WiX\ Toolset\ v3.11/bin:$PATH
-fi
+for wix in \
+    "/c/Program Files (x86)/WiX Toolset v3.14/bin" \
+    "/c/Program Files (x86)/WiX Toolset v3.11/bin"
+do
+    if [ -d "$wix" ]; then
+        which heat 2>/dev/null || export PATH="$wix:$PATH"
+        break
+    fi
+done
 which heat >/dev/null
 
 FILENAME=vatefs-$VERSION.msi
