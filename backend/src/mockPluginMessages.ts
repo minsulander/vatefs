@@ -208,12 +208,14 @@ export const mockPluginMessages: PluginMessage[] = [
     // === PENDING CLR: Departures without clearance ===
 
     // SAS462 - Departure to London, no clearance yet, no groundstate
+    // fplRemarks CALLSIGN overrides ICAO_Airlines telephony (SCANDINAVIAN → mock custom)
     fpUpdate('SAS462', 'ESGG', 'EGLL', 'A320', {
         rfl: 36000,
         depRwy: '21',
         sid: 'KAJAN1D',
         route: 'KAJAN L610 SILVA',
-        eobt: '1234'
+        eobt: '1234',
+        fplRemarks: 'PBN/A1B1 DOF/260404 REG/SEABC CALLSIGN/VIKING DOF/260404'
     }),
     ctrUpdate('SAS462', {
         squawk: '1567',

@@ -60,6 +60,7 @@ import { ViffService } from "./viff-service.js"
 import type { ViffPollResult } from "./viff-service.js"
 import { loadDclSound, playDclSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
+import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
 import { initUserSettings, loadUserSettings, saveUserSettings } from "./user-settings.js"
 
@@ -195,6 +196,11 @@ if (EUROSCOPE_DIR) {
         loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
     } catch (err) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
+    }
+    try {
+        loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
+    } catch (err) {
+        console.warn(`Failed to load ICAO airlines: ${err instanceof Error ? err.message : err}`)
     }
     // Load Hoppie config (logon code + DCL templates)
     loadHoppieConfig(EUROSCOPE_DIR)

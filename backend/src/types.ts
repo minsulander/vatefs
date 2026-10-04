@@ -23,6 +23,8 @@ export interface Flight {
     route?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
     ete?: number               // Estimated Time Enroute (seconds)
+    /** Flight plan item 18 remarks (from EuroScope GetRemarks) */
+    fplRemarks?: string
 
     // Route assignments
     sid?: string              // Standard Instrument Departure
@@ -132,6 +134,8 @@ export interface FlightPlanDataUpdateMessage {
     eobt?: string              // Estimated Off Block Time (HHmm)
     ete?: number               // Estimated Time Enroute (seconds)
     rfl?: number              // Requested flight level (feet)
+    /** Flight plan item 18 remarks */
+    fplRemarks?: string
     // Route data from UpdateRoute()
     arrRwy?: string
     star?: string

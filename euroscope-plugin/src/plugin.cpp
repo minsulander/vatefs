@@ -169,6 +169,11 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (route && *route && strlen(route) < 1000)
             message["route"] = AnsiToUtf8(route);
 
+        // FPL item 18 remarks (for CALLSIGN/CS/C/S telephony parsing)
+        const char *fplRemarks = fpData.GetRemarks();
+        if (fplRemarks && strlen(fplRemarks) < 1000)
+            message["fplRemarks"] = *fplRemarks ? AnsiToUtf8(fplRemarks) : "";
+
         const char *arrRwy = fpData.GetArrivalRwy();
         const char *starName = fpData.GetStarName();
         const char *depRwy = fpData.GetDepartureRwy();

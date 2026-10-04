@@ -17,6 +17,7 @@ import { findStandForPosition } from "./stand-data.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft } from "./slow-aircraft.js"
+import { getRtfCallsign } from "./icao-airlines.js"
 import {
     getRelevantActiveAirports,
     isMultiAirportConfig,
@@ -840,6 +841,7 @@ class FlightStore {
         if (message.eobt !== undefined) flight.eobt = message.eobt
         if (message.ete !== undefined) flight.ete = message.ete
         if (message.rfl !== undefined) flight.rfl = message.rfl
+        if (message.fplRemarks !== undefined) flight.fplRemarks = message.fplRemarks || undefined
         if (message.arrRwy !== undefined) flight.arrRwy = message.arrRwy
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
@@ -1263,6 +1265,7 @@ class FlightStore {
         return {
             id: airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign,
             callsign: flight.callsign,
+            rtfCallsign: getRtfCallsign(flight.callsign, flight.fplRemarks),
             aircraftType: flight.aircraftType ?? 'UNKN',
             wakeTurbulence,
             flightRules,
@@ -1503,6 +1506,20 @@ class FlightStore {
         // Determine section based on rules
         const targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
+
+        if (!targetSection) {
+            if (!currentAssignment) {
+                return { flight }
+            }
+            const strip = this.createStrip(
+                flight,
+                currentAssignment.bayId,
+                currentAssignment.sectionId,
+                currentAssignment.position,
+                currentAssignment.bottom
+            )
+            return { flight, strip }
+        }
 
         const sectionChanged = currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||

@@ -54,6 +54,7 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
 const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "id",
     "callsign",
+    "rtfCallsign",
     "aircraftType",
     "wakeTurbulence",
     "flightRules",

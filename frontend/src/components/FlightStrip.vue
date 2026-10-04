@@ -138,7 +138,7 @@
     <template v-else>
     <!-- Left section: Callsign block (always visible) -->
     <div class="strip-left">
-      <div class="callsign" :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
+      <div class="callsign" :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }" :title="strip.rtfCallsign || undefined" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>

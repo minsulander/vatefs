@@ -7,6 +7,8 @@ export type WakeCategory = 'L' | 'M' | 'H' | 'J' // Light, Medium, Heavy, Super
 export interface FlightStrip {
     id: string
     callsign: string
+    /** Radiotelephony designator from ICAO_Airlines.txt (e.g. "SCANDINAVIAN") */
+    rtfCallsign?: string
 
     // Aircraft info
     aircraftType: string        // e.g., "A320", "B738"
