@@ -9,6 +9,9 @@ import type { DclMode } from "@vatefs/common"
 interface UserSettings {
     activeConfig?: string
     dclMode?: DclMode
+    activeAirports?: string[]
+    columnAirports?: (string | null)[]
+    columnCount?: number
 }
 
 let settingsPath: string | undefined

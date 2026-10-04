@@ -150,6 +150,16 @@ export function isAirportDataLoaded(): boolean {
 }
 
 /**
+ * Get a sorted list of airport ICAO codes (optionally filtered by prefix).
+ */
+export function listAirportIcaos(prefix?: string): string[] {
+    const all = [...airports.keys()].sort()
+    if (!prefix) return all
+    const upper = prefix.toUpperCase()
+    return all.filter(icao => icao.startsWith(upper))
+}
+
+/**
  * Get the number of loaded airports.
  */
 export function getAirportCount(): number {

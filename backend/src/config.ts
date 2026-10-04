@@ -36,7 +36,11 @@ export {
     removeOnlineController,
     getControllerFrequency,
     getControllerCallsign,
-    clearOnlineControllers
+    clearOnlineControllers,
+    setActiveAirports,
+    setColumnAirport,
+    setColumnCount,
+    rebuildMultiAirportLayout
 } from "./static-config.js"
 
 // Re-export rules engine functions

@@ -38,14 +38,15 @@ import type {
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
-import { loadAirports, getAirportCount, getAirportByIcao } from "./airport-data.js"
+import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
 import type { ConfigFileInfo } from "./config-loader.js"
+import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
@@ -217,6 +218,20 @@ if (EUROSCOPE_DIR) {
     }
     if (savedSettings.dclMode) {
         console.log(`Restoring saved DCL mode: ${savedSettings.dclMode}`)
+    }
+    if (savedSettings.activeAirports && savedSettings.activeAirports.length > 0 && isMultiAirportConfig(staticConfig)) {
+        setActiveAirports(savedSettings.activeAirports)
+        console.log(`Restoring active airports: ${savedSettings.activeAirports.join(", ")}`)
+    }
+    if (savedSettings.columnCount && isMultiAirportConfig(staticConfig)) {
+        setColumnCount(savedSettings.columnCount)
+    }
+    if (savedSettings.columnAirports && isMultiAirportConfig(staticConfig)) {
+        for (let i = 0; i < savedSettings.columnAirports.length; i++) {
+            const icao = savedSettings.columnAirports[i]
+            if (icao) setColumnAirport(i, icao)
+        }
+        console.log(`Restoring column airports: ${savedSettings.columnAirports.map(a => a ?? "-").join(", ")}`)
     }
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
@@ -542,6 +557,10 @@ function sendStatus(socket: WebSocket) {
         airports: staticConfig.myAirports,
         role: staticConfig.myRole,
         isController: staticConfig.isController,
+        multiAirport: isMultiAirportConfig(staticConfig) || undefined,
+        activeAirports: staticConfig.activeAirports,
+        columnAirports: staticConfig.columnAirports,
+        columnCount: staticConfig.columnCount,
     }
     sendMessage(socket, message)
 }
@@ -554,6 +573,10 @@ function broadcastStatus() {
         airports: staticConfig.myAirports,
         role: staticConfig.myRole,
         isController: staticConfig.isController,
+        multiAirport: isMultiAirportConfig(staticConfig) || undefined,
+        activeAirports: staticConfig.activeAirports,
+        columnAirports: staticConfig.columnAirports,
+        columnCount: staticConfig.columnCount,
     }
     broadcast(message)
 }
@@ -713,17 +736,46 @@ function switchConfig(file: string) {
         activeConfigFile = file
         saveUserSettings({ activeConfig: file })
 
-        // Re-process all flights with new config rules
+        // Sync store layout with (possibly rebuilt) multi-airport layout
         store.reprocessAllFlights()
 
-        // Broadcast new state to all clients
-        // broadcastRefresh tells clients to clear state and re-request layout+strips.
-        // We broadcast config list separately as it's not part of the refresh flow.
         broadcastConfigList()
+        broadcastStatus()
         broadcastRefresh(`Config switched to ${configInfo.name}`)
     } catch (err) {
         console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
     }
+}
+
+/**
+ * Persist multi-airport column/active settings and push layout + remapped strips to clients.
+ */
+function applyMultiAirportViewChange(opts?: { reprocess?: boolean }) {
+    saveUserSettings({
+        activeAirports: staticConfig.activeAirports,
+        columnAirports: staticConfig.columnAirports,
+        columnCount: staticConfig.columnCount,
+    })
+
+    store.syncLayoutFromConfig()
+
+    if (opts?.reprocess) {
+        store.reprocessAllFlights()
+        broadcastStatus()
+        broadcastRefresh("Multi-airport active set changed")
+        startAtisService()
+        return
+    }
+
+    const remapped = flightStore.remapMultiAirportPlacements()
+    for (const strip of remapped) {
+        store.updateStripFromFlight(strip)
+        broadcastStrip(strip)
+    }
+
+    broadcastStatus()
+    broadcastLayout()
+    startAtisService()
 }
 
 /**
@@ -1789,6 +1841,46 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "setColumnAirport": {
+            if (setColumnAirport(message.columnIndex, message.airport)) {
+                console.log(`[MULTI] Column ${message.columnIndex} -> ${message.airport ?? "(empty)"}`)
+                applyMultiAirportViewChange({ reprocess: false })
+            }
+            break
+        }
+
+        case "addActiveAirport": {
+            const icao = message.airport?.toUpperCase()
+            if (icao && getAirportByIcao(icao)) {
+                const current = staticConfig.activeAirports ?? []
+                if (!current.includes(icao)) {
+                    setActiveAirports([...current, icao])
+                    console.log(`[MULTI] Added active airport ${icao}`)
+                    applyMultiAirportViewChange({ reprocess: true })
+                }
+            }
+            break
+        }
+
+        case "removeActiveAirport": {
+            const icao = message.airport?.toUpperCase()
+            if (icao) {
+                const current = staticConfig.activeAirports ?? []
+                setActiveAirports(current.filter(a => a !== icao))
+                console.log(`[MULTI] Removed active airport ${icao}`)
+                applyMultiAirportViewChange({ reprocess: true })
+            }
+            break
+        }
+
+        case "setColumnCount": {
+            if (setColumnCount(message.count)) {
+                console.log(`[MULTI] Column count -> ${message.count}`)
+                applyMultiAirportViewChange({ reprocess: false })
+            }
+            break
+        }
+
         case "createStrip": {
             if (message.stripType === "note") {
                 const strip = store.createNoteStrip(
@@ -1796,6 +1888,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.targetSectionId,
                     message.position,
                     message.isBottom,
+                    message.airport,
                 )
                 if (strip) {
                     console.log(`[CREATE] Note strip ${strip.id} created`)
@@ -2246,6 +2339,11 @@ app.get("/api/withinctr", (req, res) => {
     }
 })
 
+app.get("/api/airports", (req, res) => {
+    const prefix = typeof req.query.prefix === "string" ? req.query.prefix : "ES"
+    res.json({ airports: listAirportIcaos(prefix) })
+})
+
 app.get("/api/airport-name", (req, res) => {
     const icao = (req.query.icao as string ?? "").toUpperCase()
     if (!icao) {
@@ -2403,17 +2501,30 @@ udpIn.on("message", (msg, rinfo) => {
                 // Only include airports that exist in airports.csv (skip small/uncontrolled fields)
                 const knownAirports = discoveredAirports.filter((a) => getAirportByIcao(a))
                 if (knownAirports.length > 0) {
-                    const previousAirports = [...staticConfig.myAirports]
-                    const airportsChanged = JSON.stringify(previousAirports.sort()) !== JSON.stringify(knownAirports.sort())
+                    if (isMultiAirportConfig(staticConfig)) {
+                        // RTC: active set mirrors EuroScope rwyselect (not merge-only).
+                        const next = [...new Set(knownAirports.map(a => a.toUpperCase()))]
+                        const prev = [...(staticConfig.activeAirports ?? [])].sort()
+                        const nextSorted = [...next].sort()
+                        if (JSON.stringify(prev) !== JSON.stringify(nextSorted)) {
+                            setActiveAirports(next)
+                            console.log(`[MULTI] Active airports from rwyselect: ${next.join(", ")}`)
+                            applyMultiAirportViewChange({ reprocess: true })
+                        }
+                    } else {
+                        const previousAirports = [...staticConfig.myAirports].sort()
+                        const nextAirports = [...knownAirports].sort()
+                        const airportsChanged = JSON.stringify(previousAirports) !== JSON.stringify(nextAirports)
 
-                    setMyAirports(knownAirports)
-                    if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${knownAirports.join(", ")}`)
+                        setMyAirports(knownAirports)
+                        if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${knownAirports.join(", ")}`)
 
-                    // If airports changed, we need to refresh
-                    if (airportsChanged && previousAirports.length > 0) {
-                        console.log(`Airports changed, clearing store`)
-                        store.clear()
-                        broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
+                        // If airports changed, we need to refresh
+                        if (airportsChanged && previousAirports.length > 0) {
+                            console.log(`Airports changed, clearing store`)
+                            store.clear()
+                            broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
+                        }
                     }
                 }
 
@@ -2462,17 +2573,43 @@ udpIn.on("message", (msg, rinfo) => {
 
         if (result) {
             // Plugin message was processed - only broadcast/log if there was an actual change
-            if (result.strips && result.strips.length > 0) {
-                for (const strip of result.strips) {
-                    broadcastStrip(strip)
+            if (result.deletedStripIds && result.deletedStripIds.length > 0) {
+                for (const id of result.deletedStripIds) {
+                    broadcastStripDelete(id)
                 }
-            } else if (result.deleteStripId) {
+                console.log(`Strips soft-deleted: ${result.deletedStripIds.join(", ")}`)
+            } else if (result.deleteStripId && !result.strips?.length) {
                 broadcastStripDelete(result.deleteStripId)
                 if (result.softDeleted) {
                     console.log(`Strip ${result.deleteStripId} soft-deleted`)
                 } else {
                     console.log(`Strip ${result.deleteStripId} disconnected`)
                 }
+            }
+
+            if (result.strips && result.strips.length > 0) {
+                if (result.shiftedStrips && result.shiftedStrips.length > 0) {
+                    for (const shiftedStrip of result.shiftedStrips) {
+                        broadcastStrip(shiftedStrip)
+                    }
+                }
+                if (result.deletedGapKeys && result.deletedGapKeys.length > 0) {
+                    for (const key of result.deletedGapKeys) {
+                        const parsed = parseGapKey(key)
+                        if (parsed) {
+                            broadcastGapDelete(parsed.bayId, parsed.sectionId, parsed.index)
+                        }
+                    }
+                }
+                if (result.shiftedGaps && result.shiftedGaps.length > 0) {
+                    for (const shiftedGap of result.shiftedGaps) {
+                        broadcastGap(shiftedGap)
+                    }
+                }
+                for (const strip of result.strips) {
+                    broadcastStrip(strip)
+                }
+                console.log(`Strips updated: ${result.strips.map(s => s.id).join(", ")}`)
             } else if (result.strip) {
                 // Auto-move: section changed on an existing strip that wasn't just restored
                 const autoMoved = result.sectionChanged && !result.isNew && !result.restored
@@ -2526,7 +2663,7 @@ udpIn.on("message", (msg, rinfo) => {
                         if (preview && preview !== flight.dclClearance) {
                             flight.dclClearance = preview
                             // Re-broadcast strip with updated preview
-                            const updatedStrip = flightStore.regenerateStrip(flight.callsign)
+                            const updatedStrip = flightStore.regenerateStrip(result.strip.id)
                             if (updatedStrip) {
                                 store.updateStripFromFlight(updatedStrip)
                                 broadcastStrip(updatedStrip)
@@ -2536,8 +2673,6 @@ udpIn.on("message", (msg, rinfo) => {
                 }
 
                 // SEMI/AUTO mode: check if a pending DCL request can now be auto-sent
-                // This handles the case where the controller sets CFL/squawk via the dialog
-                // and the plugin roundtrip updates the flight data.
                 if (currentDclMode !== "manual" && hoppieService) {
                     const flight = flightStore.getFlight(result.strip.callsign)
                     if (flight && flight.dclStatus === "REQUEST") {

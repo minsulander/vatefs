@@ -4,6 +4,15 @@
  */
 
 import type { EfsStaticConfig, ControllerRole } from "./config-types.js"
+import {
+    buildMultiAirportLayout,
+    DEFAULT_COLUMN_COUNT,
+    MIN_COLUMN_COUNT,
+    MAX_COLUMN_COUNT,
+    isMultiAirportConfig,
+    normalizeColumnAirports,
+    seedColumnAirports
+} from "./multi-airport.js"
 
 /**
  * Top-down controller hierarchy, lowest to highest.
@@ -122,6 +131,8 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentActiveRunways = staticConfig.activeRunways
     const currentIsController = staticConfig.isController
     const currentMyFrequency = staticConfig.myFrequency
+    const currentActiveAirports = staticConfig.activeAirports
+    const currentColumnAirports = staticConfig.columnAirports
 
     // Replace all config properties
     staticConfig.myAirports = config.myAirports
@@ -134,6 +145,11 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.actionRules = config.actionRules
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules
+    staticConfig.layoutMode = config.layoutMode
+    staticConfig.bayTemplate = config.bayTemplate
+    staticConfig.columnCount = config.columnCount
+    staticConfig.activeAirports = config.activeAirports
+    staticConfig.columnAirports = config.columnAirports
 
     // Restore runtime state
     if (currentCallsign) staticConfig.myCallsign = currentCallsign
@@ -144,8 +160,145 @@ export function applyConfig(config: EfsStaticConfig) {
     if (currentIsController !== undefined) staticConfig.isController = currentIsController
     if (currentMyFrequency !== undefined) staticConfig.myFrequency = currentMyFrequency
 
+    // Restore multi-airport selections when staying in / entering multi mode
+    if (isMultiAirportConfig(staticConfig)) {
+        if (currentActiveAirports && currentActiveAirports.length > 0) {
+            staticConfig.activeAirports = currentActiveAirports
+            staticConfig.myAirports = currentActiveAirports
+        } else if (currentMyAirports.length > 0) {
+            staticConfig.activeAirports = [...currentMyAirports]
+            staticConfig.myAirports = [...currentMyAirports]
+        }
+        const count = staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
+        if (currentColumnAirports && currentColumnAirports.length > 0) {
+            staticConfig.columnAirports = normalizeColumnAirports(currentColumnAirports, count)
+        } else {
+            staticConfig.columnAirports = seedColumnAirports(staticConfig.activeAirports ?? [], count)
+        }
+        rebuildMultiAirportLayout()
+    }
+
     // Recompute effective roles with restored runtime state
     recomputeMyRolesByAirport()
+}
+
+/**
+ * Rebuild multi-airport layout from bayTemplate + columnAirports.
+ */
+export function rebuildMultiAirportLayout() {
+    if (!isMultiAirportConfig(staticConfig) || !staticConfig.bayTemplate) return
+
+    const count = staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
+    const columns = normalizeColumnAirports(staticConfig.columnAirports, count)
+    staticConfig.columnAirports = columns
+    staticConfig.columnCount = count
+
+    const built = buildMultiAirportLayout(staticConfig.bayTemplate, count, columns)
+    staticConfig.layout = { bays: [...built.layout.bays, ...built.idleLayout.bays] }
+    staticConfig.sectionToBay = built.sectionToBay
+}
+
+/**
+ * Set active airports (multi-airport mode). Also updates myAirports.
+ */
+export function setActiveAirports(airports: string[]) {
+    const unique = [...new Set(airports.map(a => a.toUpperCase()))]
+    staticConfig.activeAirports = unique
+    staticConfig.myAirports = unique
+
+    // Drop column bindings for airports no longer active
+    if (staticConfig.columnAirports) {
+        staticConfig.columnAirports = staticConfig.columnAirports.map(a =>
+            a && unique.includes(a) ? a : null
+        )
+    }
+    rebuildMultiAirportLayout()
+    recomputeMyRolesByAirport()
+}
+
+/**
+ * Bind an airport to a visible column slot (or clear with null).
+ */
+export function setColumnAirport(columnIndex: number, airport: string | null): boolean {
+    if (!isMultiAirportConfig(staticConfig)) return false
+    const count = staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
+    if (columnIndex < 0 || columnIndex >= count) return false
+
+    const columns = normalizeColumnAirports(staticConfig.columnAirports, count)
+    const icao = airport ? airport.toUpperCase() : null
+
+    if (icao) {
+        // Ensure airport is in active set
+        if (!staticConfig.activeAirports?.includes(icao)) {
+            staticConfig.activeAirports = [...(staticConfig.activeAirports ?? []), icao]
+            staticConfig.myAirports = staticConfig.activeAirports
+        }
+        // Already bound elsewhere → swap with this column's current airport
+        const previous = columns[columnIndex] ?? null
+        for (let i = 0; i < columns.length; i++) {
+            if (i !== columnIndex && columns[i] === icao) {
+                columns[i] = previous
+            }
+        }
+    }
+
+    columns[columnIndex] = icao
+    staticConfig.columnAirports = columns
+    rebuildMultiAirportLayout()
+    recomputeMyRolesByAirport()
+    return true
+}
+
+/**
+ * Change number of visible column slots.
+ */
+export function setColumnCount(count: number): boolean {
+    if (!isMultiAirportConfig(staticConfig)) return false
+    const n = Math.max(MIN_COLUMN_COUNT, Math.min(MAX_COLUMN_COUNT, Math.floor(count)))
+    if (n === staticConfig.columnCount) return false
+    staticConfig.columnCount = n
+    staticConfig.columnAirports = normalizeColumnAirports(staticConfig.columnAirports, n)
+    rebuildMultiAirportLayout()
+    return true
+}
+
+/**
+ * Update my airports (called when myselfUpdate is received or from CLI).
+ * In multiAirport mode:
+ * - Seeds activeAirports if empty
+ * - Otherwise merges newly discovered airports into the active set (never removes)
+ *   so EuroScope rwyconfig additions become active and can blink in the top bar.
+ */
+export function setMyAirports(airports: string[], opts?: { force?: boolean }): string[] {
+    const incoming = [...new Set(airports.map(a => a.toUpperCase()))]
+    if (isMultiAirportConfig(staticConfig) && !opts?.force) {
+        if (!staticConfig.activeAirports || staticConfig.activeAirports.length === 0) {
+            setActiveAirports(incoming)
+            if (!staticConfig.columnAirports?.some(Boolean)) {
+                staticConfig.columnAirports = seedColumnAirports(
+                    staticConfig.activeAirports ?? [],
+                    staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
+                )
+                rebuildMultiAirportLayout()
+            }
+            return incoming
+        }
+        // Merge only — rwyconfig often lists a subset and must not wipe user selection
+        const current = staticConfig.activeAirports
+        const added = incoming.filter(a => !current.includes(a))
+        if (added.length > 0) {
+            setActiveAirports([...current, ...added])
+            console.log(`[MULTI] Active airports from EuroScope: +${added.join(", ")}`)
+        }
+        return added
+    }
+    staticConfig.myAirports = incoming
+    if (isMultiAirportConfig(staticConfig)) {
+        staticConfig.activeAirports = [...incoming]
+        rebuildMultiAirportLayout()
+    }
+    recomputeMyRolesByAirport()
+    return incoming
 }
 
 /**
@@ -153,14 +306,6 @@ export function applyConfig(config: EfsStaticConfig) {
  */
 export function setMyCallsign(callsign: string) {
     staticConfig.myCallsign = callsign
-}
-
-/**
- * Update my airports (called when myselfUpdate is received or from CLI)
- */
-export function setMyAirports(airports: string[]) {
-    staticConfig.myAirports = airports
-    recomputeMyRolesByAirport()
 }
 
 /**

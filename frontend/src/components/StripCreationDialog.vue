@@ -7,8 +7,8 @@
       </div>
 
       <div class="dialog-body">
-        <!-- Callsign input -->
-        <div class="dialog-field">
+        <!-- Callsign input (not for notes) -->
+        <div v-if="!isNote" class="dialog-field">
           <label class="dialog-label">Callsign</label>
           <input
             ref="callsignInput"
@@ -30,7 +30,7 @@
         </div>
 
         <!-- Aircraft type (VFR DEP/ARR only) -->
-        <div v-if="stripType !== 'cross'" class="dialog-field">
+        <div v-if="stripType === 'vfrDep' || stripType === 'vfrArr'" class="dialog-field">
           <label class="dialog-label">Aircraft type</label>
           <input
             v-model="aircraftType"
@@ -43,10 +43,10 @@
           />
         </div>
 
-        <!-- Airport selector (VFR DEP/ARR when multiple airports) -->
-        <div v-if="stripType !== 'cross' && airports.length > 1" class="dialog-field">
-          <label class="dialog-label">{{ stripType === 'vfrDep' ? 'Origin' : 'Destination' }}</label>
-          <select v-model="selectedAirport" class="dialog-input dialog-select">
+        <!-- Airport selector -->
+        <div v-if="showAirportSelector" class="dialog-field">
+          <label class="dialog-label">{{ airportLabel }}</label>
+          <select ref="airportSelect" v-model="selectedAirport" class="dialog-input dialog-select" @keydown.enter="onOk">
             <option v-for="ap in airports" :key="ap" :value="ap">{{ ap }}</option>
           </select>
         </div>
@@ -69,6 +69,8 @@ type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
 const props = defineProps<{
   modelValue: boolean
   stripType: SpecialStripType
+  /** Prefill airport (e.g. from drop target column) */
+  initialAirport?: string
 }>()
 
 const emit = defineEmits<{
@@ -79,6 +81,7 @@ const emit = defineEmits<{
 const store = useEfsStore()
 
 const callsignInput = ref<HTMLInputElement | null>(null)
+const airportSelect = ref<HTMLSelectElement | null>(null)
 const callsign = ref('')
 const aircraftType = ref('')
 const selectedAirport = ref('')
@@ -87,13 +90,42 @@ const isSearching = ref(false)
 
 let searchDebounce: ReturnType<typeof setTimeout> | undefined
 
-const airports = computed(() => store.myAirports)
+const isNote = computed(() => props.stripType === 'note')
+
+const airports = computed(() => {
+  if (store.multiAirport) {
+    const opts = new Set<string>([
+      ...store.activeAirports,
+      ...store.columnAirports.filter((a): a is string => !!a),
+    ])
+    return [...opts].sort()
+  }
+  return store.myAirports
+})
+
+const showAirportSelector = computed(() => {
+  if (airports.value.length === 0) return false
+  if (props.stripType === 'cross' || props.stripType === 'note') {
+    return store.multiAirport || airports.value.length > 1
+  }
+  // VFR DEP/ARR
+  return airports.value.length > 1
+})
+
+const airportLabel = computed(() => {
+  switch (props.stripType) {
+    case 'vfrDep': return 'Origin'
+    case 'vfrArr': return 'Destination'
+    default: return 'Airport'
+  }
+})
 
 const dialogTitle = computed(() => {
   switch (props.stripType) {
     case 'vfrDep': return 'NEW VFR DEPARTURE'
     case 'vfrArr': return 'NEW VFR ARRIVAL'
     case 'cross': return 'NEW CROSSING TRAFFIC'
+    case 'note': return 'NEW NOTE'
     default: return 'NEW STRIP'
   }
 })
@@ -114,7 +146,12 @@ const matchClass = computed(() => {
 })
 
 const isValid = computed(() => {
-  return callsign.value.length >= 2
+  if (isNote.value) {
+    return !showAirportSelector.value || !!selectedAirport.value
+  }
+  if (callsign.value.length < 2) return false
+  if (showAirportSelector.value && !selectedAirport.value) return false
+  return true
 })
 
 // Reset state when dialog opens
@@ -122,11 +159,19 @@ watch(() => props.modelValue, (open) => {
   if (open) {
     callsign.value = ''
     aircraftType.value = ''
-    selectedAirport.value = airports.value[0] ?? ''
+    const prefer =
+      props.initialAirport && airports.value.includes(props.initialAirport)
+        ? props.initialAirport
+        : airports.value[0] ?? ''
+    selectedAirport.value = prefer
     matchFound.value = false
     isSearching.value = false
     nextTick(() => {
-      callsignInput.value?.focus()
+      if (isNote.value) {
+        airportSelect.value?.focus()
+      } else {
+        callsignInput.value?.focus()
+      }
     })
   }
 })
@@ -141,7 +186,6 @@ function onCallsignInput() {
     return
   }
 
-  // Debounce the flight lookup
   if (searchDebounce) clearTimeout(searchDebounce)
   isSearching.value = true
   searchDebounce = setTimeout(async () => {
@@ -150,7 +194,6 @@ function onCallsignInput() {
       if (resp.ok) {
         const flight = await resp.json()
         matchFound.value = true
-        // Pre-fill aircraft type if available and not already entered
         if (flight.aircraftType && !aircraftType.value) {
           aircraftType.value = flight.aircraftType.toUpperCase()
         }
@@ -168,7 +211,7 @@ function onOk() {
   if (!isValid.value) return
 
   emit('create', {
-    callsign: callsign.value,
+    callsign: isNote.value ? '' : callsign.value,
     aircraftType: aircraftType.value || undefined,
     airport: selectedAirport.value || undefined
   })

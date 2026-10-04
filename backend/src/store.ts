@@ -3,9 +3,11 @@ import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
 import type { EfsStaticConfig } from "./config-types.js"
 import { flightStore } from "./flightStore.js"
+import type { ProcessMessageResult } from "./flightStore.js"
 import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
+import { getVisibleLayout, IDLE_BAY_ID, isMultiAirportConfig, resolveBayForAirport, prefixedSectionId } from "./multi-airport.js"
 
 /**
  * Resolve template variables in section titles.
@@ -198,6 +200,7 @@ class EfsStore {
         strip?: FlightStrip
         strips?: FlightStrip[]
         deleteStripId?: string
+        deletedStripIds?: string[]
         isNew?: boolean
         sectionChanged?: boolean
         previousSection?: { bayId: string; sectionId: string }
@@ -206,11 +209,68 @@ class EfsStore {
         shiftedStrips?: FlightStrip[]
         shiftedGaps?: Gap[]
         deletedGapKeys?: string[]
+        multiUpdates?: ProcessMessageResult['multiUpdates']
     } {
         const result = flightStore.processMessage(message)
 
-        // Batch strip updates (CDM local file poll)
-        if (result.strips && result.strips.length > 0) {
+        // Multi-airport: apply each update
+        if (result.multiUpdates && result.multiUpdates.length > 0) {
+            const strips: FlightStrip[] = []
+            const deletedStripIds: string[] = []
+            let shiftedStrips: FlightStrip[] | undefined
+            let shiftedGaps: Gap[] | undefined
+            let deletedGapKeys: string[] | undefined
+
+            for (const update of result.multiUpdates) {
+                if (update.deleteStripId) {
+                    this.strips.delete(update.deleteStripId)
+                    this.deletedStrips.delete(update.deleteStripId)
+                    deletedStripIds.push(update.deleteStripId)
+                    continue
+                }
+                if (!update.strip) continue
+
+                if (update.sectionChanged && update.previousSection) {
+                    this.recomputePositions(
+                        update.previousSection.bayId,
+                        update.previousSection.sectionId,
+                        false
+                    )
+                }
+
+                this.strips.set(update.strip.id, update.strip)
+                strips.push(update.strip)
+
+                if ((update.isNew || update.sectionChanged) && update.shiftedCallsigns && update.shiftedCallsigns.length > 0) {
+                    if (!shiftedStrips) shiftedStrips = []
+                    for (const sid of update.shiftedCallsigns) {
+                        const regeneratedStrip = flightStore.regenerateStrip(sid)
+                        if (regeneratedStrip) {
+                            this.strips.set(regeneratedStrip.id, regeneratedStrip)
+                            shiftedStrips.push(regeneratedStrip)
+                        }
+                    }
+                    const gapResult = this.shiftGapsDown(update.strip.bayId, update.strip.sectionId)
+                    shiftedGaps = [...(shiftedGaps ?? []), ...gapResult.shiftedGaps]
+                    deletedGapKeys = [...(deletedGapKeys ?? []), ...gapResult.deletedGapKeys]
+                }
+            }
+
+            return {
+                strip: strips[0],
+                strips: strips.length ? strips : undefined,
+                deletedStripIds: deletedStripIds.length ? deletedStripIds : undefined,
+                deleteStripId: deletedStripIds[0],
+                softDeleted: deletedStripIds.length > 0,
+                shiftedStrips,
+                shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
+                deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
+                multiUpdates: result.multiUpdates
+            }
+        }
+
+        // Batch strip updates (CDM local file poll) — not already handled via multiUpdates
+        if (result.strips && result.strips.length > 0 && !result.strip) {
             const changed: FlightStrip[] = []
             for (const strip of result.strips) {
                 const existing = this.strips.get(strip.id)
@@ -226,6 +286,14 @@ class EfsStore {
             this.strips.delete(result.deleteStripId)
             this.deletedStrips.delete(result.deleteStripId)
             return { deleteStripId: result.deleteStripId }
+        }
+
+        if (result.deletedStripIds && result.deletedStripIds.length > 0) {
+            for (const id of result.deletedStripIds) {
+                this.strips.delete(id)
+                this.deletedStrips.delete(id)
+            }
+            return { deletedStripIds: result.deletedStripIds, deleteStripId: result.deletedStripIds[0], softDeleted: true }
         }
 
         // Handle soft-delete: move strip to deletedStrips map
@@ -259,7 +327,7 @@ class EfsStore {
 
             // Log which fields changed for non-trivial updates (helps trace misbehavior to code)
             if (!isNew && !result.sectionChanged && !result.restored && stripChanged && existingStrip) {
-                const changed: string[] = STRIP_COMPARE_FIELDS.filter(f => existingStrip[f] !== result.strip[f])
+                const changed: string[] = STRIP_COMPARE_FIELDS.filter(f => existingStrip[f] !== result.strip![f])
                 if (!actionsEqual(existingStrip.actions, result.strip.actions)) changed.push('actions')
                 if (changed.length > 0) console.log(`Strip ${result.strip.callsign} fields: ${changed.join(', ')}`)
             }
@@ -323,7 +391,26 @@ class EfsStore {
 
     // Get layout (for sending to clients), with section title templates resolved
     getLayout(): EfsLayout {
-        return resolveLayoutTemplates(this.layout, staticConfig)
+        const base = isMultiAirportConfig(staticConfig)
+            ? getVisibleLayout(staticConfig)
+            : this.layout
+        // Prefer store layout for section heights, but drop idle bay
+        const withHeights: EfsLayout = {
+            bays: base.bays.map(bay => {
+                const storeBay = this.layout.bays.find(b => b.id === bay.id)
+                if (!storeBay) return bay
+                return {
+                    ...bay,
+                    title: bay.title ?? storeBay.title,
+                    airport: bay.airport ?? storeBay.airport,
+                    sections: bay.sections.map(section => {
+                        const storeSection = storeBay.sections.find(s => s.id === section.id)
+                        return storeSection ? { ...section, height: storeSection.height } : section
+                    })
+                }
+            }).filter(b => b.id !== IDLE_BAY_ID)
+        }
+        return resolveLayoutTemplates(withHeights, staticConfig)
     }
 
     // Get all strips as array
@@ -391,7 +478,7 @@ class EfsStore {
         if (!strip) return null
 
         // Notify flight store about manual move (prevents auto-move back)
-        flightStore.setStripAssignment(strip.callsign, targetBayId, targetSectionId, position ?? 0, isBottom)
+        flightStore.setStripAssignment(strip.id, targetBayId, targetSectionId, position ?? 0, isBottom)
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -523,6 +610,32 @@ class EfsStore {
     }
 
     /**
+     * Sync layout from staticConfig without clearing strips (multi-airport column changes).
+     * Preserves user-resized section heights per bay/section id.
+     */
+    syncLayoutFromConfig() {
+        const heightBySection = new Map<string, number>()
+        for (const bay of this.layout.bays) {
+            for (const section of bay.sections) {
+                if (section.height !== undefined) {
+                    heightBySection.set(`${bay.id}:${section.id}`, section.height)
+                }
+            }
+        }
+
+        this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
+
+        for (const bay of this.layout.bays) {
+            for (const section of bay.sections) {
+                const h = heightBySection.get(`${bay.id}:${section.id}`)
+                if (h !== undefined) {
+                    section.height = h
+                }
+            }
+        }
+    }
+
+    /**
      * Create a note strip (no associated flight, just text).
      * Returns the created strip.
      */
@@ -530,9 +643,11 @@ class EfsStore {
         targetBayId?: string,
         targetSectionId?: string,
         position?: number,
-        isBottom?: boolean
+        isBottom?: boolean,
+        airport?: string
     ): FlightStrip | undefined {
         const stripId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const icao = airport?.toUpperCase()
 
         // Determine bay/section
         let bayId: string
@@ -542,6 +657,10 @@ class EfsStore {
         if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
+            pos = position ?? 0
+        } else if (icao && isMultiAirportConfig(staticConfig)) {
+            bayId = resolveBayForAirport(icao, staticConfig.columnAirports)
+            sectionId = prefixedSectionId(bayId, 'app')
             pos = position ?? 0
         } else if (staticConfig.layout.bays.length > 0 && staticConfig.layout.bays[0].sections.length > 0) {
             bayId = staticConfig.layout.bays[0].id
@@ -565,6 +684,7 @@ class EfsStore {
             position: pos,
             bottom: isBottom ?? false,
             noteText: '',
+            airport: icao,
         }
 
         this.strips.set(stripId, strip)

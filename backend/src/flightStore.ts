@@ -17,6 +17,17 @@ import { findStandForPosition } from "./stand-data.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft } from "./slow-aircraft.js"
+import {
+    getRelevantActiveAirports,
+    isMultiAirportConfig,
+    parseStripAirportId,
+    stripIdForAirport,
+    withAirportScope,
+    logicalSectionId,
+    prefixedSectionId,
+    resolveBayForAirport,
+    IDLE_BAY_ID
+} from "./multi-airport.js"
 import moment from "moment"
 
 /**
@@ -29,11 +40,14 @@ export interface ProcessMessageResult {
     /** Strip to create or update (if flight has required data) */
     strip?: FlightStrip
 
-    /** Multiple strips to update (e.g. batch CDM local file poll) */
+    /** Multiple strips to update (CDM local poll / multi-airport mode) */
     strips?: FlightStrip[]
 
     /** Strip ID to delete (if flight disconnected) */
     deleteStripId?: string
+
+    /** Multiple strip IDs to delete (multi-airport mode) */
+    deletedStripIds?: string[]
 
     /** Whether the strip section changed (needs move) */
     sectionChanged?: boolean
@@ -47,8 +61,20 @@ export interface ProcessMessageResult {
     /** Whether the strip was un-deleted (restored from soft-delete) */
     restored?: boolean
 
-    /** Callsigns of strips whose positions were shifted (for add-from-top) */
+    /** Callsigns/strip IDs of strips whose positions were shifted (for add-from-top) */
     shiftedCallsigns?: string[]
+
+    /** Per-strip update details in multi-airport mode */
+    multiUpdates?: Array<{
+        strip?: FlightStrip
+        deleteStripId?: string
+        sectionChanged?: boolean
+        previousSection?: { bayId: string; sectionId: string }
+        softDeleted?: boolean
+        restored?: boolean
+        shiftedCallsigns?: string[]
+        isNew?: boolean
+    }>
 }
 
 /**
@@ -190,14 +216,14 @@ class FlightStore {
      * 2. Flight's origin, destination, or alternate is in myAirports
      * 3. Flight is within radarRangeNm of any myAirport
      */
-    isEligibleForStrip(flight: Flight): boolean {
+    isEligibleForStrip(flight: Flight, config: EfsStaticConfig = this.config): boolean {
         // Must have radar position
         if (flight.latitude === undefined || flight.longitude === undefined) {
             return false
         }
 
         // Must have origin, destination, or alternate at one of our airports
-        const myAirports = this.config.myAirports
+        const myAirports = config.myAirports
         const hasRelevantAirport =
             (flight.origin !== undefined && myAirports.includes(flight.origin)) ||
             (flight.destination !== undefined && myAirports.includes(flight.destination)) ||
@@ -212,9 +238,222 @@ class FlightStore {
             flight.latitude,
             flight.longitude,
             myAirports,
-            this.config.radarRangeNm,
+            config.radarRangeNm,
             getAirportCoords
         )
+    }
+
+    /**
+     * After flight data is updated, create/update/delete strip(s).
+     * In multiAirport mode, one strip instance per relevant active airport.
+     */
+    private finalizeFlightStrips(
+        callsign: string,
+        flight: Flight,
+        preferNew: boolean,
+        restoredHint?: boolean
+    ): ProcessMessageResult {
+        if (isMultiAirportConfig(this.config)) {
+            return this.resolveMultiAirportStrips(callsign, flight)
+        }
+
+        const deleteState = this.applyDeleteRules(callsign, flight)
+        if (deleteState.shortCircuit) {
+            return deleteState.shortCircuit
+        }
+
+        const hasRequiredData = flightHasRequiredData(flight)
+        if (!hasRequiredData || flight.deleted) {
+            return { flight, softDeleted: flight.deleted }
+        }
+
+        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
+            return { flight }
+        }
+
+        return this.resolveStripResult(
+            callsign,
+            flight,
+            preferNew,
+            !deleteState.deleteResult.shouldDelete && deleteState.wasDeleted ? true : restoredHint
+        )
+    }
+
+    /**
+     * Multi-airport: evaluate eligibility/section/delete per active airport with scoped config.
+     */
+    private resolveMultiAirportStrips(callsign: string, flight: Flight): ProcessMessageResult {
+        const active = this.config.activeAirports ?? this.config.myAirports
+        const relevant = getRelevantActiveAirports(flight, active)
+        const multiUpdates: NonNullable<ProcessMessageResult['multiUpdates']> = []
+        const strips: FlightStrip[] = []
+        const deletedStripIds: string[] = []
+
+        // Remove strip instances for airports no longer relevant
+        for (const stripId of [...this.stripAssignments.keys()]) {
+            const parsed = parseStripAirportId(stripId)
+            if (parsed?.callsign === callsign && !relevant.includes(parsed.airport)) {
+                this.stripAssignments.delete(stripId)
+                deletedStripIds.push(stripId)
+                multiUpdates.push({ deleteStripId: stripId, softDeleted: true })
+            }
+        }
+
+        if (!flightHasRequiredData(flight) || flight.manuallyDeleted) {
+            // Soft-delete remaining instances
+            for (const airport of relevant) {
+                const stripId = stripIdForAirport(callsign, airport)
+                if (this.stripAssignments.has(stripId)) {
+                    this.stripAssignments.delete(stripId)
+                    deletedStripIds.push(stripId)
+                    multiUpdates.push({ deleteStripId: stripId, softDeleted: true })
+                }
+            }
+            return {
+                flight,
+                deletedStripIds: deletedStripIds.length ? deletedStripIds : undefined,
+                softDeleted: deletedStripIds.length > 0,
+                multiUpdates: multiUpdates.length ? multiUpdates : undefined
+            }
+        }
+
+        for (const airport of relevant) {
+            const scoped = withAirportScope(this.config, airport)
+            const stripId = stripIdForAirport(callsign, airport)
+            const hadAssignment = this.stripAssignments.has(stripId)
+
+            if (!this.isEligibleForStrip(flight, scoped) && !hadAssignment) {
+                continue
+            }
+
+            const deleteResult = shouldDeleteFlight(flight, scoped)
+            if (deleteResult.shouldDelete) {
+                if (hadAssignment) {
+                    this.stripAssignments.delete(stripId)
+                    deletedStripIds.push(stripId)
+                    multiUpdates.push({ deleteStripId: stripId, softDeleted: true })
+                }
+                continue
+            }
+
+            const targetSection = determineSectionForFlight(flight, scoped, airport)
+            if (!targetSection) {
+                if (hadAssignment) {
+                    this.stripAssignments.delete(stripId)
+                    deletedStripIds.push(stripId)
+                    multiUpdates.push({ deleteStripId: stripId, softDeleted: true })
+                }
+                continue
+            }
+
+            const currentAssignment = this.stripAssignments.get(stripId)
+            const isNewStrip = !currentAssignment
+            const sectionChanged = !!(currentAssignment &&
+                (currentAssignment.bayId !== targetSection.bayId ||
+                 currentAssignment.sectionId !== targetSection.sectionId))
+
+            let position: number
+            let bottom: boolean
+            let previousSection: { bayId: string; sectionId: string } | undefined
+
+            if (isNewStrip) {
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                bottom = false
+                this.stripAssignments.set(stripId, {
+                    bayId: targetSection.bayId,
+                    sectionId: targetSection.sectionId,
+                    position,
+                    bottom
+                })
+                console.log(`[RULE] ${stripId} -> ${targetSection.sectionId} (rule: ${targetSection.ruleId ?? 'default'}, new)`)
+            } else if (sectionChanged && currentAssignment) {
+                previousSection = {
+                    bayId: currentAssignment.bayId,
+                    sectionId: currentAssignment.sectionId
+                }
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                bottom = false
+                this.stripAssignments.set(stripId, {
+                    bayId: targetSection.bayId,
+                    sectionId: targetSection.sectionId,
+                    position,
+                    bottom
+                })
+                console.log(`[RULE] ${stripId} ${previousSection.sectionId} -> ${targetSection.sectionId}`)
+            } else if (currentAssignment) {
+                position = currentAssignment.position
+                bottom = currentAssignment.bottom
+            } else {
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                bottom = false
+                this.stripAssignments.set(stripId, {
+                    bayId: targetSection.bayId,
+                    sectionId: targetSection.sectionId,
+                    position,
+                    bottom
+                })
+            }
+
+            const strip = this.createStrip(
+                flight,
+                targetSection.bayId,
+                targetSection.sectionId,
+                position,
+                bottom,
+                airport,
+                scoped
+            )
+            const shiftedCallsigns = this.getLastShiftedCallsigns()
+            strips.push(strip)
+            multiUpdates.push({
+                strip,
+                isNew: isNewStrip,
+                sectionChanged,
+                previousSection,
+                shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
+            })
+        }
+
+        return {
+            flight,
+            strip: strips[0],
+            strips: strips.length ? strips : undefined,
+            deletedStripIds: deletedStripIds.length ? deletedStripIds : undefined,
+            softDeleted: deletedStripIds.length > 0 && strips.length === 0,
+            multiUpdates: multiUpdates.length ? multiUpdates : undefined
+        }
+    }
+
+    /**
+     * Remap all multi-airport strip bay/section placements after columnAirports change.
+     * Does not re-run eligibility — only moves instances between visible/idle bays.
+     */
+    remapMultiAirportPlacements(): FlightStrip[] {
+        if (!isMultiAirportConfig(this.config)) return []
+
+        const updated: FlightStrip[] = []
+        for (const [stripId, assignment] of this.stripAssignments) {
+            const parsed = parseStripAirportId(stripId)
+            if (!parsed) continue
+
+            const flight = this.flights.get(parsed.callsign)
+            if (!flight) continue
+
+            const logical = logicalSectionId(assignment.sectionId)
+            const bayId = resolveBayForAirport(parsed.airport, this.config.columnAirports)
+            const sectionId = prefixedSectionId(bayId, logical)
+
+            if (bayId === assignment.bayId && sectionId === assignment.sectionId) continue
+
+            const position = this.getNewStripPosition(bayId, sectionId)
+            const bottom = assignment.bottom
+            this.stripAssignments.set(stripId, { bayId, sectionId, position, bottom })
+
+            const scoped = withAirportScope(this.config, parsed.airport)
+            const strip = this.createStrip(flight, bayId, sectionId, position, bottom, parsed.airport, scoped)
+            updated.push(strip)
+        }
+        return updated
     }
 
     /**
@@ -611,29 +850,10 @@ class FlightStore {
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         flight.lastUpdate = Date.now()
 
-        const deleteState = this.applyDeleteRules(callsign, flight)
-        if (deleteState.shortCircuit) {
-            return deleteState.shortCircuit
-        }
-
-        // Check if we should create/update a strip
-        const hasRequiredData = flightHasRequiredData(flight)
-        if (!hasRequiredData || flight.deleted) {
-            return { flight, softDeleted: flight.deleted }
-        }
-
-        // Check if eligible for strip (position + airport + range).
-        // Skip eligibility check if a strip already exists for this flight
-        // (e.g. a manually-created VFR strip whose radar position hasn't arrived yet).
-        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
-            return { flight }
-        }
-
-        return this.resolveStripResult(
+        return this.finalizeFlightStrips(
             callsign,
             flight,
-            !hadRequiredData || !this.stripAssignments.get(callsign),
-            !deleteState.deleteResult.shouldDelete && deleteState.wasDeleted
+            !hadRequiredData || !this.stripAssignments.get(callsign)
         )
     }
 
@@ -690,29 +910,10 @@ class FlightStore {
         // Auto-detect stand from position if not already set
         this.trySetStandFromPosition(flight)
 
-        const deleteState = this.applyDeleteRules(callsign, flight)
-        if (deleteState.shortCircuit) {
-            return deleteState.shortCircuit
-        }
-
-        // Check if we should create/update a strip
-        const hasRequiredData = flightHasRequiredData(flight)
-        if (!hasRequiredData || flight.deleted) {
-            return { flight, softDeleted: flight.deleted }
-        }
-
-        // Check if eligible for strip (position + airport + range).
-        // Skip eligibility check if a strip already exists for this flight
-        // (e.g. a manually-created VFR strip whose radar position hasn't arrived yet).
-        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
-            return { flight }
-        }
-
-        return this.resolveStripResult(
+        return this.finalizeFlightStrips(
             callsign,
             flight,
-            !hadRequiredData || !this.stripAssignments.get(callsign),
-            !deleteState.deleteResult.shouldDelete && deleteState.wasDeleted
+            !hadRequiredData || !this.stripAssignments.get(callsign)
         )
     }
 
@@ -725,6 +926,23 @@ class FlightStore {
         console.log(`[DISCONNECT] ${callsign}`)
 
         this.flights.delete(callsign)
+
+        if (isMultiAirportConfig(this.config)) {
+            const deletedStripIds: string[] = []
+            for (const stripId of [...this.stripAssignments.keys()]) {
+                const parsed = parseStripAirportId(stripId)
+                if (parsed?.callsign === callsign || stripId === callsign) {
+                    this.stripAssignments.delete(stripId)
+                    deletedStripIds.push(stripId)
+                }
+            }
+            return {
+                flight,
+                deleteStripId: deletedStripIds[0],
+                deletedStripIds: deletedStripIds.length ? deletedStripIds : undefined
+            }
+        }
+
         this.stripAssignments.delete(callsign)
 
         return {
@@ -807,26 +1025,10 @@ class FlightStore {
             flight.airborne = false
         }
 
-        const deleteState = this.applyDeleteRules(callsign, flight)
-        if (deleteState.shortCircuit) {
-            return deleteState.shortCircuit
-        }
-
-        // Check if we should create/update a strip
-        if (!flightHasRequiredData(flight) || flight.deleted) {
-            return { flight, softDeleted: flight.deleted }
-        }
-
-        // Check if eligible for strip (position + airport + range)
-        if (!this.isEligibleForStrip(flight)) {
-            return { flight }
-        }
-
-        return this.resolveStripResult(
+        return this.finalizeFlightStrips(
             callsign,
             flight,
-            !this.stripAssignments.get(callsign),
-            !deleteState.deleteResult.shouldDelete && deleteState.wasDeleted
+            !this.stripAssignments.get(callsign)
         )
     }
 
@@ -930,10 +1132,12 @@ class FlightStore {
         bayId: string,
         sectionId: string,
         position: number,
-        bottom: boolean
+        bottom: boolean,
+        airport?: string,
+        actionConfig: EfsStaticConfig = this.config
     ): FlightStrip {
         // Determine strip type
-        const stripType = this.determineStripType(flight)
+        const stripType = this.determineStripType(flight, actionConfig)
 
         // Convert wake turbulence (use explicit value or derive from aircraft type)
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
@@ -959,7 +1163,7 @@ class FlightStore {
 
         // Determine actions based on controller status
         let actions: string[] | undefined
-        const myCallsign = this.config.myCallsign
+        const myCallsign = actionConfig.myCallsign
         const isTrackedByMe = flight.controller === myCallsign
         const isUntracked = !flight.controller || flight.controller === ''
         const isHandoffToMe = flight.handoffTargetController === myCallsign
@@ -967,18 +1171,18 @@ class FlightStore {
         if (!clearedForTakeoff) {
             if (isTrackedByMe) {
                 // We're the tracking controller - show action from rules
-                const defaultAction = determineActionForFlight(flight, sectionId, this.config)
+                const defaultAction = determineActionForFlight(flight, sectionId, actionConfig)
                 if (defaultAction === 'LU') {
                     // LU (line up) — show paired with CTO so controller can choose either
                     actions = ['LU', 'CTO']
                 } else if (defaultAction) {
                     actions = [defaultAction]
                 }
-            } else if ((isUntracked || isHandoffToMe) && this.config.isController) {
+            } else if ((isUntracked || isHandoffToMe) && actionConfig.isController) {
                 // Untracked or being handed off to us - let action rules decide
                 // Rules with controller:myself won't match; rules with controller:not_myself or
                 // no controller condition will match (ASSUME, CLNC, etc.)
-                const action = determineActionForFlight(flight, sectionId, this.config)
+                const action = determineActionForFlight(flight, sectionId, actionConfig)
                 if (action === 'ASSUME') {
                     actions = ['ASSUME']
                 } else if (action) {
@@ -996,7 +1200,7 @@ class FlightStore {
 
         // Supplement xferFrequency from online controller tracking when flight data doesn't have it
         if (!xferFrequency && actions?.length) {
-            const myRole = this.config.myRole ?? 'TWR'
+            const myRole = actionConfig.myRole ?? 'TWR'
             const primaryAction = actions[0]
             if (primaryAction === 'READY' && myRole === 'DEL') {
                 const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
@@ -1017,10 +1221,10 @@ class FlightStore {
         }
 
         // Can reset squawk if we're a controller and we track the flight (or it's untracked)
-        const canResetSquawk = this.config.isController === true && (isTrackedByMe || isUntracked)
+        const canResetSquawk = actionConfig.isController === true && (isTrackedByMe || isUntracked)
 
         // Can edit clearance if we're a controller and the flight is tracked by me or untracked
-        const canEditClearance = this.config.isController === true && (isTrackedByMe || isUntracked)
+        const canEditClearance = actionConfig.isController === true && (isTrackedByMe || isUntracked)
 
         // Slow aircraft detection
         const isSlow = isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '') || undefined
@@ -1030,7 +1234,7 @@ class FlightStore {
         if (actions && flight.latitude !== undefined && flight.longitude !== undefined && flight.currentAltitude !== undefined) {
             // TXI highlight: arrival that has left the runway (taxiing in)
             if (actions.includes('TXI') && stripType === 'arrival') {
-                const onRunway = isOnAnyRunway(flight.latitude, flight.longitude, flight.currentAltitude, this.config.myAirports)
+                const onRunway = isOnAnyRunway(flight.latitude, flight.longitude, flight.currentAltitude, actionConfig.myAirports)
                 if (!onRunway) {
                     highlightActions.push('TXI')
                 }
@@ -1038,7 +1242,7 @@ class FlightStore {
 
             // PARK highlight: arrival at a stand
             if (actions.includes('PARK') && stripType === 'arrival') {
-                const nearestAirport = findNearestAirport(flight.latitude, flight.longitude, this.config.myAirports, getAirportCoords)
+                const nearestAirport = findNearestAirport(flight.latitude, flight.longitude, actionConfig.myAirports, getAirportCoords)
                 if (nearestAirport) {
                     const stand = findStandForPosition(nearestAirport, flight.latitude, flight.longitude)
                     if (stand) {
@@ -1049,7 +1253,7 @@ class FlightStore {
 
             // XFER highlight: departure outside CTR
             if (actions.includes('XFER') && stripType === 'departure') {
-                const withinCtr = isWithinCtr(this.config.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
+                const withinCtr = isWithinCtr(actionConfig.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
                 if (withinCtr === false) {
                     highlightActions.push('XFER')
                 }
@@ -1057,7 +1261,7 @@ class FlightStore {
         }
 
         return {
-            id: flight.callsign, // Use callsign as strip ID
+            id: airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign,
             callsign: flight.callsign,
             aircraftType: flight.aircraftType ?? 'UNKN',
             wakeTurbulence,
@@ -1106,15 +1310,16 @@ class FlightStore {
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
             isAssumed: isTrackedByMe || undefined,
-            groundstate: flight.groundstate || undefined
+            groundstate: flight.groundstate || undefined,
+            airport
         }
     }
 
     /**
      * Determine strip type based on flight data
      */
-    private determineStripType(flight: Flight): StripType {
-        const myAirports = this.config.myAirports
+    private determineStripType(flight: Flight, config: EfsStaticConfig = this.config): StripType {
+        const myAirports = config.myAirports
 
         const originIsOurs = flight.origin !== undefined && myAirports.includes(flight.origin)
         const destIsOurs = flight.destination !== undefined && myAirports.includes(flight.destination)
@@ -1123,9 +1328,6 @@ class FlightStore {
         if (originIsOurs && destIsOurs) {
             return 'local'
         }
-
-        // VFR (would need flight rules info, defaulting based on other factors for now)
-        // This would need flightRules field from the plugin
 
         // Departure from one of our airports
         if (originIsOurs) {
@@ -1227,6 +1429,16 @@ class FlightStore {
 
         for (const flight of this.flights.values()) {
             if (flight.manuallyDeleted) continue
+
+            if (isMultiAirportConfig(this.config)) {
+                const multi = this.resolveMultiAirportStrips(flight.callsign, flight)
+                if (multi.strips) {
+                    for (const strip of multi.strips) {
+                        results.push({ strip, softDeleted: false })
+                    }
+                }
+                continue
+            }
 
             // Must have required data and be within range
             if (!flightHasRequiredData(flight) || !this.isEligibleForStrip(flight)) continue
@@ -1415,11 +1627,25 @@ class FlightStore {
         let sectionId: string
         let pos: number
         let bottom = isBottom ?? false
+        const multi = isMultiAirportConfig(this.config)
+        const stripAirport = multi ? primaryAirport : undefined
 
         if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
             pos = position ?? this.getNewStripPosition(bayId, sectionId)
+        } else if (multi && stripAirport) {
+            const scoped = withAirportScope(this.config, stripAirport)
+            const targetSection = determineSectionForFlight(flight, scoped)
+            bayId = resolveBayForAirport(stripAirport, this.config.columnAirports)
+            if (targetSection) {
+                // Map logical section onto this airport's bay
+                const logical = logicalSectionId(targetSection.sectionId)
+                sectionId = prefixedSectionId(bayId, logical)
+            } else {
+                sectionId = prefixedSectionId(bayId, 'app')
+            }
+            pos = this.getNewStripPosition(bayId, sectionId)
         } else {
             const targetSection = determineSectionForFlight(flight, this.config)
             if (!targetSection) {
@@ -1443,12 +1669,21 @@ class FlightStore {
             }
         }
 
-        // Record the assignment
-        this.stripAssignments.set(callsign, { bayId, sectionId, position: pos, bottom })
+        // Record the assignment (multi-airport: key by callsign@ICAO)
+        const assignmentKey = stripAirport ? stripIdForAirport(callsign, stripAirport) : callsign
+        this.stripAssignments.set(assignmentKey, { bayId, sectionId, position: pos, bottom })
         flight.lastSectionRule = 'manual'
 
-        // Create the strip
-        const strip = this.createStrip(flight, bayId, sectionId, pos, bottom)
+        // Create the strip (always attach airport in multi mode)
+        const strip = this.createStrip(
+            flight,
+            bayId,
+            sectionId,
+            pos,
+            bottom,
+            stripAirport,
+            stripAirport ? withAirportScope(this.config, stripAirport) : this.config,
+        )
 
         // Override strip type for cross
         if (stripType === 'cross') {
@@ -1481,29 +1716,37 @@ class FlightStore {
         if (!flight || !flightHasRequiredData(flight) || flight.deleted) {
             return { flight }
         }
-        return this.resolveStripResult(callsign, flight, false)
+        return this.finalizeFlightStrips(callsign, flight, false)
     }
 
     /**
-     * Regenerate a strip for a flight (used when positions are shifted)
+     * Regenerate a strip for a flight (used when positions are shifted).
+     * Accepts either a callsign or a multi-airport strip id (callsign@ICAO).
      */
-    regenerateStrip(callsign: string): FlightStrip | undefined {
+    regenerateStrip(stripIdOrCallsign: string): FlightStrip | undefined {
+        const parsed = parseStripAirportId(stripIdOrCallsign)
+        const callsign = parsed?.callsign ?? stripIdOrCallsign
+        const airport = parsed?.airport
+
         const flight = this.flights.get(callsign)
         if (!flight || !flightHasRequiredData(flight) || flight.deleted) {
             return undefined
         }
 
-        const assignment = this.stripAssignments.get(callsign)
+        const assignment = this.stripAssignments.get(stripIdOrCallsign)
         if (!assignment) {
             return undefined
         }
 
+        const scoped = airport ? withAirportScope(this.config, airport) : this.config
         return this.createStrip(
             flight,
             assignment.bayId,
             assignment.sectionId,
             assignment.position,
-            assignment.bottom
+            assignment.bottom,
+            airport,
+            scoped
         )
     }
 }
