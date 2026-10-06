@@ -162,7 +162,7 @@
 
     <!-- Middle section (truncatable) -->
     <div class="strip-middle">
-      <!-- Remarks / scratchpad row (SLOW flag shown here, not only in clearance dialog) -->
+      <!-- Remarks / scratchpad row (only real remarks — auto-SLOW sets remarks via ES scratch) -->
       <div v-if="remarksEditing || displayRemarks" class="remarks-row" @click.stop>
         <input
           v-if="remarksEditing"
@@ -509,12 +509,8 @@ const remarksInitialText = ref('')
 const remarksDirty = ref(false)
 const remarksInput = ref<HTMLInputElement | null>(null)
 
-/** Scratchpad text: real remarks, or SLOW when the slow-aircraft flag is set */
-const displayRemarks = computed(() => {
-  const r = props.strip.remarks?.trim()
-  if (r) return r
-  return props.strip.isSlow ? 'SLOW' : ''
-})
+/** Scratchpad / remarks text only — do not invent SLOW from isSlow (ATYP flag). */
+const displayRemarks = computed(() => props.strip.remarks?.trim() || '')
 
 function onNoteClick() {
   // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
@@ -569,8 +565,7 @@ onMounted(() => {
 
 // Remarks handlers
 function startRemarksEditing() {
-  // Prefill SLOW when showing the flag so an edit/save keeps it in the scratchpad
-  remarksText.value = props.strip.remarks?.trim() || (props.strip.isSlow ? 'SLOW' : '')
+  remarksText.value = props.strip.remarks?.trim() || ''
   remarksInitialText.value = remarksText.value
   remarksDirty.value = false
   remarksEditing.value = true
