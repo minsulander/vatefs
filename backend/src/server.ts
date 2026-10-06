@@ -31,10 +31,13 @@ import type {
     ConfigListMessage,
     ControllersMessage,
     ControllerInfo,
+    UserSettingsMessage,
     ServerMessage,
     ClientMessage,
     AirportAtisInfo,
+    UiSettings,
 } from "@vatefs/common"
+import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
@@ -62,7 +65,7 @@ import { loadDclSound, playDclSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
 import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
-import { initUserSettings, loadUserSettings, saveUserSettings } from "./user-settings.js"
+import { initUserSettings, loadUserSettings, saveUserSettings, resolveUiSettings } from "./user-settings.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
 
@@ -241,6 +244,20 @@ if (EUROSCOPE_DIR) {
     }
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
+    // Still persist UI settings under %APPDATA%\EuroScope when possible (mock/dev)
+    const appdata = process.env.APPDATA
+    if (appdata) {
+        const fallbackDir = path.join(appdata, "EuroScope")
+        initUserSettings(fallbackDir)
+        console.log(`User settings fallback directory: ${fallbackDir}`)
+    }
+}
+
+/** UI preferences (DCL sound, strip flashes) — defaults until loaded from disk */
+let currentUiSettings: UiSettings = { ...DEFAULT_UI_SETTINGS }
+{
+    const saved = loadUserSettings()
+    currentUiSettings = resolveUiSettings(saved)
 }
 
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
@@ -864,6 +881,16 @@ function sendDclStatus(socket: WebSocket) {
     sendMessage(socket, message)
 }
 
+function sendUserSettings(socket: WebSocket) {
+    const message: UserSettingsMessage = { type: "userSettings", settings: { ...currentUiSettings } }
+    sendMessage(socket, message)
+}
+
+function broadcastUserSettings() {
+    const message: UserSettingsMessage = { type: "userSettings", settings: { ...currentUiSettings } }
+    broadcast(message)
+}
+
 /**
  * Recalculate DCL availability. Called when airports change.
  * If no service is active, set status to available/unavailable based on config
@@ -1108,8 +1135,10 @@ function handleDclRequest(from: string, packet: string) {
     flight.dclStatus = "REQUEST"
     flight.dclMessage = packet
 
-    // Play notification sound
-    playDclSound()
+    // Play notification sound (if enabled in user settings)
+    if (currentUiSettings.dclSoundEnabled) {
+        playDclSound()
+    }
 
     // Build clearance preview
     const templateData = buildDclTemplateData(flight, "")
@@ -1892,6 +1921,29 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "updateUserSettings": {
+            const update: Partial<UiSettings> = {}
+            const incoming = message.settings
+            if (typeof incoming.dclSoundEnabled === "boolean") {
+                currentUiSettings.dclSoundEnabled = incoming.dclSoundEnabled
+                update.dclSoundEnabled = incoming.dclSoundEnabled
+            }
+            if (typeof incoming.flashChangedTimes === "boolean") {
+                currentUiSettings.flashChangedTimes = incoming.flashChangedTimes
+                update.flashChangedTimes = incoming.flashChangedTimes
+            }
+            if (typeof incoming.flashTsatWindow === "boolean") {
+                currentUiSettings.flashTsatWindow = incoming.flashTsatWindow
+                update.flashTsatWindow = incoming.flashTsatWindow
+            }
+            if (Object.keys(update).length > 0) {
+                saveUserSettings(update)
+                console.log(`[SETTINGS] Updated: ${JSON.stringify(update)}`)
+                broadcastUserSettings()
+            }
+            break
+        }
+
         case "switchConfig": {
             console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
             switchConfig(message.file)
@@ -2251,6 +2303,7 @@ wsServer.on("connection", (socket) => {
     sendGaps(socket)
     sendStatus(socket)
     sendDclStatus(socket)
+    sendUserSettings(socket)
     sendAtisUpdate(socket)
     sendConfigList(socket)
     sendControllers(socket)

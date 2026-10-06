@@ -13,6 +13,11 @@ const routes = [
         component: () => import("@/views/HomeView.vue"),
     },
     {
+        path: "/settings",
+        name: "settings",
+        component: () => import("@/views/SettingsView.vue"),
+    },
+    {
         path: "/:pathMatch(.*)*",
         name: "notfound",
         component: () => import("@/views/HomeView.vue"),

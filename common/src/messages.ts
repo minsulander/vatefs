@@ -1,6 +1,6 @@
 // WebSocket API message types
 
-import type { AirportAtisInfo, DclMode, EfsLayout, FlightStrip, Gap, Section } from "./types.js"
+import type { AirportAtisInfo, DclMode, EfsLayout, FlightStrip, Gap, Section, UiSettings } from "./types.js"
 
 // Server -> Client messages
 
@@ -103,7 +103,12 @@ export interface ControllersMessage {
     controllers: ControllerInfo[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage
+export interface UserSettingsMessage {
+    type: 'userSettings'
+    settings: UiSettings
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage
 
 // Client -> Server messages
 
@@ -268,7 +273,12 @@ export interface SetColumnCountMessage {
     count: number
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage
+export interface UpdateUserSettingsMessage {
+    type: 'updateUserSettings'
+    settings: Partial<UiSettings>
+}
+
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage
 
 // Type guards for message parsing
 
@@ -281,7 +291,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
-           type === 'controllers'
+           type === 'controllers' || type === 'userSettings'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -289,5 +299,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings'
 }

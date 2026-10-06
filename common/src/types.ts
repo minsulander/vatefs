@@ -128,6 +128,19 @@ export interface EfsLayout {
 
 export type DclMode = 'manual' | 'auto' | 'semi'
 
+/** UI preferences persisted in VatEFSsettings.json (local backend). */
+export interface UiSettings {
+    dclSoundEnabled: boolean
+    flashChangedTimes: boolean
+    flashTsatWindow: boolean
+}
+
+export const DEFAULT_UI_SETTINGS: UiSettings = {
+    dclSoundEnabled: true,
+    flashChangedTimes: true,
+    flashTsatWindow: true,
+}
+
 export interface AirportAtisInfo {
     airport: string
     atis?: string          // ATIS letter (single-ATIS airports)

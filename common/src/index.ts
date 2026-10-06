@@ -11,8 +11,11 @@ export type {
     EfsLayout,
     Gap,
     DclMode,
+    UiSettings,
     AirportAtisInfo
 } from "./types.js"
+
+export { DEFAULT_UI_SETTINGS } from "./types.js"
 
 // WebSocket API messages
 export type {
@@ -29,6 +32,7 @@ export type {
     AtisUpdateMessage,
     ControllerInfo,
     ControllersMessage,
+    UserSettingsMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,
@@ -53,6 +57,7 @@ export type {
     AddActiveAirportMessage,
     RemoveActiveAirportMessage,
     SetColumnCountMessage,
+    UpdateUserSettingsMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

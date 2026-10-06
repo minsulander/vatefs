@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo } from "@vatefs/common"
-import { isServerMessage, GAP_BUFFER, gapKey } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings } from "@vatefs/common"
+import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -102,6 +102,24 @@ export const useEfsStore = defineStore("efs", () => {
     // Online controllers (for manual transfer menu)
     const controllers = ref<ControllerInfo[]>([])
 
+    // UI preferences (persisted via backend VatEFSsettings.json)
+    const dclSoundEnabled = ref(DEFAULT_UI_SETTINGS.dclSoundEnabled)
+    const flashChangedTimes = ref(DEFAULT_UI_SETTINGS.flashChangedTimes)
+    const flashTsatWindow = ref(DEFAULT_UI_SETTINGS.flashTsatWindow)
+
+    function applyUserSettings(settings: UiSettings) {
+        dclSoundEnabled.value = settings.dclSoundEnabled
+        flashChangedTimes.value = settings.flashChangedTimes
+        flashTsatWindow.value = settings.flashTsatWindow
+    }
+
+    /** Update one or more UI settings (optimistic local apply + persist via backend). */
+    function updateUserSettings(partial: Partial<UiSettings>) {
+        if (typeof partial.dclSoundEnabled === 'boolean') dclSoundEnabled.value = partial.dclSoundEnabled
+        if (typeof partial.flashChangedTimes === 'boolean') flashChangedTimes.value = partial.flashChangedTimes
+        if (typeof partial.flashTsatWindow === 'boolean') flashTsatWindow.value = partial.flashTsatWindow
+        sendMessage({ type: 'updateUserSettings', settings: partial })
+    }
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
         socket = new WebSocket(`ws://${location.hostname}:17770`)
@@ -181,6 +199,9 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'controllers':
                         controllers.value = message.controllers
+                        break
+                    case 'userSettings':
+                        applyUserSettings(message.settings)
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -1085,6 +1106,10 @@ export const useEfsStore = defineStore("efs", () => {
         autoMoveData,
         controllers,
         releaseStrip,
-        manualTransfer
+        manualTransfer,
+        dclSoundEnabled,
+        flashChangedTimes,
+        flashTsatWindow,
+        updateUserSettings,
     }
 })

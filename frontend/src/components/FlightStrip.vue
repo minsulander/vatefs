@@ -752,6 +752,7 @@ let tsatChangedTimer: ReturnType<typeof setTimeout> | undefined
 let ctotChangedTimer: ReturnType<typeof setTimeout> | undefined
 
 function triggerTimeChangedFlash(which: 'tobt' | 'tsat' | 'ctot') {
+  if (!store.flashChangedTimes) return
   if (which === 'tobt') {
     tobtChanged.value = true
     if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
@@ -865,7 +866,9 @@ const tsatColorClass = computed(() => {
   // Past window: expired TSAT
   if (deltaSec >= 6 * 60) return { 'tsat-expired': true }
   // Last clock minute of ±5 window (e.g. TSAT 1052 → flash all of 1057z)
-  if (deltaSec >= 5 * 60 && deltaSec < 6 * 60) return { 'tsat-flash': true }
+  if (deltaSec >= 5 * 60 && deltaSec < 6 * 60) {
+    return store.flashTsatWindow ? { 'tsat-flash': true } : { 'tsat-window': true }
+  }
   // Inside TSAT±5 (before last minute): green
   if (deltaSec >= -5 * 60 && deltaSec < 5 * 60) return { 'tsat-window': true }
 

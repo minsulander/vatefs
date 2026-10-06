@@ -3,6 +3,7 @@
     <v-app-bar color="#2b2d31" height="25" elevation="0" class="efs-top-bar text-body-2 text-grey">
       <!-- Refresh button -->
       <v-btn variant="text" icon="mdi-refresh" size="small" class="text-grey" @click="efs.refresh()" title="Refresh"></v-btn>
+      <v-btn variant="text" icon="mdi-cog" size="small" class="text-grey" to="/settings" title="Settings"></v-btn>
       <!-- Callsign -->
       <span class="text-grey ml-1">{{ efs.myCallsign || 'NOT CONNECTED' }}</span>
       <!-- ATIS / airports (MULTIAPT: open columns always; idle ICAOs only with traffic, clickable for swap) -->
