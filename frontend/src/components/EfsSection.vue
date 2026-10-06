@@ -16,7 +16,7 @@
       @mousedown="onResizeStart"
       @touchstart="onResizeStart"
     >
-      <span class="section-title">{{ sectionDisplayTitle }}</span>
+      <span class="section-title">{{ section.title }}</span>
       <div class="section-header-right">
         <div
           v-if="showTimeSortControls"
@@ -161,29 +161,13 @@ const isTimeSortedSection = computed(() => isTimeSortSectionId(props.section.id)
 const hasEssa = computed(() =>
   store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
-/** Exactly ESSA — not multi-airport or another field */
-const onlyEssa = computed(() => {
-  const airports = store.myAirports.map((a) => a.toUpperCase())
-  return airports.length === 1 && airports[0] === 'ESSA'
-})
-/** Time-sort UI/auto-sort: single-airport dep sections (not RTC). EOBT works anywhere; TSAT toggle needs ESSA. */
+/** Time-sort auto-sort: single-airport dep sections (not RTC). */
 const timeSortEnabled = computed(
   () => isTimeSortedSection.value && !store.multiAirport,
 )
-const showTimeSortControls = computed(() => timeSortEnabled.value)
+/** Sort field/dir are fixed per section — no UI controls */
+const showTimeSortControls = computed(() => false)
 const showTsatSortOption = computed(() => hasEssa.value && !store.multiAirport)
-/** GNG-style: PENDING DEP → TSAT when only ESSA and sort controls are shown */
-const sectionDisplayTitle = computed(() => {
-  if (
-    props.section.id === 'pending_dep' &&
-    onlyEssa.value &&
-    showTimeSortControls.value &&
-    activeTimeSortField() === 'tsat'
-  ) {
-    return 'TSAT'
-  }
-  return props.section.title
-})
 
 function loadTimeSortField(): TimeSortField {
   // Migrate older pending-dep-only key if present
@@ -200,8 +184,21 @@ const timeSortDir = ref<TimeSortDir>(loadTimeSortDir())
 /** Last preferred HHMM per strip — used to detect real time changes (not clock wrap) */
 const lastSortTimes = ref<Map<string, string>>(new Map())
 
+/**
+ * Fixed sort field per section:
+ * - pending_dep (CD ALL / PENDING DEP): TOBT → EOBT
+ * - cleared (CLEARED / TSAT): TSAT → TOBT → EOBT
+ * - other time-sort sections: TOBT → EOBT
+ */
 function activeTimeSortField(): TimeSortField {
-  return showTsatSortOption.value ? timeSortField.value : 'etobt'
+  if (props.section.id === 'cleared') return 'tsat'
+  if (props.section.id === 'pending_dep') return 'etobt'
+  // RTC bay*_dep / dep: E/TOBT (TOBT → EOBT); TSAT used only when present via cleared rule above
+  return 'etobt'
+}
+
+function activeTimeSortDir(): TimeSortDir {
+  return 'asc'
 }
 
 const timeSortFieldLabel = computed(() =>
@@ -223,9 +220,8 @@ const timeSortDirTitle = computed(() =>
     : 'Earliest at bottom — click for earliest at top',
 )
 
-const preferManualOrder = computed(() =>
-  isTimeSortedSection.value && store.hasManualOrder(props.bayId, props.section.id),
-)
+/** Fixed auto-sort — no manual override (sort controls removed) */
+const preferManualOrder = computed(() => false)
 
 function clearManualAndPersist() {
   store.clearManualOrder(props.bayId, props.section.id)
@@ -339,7 +335,7 @@ const topStrips = computed(() => {
   const list = collectTopStrips()
 
   if (timeSortEnabled.value && !preferManualOrder.value) {
-    return sortByDepTime(list, activeTimeSortField(), timeSortDir.value)
+    return sortByDepTime(list, activeTimeSortField(), activeTimeSortDir())
   }
 
   return list.sort((a, b) => a.position - b.position)
@@ -347,7 +343,7 @@ const topStrips = computed(() => {
 
 // When preferred dep time (TSAT/TOBT/EOBT) changes, drop manual order and re-sort
 watch(
-  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value, store.multiAirport] as const,
+  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value, store.multiAirport, store.essaRolesMode] as const,
   () => {
     if (!timeSortEnabled.value) return
     const field = activeTimeSortField()

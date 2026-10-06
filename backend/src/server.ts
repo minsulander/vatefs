@@ -41,8 +41,9 @@ import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout } from "./config.js"
-import type { EuroscopeCommand } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
+import type { EuroscopeCommand, EssaPositionRole } from "./config.js"
+import { normalizeEssaRoles } from "./essa-roles.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
@@ -242,6 +243,13 @@ if (EUROSCOPE_DIR) {
             if (icao) setColumnAirport(i, icao)
         }
         console.log(`Restoring column airports: ${savedSettings.columnAirports.map(a => a ?? "-").join(", ")}`)
+    }
+    if (isEssaRolesConfig(staticConfig)) {
+        const roles = normalizeEssaRoles(savedSettings.essaRoles)
+        restoreEssaRolesFromSettings(roles, savedSettings.essaRolesManual)
+        if (savedSettings.essaRolesManual) {
+            console.log(`Restoring manual ESSA roles: ${(roles ?? []).join(", ")}`)
+        }
     }
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
@@ -593,6 +601,7 @@ function sendStatus(socket: WebSocket) {
 
 // Broadcast status to all clients
 function broadcastStatus() {
+    const essaMode = isEssaRolesConfig(staticConfig)
     const message: StatusMessage = {
         type: "status",
         callsign: staticConfig.myCallsign ?? "",
@@ -604,6 +613,9 @@ function broadcastStatus() {
         esAirports: isMultiAirportConfig(staticConfig) ? esRwySelectAirports : undefined,
         columnAirports: staticConfig.columnAirports,
         columnCount: staticConfig.columnCount,
+        essaRolesMode: essaMode || undefined,
+        essaRoles: essaMode ? (staticConfig.essaRoles ?? []) : undefined,
+        essaRolesManual: essaMode ? !!staticConfig.essaRolesManual : undefined,
     }
     broadcast(message)
 }
@@ -762,6 +774,12 @@ function switchConfig(file: string) {
         applyConfig(config)
         activeConfigFile = file
         saveUserSettings({ activeConfig: file })
+
+        if (isEssaRolesConfig(staticConfig)) {
+            const saved = loadUserSettings()
+            const roles = normalizeEssaRoles(saved.essaRoles)
+            restoreEssaRolesFromSettings(roles, saved.essaRolesManual)
+        }
 
         // Sync store layout with (possibly rebuilt) multi-airport layout
         store.reprocessAllFlights()
@@ -1281,6 +1299,11 @@ function handleCpdlcResponse(from: string, packet: string) {
 // regenerateStrip() only updates actions in place — use reprocessAllFlights so sections move too.
 function reprocessAllStripsForRoleChange(reason: string) {
     store.reprocessAllFlights()
+    // ESSA auto roles may have changed — push status + filtered layout before refresh
+    if (isEssaRolesConfig(staticConfig)) {
+        broadcastStatus()
+        broadcastLayout()
+    }
     broadcastRefresh(reason)
 }
 
@@ -1986,6 +2009,24 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "switchConfig": {
             console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
             switchConfig(message.file)
+            break
+        }
+
+        case "setEssaRoles": {
+            if (!isEssaRolesConfig(staticConfig)) break
+            const roles = (normalizeEssaRoles(message.roles) ?? []) as EssaPositionRole[]
+            if (setEssaRoles(roles, message.manual)) {
+                saveUserSettings({
+                    essaRoles: message.manual ? roles : [],
+                    essaRolesManual: message.manual,
+                })
+                console.log(
+                    `[ESSA] Roles ${message.manual ? "manual" : "auto"}: ${(staticConfig.essaRoles ?? []).join(", ")}`
+                )
+                store.reprocessAllFlights()
+                broadcastStatus()
+                broadcastRefresh("ESSA roles changed")
+            }
             break
         }
 
@@ -2733,10 +2774,11 @@ udpIn.on("message", (msg, rinfo) => {
                 setActiveRunways(activeRunways)
                 const runwaysChanged = JSON.stringify(activeRunways) !== previousRunways
 
-                // Re-broadcast layout when runways change (section titles may have templates)
+                // Re-broadcast layout + ATIS (includes arr/dep runways for ESSA RWY label)
                 if (runwaysChanged) {
-                    console.log(`Active runways changed, broadcasting updated layout`)
+                    console.log(`Active runways changed: ${JSON.stringify(activeRunways)}`)
                     broadcastLayout()
+                    broadcastAtisUpdate()
                 }
 
                 // Start ATIS polling if not already running

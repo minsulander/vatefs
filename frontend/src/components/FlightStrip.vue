@@ -162,8 +162,8 @@
 
     <!-- Middle section (truncatable) -->
     <div class="strip-middle">
-      <!-- Remarks row (above other fields, spans full width) -->
-      <div v-if="remarksEditing || strip.remarks" class="remarks-row" @click.stop>
+      <!-- Remarks / scratchpad row (SLOW flag shown here, not only in clearance dialog) -->
+      <div v-if="remarksEditing || displayRemarks" class="remarks-row" @click.stop>
         <input
           v-if="remarksEditing"
           ref="remarksInput"
@@ -175,7 +175,7 @@
           @keydown.enter="onRemarksBlur"
           @keydown.escape="onRemarksCancel"
         />
-        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ strip.remarks }}</span>
+        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ displayRemarks }}</span>
       </div>
       <div class="strip-middle-content">
         <!-- Time section / clearance triangle -->
@@ -509,6 +509,13 @@ const remarksInitialText = ref('')
 const remarksDirty = ref(false)
 const remarksInput = ref<HTMLInputElement | null>(null)
 
+/** Scratchpad text: real remarks, or SLOW when the slow-aircraft flag is set */
+const displayRemarks = computed(() => {
+  const r = props.strip.remarks?.trim()
+  if (r) return r
+  return props.strip.isSlow ? 'SLOW' : ''
+})
+
 function onNoteClick() {
   // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
   // Still re-focus the input (important for touch interactions).
@@ -562,7 +569,8 @@ onMounted(() => {
 
 // Remarks handlers
 function startRemarksEditing() {
-  remarksText.value = props.strip.remarks ?? ''
+  // Prefill SLOW when showing the flag so an edit/save keeps it in the scratchpad
+  remarksText.value = props.strip.remarks?.trim() || (props.strip.isSlow ? 'SLOW' : '')
   remarksInitialText.value = remarksText.value
   remarksDirty.value = false
   remarksEditing.value = true

@@ -87,6 +87,17 @@ export const useEfsStore = defineStore("efs", () => {
     const columnCount = ref(4)
     const airportOptions = ref<string[]>([])
 
+    // ESSA role-profile mode
+    const essaRolesMode = ref(false)
+    const essaRoles = ref<string[]>([])
+    const essaRolesManual = ref(false)
+
+    /** Manual ESSA RWY combination id (Appendix A/B); cleared when ES runways change */
+    const essaRwyConfigId = ref<string | null>(null)
+    const essaRwyConfigManual = ref(false)
+    /** Fingerprint of last ES ARR/DEP used to auto-clear manual RWY config */
+    let essaRwyEsFingerprint = ''
+
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
     const dclError = ref<string | undefined>(undefined)
@@ -324,12 +335,18 @@ export const useEfsStore = defineStore("efs", () => {
         esAirports?: string[]
         columnAirports?: (string | null)[]
         columnCount?: number
+        essaRolesMode?: boolean
+        essaRoles?: string[]
+        essaRolesManual?: boolean
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
         myRole.value = message.role
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
+        essaRolesMode.value = message.essaRolesMode ?? false
+        essaRoles.value = message.essaRoles ?? []
+        essaRolesManual.value = message.essaRolesManual ?? false
         const nextActive = message.activeAirports ?? message.airports
         markNewlyActiveAirports(nextActive)
         activeAirports.value = nextActive
@@ -935,6 +952,42 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'switchConfig', file })
     }
 
+    /** Set ESSA roles manually, or pass manual=false to return to auto-detect. */
+    function setEssaRoles(roles: string[], manual: boolean) {
+        if (manual) {
+            essaRoles.value = [...roles]
+            essaRolesManual.value = true
+        } else {
+            essaRolesManual.value = false
+        }
+        sendMessage({ type: 'setEssaRoles', roles, manual })
+    }
+
+    /**
+     * Set ESSA RWY combination manually, or pass manual=false for auto
+     * (ES runways + night/day letter selection).
+     */
+    function setEssaRwyConfig(configId: string | null, manual: boolean) {
+        if (manual && configId) {
+            essaRwyConfigId.value = configId
+            essaRwyConfigManual.value = true
+        } else {
+            essaRwyConfigId.value = null
+            essaRwyConfigManual.value = false
+        }
+    }
+
+    /** When ES ARR/DEP change, drop manual RWY config so auto follows EuroScope. */
+    function syncEssaRwyConfigFromEs(arr: string[], dep: string[]) {
+        const fp = `${arr.join('/')}|${dep.join('/')}`
+        if (fp === essaRwyEsFingerprint) return
+        essaRwyEsFingerprint = fp
+        if (essaRwyConfigManual.value) {
+            essaRwyConfigId.value = null
+            essaRwyConfigManual.value = false
+        }
+    }
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -1049,6 +1102,14 @@ export const useEfsStore = defineStore("efs", () => {
         myRole,
         isController,
         multiAirport,
+        essaRolesMode,
+        essaRoles,
+        essaRolesManual,
+        setEssaRoles,
+        essaRwyConfigId,
+        essaRwyConfigManual,
+        setEssaRwyConfig,
+        syncEssaRwyConfigFromEs,
         activeAirports,
         esAirports,
         columnAirports,

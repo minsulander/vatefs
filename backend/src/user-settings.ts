@@ -19,6 +19,9 @@ export interface UserSettings {
     showStripOwnership?: boolean
     dimOtherOwnedStrips?: boolean
     transferSoundsEnabled?: boolean
+    /** Manual ESSA role selection (physical positions) */
+    essaRoles?: string[]
+    essaRolesManual?: boolean
 }
 
 let settingsPath: string | undefined

@@ -1131,13 +1131,26 @@ class FlightStore {
             flight.missedApproach = false
         }
         // Process scratchpad-based remarks:
-        // Scratch values starting with "." are user remarks (e.g. ".SLOW" -> "SLOW").
-        // Any other scratch value, including "", means the remark was removed in EuroScope.
+        // - ".TEXT" → remark TEXT (VatEFS convention)
+        // - "SLOW" (no leading ".") → keep as remark (ES/TopSky slow flag)
+        // - "MISAP_" and other specials → leave remarks unchanged
+        // - "" → remark cleared in EuroScope
         if (message.scratch !== undefined) {
-            const nextRemarks = message.scratch.startsWith('.')
-                ? (message.scratch.substring(1).trim() || undefined)
-                : undefined
-            if (nextRemarks !== flight.remarks) {
+            const scratch = message.scratch
+            let nextRemarks: string | undefined | null = null
+            if (scratch.startsWith('.')) {
+                nextRemarks = scratch.substring(1).trim() || undefined
+            } else if (scratch.toUpperCase() === 'SLOW') {
+                nextRemarks = 'SLOW'
+            } else if (scratch === '') {
+                nextRemarks = undefined
+            } else if (scratch === 'MISAP_') {
+                nextRemarks = null // special flag — do not hide strip remarks
+            } else {
+                // Other non-remark scratch values (TopSky ops, etc.) — clear remark
+                nextRemarks = undefined
+            }
+            if (nextRemarks !== null && nextRemarks !== flight.remarks) {
                 console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
                 this.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
                 flight.remarks = nextRemarks
