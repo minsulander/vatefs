@@ -318,7 +318,7 @@ export function setIsController(isController: boolean) {
 /**
  * Update my frequency (called when myselfUpdate is received)
  */
-export function setMyFrequency(frequency: number) {
+export function setMyFrequency(frequency: number | undefined) {
     staticConfig.myFrequency = frequency
 }
 
@@ -364,6 +364,11 @@ export function setMyRole(role: ControllerRole) {
  */
 export function updateOnlineController(callsign: string, frequency: number, myAirports: string[]): boolean {
     const upper = callsign.toUpperCase()
+
+    // Never track ourselves as an "other" online controller (ghost after position switch)
+    if (staticConfig.myCallsign && upper === staticConfig.myCallsign.toUpperCase()) {
+        return false
+    }
 
     // Skip ATIS stations — they are not real controllers
     if (upper.endsWith('_ATIS')) return false

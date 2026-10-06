@@ -316,7 +316,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
             break
 
         case "setClearance":
-            sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign }))
+            sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign, desired: command.value }))
             if (cliArgs.mock) {
                 flight.clearance = command.value
                 reevaluateAndBroadcast(callsign)
@@ -394,7 +394,7 @@ type OutboundPluginCommand =
     | { type: "transfer"; callsign: string; targetCallsign?: string }
     | { type: "release"; callsign: string }
     | { type: "assume"; callsign: string }
-    | { type: "toggleClearanceFlag"; callsign: string }
+    | { type: "toggleClearanceFlag"; callsign: string; desired?: boolean }
     | { type: "resetSquawk"; callsign: string }
     | { type: "assignDepartureRunway"; callsign: string; runway: string }
     | { type: "assignSid"; callsign: string; sid: string }
@@ -757,6 +757,9 @@ function switchConfig(file: string) {
 
 /** Airports currently ARR/DEP in EuroScope rwyselect (RTC relevance) */
 let esRwySelectAirports: string[] = []
+
+/** After connectionType 0, request a plugin refresh on the next myselfUpdate */
+let pendingPluginRefreshAfterReconnect = false
 
 /**
  * Drop user-picked airports that are no longer relevant:
@@ -1217,7 +1220,7 @@ function handleCpdlcResponse(from: string, packet: string) {
         }
 
         // Set clearance flag via EuroScope plugin
-        sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: flight.callsign }))
+        sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: flight.callsign, desired: true }))
 
         // Regenerate and broadcast strip
         const strip = flightStore.regenerateStrip(flight.callsign)
@@ -1243,16 +1246,11 @@ function handleCpdlcResponse(from: string, packet: string) {
     }
 }
 
-// Regenerate all strips (e.g., when online controller state changes)
-function regenerateAllStrips() {
-    const allStrips = store.getAllStrips()
-    for (const strip of allStrips) {
-        const regenerated = flightStore.regenerateStrip(strip.callsign)
-        if (regenerated) {
-            store.updateStripFromFlight(regenerated)
-            broadcastStrip(regenerated)
-        }
-    }
+// Regenerate all strips with full section re-evaluation (e.g., when online controller roles change).
+// regenerateStrip() only updates actions in place — use reprocessAllFlights so sections move too.
+function reprocessAllStripsForRoleChange(reason: string) {
+    store.reprocessAllFlights()
+    broadcastRefresh(reason)
 }
 
 // Send layout to a client
@@ -1470,6 +1468,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "CTL_GS") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
                     sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                } else if (message.action === "toggleClearanceFlag") {
+                    const clrFlight = flightStore.getFlight(strip.callsign)
+                    const desired = !(clrFlight?.clearance ?? false)
+                    sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
@@ -2454,7 +2456,9 @@ udpIn.on("message", (msg, rinfo) => {
             setMyCallsign("")
             setMyAirports([])
             setIsController(false)
+            setMyFrequency(undefined)
             clearOnlineControllers()
+            pendingPluginRefreshAfterReconnect = true
             broadcastStatus()
             broadcastRefresh("Connection lost")
 
@@ -2476,7 +2480,18 @@ udpIn.on("message", (msg, rinfo) => {
         // Handle controllerPositionUpdate - track online controllers at our airports
         if (data.type === "controllerPositionUpdate") {
             const msg = data as ControllerPositionUpdateMessage
-            if (!msg.me && msg.controller) {
+            if (msg.me) {
+                // Ensure self is never left in onlineControllers after a position switch
+                if (removeOnlineController(msg.callsign)) {
+                    const rolesLog = staticConfig.myRolesByAirport
+                        ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
+                        : 'unknown'
+                    console.log(`Removed self from online controllers - effective roles: ${rolesLog}`)
+                    reprocessAllStripsForRoleChange("Removed self from online controllers")
+                }
+                return
+            }
+            if (msg.controller) {
                 const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports)
                 // Always broadcast controllers list when a controller connects (even if roles didn't change)
                 broadcastControllers()
@@ -2485,7 +2500,7 @@ udpIn.on("message", (msg, rinfo) => {
                         ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
                         : 'unknown'
                     console.log(`Online controllers changed - effective roles: ${rolesLog}`)
-                    regenerateAllStrips()
+                    reprocessAllStripsForRoleChange("Online controllers changed")
                 }
             }
             return
@@ -2502,7 +2517,7 @@ udpIn.on("message", (msg, rinfo) => {
                     ? [...staticConfig.myRolesByAirport.entries()].map(([a, r]) => `${a}:[${r.join(',')}]`).join(' ')
                     : 'unknown'
                 console.log(`Controller disconnected: ${msg.callsign} - effective roles: ${rolesLog}`)
-                regenerateAllStrips()
+                reprocessAllStripsForRoleChange(`Controller disconnected: ${msg.callsign}`)
             }
             return
         }
@@ -2514,7 +2529,12 @@ udpIn.on("message", (msg, rinfo) => {
             const callsignChanged = previousCallsign !== msg.callsign
 
             if (callsignChanged) {
+                // Drop previous (and current) self from onlineControllers to avoid ghost roles
+                if (previousCallsign) {
+                    removeOnlineController(previousCallsign)
+                }
                 setMyCallsign(msg.callsign)
+                removeOnlineController(msg.callsign)
                 console.log(`My callsign set to: ${msg.callsign}`)
             }
 
@@ -2527,9 +2547,18 @@ udpIn.on("message", (msg, rinfo) => {
                 console.log(`Controller role: ${role}`)
             }
 
-            // Store frequency
+            // Detect primary frequency / AoR change (same callsign, different freq)
+            const previousFrequency = staticConfig.myFrequency
+            const frequencyChanged =
+                msg.frequency != null &&
+                previousFrequency != null &&
+                Math.abs(previousFrequency - msg.frequency) > 0.001
+
             if (msg.frequency) {
                 setMyFrequency(msg.frequency)
+                if (frequencyChanged) {
+                    console.log(`My frequency changed: ${previousFrequency!.toFixed(3)} -> ${msg.frequency.toFixed(3)} (AoR)`)
+                }
             }
 
             // Extract airports from rwyconfig - any airport with arr or dep set
@@ -2617,11 +2646,27 @@ udpIn.on("message", (msg, rinfo) => {
             // Recalculate DCL availability when airports change
             recalculateDclAvailability()
 
-            // If callsign changed, clear store and tell clients to refresh
-            if (callsignChanged && previousCallsign) {
-                console.log(`Callsign changed from ${previousCallsign} to ${msg.callsign}, clearing store`)
+            // If callsign or primary frequency (AoR) changed, clear store and tell clients to refresh
+            if ((callsignChanged && previousCallsign) || frequencyChanged) {
+                if (callsignChanged && previousCallsign) {
+                    console.log(`Callsign changed from ${previousCallsign} to ${msg.callsign}, clearing store`)
+                } else {
+                    console.log(`Frequency/AoR changed, clearing store`)
+                }
                 store.clear()
-                broadcastRefresh(`Callsign changed to ${msg.callsign}`)
+                broadcastRefresh(
+                    callsignChanged && previousCallsign
+                        ? `Callsign changed to ${msg.callsign}`
+                        : `Frequency changed to ${msg.frequency?.toFixed(3)}`,
+                )
+            }
+
+            // After reconnect, callsign, or AoR frequency change, dump FPs/controllers from the plugin
+            // (client-side refresh skips the plugin refresh request)
+            if (pendingPluginRefreshAfterReconnect || (callsignChanged && previousCallsign) || frequencyChanged) {
+                pendingPluginRefreshAfterReconnect = false
+                console.log("Requesting plugin refresh after reconnect/callsign/frequency change")
+                sendUdp(JSON.stringify({ type: "refresh" }))
             }
 
             // Forward to clients
