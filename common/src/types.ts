@@ -93,6 +93,26 @@ export interface FlightStrip {
 
     // Controller state
     isAssumed?: boolean          // Whether the strip is assumed/tracked by me
+    /** Sector indicator (EuroScope position ID) of the tracking controller */
+    ownerSi?: string
+    /** Tracked by a controller other than me (for ownership styling) */
+    ownedByOther?: boolean
+    /**
+     * Pending handoff relative to me:
+     * - 'in'  — someone is transferring the strip to me
+     * - 'out' — I am transferring the strip to someone else
+     */
+    transferPending?: 'in' | 'out'
+    /** SI of the handoff target (who the strip is being transferred to) */
+    transferSi?: string
+    /** Full login callsign of the tracking controller (for tooltips) */
+    ownerCallsign?: string
+    /** Primary frequency of the tracking controller (MHz, for tooltips) */
+    ownerFrequency?: string
+    /** Full login callsign of the handoff target (for tooltips) */
+    transferCallsign?: string
+    /** Primary frequency of the handoff target (MHz, for tooltips) */
+    transferFrequency?: string
     groundstate?: string         // Current ground state (NSTS, STUP, PUSH, TAXI, etc.)
 
     // Multi-airport column mode: which airport this strip instance belongs to
@@ -133,12 +153,21 @@ export interface UiSettings {
     dclSoundEnabled: boolean
     flashChangedTimes: boolean
     flashTsatWindow: boolean
+    /** Show tracking controller SI on strips */
+    showStripOwnership: boolean
+    /** Dim strips assumed by other positions */
+    dimOtherOwnedStrips: boolean
+    /** Play TopSky Coord sounds for transfer request / accept / refuse */
+    transferSoundsEnabled: boolean
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
     dclSoundEnabled: true,
     flashChangedTimes: true,
     flashTsatWindow: true,
+    showStripOwnership: true,
+    dimOtherOwnedStrips: true,
+    transferSoundsEnabled: true,
 }
 
 export interface AirportAtisInfo {

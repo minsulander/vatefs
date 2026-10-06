@@ -131,6 +131,7 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentActiveRunways = staticConfig.activeRunways
     const currentIsController = staticConfig.isController
     const currentMyFrequency = staticConfig.myFrequency
+    const currentMyPositionId = staticConfig.myPositionId
     const currentActiveAirports = staticConfig.activeAirports
     const currentColumnAirports = staticConfig.columnAirports
 
@@ -159,6 +160,7 @@ export function applyConfig(config: EfsStaticConfig) {
     if (currentActiveRunways) staticConfig.activeRunways = currentActiveRunways
     if (currentIsController !== undefined) staticConfig.isController = currentIsController
     if (currentMyFrequency !== undefined) staticConfig.myFrequency = currentMyFrequency
+    if (currentMyPositionId !== undefined) staticConfig.myPositionId = currentMyPositionId
 
     // Restore multi-airport selections when staying in / entering multi mode
     if (isMultiAirportConfig(staticConfig)) {
@@ -323,6 +325,13 @@ export function setMyFrequency(frequency: number | undefined) {
 }
 
 /**
+ * Update my position ID / SI (called when myselfUpdate is received)
+ */
+export function setMyPositionId(positionId: string | undefined) {
+    staticConfig.myPositionId = positionId || undefined
+}
+
+/**
  * Update active runways per airport (called when rwyconfig is received)
  */
 export function setActiveRunways(runways: Record<string, { arr: string[]; dep: string[] }>) {
@@ -362,7 +371,12 @@ export function setMyRole(role: ControllerRole) {
  * and CTR controllers universally (they cover all airports).
  * Returns true if myRolesByAirport changed (requiring strip regeneration).
  */
-export function updateOnlineController(callsign: string, frequency: number, myAirports: string[]): boolean {
+export function updateOnlineController(
+    callsign: string,
+    frequency: number,
+    myAirports: string[],
+    positionId?: string
+): boolean {
     const upper = callsign.toUpperCase()
 
     // Never track ourselves as an "other" online controller (ghost after position switch)
@@ -387,10 +401,49 @@ export function updateOnlineController(callsign: string, frequency: number, myAi
     }
 
     const prevRoles = staticConfig.myRolesByAirport
-    staticConfig.onlineControllers.set(callsign, { role, frequency, callsign })
+    const prev = staticConfig.onlineControllers.get(callsign)
+    const positionChanged = !!(positionId && positionId !== prev?.positionId)
+    staticConfig.onlineControllers.set(callsign, {
+        role,
+        frequency,
+        callsign,
+        positionId: positionId || prev?.positionId,
+    })
     recomputeMyRolesByAirport()
 
-    return rolesChanged(prevRoles, staticConfig.myRolesByAirport)
+    return rolesChanged(prevRoles, staticConfig.myRolesByAirport) || positionChanged
+}
+
+/**
+ * Look up the sector indicator (position ID) for a tracking controller callsign.
+ */
+export function getControllerPositionId(callsign: string | undefined): string | undefined {
+    return getOnlineController(callsign)?.positionId
+        ?? (staticConfig.myCallsign && callsign === staticConfig.myCallsign
+            ? staticConfig.myPositionId
+            : undefined)
+}
+
+/**
+ * Look up primary frequency (MHz) for a controller callsign.
+ */
+export function getFrequencyForCallsign(callsign: string | undefined): number | undefined {
+    if (!callsign) return undefined
+    if (staticConfig.myCallsign && callsign === staticConfig.myCallsign) {
+        return staticConfig.myFrequency
+    }
+    return getOnlineController(callsign)?.frequency
+}
+
+function getOnlineController(callsign: string | undefined): { role: ControllerRole; frequency: number; callsign: string; positionId?: string } | undefined {
+    if (!callsign || !staticConfig.onlineControllers) return undefined
+    const exact = staticConfig.onlineControllers.get(callsign)
+    if (exact) return exact
+    const upper = callsign.toUpperCase()
+    for (const c of staticConfig.onlineControllers.values()) {
+        if (c.callsign.toUpperCase() === upper) return c
+    }
+    return undefined
 }
 
 /**

@@ -16,6 +16,9 @@ export interface UserSettings {
     dclSoundEnabled?: boolean
     flashChangedTimes?: boolean
     flashTsatWindow?: boolean
+    showStripOwnership?: boolean
+    dimOtherOwnedStrips?: boolean
+    transferSoundsEnabled?: boolean
 }
 
 let settingsPath: string | undefined
@@ -76,5 +79,17 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
                 : DEFAULT_UI_SETTINGS.flashChangedTimes,
         flashTsatWindow:
             typeof saved.flashTsatWindow === "boolean" ? saved.flashTsatWindow : DEFAULT_UI_SETTINGS.flashTsatWindow,
+        showStripOwnership:
+            typeof saved.showStripOwnership === "boolean"
+                ? saved.showStripOwnership
+                : DEFAULT_UI_SETTINGS.showStripOwnership,
+        dimOtherOwnedStrips:
+            typeof saved.dimOtherOwnedStrips === "boolean"
+                ? saved.dimOtherOwnedStrips
+                : DEFAULT_UI_SETTINGS.dimOtherOwnedStrips,
+        transferSoundsEnabled:
+            typeof saved.transferSoundsEnabled === "boolean"
+                ? saved.transferSoundsEnabled
+                : DEFAULT_UI_SETTINGS.transferSoundsEnabled,
     }
 }

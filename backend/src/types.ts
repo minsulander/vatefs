@@ -36,7 +36,11 @@ export interface Flight {
 
     // Controller assigned data (from controllerAssignedDataUpdate)
     controller?: string       // Tracking controller callsign
+    /** Tracking controller sector indicator (EuroScope position ID) */
+    controllerId?: string
     handoffTargetController?: string  // Controller receiving handoff (if any)
+    /** Handoff target sector indicator (EuroScope position ID) */
+    handoffTargetControllerId?: string
     nextController?: string       // Next controller callsign
     nextControllerFrequency?: number // Next controller frequency
     squawk?: string
@@ -146,7 +150,9 @@ export interface FlightPlanDataUpdateMessage {
     depRwy?: string
     sid?: string
     controller?: string
+    controllerId?: string
     handoffTargetController?: string
+    handoffTargetControllerId?: string
     nextController?: string
     nextControllerFrequency?: number // Next controller frequency
 }
@@ -155,6 +161,9 @@ export interface ControllerAssignedDataUpdateMessage {
     type: 'controllerAssignedDataUpdate'
     callsign: string
     controller?: string
+    controllerId?: string
+    handoffTargetController?: string
+    handoffTargetControllerId?: string
     squawk?: string
     rfl?: number
     cfl?: number
@@ -208,6 +217,8 @@ export interface MyselfUpdateMessage {
     rating: number
     facility: number
     sector: string
+    /** EuroScope position ID (sector indicator), e.g. "GG" */
+    position?: string
     controller: boolean
     pluginVersion: string
     rwyconfig: Record<string, Record<string, { arr?: boolean; dep?: boolean }>>
@@ -217,7 +228,9 @@ export interface RadarTargetPositionUpdateMessage {
     type: 'radarTargetPositionUpdate'
     callsign: string
     controller?: string
+    controllerId?: string
     handoffTargetController?: string
+    handoffTargetControllerId?: string
     nextController?: string
     nextControllerFrequency?: number // Next controller frequency
     ete?: number

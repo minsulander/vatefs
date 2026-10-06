@@ -11,6 +11,8 @@ interface WavPlayer {
     stop: () => void
 }
 
+export type TransferSoundKind = "request" | "accept" | "refuse"
+
 // Lazy-loaded wav player instance
 let wavPlayer: WavPlayer | null = null
 
@@ -25,20 +27,62 @@ function getWavPlayer(): WavPlayer | null {
     }
 }
 
+function playWav(soundPath: string | null, label: string) {
+    if (!soundPath) return
+
+    const player = getWavPlayer()
+    if (!player) return
+
+    player.play({ path: soundPath }).catch((err: Error) => {
+        console.warn(`Failed to play ${label} sound: ${err.message}`)
+    })
+}
+
+function resolvePluginSound(euroscopeDir: string, fileName: string): string | null {
+    const soundFile = path.join(euroscopeDir, "ESAA", "Plugins", fileName)
+    if (fs.existsSync(soundFile)) return soundFile
+    return null
+}
+
 let dclSoundPath: string | null = null
+let transferRequestSoundPath: string | null = null
+let transferAcceptSoundPath: string | null = null
+let transferRefuseSoundPath: string | null = null
 
 /**
  * Load the DCL notification sound file path from EuroScope directory.
  * Expected location: ESAA/Plugins/TopSkySoundCPDLC.wav
  */
 export function loadDclSound(euroscopeDir: string) {
-    const soundFile = path.join(euroscopeDir, "ESAA", "Plugins", "TopSkySoundCPDLC.wav")
-    if (fs.existsSync(soundFile)) {
-        dclSoundPath = soundFile
-        console.log(`DCL sound loaded: ${soundFile}`)
+    dclSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCPDLC.wav")
+    if (dclSoundPath) {
+        console.log(`DCL sound loaded: ${dclSoundPath}`)
     } else {
-        dclSoundPath = null
-        console.log(`DCL sound file not found: ${soundFile}`)
+        console.log(`DCL sound file not found: ${path.join(euroscopeDir, "ESAA", "Plugins", "TopSkySoundCPDLC.wav")}`)
+    }
+}
+
+/**
+ * Load TopSky coordination sounds used for transfer alerts.
+ * - request: TopSkySoundCoord.wav
+ * - accept:  TopSkySoundCoordACP.wav
+ * - refuse:  TopSkySoundCoordRJC.wav
+ */
+export function loadTransferSounds(euroscopeDir: string) {
+    transferRequestSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoord.wav")
+    transferAcceptSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoordACP.wav")
+    transferRefuseSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoordRJC.wav")
+
+    const loaded = [
+        transferRequestSoundPath && "request",
+        transferAcceptSoundPath && "accept",
+        transferRefuseSoundPath && "refuse",
+    ].filter(Boolean)
+
+    if (loaded.length > 0) {
+        console.log(`Transfer sounds loaded: ${loaded.join(", ")}`)
+    } else {
+        console.log("Transfer sound files not found in ESAA/Plugins (TopSkySoundCoord*.wav)")
     }
 }
 
@@ -47,12 +91,22 @@ export function loadDclSound(euroscopeDir: string) {
  * Does nothing if the sound file was not found.
  */
 export function playDclSound() {
-    if (!dclSoundPath) return
+    playWav(dclSoundPath, "DCL")
+}
 
-    const player = getWavPlayer()
-    if (!player) return
-
-    player.play({ path: dclSoundPath }).catch((err: Error) => {
-        console.warn(`Failed to play DCL sound: ${err.message}`)
-    })
+/**
+ * Play a transfer-related sound (inbound request / accept / refuse).
+ */
+export function playTransferSound(kind: TransferSoundKind) {
+    switch (kind) {
+        case "request":
+            playWav(transferRequestSoundPath, "transfer request")
+            break
+        case "accept":
+            playWav(transferAcceptSoundPath, "transfer accept")
+            break
+        case "refuse":
+            playWav(transferRefuseSoundPath, "transfer refuse")
+            break
+    }
 }

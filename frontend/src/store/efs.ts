@@ -106,11 +106,17 @@ export const useEfsStore = defineStore("efs", () => {
     const dclSoundEnabled = ref(DEFAULT_UI_SETTINGS.dclSoundEnabled)
     const flashChangedTimes = ref(DEFAULT_UI_SETTINGS.flashChangedTimes)
     const flashTsatWindow = ref(DEFAULT_UI_SETTINGS.flashTsatWindow)
+    const showStripOwnership = ref(DEFAULT_UI_SETTINGS.showStripOwnership)
+    const dimOtherOwnedStrips = ref(DEFAULT_UI_SETTINGS.dimOtherOwnedStrips)
+    const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
 
     function applyUserSettings(settings: UiSettings) {
         dclSoundEnabled.value = settings.dclSoundEnabled
         flashChangedTimes.value = settings.flashChangedTimes
         flashTsatWindow.value = settings.flashTsatWindow
+        showStripOwnership.value = settings.showStripOwnership
+        dimOtherOwnedStrips.value = settings.dimOtherOwnedStrips
+        transferSoundsEnabled.value = settings.transferSoundsEnabled
     }
 
     /** Update one or more UI settings (optimistic local apply + persist via backend). */
@@ -118,6 +124,9 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.dclSoundEnabled === 'boolean') dclSoundEnabled.value = partial.dclSoundEnabled
         if (typeof partial.flashChangedTimes === 'boolean') flashChangedTimes.value = partial.flashChangedTimes
         if (typeof partial.flashTsatWindow === 'boolean') flashTsatWindow.value = partial.flashTsatWindow
+        if (typeof partial.showStripOwnership === 'boolean') showStripOwnership.value = partial.showStripOwnership
+        if (typeof partial.dimOtherOwnedStrips === 'boolean') dimOtherOwnedStrips.value = partial.dimOtherOwnedStrips
+        if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
         sendMessage({ type: 'updateUserSettings', settings: partial })
     }
     function connect() {
@@ -1110,6 +1119,9 @@ export const useEfsStore = defineStore("efs", () => {
         dclSoundEnabled,
         flashChangedTimes,
         flashTsatWindow,
+        showStripOwnership,
+        dimOtherOwnedStrips,
+        transferSoundsEnabled,
         updateUserSettings,
     }
 })

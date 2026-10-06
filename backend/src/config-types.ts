@@ -342,6 +342,9 @@ export interface EfsStaticConfig {
     /** My primary frequency in MHz (e.g., 118.505) */
     myFrequency?: number
 
+    /** My EuroScope position ID / sector indicator (e.g. "GG") */
+    myPositionId?: string
+
     /** Radar range in nautical miles for strip filtering (default: 25) */
     radarRangeNm: number
 
@@ -376,7 +379,7 @@ export interface EfsStaticConfig {
     myRole?: ControllerRole
 
     /** Online controllers at our airports, keyed by callsign */
-    onlineControllers?: Map<string, { role: ControllerRole; frequency: number; callsign: string }>
+    onlineControllers?: Map<string, { role: ControllerRole; frequency: number; callsign: string; positionId?: string }>
 
     /**
      * My effective roles per airport, computed from myRole + online controllers.

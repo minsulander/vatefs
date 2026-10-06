@@ -358,6 +358,7 @@ export const mockMyselfUpdate: MyselfUpdateMessage = {
     rating: 5,
     facility: 4, // Tower
     sector: '',
+    position: 'GG',
     controller: true,
     pluginVersion: 'mock',
     rwyconfig: {

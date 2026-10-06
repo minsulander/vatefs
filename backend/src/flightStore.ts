@@ -9,7 +9,7 @@ import type {
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
@@ -69,6 +69,9 @@ export interface ProcessMessageResult {
     /** Scratchpad value to push to EuroScope (e.g. auto-SLOW remark) */
     setScratchValue?: string
 
+    /** Transfer sound to play (handoff request / accept / refuse) */
+    transferSound?: 'request' | 'accept' | 'refuse'
+
     /** Per-strip update details in multi-airport mode */
     multiUpdates?: Array<{
         strip?: FlightStrip
@@ -80,6 +83,44 @@ export interface ProcessMessageResult {
         shiftedCallsigns?: string[]
         isNew?: boolean
     }>
+}
+
+/**
+ * Detect transfer sound events from controller/handoff transitions.
+ */
+function detectTransferSound(
+    prevController: string | undefined,
+    prevHandoff: string | undefined,
+    nextController: string | undefined,
+    nextHandoff: string | undefined,
+    myCallsign: string | undefined
+): 'request' | 'accept' | 'refuse' | undefined {
+    if (!myCallsign) return undefined
+
+    const prevCtrl = prevController || ''
+    const nextCtrl = nextController || ''
+    const prevHo = prevHandoff || ''
+    const nextHo = nextHandoff || ''
+
+    // Inbound handoff request to me
+    if (nextHo === myCallsign && prevHo !== myCallsign) {
+        return 'request'
+    }
+
+    const hadOutbound = prevCtrl === myCallsign && prevHo !== '' && prevHo !== myCallsign
+    if (!hadOutbound) return undefined
+
+    // Other controller assumed our outbound transfer
+    if (nextCtrl !== '' && nextCtrl !== myCallsign) {
+        return 'accept'
+    }
+
+    // Outbound cancelled / refused while we still track
+    if (nextCtrl === myCallsign && nextHo === '') {
+        return 'refuse'
+    }
+
+    return undefined
 }
 
 /**
@@ -326,6 +367,23 @@ class FlightStore {
      * After flight data is updated, create/update/delete strip(s).
      * In multiAirport mode, one strip instance per relevant active airport.
      */
+    private withTransferSound(
+        result: ProcessMessageResult,
+        prevController: string | undefined,
+        prevHandoff: string | undefined,
+        flight: Flight
+    ): ProcessMessageResult {
+        const sound = detectTransferSound(
+            prevController,
+            prevHandoff,
+            flight.controller,
+            flight.handoffTargetController,
+            this.config.myCallsign
+        )
+        if (sound) result.transferSound = sound
+        return result
+    }
+
     private finalizeFlightStrips(
         callsign: string,
         flight: Flight,
@@ -969,6 +1027,8 @@ class FlightStore {
         const callsign = message.callsign
         const flight = this.getOrCreateFlight(callsign)
         const hadRequiredData = flightHasRequiredData(flight)
+        const prevController = flight.controller
+        const prevHandoff = flight.handoffTargetController
 
         // Log significant state changes before applying them
         if (message.controller !== undefined && message.controller !== flight.controller)
@@ -992,16 +1052,31 @@ class FlightStore {
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
         if (message.sid !== undefined) flight.sid = message.sid
-        if (message.controller !== undefined) flight.controller = message.controller
-        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
+        if (message.controller !== undefined) {
+            flight.controller = message.controller
+            if (!message.controller) flight.controllerId = undefined
+        }
+        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
+        if (message.handoffTargetController !== undefined) {
+            flight.handoffTargetController = message.handoffTargetController
+            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
+        }
+        if (message.handoffTargetControllerId !== undefined) {
+            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
+        }
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         flight.lastUpdate = Date.now()
 
-        return this.finalizeFlightStrips(
-            callsign,
-            flight,
-            !hadRequiredData || !this.stripAssignments.get(callsign)
+        return this.withTransferSound(
+            this.finalizeFlightStrips(
+                callsign,
+                flight,
+                !hadRequiredData || !this.stripAssignments.get(callsign)
+            ),
+            prevController,
+            prevHandoff,
+            flight
         )
     }
 
@@ -1012,6 +1087,8 @@ class FlightStore {
         const callsign = message.callsign
         const flight = this.getOrCreateFlight(callsign)
         const hadRequiredData = flightHasRequiredData(flight)
+        const prevController = flight.controller
+        const prevHandoff = flight.handoffTargetController
 
         // Log significant state changes before applying them
         if (message.controller !== undefined && message.controller !== flight.controller)
@@ -1027,7 +1104,18 @@ class FlightStore {
             console.log(`[ASSIGN] ${callsign} missedApproach cleared`)
 
         // Update flight data
-        if (message.controller !== undefined) flight.controller = message.controller
+        if (message.controller !== undefined) {
+            flight.controller = message.controller
+            if (!message.controller) flight.controllerId = undefined
+        }
+        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
+        if (message.handoffTargetController !== undefined) {
+            flight.handoffTargetController = message.handoffTargetController
+            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
+        }
+        if (message.handoffTargetControllerId !== undefined) {
+            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
+        }
         if (message.squawk !== undefined) flight.squawk = message.squawk
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.cfl !== undefined) flight.cfl = message.cfl
@@ -1066,10 +1154,15 @@ class FlightStore {
         // Auto-detect stand from position if not already set
         this.trySetStandFromPosition(flight)
 
-        return this.finalizeFlightStrips(
-            callsign,
-            flight,
-            !hadRequiredData || !this.stripAssignments.get(callsign)
+        return this.withTransferSound(
+            this.finalizeFlightStrips(
+                callsign,
+                flight,
+                !hadRequiredData || !this.stripAssignments.get(callsign)
+            ),
+            prevController,
+            prevHandoff,
+            flight
         )
     }
 
@@ -1147,11 +1240,24 @@ class FlightStore {
             return {}
         }
 
+        const prevController = flight.controller
+        const prevHandoff = flight.handoffTargetController
+
         // Update radar data
         flight.currentAltitude = message.altitude
         if (message.ete !== undefined) flight.ete = message.ete
-        if (message.controller !== undefined) flight.controller = message.controller
-        if (message.handoffTargetController !== undefined) flight.handoffTargetController = message.handoffTargetController
+        if (message.controller !== undefined) {
+            flight.controller = message.controller
+            if (!message.controller) flight.controllerId = undefined
+        }
+        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
+        if (message.handoffTargetController !== undefined) {
+            flight.handoffTargetController = message.handoffTargetController
+            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
+        }
+        if (message.handoffTargetControllerId !== undefined) {
+            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
+        }
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         if (message.latitude !== undefined) flight.latitude = message.latitude
@@ -1181,10 +1287,15 @@ class FlightStore {
             flight.airborne = false
         }
 
-        return this.finalizeFlightStrips(
-            callsign,
-            flight,
-            !this.stripAssignments.get(callsign)
+        return this.withTransferSound(
+            this.finalizeFlightStrips(
+                callsign,
+                flight,
+                !this.stripAssignments.get(callsign)
+            ),
+            prevController,
+            prevHandoff,
+            flight
         )
     }
 
@@ -1323,6 +1434,28 @@ class FlightStore {
         const isTrackedByMe = flight.controller === myCallsign
         const isUntracked = !flight.controller || flight.controller === ''
         const isHandoffToMe = flight.handoffTargetController === myCallsign
+        const handoffTarget = flight.handoffTargetController
+        const hasHandoff = !!handoffTarget && handoffTarget !== ''
+
+        let transferPending: 'in' | 'out' | undefined
+        if (hasHandoff) {
+            if (isHandoffToMe) transferPending = 'in'
+            else if (isTrackedByMe) transferPending = 'out'
+        }
+
+        const ownerSi = (flight.controllerId || getControllerPositionId(flight.controller)) || undefined
+        const transferSi = hasHandoff
+            ? (flight.handoffTargetControllerId || getControllerPositionId(handoffTarget) || undefined)
+            : undefined
+        const formatFreq = (mhz: number | undefined) =>
+            mhz != null && mhz > 0 && mhz < 199 ? mhz.toFixed(3) : undefined
+        const ownerFrequency = !isUntracked ? formatFreq(getFrequencyForCallsign(flight.controller)) : undefined
+        const transferFrequency = hasHandoff
+            ? formatFreq(
+                getFrequencyForCallsign(handoffTarget)
+                ?? (handoffTarget === flight.nextController ? flight.nextControllerFrequency : undefined)
+              )
+            : undefined
 
         if (!clearedForTakeoff) {
             if (isTrackedByMe) {
@@ -1467,6 +1600,14 @@ class FlightStore {
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
             isAssumed: isTrackedByMe || undefined,
+            ownerSi,
+            ownedByOther: (!isTrackedByMe && !isUntracked) || undefined,
+            transferPending,
+            transferSi: transferSi || undefined,
+            ownerCallsign: (!isUntracked && flight.controller) || undefined,
+            ownerFrequency,
+            transferCallsign: hasHandoff ? handoffTarget : undefined,
+            transferFrequency,
             groundstate: flight.groundstate || undefined,
             airport
         }

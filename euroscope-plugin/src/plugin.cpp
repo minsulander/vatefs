@@ -122,11 +122,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         if (FlightPlan.GetSimulated()) out << " simulated";
 
-        const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
-        if (trackingController && strlen(trackingController) < 20) {
-            if (strlen(trackingController) > 0) out << " controller " << trackingController;
-            SetJsonIfValidUtf8(message, "controller", trackingController);
-        }
+        AppendOwnershipFields(message, FlightPlan, &out);
         const char *nextController = FlightPlan.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
             if (strlen(nextController) > 0) out << " nextController " << nextController;
@@ -136,12 +132,6 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
                 message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
             else
                 message["nextControllerFrequency"] = 0;
-        }
-        const char *handoffTargetController = FlightPlan.GetHandoffTargetControllerCallsign();
-        if (handoffTargetController && strlen(handoffTargetController) < 20) {
-            if (strlen(handoffTargetController) > 0)
-                out << " handoffTargetController " << handoffTargetController;
-            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
         }
 
         const char *aircraftType = fpData.GetAircraftFPType();
@@ -241,11 +231,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         message["type"] = "controllerAssignedDataUpdate";
         SetJsonIfValidUtf8(message, "callsign", callsign.c_str());
 
-        const char *controllerCallsign = FlightPlan.GetTrackingControllerCallsign();
-        if (controllerCallsign && strlen(controllerCallsign) > 0 && strlen(controllerCallsign) < 20) {
-            SetJsonIfValidUtf8(message, "controller", controllerCallsign);
-            out << " controller " << controllerCallsign;
-        }
+        AppendOwnershipFields(message, FlightPlan, &out);
 
         const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData =
         FlightPlan.GetControllerAssignedData();
@@ -508,10 +494,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     }
     auto fp = RadarTarget.GetCorrelatedFlightPlan();
     if (fp.IsValid()) {
-        const char *trackingCallsign = fp.GetTrackingControllerCallsign();
-        if (trackingCallsign && strlen(trackingCallsign) < 20) {
-            SetJsonIfValidUtf8(message, "controller", trackingCallsign);
-        }
+        AppendOwnershipFields(message, fp);
         const char *nextController = fp.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
             SetJsonIfValidUtf8(message, "nextController", nextController);
@@ -520,10 +503,6 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
                 message["nextControllerFrequency"] = nextCon.GetPrimaryFrequency();
             else
                 message["nextControllerFrequency"] = 0;
-        }
-        const char *handoffTargetController = fp.GetHandoffTargetControllerCallsign();
-        if (handoffTargetController && strlen(handoffTargetController) < 20) {
-            SetJsonIfValidUtf8(message, "handoffTargetController", handoffTargetController);
         }
         int ete = fp.GetPositionPredictions().GetPointsNumber();
         if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
@@ -582,9 +561,20 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         bool handoffToMe = handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
                            strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
         bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
+        bool trackedByMe = fp.GetTrackingControllerIsMe();
+        bool outgoingHandoff = trackedByMe && handoffTarget && handoffTarget[0] != '\0' && !handoffToMe;
         if (handoffToMe) {
             fp.AcceptHandoff();
             DisplayMessage("Accepted handoff for " + callsign);
+            return true;
+        }
+        if (outgoingHandoff) {
+            // Re-assume cancels a pending outbound handoff we initiated
+            bool ok = fp.StartTracking();
+            if (ok)
+                DisplayMessage("Cancelled handoff for " + callsign);
+            else
+                DisplayMessage("Failed to cancel handoff for " + callsign);
             return true;
         }
         if (untracked) {
@@ -1280,6 +1270,7 @@ void VatEFSPlugin::UpdateMyself()
         message["rating"] = me.GetRating();
         message["facility"] = me.GetFacility();
         SetJsonIfValidUtf8(message, "sector", me.GetSectorFileName());
+        SetJsonIfValidUtf8(message, "position", me.GetPositionId());
         message["controller"] = me.IsController();
         message["pluginVersion"] = PLUGIN_VERSION;
 
@@ -1686,10 +1677,20 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
                             strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
                             bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
+                            bool trackedByMe = fp.GetTrackingControllerIsMe();
+                            bool outgoingHandoff = trackedByMe && handoffTarget && handoffTarget[0] != '\0' && !handoffToMe;
                             if (handoffToMe) {
                                 fp.AcceptHandoff();
                                 DebugMessage("Accepted handoff for " + callsign);
                                 OnFlightPlanFlightPlanDataUpdate(fp);
+                            } else if (outgoingHandoff) {
+                                // Re-assume cancels a pending outbound handoff we initiated
+                                bool ok = fp.StartTracking();
+                                if (ok) {
+                                    DebugMessage("Cancelled handoff for " + callsign);
+                                    OnFlightPlanFlightPlanDataUpdate(fp);
+                                } else
+                                    DisplayMessage("Failed to cancel handoff for " + callsign);
                             } else if (untracked) {
                                 bool ok = fp.StartTracking();
                                 if (ok) {
@@ -2259,6 +2260,45 @@ std::string VatEFSPlugin::SanitizeUtf8(const char *str)
     for (size_t i = 0; i < seq.size(); i++)
         result += '?';
     return result;
+}
+
+void VatEFSPlugin::AppendOwnershipFields(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan,
+                                         std::stringstream *out)
+{
+    auto resolveSi = [this](const char *esId, const char *callsign) -> std::string {
+        // Prefer EuroScope tracking/handoff position ID; fall back to ControllerSelect
+        if (esId && esId[0] != '\0' && strlen(esId) < 10 && IsValidUtf8(esId)) {
+            return esId;
+        }
+        if (callsign && callsign[0] != '\0' && strlen(callsign) < 20) {
+            auto con = ControllerSelect(callsign);
+            if (con.IsValid()) {
+                const char *posId = con.GetPositionId();
+                if (posId && posId[0] != '\0' && strlen(posId) < 10 && IsValidUtf8(posId)) {
+                    return posId;
+                }
+            }
+        }
+        return "";
+    };
+
+    const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
+    if (trackingController && strlen(trackingController) < 20) {
+        if (out && trackingController[0] != '\0') *out << " controller " << trackingController;
+        SetJsonIfValidUtf8(message, "controller", trackingController);
+        std::string si = resolveSi(FlightPlan.GetTrackingControllerId(), trackingController);
+        SetJsonIfValidUtf8(message, "controllerId", si.c_str());
+        if (out && !si.empty()) *out << " controllerId " << si;
+    }
+
+    const char *handoffTarget = FlightPlan.GetHandoffTargetControllerCallsign();
+    if (handoffTarget && strlen(handoffTarget) < 20) {
+        if (out && handoffTarget[0] != '\0') *out << " handoffTargetController " << handoffTarget;
+        SetJsonIfValidUtf8(message, "handoffTargetController", handoffTarget);
+        std::string hoSi = resolveSi(FlightPlan.GetHandoffTargetControllerId(), handoffTarget);
+        SetJsonIfValidUtf8(message, "handoffTargetControllerId", hoSi.c_str());
+        if (out && !hoSi.empty()) *out << " handoffTargetControllerId " << hoSi;
+    }
 }
 
 void VatEFSPlugin::SetJsonIfValidUtf8(nlohmann::json &j, const char *key, const char *value)

@@ -99,6 +99,16 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "cdmSts",
     "ctot",
     "ctotReason",
+    // Ownership / transfer — SI and pending handoff must refresh clients
+    "isAssumed",
+    "ownerSi",
+    "ownedByOther",
+    "transferPending",
+    "transferSi",
+    "ownerCallsign",
+    "ownerFrequency",
+    "transferCallsign",
+    "transferFrequency",
 ]
 
 /**
@@ -211,9 +221,11 @@ class EfsStore {
         shiftedGaps?: Gap[]
         deletedGapKeys?: string[]
         setScratchValue?: string
+        transferSound?: ProcessMessageResult['transferSound']
         multiUpdates?: ProcessMessageResult['multiUpdates']
     } {
         const result = flightStore.processMessage(message)
+        const transferSound = result.transferSound
 
         // Multi-airport: apply each update
         if (result.multiUpdates && result.multiUpdates.length > 0) {
@@ -268,6 +280,7 @@ class EfsStore {
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
+                transferSound,
                 multiUpdates: result.multiUpdates
             }
         }
@@ -282,13 +295,13 @@ class EfsStore {
                     changed.push(strip)
                 }
             }
-            return changed.length > 0 ? { strips: changed } : {}
+            return changed.length > 0 ? { strips: changed, transferSound } : { transferSound }
         }
 
         if (result.deleteStripId) {
             this.strips.delete(result.deleteStripId)
             this.deletedStrips.delete(result.deleteStripId)
-            return { deleteStripId: result.deleteStripId }
+            return { deleteStripId: result.deleteStripId, transferSound }
         }
 
         if (result.deletedStripIds && result.deletedStripIds.length > 0) {
@@ -296,7 +309,7 @@ class EfsStore {
                 this.strips.delete(id)
                 this.deletedStrips.delete(id)
             }
-            return { deletedStripIds: result.deletedStripIds, deleteStripId: result.deletedStripIds[0], softDeleted: true }
+            return { deletedStripIds: result.deletedStripIds, deleteStripId: result.deletedStripIds[0], softDeleted: true, transferSound }
         }
 
         // Handle soft-delete: move strip to deletedStrips map
@@ -306,9 +319,9 @@ class EfsStore {
             if (existingStrip) {
                 this.deletedStrips.set(stripId, existingStrip)
                 this.strips.delete(stripId)
-                return { deleteStripId: stripId, softDeleted: true }
+                return { deleteStripId: stripId, softDeleted: true, transferSound }
             }
-            return { softDeleted: true }
+            return { softDeleted: true, transferSound }
         }
 
         // Handle restore: move strip back from deletedStrips
@@ -325,7 +338,7 @@ class EfsStore {
 
             // If nothing changed and no section change, skip the update
             if (!stripChanged && !result.sectionChanged && !result.restored) {
-                return {}
+                return transferSound ? { transferSound } : {}
             }
 
             // Log which fields changed for non-trivial updates (helps trace misbehavior to code)
@@ -376,11 +389,12 @@ class EfsStore {
                 shiftedStrips,
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
-                setScratchValue: result.setScratchValue
+                setScratchValue: result.setScratchValue,
+                transferSound
             }
         }
 
-        return {}
+        return transferSound ? { transferSound } : {}
     }
 
     /**

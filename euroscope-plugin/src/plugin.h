@@ -91,6 +91,9 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     static std::string SanitizeUtf8(const char* str);
     void SetJsonIfValidUtf8(nlohmann::json& j, const char* key, const char* value);
     void SetJsonWithUtf8Replace(nlohmann::json& j, const char* key, const char* value);
+    /** Append tracking/handoff callsigns + sector indicators (SI) from EuroScope */
+    void AppendOwnershipFields(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan,
+                               std::stringstream *out = nullptr);
 };
 
 class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen

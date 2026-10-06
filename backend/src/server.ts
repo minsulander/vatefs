@@ -41,7 +41,7 @@ import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout } from "./config.js"
 import type { EuroscopeCommand } from "./config.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
@@ -61,7 +61,7 @@ import { AtisService } from "./atis-service.js"
 import type { DclStatus } from "./hoppie-service.js"
 import { ViffService } from "./viff-service.js"
 import type { ViffPollResult } from "./viff-service.js"
-import { loadDclSound, playDclSound } from "./sound.js"
+import { loadDclSound, playDclSound, loadTransferSounds, playTransferSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
 import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
@@ -209,6 +209,7 @@ if (EUROSCOPE_DIR) {
     loadHoppieConfig(EUROSCOPE_DIR)
     // Load DCL notification sound
     loadDclSound(EUROSCOPE_DIR)
+    loadTransferSounds(EUROSCOPE_DIR)
     // Initialize user settings persistence
     initUserSettings(EUROSCOPE_DIR)
     const savedSettings = loadUserSettings()
@@ -501,6 +502,7 @@ if (cliArgs.mock) {
     }
     setIsController(mockMyselfUpdate.controller)
     setMyFrequency(mockMyselfUpdate.frequency)
+    setMyPositionId(mockMyselfUpdate.position ?? 'GG')
 
     // Extract active runways from mock rwyconfig
     if (mockMyselfUpdate.rwyconfig) {
@@ -1484,11 +1486,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    if (flight && targetCallsign) {
+                        flight.handoffTargetController = targetCallsign
+                    }
                 // XFER: initiate handoff to the appropriate next controller
                 } else if (message.action === "XFER") {
                     const flight = flightStore.getFlight(strip.callsign)
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    // Optimistic: show pending outbound transfer immediately
+                    if (flight && targetCallsign) {
+                        flight.handoffTargetController = targetCallsign
+                    }
                 // PARK is a compound action: set PARK groundstate + release
                 } else if (message.action === "PARK") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "PARK" }))
@@ -1539,6 +1548,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         case "ASSUME":
                             flight.controller = staticConfig.myCallsign
+                            flight.controllerId = staticConfig.myPositionId
+                            flight.handoffTargetController = ""
                             break
                         case "resetSquawk": {
                             const sq = String(Math.floor(2000 + Math.random() * 5777)).padStart(4, "0")
@@ -1571,15 +1582,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.clearedToLand = false
                             flight.missedApproach = true
                             break
-                        case "XFER":
-                            flight.controller = ""
-                            flight.handoffTargetController = ""
+                        case "XFER": {
+                            const target = resolveXferTarget(strip, flight)
+                            flight.handoffTargetController = target || ""
                             break
-                        case "READY":
+                        }
+                        case "READY": {
                             flight.groundstate = "DE-ICE"
-                            flight.controller = ""
-                            flight.handoffTargetController = ""
+                            const readyTarget = resolveXferTarget(strip, flight)
+                            flight.handoffTargetController = readyTarget || ""
                             break
+                        }
                         case "FRQ":
                             flight.groundstate = "ONFREQ"
                             break
@@ -1603,10 +1616,16 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
 
                     reevaluateAndBroadcast(strip.callsign)
-                } else if (message.action === "toggleClearanceFlag" || message.action === "ASSUME") {
+                } else if (
+                    message.action === "toggleClearanceFlag" ||
+                    message.action === "ASSUME" ||
+                    message.action === "XFER" ||
+                    message.action === "READY"
+                ) {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
                         flight.controller = staticConfig.myCallsign
+                        flight.controllerId = staticConfig.myPositionId
                         flight.handoffTargetController = ""
                     }
                     reevaluateAndBroadcast(strip.callsign)
@@ -1742,6 +1761,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {
                 flight.controller = undefined
+                flight.controllerId = undefined
                 const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                 if (updatedStrip) {
                     store.updateStripFromFlight(updatedStrip)
@@ -1765,6 +1785,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 targetCallsign: message.targetCallsign
             } satisfies OutboundPluginCommand))
             console.log(`[TRANSFER] Transferred ${strip.callsign} to ${message.targetCallsign}`)
+
+            // Optimistic pending outbound transfer
+            const flight = flightStore.getFlight(strip.callsign)
+            if (flight) {
+                flight.handoffTargetController = message.targetCallsign
+                reevaluateAndBroadcast(strip.callsign)
+            }
             break
         }
 
@@ -1935,6 +1962,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (typeof incoming.flashTsatWindow === "boolean") {
                 currentUiSettings.flashTsatWindow = incoming.flashTsatWindow
                 update.flashTsatWindow = incoming.flashTsatWindow
+            }
+            if (typeof incoming.showStripOwnership === "boolean") {
+                currentUiSettings.showStripOwnership = incoming.showStripOwnership
+                update.showStripOwnership = incoming.showStripOwnership
+            }
+            if (typeof incoming.dimOtherOwnedStrips === "boolean") {
+                currentUiSettings.dimOtherOwnedStrips = incoming.dimOtherOwnedStrips
+                update.dimOtherOwnedStrips = incoming.dimOtherOwnedStrips
+            }
+            if (typeof incoming.transferSoundsEnabled === "boolean") {
+                currentUiSettings.transferSoundsEnabled = incoming.transferSoundsEnabled
+                update.transferSoundsEnabled = incoming.transferSoundsEnabled
             }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
@@ -2510,6 +2549,7 @@ udpIn.on("message", (msg, rinfo) => {
             setMyAirports([])
             setIsController(false)
             setMyFrequency(undefined)
+            setMyPositionId(undefined)
             clearOnlineControllers()
             pendingPluginRefreshAfterReconnect = true
             broadcastStatus()
@@ -2534,6 +2574,14 @@ udpIn.on("message", (msg, rinfo) => {
         if (data.type === "controllerPositionUpdate") {
             const msg = data as ControllerPositionUpdateMessage
             if (msg.me) {
+                // Capture our SI from existing plugin messages (position is already sent)
+                if (msg.position) {
+                    const prevSi = staticConfig.myPositionId
+                    setMyPositionId(msg.position)
+                    if (msg.position !== prevSi) {
+                        reprocessAllStripsForRoleChange("My position SI updated")
+                    }
+                }
                 // Ensure self is never left in onlineControllers after a position switch
                 if (removeOnlineController(msg.callsign)) {
                     const rolesLog = staticConfig.myRolesByAirport
@@ -2545,7 +2593,7 @@ udpIn.on("message", (msg, rinfo) => {
                 return
             }
             if (msg.controller) {
-                const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports)
+                const changed = updateOnlineController(msg.callsign, msg.frequency, staticConfig.myAirports, msg.position)
                 // Always broadcast controllers list when a controller connects (even if roles didn't change)
                 broadcastControllers()
                 if (changed) {
@@ -2612,6 +2660,10 @@ udpIn.on("message", (msg, rinfo) => {
                 if (frequencyChanged) {
                     console.log(`My frequency changed: ${previousFrequency!.toFixed(3)} -> ${msg.frequency.toFixed(3)} (AoR)`)
                 }
+            }
+
+            if (typeof msg.position === "string") {
+                setMyPositionId(msg.position)
             }
 
             // Extract airports from rwyconfig - any airport with arr or dep set
@@ -2736,6 +2788,9 @@ udpIn.on("message", (msg, rinfo) => {
 
         if (result) {
             // Plugin message was processed - only broadcast/log if there was an actual change
+            if (result.transferSound && currentUiSettings.showStripOwnership && currentUiSettings.transferSoundsEnabled) {
+                playTransferSound(result.transferSound)
+            }
             if (result.deletedStripIds && result.deletedStripIds.length > 0) {
                 for (const id of result.deletedStripIds) {
                     broadcastStripDelete(id)

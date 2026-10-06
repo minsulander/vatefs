@@ -20,6 +20,9 @@
       <v-list-item v-if="!isNote" @click="onFplClick">
         <v-list-item-title>Flightplan</v-list-item-title>
       </v-list-item>
+      <v-list-item v-if="strip.transferPending === 'out' && !isNote && store.isController" @click="onAssumeClick">
+        <v-list-item-title>Assume</v-list-item-title>
+      </v-list-item>
       <v-list-item v-if="strip.isAssumed && !isNote" @click="onReleaseClick">
         <v-list-item-title>Release</v-list-item-title>
       </v-list-item>
@@ -107,7 +110,7 @@
   </v-menu>
 
   <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving }]" :style="stripStyle"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimOwnership, 'transfer-pending-in': isTransferIn, 'transfer-pending-out': isTransferOut }]" :style="stripStyle"
     :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
     @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
@@ -142,6 +145,12 @@
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
+        <span
+          v-if="showOwnerSi"
+          class="owner-si"
+          :class="ownerSiClass"
+          :title="ownerSiTitle"
+        >{{ ownerSiText }}</span>
       </div>
       <div class="squawk-stand-row">
         <span class="squawk" v-if="strip.squawk">{{ strip.squawk }}</span>
@@ -446,6 +455,45 @@ const deleteDialogOpen = ref(false)
 
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
+const showOwnerSi = computed(() => {
+  if (!store.showStripOwnership || isNote.value) return false
+  if (props.strip.transferPending) return !!props.strip.transferSi
+  return !!props.strip.ownerSi
+})
+const isTransferIn = computed(() => !isNote.value && props.strip.transferPending === 'in')
+const isTransferOut = computed(() => !isNote.value && props.strip.transferPending === 'out')
+/** Dim other-owned strips only when ownership display (and dimming) are enabled */
+const shouldDimOwnership = computed(() =>
+  store.showStripOwnership &&
+  store.dimOtherOwnedStrips &&
+  !!props.strip.ownedByOther &&
+  !isTransferIn.value &&
+  !isNote.value
+)
+/** Pending transfer: destination SI only (arrow via CSS); otherwise current owner SI */
+const ownerSiText = computed(() => {
+  if (props.strip.transferPending && props.strip.transferSi) {
+    return props.strip.transferSi
+  }
+  return props.strip.ownerSi || ''
+})
+const ownerSiClass = computed(() => ({
+  'si-transfer-in': isTransferIn.value,
+  'si-transfer-out': isTransferOut.value,
+}))
+const ownerSiTitle = computed(() => {
+  const withFreq = (callsign: string | undefined, freq: string | undefined, fallbackSi: string | undefined) => {
+    const who = callsign || fallbackSi
+    if (!who) return undefined
+    return freq ? `${who} ${freq}` : who
+  }
+  if (props.strip.transferPending) {
+    const target = withFreq(props.strip.transferCallsign, props.strip.transferFrequency, props.strip.transferSi)
+    return target ? `Transfer to ${target}` : 'Pending transfer'
+  }
+  const owner = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
+  return owner ? `Tracked by ${owner}` : undefined
+})
 const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
 const effectiveActionCount = computed(() => props.strip.actions?.length ?? 0)
 const noteEditing = ref(false)
@@ -1409,6 +1457,12 @@ function onReleaseClick() {
   store.releaseStrip(props.strip.id)
 }
 
+/** Cancel pending outbound handoff by re-assuming */
+function onAssumeClick() {
+  menuOpen.value = false
+  store.sendStripAction(props.strip.id, 'ASSUME')
+}
+
 function onTransferClick(targetCallsign: string) {
   menuOpen.value = false
   transferMenuOpen.value = false
@@ -1519,6 +1573,57 @@ function onGroundStateClick(action: string) {
   font-size: 9px;
   color: #555;
   margin-top: 1px;
+  align-items: baseline;
+  position: relative;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 1.5em; /* reserved for SI (arrow overlays, does not expand) */
+}
+
+.owner-si {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-weight: 700;
+  font-size: 10px;
+  color: #003399;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.owner-si.si-transfer-in::before,
+.owner-si.si-transfer-out::before {
+  content: '→';
+  position: absolute;
+  right: 100%;
+  top: 0;
+}
+
+.owner-si.si-transfer-in {
+  color: #0a7a28;
+}
+
+.owner-si.si-transfer-out {
+  color: #b05a00;
+}
+
+.flight-strip.owned-by-other {
+  opacity: 0.55;
+}
+
+.flight-strip.owned-by-other:hover {
+  opacity: 0.75;
+}
+
+.flight-strip.transfer-pending-in {
+  opacity: 1;
+  box-shadow: inset 0 0 0 2px #2e8b57;
+}
+
+.flight-strip.transfer-pending-out {
+  box-shadow: inset 0 0 0 2px #c47a00;
 }
 
 .flight-rules {
@@ -1528,6 +1633,9 @@ function onGroundStateClick(action: string) {
 
 .aircraft-type {
   color: #666;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .squawk-stand-row {
