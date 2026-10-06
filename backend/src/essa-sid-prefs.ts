@@ -71,6 +71,8 @@ export function findRouteExit(route: string | undefined, exits: Iterable<string>
         if (!token) continue
         if (/^\d{1,2}[LRC]?$/i.test(token)) continue
         if (slashIdx >= 0 && /^[A-Z]{4}$/.test(token)) continue
+        // ICAO speed/level group (N0450F350, M078F100, …)
+        if (/^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(token)) continue
         if (exitSet.has(token)) return token
         // Track SID in route: 240·PETEV or 190·120·BABAP
         if (token.includes(TRACK_SEP)) {
