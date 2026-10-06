@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref, computed } from "vue"
 import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings } from "@vatefs/common"
-import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS } from "@vatefs/common"
+import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS, resolveEssaRwyConfigId } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -105,6 +105,20 @@ export const useEfsStore = defineStore("efs", () => {
 
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
+
+    /** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
+    const essaEsRunways = computed(() => {
+        const info = atisInfo.value.find(a => a.airport === 'ESSA') ?? atisInfo.value[0]
+        if (!info) return { arr: [] as string[], dep: [] as string[] }
+        return { arr: info.arrRunways ?? [], dep: info.depRunways ?? [] }
+    })
+
+    /** Resolved ESSA RWY config id (manual override or ES + night/day auto) */
+    const essaRwyConfigIdResolved = computed(() => {
+        if (essaRwyConfigManual.value && essaRwyConfigId.value) return essaRwyConfigId.value
+        const { arr, dep } = essaEsRunways.value
+        return resolveEssaRwyConfigId(arr, dep)
+    })
 
     // Configuration
     const availableConfigs = ref<ConfigInfo[]>([])
@@ -1108,6 +1122,7 @@ export const useEfsStore = defineStore("efs", () => {
         setEssaRoles,
         essaRwyConfigId,
         essaRwyConfigManual,
+        essaRwyConfigIdResolved,
         setEssaRwyConfig,
         syncEssaRwyConfigFromEs,
         activeAirports,

@@ -53,6 +53,7 @@ import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
+import { loadEssaSidPrefs, resolvePreferredSid } from "./essa-sid-prefs.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
@@ -153,6 +154,10 @@ if (fs.existsSync(slowAircraftFile)) {
 } else {
     console.warn(`Slow aircraft config not found: ${slowAircraftFile}`)
 }
+
+// ESSA Appendix A/B preferred + SLOW SID tables
+const essaSidPrefsFile = path.join(dataDir, "essa-sid-prefs.json")
+loadEssaSidPrefs(essaSidPrefsFile)
 
 /**
  * Validate that a directory is a EuroScope install: must contain *.prf file.
@@ -2509,6 +2514,29 @@ app.get("/api/sidalt", (req, res) => {
 
     const altitude = getSidAltitude(airport, sid)
     res.json({ altitude: altitude ?? null })
+})
+
+/**
+ * ESSA preferred SID for active runway config (+ SLOW track/HAPZI when slow=1).
+ * Query: airport, runway, config, route?, slow=0|1
+ */
+app.get("/api/preferred-sid", (req, res) => {
+    const airport = req.query.airport as string
+    const runway = req.query.runway as string
+    const configId = req.query.config as string
+    const route = (req.query.route as string) || undefined
+    const slow = req.query.slow === "1" || req.query.slow === "true"
+
+    if (!airport || !runway || !configId) {
+        res.status(400).json({
+            error: "Missing parameters",
+            usage: "/api/preferred-sid?airport=ESSA&runway=19L&config=9A&route=DCT%20RESNA&slow=0",
+        })
+        return
+    }
+
+    const result = resolvePreferredSid({ airport, runway, configId, route, slow })
+    res.json(result)
 })
 
 app.get("/api/withinctr", (req, res) => {

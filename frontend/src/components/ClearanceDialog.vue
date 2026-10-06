@@ -167,6 +167,28 @@ const dropdownScrollRef = ref<HTMLElement | null>(null)
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
 const availableRunways = ref<string[]>([])
 const availableSids = ref<{ name: string }[]>([])
+/** Preferred SID sort group from /api/preferred-sid (letter-group or SLOW tracks) */
+const preferredSidSortGroup = ref<string[]>([])
+const preferredSidMatched = ref<string | null>(null)
+
+function isSlowForClr(): boolean {
+  return !!props.strip.isSlow || props.strip.remarks === 'SLOW'
+}
+
+function isEssaIfrDep(): boolean {
+  return (
+    props.strip.adep === 'ESSA' &&
+    props.strip.flightRules !== 'V' &&
+    (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+  )
+}
+
+/** True when strip has no real ESE SID assigned yet (route-fix display counts as empty). */
+function sidNeedsPreferred(eseNames: Set<string>): boolean {
+  const sid = props.strip.sid
+  if (!sid) return true
+  return !eseNames.has(sid)
+}
 
 // Fetch runways for the departure airport
 async function fetchRunways() {
@@ -202,6 +224,60 @@ async function fetchSids() {
   }
 }
 
+/**
+ * ESSA config-aware preferred SID (or SLOW track/HAPZI). Only assigns when SID empty.
+ */
+async function applyPreferredSid() {
+  preferredSidSortGroup.value = []
+  preferredSidMatched.value = null
+
+  if (!isEssaIfrDep()) return
+
+  const airport = props.strip.adep
+  const runway = props.strip.runway
+  const configId = store.essaRwyConfigIdResolved
+  if (!airport || !runway || !configId) return
+
+  const eseNames = new Set(availableSids.value.map(s => s.name))
+  const shouldAssign = sidNeedsPreferred(eseNames) && !!props.strip.canEditClearance
+
+  try {
+    const params = new URLSearchParams({
+      airport,
+      runway,
+      config: configId,
+      slow: isSlowForClr() ? '1' : '0',
+    })
+    if (props.strip.route) params.set('route', props.strip.route)
+
+    const res = await fetch(`/api/preferred-sid?${params}`)
+    if (!res.ok) return
+    const data = await res.json() as { sid: string | null; sortGroup?: string[] }
+    preferredSidSortGroup.value = data.sortGroup ?? []
+    preferredSidMatched.value = data.sid
+
+    if (shouldAssign && data.sid) {
+      store.sendAssignment(props.strip.id, 'assignSid', data.sid)
+      // Strip SID may not update until WS round-trip — fetch CFL for the new SID directly
+      if (!props.strip.clearedAltitude) {
+        try {
+          const altRes = await fetch(`/api/sidalt?airport=${airport}&sid=${encodeURIComponent(data.sid)}`)
+          if (altRes.ok) {
+            const altData = await altRes.json()
+            if (altData.altitude) {
+              store.sendAssignment(props.strip.id, 'assignCfl', String(altData.altitude))
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // Fetch the SID altitude and assign CFL if not already set
 async function applyDefaultCfl() {
   const airport = props.strip.adep
@@ -228,20 +304,25 @@ function applyDefaultSquawk() {
 }
 
 // When dialog opens, fetch data and reset remarks
-watch(dialogOpen, (open) => {
+watch(dialogOpen, async (open) => {
   if (open) {
+    remarks.value = ''
+    preferredSidSortGroup.value = []
+    preferredSidMatched.value = null
     fetchRunways()
-    fetchSids()
     fetchDestinationName()
     fetchDepartureName()
+    await fetchSids()
+    await applyPreferredSid()
     applyDefaultCfl()
     applyDefaultSquawk()
-    remarks.value = ''
   } else {
     activeDropdown.value = null
     destinationName.value = null
     departureName.value = null
     showRoute.value = false
+    preferredSidSortGroup.value = []
+    preferredSidMatched.value = null
   }
 })
 
@@ -295,9 +376,24 @@ const dropdownOptions = computed(() => {
       }))
     case 'sid': {
       const isVfr = props.strip.flightRules === 'V'
-      const sids = isVfr
+      let sids = isVfr
         ? availableSids.value.filter(sid => sid.name.startsWith('VFR'))
-        : availableSids.value
+        : [...availableSids.value]
+      if (!isVfr && preferredSidSortGroup.value.length > 0) {
+        const groupSet = new Set(preferredSidSortGroup.value)
+        const matched = preferredSidMatched.value
+        sids.sort((a, b) => {
+          const aIn = groupSet.has(a.name)
+          const bIn = groupSet.has(b.name)
+          if (aIn && !bIn) return -1
+          if (!aIn && bIn) return 1
+          if (aIn && bIn && matched) {
+            if (a.name === matched && b.name !== matched) return -1
+            if (b.name === matched && a.name !== matched) return 1
+          }
+          return 0
+        })
+      }
       return sids.map(sid => ({
         label: sid.name,
         value: sid.name,
