@@ -20,7 +20,7 @@
       <div v-if="showRoute && strip.route" class="clnc-route">{{ strip.route }}</div>
       <div class="clnc-fields">
         <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value clnc-clickable" @click="openDropdown('rwy')">{{ strip.runway || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ strip.sid || '---' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ store.displaySidForStrip(strip) || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
         <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value clnc-clickable" @click="openDropdown('cfl')">{{ strip.clearedAltitude || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
@@ -183,13 +183,6 @@ function isEssaIfrDep(): boolean {
   )
 }
 
-/** True when strip has no real ESE SID assigned yet (route-fix display counts as empty). */
-function sidNeedsPreferred(eseNames: Set<string>): boolean {
-  const sid = props.strip.sid
-  if (!sid) return true
-  return !eseNames.has(sid)
-}
-
 // Fetch runways for the departure airport
 async function fetchRunways() {
   const airport = props.strip.adep
@@ -225,7 +218,9 @@ async function fetchSids() {
 }
 
 /**
- * ESSA config-aware preferred SID (or SLOW track/HAPZI). Only assigns when SID empty.
+ * ESSA config-aware preferred SID (or SLOW track/HAPZI).
+ * Reassigns when uncleared (clearance flag not set), so RWY config changes
+ * (e.g. 08-LT → 08-RT) update L/R letter groups. Leaves cleared strips alone.
  */
 async function applyPreferredSid() {
   preferredSidSortGroup.value = []
@@ -238,8 +233,9 @@ async function applyPreferredSid() {
   const configId = store.essaRwyConfigIdResolved
   if (!airport || !runway || !configId) return
 
-  const eseNames = new Set(availableSids.value.map(s => s.name))
-  const shouldAssign = sidNeedsPreferred(eseNames) && !!props.strip.canEditClearance
+  // Already cleared — keep assigned SID
+  const mayReassign =
+    !props.strip.clearance && !!props.strip.canEditClearance
 
   try {
     const params = new URLSearchParams({
@@ -256,21 +252,19 @@ async function applyPreferredSid() {
     preferredSidSortGroup.value = data.sortGroup ?? []
     preferredSidMatched.value = data.sid
 
-    if (shouldAssign && data.sid) {
+    if (mayReassign && data.sid && data.sid !== props.strip.sid) {
       store.sendAssignment(props.strip.id, 'assignSid', data.sid)
       // Strip SID may not update until WS round-trip — fetch CFL for the new SID directly
-      if (!props.strip.clearedAltitude) {
-        try {
-          const altRes = await fetch(`/api/sidalt?airport=${airport}&sid=${encodeURIComponent(data.sid)}`)
-          if (altRes.ok) {
-            const altData = await altRes.json()
-            if (altData.altitude) {
-              store.sendAssignment(props.strip.id, 'assignCfl', String(altData.altitude))
-            }
+      try {
+        const altRes = await fetch(`/api/sidalt?airport=${airport}&sid=${encodeURIComponent(data.sid)}`)
+        if (altRes.ok) {
+          const altData = await altRes.json()
+          if (altData.altitude) {
+            store.sendAssignment(props.strip.id, 'assignCfl', String(altData.altitude))
           }
-        } catch {
-          // ignore
         }
+      } catch {
+        // ignore
       }
     }
   } catch {

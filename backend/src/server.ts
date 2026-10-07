@@ -43,7 +43,11 @@ import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
 import type { EuroscopeCommand, EssaPositionRole } from "./config.js"
-import { normalizeEssaRoles } from "./essa-roles.js"
+import {
+    normalizeEssaRoles,
+    remapBayIdsToLayout,
+    remapStripsForEssaGndOnly,
+} from "./essa-roles.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
@@ -549,9 +553,30 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
     })
 }
 
+/**
+ * Map strip bayIds to the visible ESSA layout (CD ALL+TSAT merge, GND-only inbound).
+ * Store keeps canonical bayIds; clients only see filtered layout bays.
+ */
+function stripForClient(strip: FlightStrip): FlightStrip {
+    if (!isEssaRolesConfig(staticConfig)) return strip
+    const gndRemapped = remapStripsForEssaGndOnly(
+        [strip],
+        staticConfig.essaRoles ?? [],
+        staticConfig.sectionToBay
+    )
+    const [remapped] = remapBayIdsToLayout(gndRemapped, store.getLayout())
+    return remapped ?? strip
+}
+
+function gapForClient(gap: Gap): Gap {
+    if (!isEssaRolesConfig(staticConfig)) return gap
+    const [remapped] = remapBayIdsToLayout([gap], store.getLayout())
+    return remapped ?? gap
+}
+
 // Broadcast a strip update
 function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; autoMoved?: boolean }) {
-    const message: StripMessage = { type: "strip", strip }
+    const message: StripMessage = { type: "strip", strip: stripForClient(strip) }
     if (options?.autoMoved) message.autoMoved = true
     broadcast(message, options?.exclude)
 }
@@ -564,13 +589,18 @@ function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
 
 // Broadcast a gap update
 function broadcastGap(gap: Gap, exclude?: WebSocket) {
-    const message: GapMessage = { type: "gap", gap }
+    const message: GapMessage = { type: "gap", gap: gapForClient(gap) }
     broadcast(message, exclude)
 }
 
 // Broadcast a gap delete
 function broadcastGapDelete(bayId: string, sectionId: string, index: number, exclude?: WebSocket) {
-    const message: GapDeleteMessage = { type: "gapDelete", bayId, sectionId, index }
+    let outBayId = bayId
+    if (isEssaRolesConfig(staticConfig)) {
+        const [remapped] = remapBayIdsToLayout([{ bayId, sectionId }], store.getLayout())
+        if (remapped) outBayId = remapped.bayId
+    }
+    const message: GapDeleteMessage = { type: "gapDelete", bayId: outBayId, sectionId, index }
     broadcast(message, exclude)
 }
 

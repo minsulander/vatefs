@@ -290,7 +290,7 @@
         <!-- SID section -->
         <template  v-if="strip.stripType === 'departure'">
           <div class="strip-section strip-sid">
-              <div class="sid-value">{{ strip.sid || '' }}</div>
+              <div class="sid-value">{{ store.displaySidForStrip(strip) }}</div>
               <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
                 <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
                 <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
