@@ -455,13 +455,14 @@ const deleteDialogOpen = ref(false)
 
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
-const showOwnerSi = computed(() => {
-  if (!store.showStripOwnership || isNote.value) return false
-  if (props.strip.transferPending) return !!props.strip.transferSi
-  return !!props.strip.ownerSi
-})
 const isTransferIn = computed(() => !isNote.value && props.strip.transferPending === 'in')
 const isTransferOut = computed(() => !isNote.value && props.strip.transferPending === 'out')
+const showOwnerSi = computed(() => {
+  if (!store.showStripOwnership || isNote.value) return false
+  if (isTransferIn.value) return !!props.strip.ownerSi
+  if (isTransferOut.value) return !!props.strip.transferSi
+  return !!props.strip.ownerSi
+})
 /** Dim other-owned strips only when ownership display (and dimming) are enabled */
 const shouldDimOwnership = computed(() =>
   store.showStripOwnership &&
@@ -470,11 +471,15 @@ const shouldDimOwnership = computed(() =>
   !isTransferIn.value &&
   !isNote.value
 )
-/** Pending transfer: destination SI only (arrow via CSS); otherwise current owner SI */
+/**
+ * SI label:
+ * - transfer in  → initiator (current owner) SI, arrow after (from them)
+ * - transfer out → destination SI, arrow before (to them)
+ * - otherwise    → current owner SI
+ */
 const ownerSiText = computed(() => {
-  if (props.strip.transferPending && props.strip.transferSi) {
-    return props.strip.transferSi
-  }
+  if (isTransferIn.value) return props.strip.ownerSi || ''
+  if (isTransferOut.value) return props.strip.transferSi || ''
   return props.strip.ownerSi || ''
 })
 const ownerSiClass = computed(() => ({
@@ -487,7 +492,11 @@ const ownerSiTitle = computed(() => {
     if (!who) return undefined
     return freq ? `${who} ${freq}` : who
   }
-  if (props.strip.transferPending) {
+  if (isTransferIn.value) {
+    const from = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
+    return from ? `Transfer from ${from}` : 'Incoming transfer'
+  }
+  if (isTransferOut.value) {
     const target = withFreq(props.strip.transferCallsign, props.strip.transferFrequency, props.strip.transferSi)
     return target ? `Transfer to ${target}` : 'Pending transfer'
   }
@@ -1593,7 +1602,7 @@ function onGroundStateClick(action: string) {
   flex-shrink: 0;
 }
 
-.owner-si.si-transfer-in::before,
+/* Outgoing: arrow before destination SI (→ DEST) */
 .owner-si.si-transfer-out::before {
   content: '→';
   position: absolute;
@@ -1601,8 +1610,16 @@ function onGroundStateClick(action: string) {
   top: 0;
 }
 
+/* Incoming: arrow after initiator SI (FROM→); keep glyph inside the padded edge */
+.owner-si.si-transfer-in::after {
+  content: '→';
+  margin-left: 1px;
+}
+
 .owner-si.si-transfer-in {
   color: #0a7a28;
+  right: 0;
+  padding-right: 0; /* arrow is part of the label width via ::after */
 }
 
 .owner-si.si-transfer-out {
