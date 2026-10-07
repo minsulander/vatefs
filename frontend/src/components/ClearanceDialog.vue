@@ -24,11 +24,11 @@
         <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
         <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value clnc-clickable" @click="openDropdown('cfl')">{{ strip.clearedAltitude || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
-        <div v-if="strip.tsat" class="clnc-row">
+        <div v-if="showCdmTimes && strip.tsat" class="clnc-row">
           <span class="clnc-label">TSAT</span>
           <span class="clnc-value">{{ strip.tsat }}</span>
         </div>
-        <div v-if="strip.ctot" class="clnc-row">
+        <div v-if="showCdmTimes && strip.ctot" class="clnc-row">
           <span class="clnc-label">CTOT</span>
           <span class="clnc-value">{{ strip.ctot }}</span>
         </div>
@@ -51,6 +51,21 @@
       <!-- Dropdown overlay -->
       <div v-if="activeDropdown" class="clnc-dropdown-overlay" @click="activeDropdown = null">
         <div class="clnc-dropdown" :style="dropdownStyle" @click.stop>
+          <div v-if="activeDropdown === 'cfl'" class="clnc-custom-cfl">
+            <input
+              ref="cflCustomInput"
+              v-model="cflCustomText"
+              class="clnc-custom-cfl-input"
+              :class="{ 'clnc-custom-cfl-invalid': cflCustomText.length > 0 && !cflCustomValid }"
+              maxlength="4"
+              placeholder="A012 / 070"
+              spellcheck="false"
+              autocomplete="off"
+              @input="onCflCustomInput"
+              @keydown.enter.prevent="submitCustomCfl"
+              @keydown.escape.prevent="activeDropdown = null"
+            />
+          </div>
           <div ref="dropdownScrollRef" class="clnc-dropdown-scroll">
             <div v-for="option in dropdownOptions" :key="option.value"
               class="clnc-dropdown-item"
@@ -129,6 +144,12 @@ const dclStatusClass = computed(() => {
   }
 })
 
+/** TOBT/TSAT/CTOT only for IFR (I/Y) departures */
+const showCdmTimes = computed(() =>
+  props.strip.stripType === 'departure' &&
+  (props.strip.flightRules === 'I' || props.strip.flightRules === 'Y')
+)
+
 // Airport name lookups
 const destinationName = ref<string | null>(null)
 const departureName = ref<string | null>(null)
@@ -162,6 +183,8 @@ async function fetchDepartureName() {
 
 // Dropdown scroll ref
 const dropdownScrollRef = ref<HTMLElement | null>(null)
+const cflCustomInput = ref<HTMLInputElement | null>(null)
+const cflCustomText = ref('')
 
 // Dropdown state
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
@@ -344,18 +367,48 @@ const headingOptions = (() => {
   return opts
 })()
 
-// Generate CFL options: A05-A50 (500ft intervals), then 060-510 (1000ft FL intervals)
+/** Match strip CFL display (backend formatFlightLevel) */
+function formatCflLabel(feet: number): string {
+  if (feet >= 10000) return `FL${Math.round(feet / 100)}`
+  return `A${String(Math.round(feet / 100)).padStart(3, '0')}`
+}
+
+/**
+ * Parse custom CFL entry (2–4 chars) to feet.
+ * - A5 / A05 / A012 → altitude in hundreds of feet
+ * - 70 / 070 / 350 → flight level × 100
+ */
+function parseCustomCfl(raw: string): number | null {
+  const s = raw.trim().toUpperCase()
+  if (s.length < 2 || s.length > 4) return null
+
+  if (s.startsWith('A')) {
+    const digits = s.slice(1)
+    if (!/^\d{1,3}$/.test(digits)) return null
+    const hundreds = parseInt(digits, 10)
+    if (hundreds < 1 || hundreds > 200) return null
+    return hundreds * 100
+  }
+
+  if (/^\d{2,3}$/.test(s)) {
+    const fl = parseInt(s, 10)
+    if (fl < 1 || fl > 600) return null
+    return fl * 100
+  }
+
+  return null
+}
+
+const cflCustomValid = computed(() => parseCustomCfl(cflCustomText.value) != null)
+
+// Generate CFL options: A005–A050 (500ft), then A060–A090 / FL100–FL510 (1000ft)
 const cflOptions = (() => {
   const opts: { label: string; value: string }[] = []
-  // Altitudes: 500ft to 5000ft (transition altitude) in 500ft steps
   for (let alt = 500; alt <= 5000; alt += 500) {
-    const label = 'A' + String(alt / 100).padStart(2, '0')
-    opts.push({ label, value: String(alt) })
+    opts.push({ label: formatCflLabel(alt), value: String(alt) })
   }
-  // Flight levels: 6000ft to 51000ft in 1000ft steps
   for (let alt = 6000; alt <= 51000; alt += 1000) {
-    const fl = String(alt / 100).padStart(3, '0')
-    opts.push({ label: fl, value: String(alt) })
+    opts.push({ label: formatCflLabel(alt), value: String(alt) })
   }
   return opts
 })()
@@ -405,7 +458,7 @@ const dropdownOptions = computed(() => {
       const current = props.strip.clearedAltitude
       return cflOptions.map(opt => ({
         ...opt,
-        selected: opt.label === current
+        selected: opt.label === current || formatCflLabel(parseInt(opt.value, 10)) === current
       }))
     }
     default:
@@ -429,7 +482,41 @@ async function openDropdown(field: 'rwy' | 'sid' | 'hdg' | 'cfl') {
   } else if (field === 'sid') {
     await fetchSids()
   }
+  if (field === 'cfl') {
+    // Prefill editable form without FL/A padding (A012 / 070)
+    const cur = props.strip.clearedAltitude || ''
+    if (cur.startsWith('FL')) cflCustomText.value = cur.slice(2)
+    else if (cur.startsWith('A')) cflCustomText.value = cur
+    else cflCustomText.value = cur
+  } else {
+    cflCustomText.value = ''
+  }
   activeDropdown.value = field
+  if (field === 'cfl') {
+    nextTick(() => {
+      cflCustomInput.value?.focus()
+      cflCustomInput.value?.select()
+    })
+  }
+}
+
+function onCflCustomInput() {
+  // Keep only A + digits, uppercase, max 4
+  const cleaned = cflCustomText.value.toUpperCase().replace(/[^A0-9]/g, '').slice(0, 4)
+  // Only one leading A allowed
+  if (cleaned.includes('A')) {
+    const rest = cleaned.replace(/A/g, '')
+    cflCustomText.value = ('A' + rest).slice(0, 4)
+  } else {
+    cflCustomText.value = cleaned
+  }
+}
+
+function submitCustomCfl() {
+  const feet = parseCustomCfl(cflCustomText.value)
+  if (feet == null) return
+  activeDropdown.value = null
+  store.sendAssignment(props.strip.id, 'assignCfl', String(feet))
 }
 
 function selectOption(value: string) {
@@ -780,6 +867,41 @@ function onResetSquawk() {
   border: 1px solid #666;
   border-radius: 2px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+}
+
+.clnc-custom-cfl {
+  padding: 6px 8px;
+  border-bottom: 1px solid #444;
+}
+
+.clnc-custom-cfl-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #2a2a2e;
+  border: 1px solid #555;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  border-radius: 2px;
+  outline: none;
+  text-transform: uppercase;
+}
+
+.clnc-custom-cfl-input:focus {
+  border-color: #3b7dd8;
+}
+
+.clnc-custom-cfl-input.clnc-custom-cfl-invalid {
+  border-color: #c62828;
+}
+
+.clnc-custom-cfl-input::placeholder {
+  color: #666;
+  font-weight: normal;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .clnc-dropdown-scroll {

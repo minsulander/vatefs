@@ -671,6 +671,8 @@ function isCdmGroundSection(sectionId: string): boolean {
 
 function sectionIdMatches(sectionId: string, allowed: Set<string>): boolean {
   if (allowed.has(sectionId)) return true
+  // ESSA dynamic pair sections: runway_01L_19R
+  if (allowed.has('runway') && sectionId.includes('runway')) return true
   const logical = sectionId.includes('_') ? sectionId.slice(sectionId.lastIndexOf('_') + 1) : sectionId
   return allowed.has(logical)
 }

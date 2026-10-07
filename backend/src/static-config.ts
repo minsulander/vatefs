@@ -360,6 +360,18 @@ export function setActiveRunways(runways: Record<string, { arr: string[]; dep: s
 }
 
 /**
+ * Update ESSA FPL-assigned runway ends used for extra RWY headers.
+ * Returns true when the set changed.
+ */
+export function setEssaAssignedRunways(assigned: { arr: string[]; dep: string[] }): boolean {
+    const prev = JSON.stringify(staticConfig.essaAssignedRunways ?? { arr: [], dep: [] })
+    const next = JSON.stringify(assigned)
+    if (prev === next) return false
+    staticConfig.essaAssignedRunways = assigned
+    return true
+}
+
+/**
  * Parse controller role from callsign.
  * Checks if callsign matches any of our airports and ends with _DEL or _GND.
  * Also detects _APP and _CTR roles (excluding _R_APP and _R_CTR remote tower positions).

@@ -1,6 +1,9 @@
 # VatEFS ESSA role-based layout.
 # Sections appear/hide based on selected ESSA positions (CD, GND-E/N/W, TWR-E/S/W).
 # Same dual-runway routing rules as dualrwy4bays.yml; titles follow SAAB EFS naming.
+# RUNWAY headers are physical strips (RUNWAY 01L/19R, RUNWAY 01R/19L, RUNWAY 08/26) —
+# no ARR/DEP text. One header per strip in use (active RWY and/or FPL-assigned). A
+# single strip sits under CTR DEP; additional strips get a header under CTR ARR.
 
 name: ESSA
 layoutMode: essaRoles
@@ -22,11 +25,14 @@ layout:
           title: CTR ARR
           visibleFor: [TWR]
         arr_runway:
-          title: RUNWAY ARR <arwy>
+          # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
+          title: RUNWAY
           visibleFor: [TWR]
         taxi_arr:
           title: TAXI ARR
-          visibleFor: [GND]
+          # TWR sees this when covering GND solo; when GND is separate, TWR-only
+          # hold rules keep landed traffic on RWY until GND assumes.
+          visibleFor: [GND, TWR]
 
     bay2:
       sections:
@@ -34,7 +40,8 @@ layout:
           title: CTR DEP
           visibleFor: [TWR]
         dep_runway:
-          title: RUNWAY DEP <drwy>
+          # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
+          title: RUNWAY
           visibleFor: [TWR]
 
     bay3:
@@ -185,6 +192,54 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 95
 
+  # === TWR-ONLY + separate GND: keep landed traffic on RWY until GND assumes ===
+  # Role picker TWR without GND, and not covering GND top-down (GND online).
+  # When ARR==DEP runway, arr_runway assignments collapse to dep_runway.
+
+  runway_hold_twr_only_arr:
+    sectionId: arr_runway
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: myself
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    notMyRole: [GND]
+    priority: 85
+
+  runway_hold_twr_only_arr_local:
+    sectionId: arr_runway
+    direction: local
+    airborne: false
+    groundstates: [ARR, TXIN]
+    controller: myself
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    notMyRole: [GND]
+    priority: 85
+
+  runway_hold_twr_only_dep:
+    sectionId: dep_runway
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: myself
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    notMyRole: [GND]
+    priority: 85
+
+  runway_hold_twr_only_dep_local:
+    sectionId: dep_runway
+    direction: local
+    airborne: false
+    groundstates: [ARR, TXIN]
+    controller: myself
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    notMyRole: [GND]
+    priority: 85
+
 actionRules:
   goa_arr_runway:
     action: GOA
@@ -225,62 +280,40 @@ moveRules:
       type: setGroundstate
       value: PUSH
 
-  move_taxi_to_dep_runway:
+  # TAXI / TAXI DEP → any RUNWAY pair: LU (LINEUP)
+  # toSectionIdContains matches runway_01L_19R etc. and legacy arr/dep_runway
+  move_taxi_dep_to_runway:
     fromSectionId: taxi_dep
-    toSectionId: dep_runway
+    toSectionIdContains: runway
     direction: either
     myRole: [TWR, APP, CTR]
     command:
       type: setGroundstate
       value: LINEUP
 
-  move_taxi_to_arr_runway:
-    fromSectionId: taxi_dep
-    toSectionId: arr_runway
-    direction: either
-    myRole: [TWR, APP, CTR]
-    command:
-      type: setGroundstate
-      value: LINEUP
-
-  move_inbound_to_arr_runway:
+  # INBOUND → RUNWAY: CTL
+  move_inbound_to_runway:
     fromSectionId: inbound
-    toSectionId: arr_runway
+    toSectionIdContains: runway
     direction: arrival
     myRole: [TWR, APP, CTR]
     command:
       type: setClearedToLand
       value: true
 
-  move_inbound_to_dep_runway:
-    fromSectionId: inbound
-    toSectionId: dep_runway
-    direction: either
-    myRole: [TWR, APP, CTR]
-    command:
-      type: setClearedToLand
-      value: true
-
-  move_ctr_arr_to_arr_runway:
+  # CTR ARR → RUNWAY: CTL
+  move_ctr_arr_to_runway:
     fromSectionId: ctr_arr
-    toSectionId: arr_runway
+    toSectionIdContains: runway
     direction: either
     myRole: [TWR, APP, CTR]
     command:
       type: setClearedToLand
       value: true
 
-  move_ctr_arr_to_dep_runway:
-    fromSectionId: ctr_arr
-    toSectionId: dep_runway
-    direction: either
-    myRole: [TWR, APP, CTR]
-    command:
-      type: setClearedToLand
-      value: true
-
-  move_arr_runway_to_taxi_dep:
-    fromSectionId: arr_runway
+  # RUNWAY → TAXI DEP (departures)
+  move_runway_to_taxi_dep:
+    fromSectionIdContains: runway
     toSectionId: taxi_dep
     direction: departure
     priority: 10
@@ -288,26 +321,9 @@ moveRules:
       type: setGroundstate
       value: TAXI
 
-  move_arr_runway_to_taxi:
-    fromSectionId: arr_runway
-    toSectionId: taxi_arr
-    direction: either
-    myRole: [GND, TWR, APP, CTR]
-    command:
-      type: setGroundstate
-      value: TXIN
-
-  move_dep_runway_to_taxi_dep:
-    fromSectionId: dep_runway
-    toSectionId: taxi_dep
-    direction: departure
-    priority: 10
-    command:
-      type: setGroundstate
-      value: TAXI
-
-  move_dep_runway_to_taxi:
-    fromSectionId: dep_runway
+  # RUNWAY → TAXI ARR
+  move_runway_to_taxi_arr:
+    fromSectionIdContains: runway
     toSectionId: taxi_arr
     direction: either
     myRole: [GND, TWR, APP, CTR]

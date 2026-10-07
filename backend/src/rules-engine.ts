@@ -22,6 +22,14 @@ import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole } from "./static-config.js"
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
+import { essaRunwaySectionId } from "@vatefs/common"
+import {
+    familiesFromRoles,
+    isEssaRolesConfig,
+    isEssaLegacyRunwaySectionId,
+    resolveEssaPairForFlight,
+    type EssaFamily,
+} from "./essa-roles.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -36,6 +44,8 @@ type CommonRuleConditions = {
     arrRunway?: boolean
     myRole?: ControllerRole[]
     notMyRole?: ControllerRole[]
+    essaFamilies?: EssaFamily[]
+    notEssaFamilies?: EssaFamily[]
     nextControllerRole?: ControllerRole[]
     missedApproach?: boolean
 }
@@ -352,6 +362,18 @@ function evaluateCommonConditions(
         }
     }
 
+    // ESSA role-picker families (selected positions, not top-down coverage)
+    if (rule.essaFamilies || rule.notEssaFamilies) {
+        if (!isEssaRolesConfig(config)) return false
+        const families = familiesFromRoles(config.essaRoles ?? [])
+        if (rule.essaFamilies && !rule.essaFamilies.some(f => families.has(f))) {
+            return false
+        }
+        if (rule.notEssaFamilies && rule.notEssaFamilies.some(f => families.has(f))) {
+            return false
+        }
+    }
+
     // nextControllerRole: flight.nextController callsign must resolve to one of these roles
     if (rule.nextControllerRole) {
         if (!flight.nextController) return false
@@ -436,14 +458,51 @@ export function determineSectionForFlight(
                     ruleId: rule.id
                 }
             }
-            const bayId = config.sectionToBay.get(rule.sectionId)
+            let sectionId = rule.sectionId
+            // ESSA: map legacy arr_runway/dep_runway onto physical RWY pair sections
+            if (isEssaRolesConfig(config) && isEssaLegacyRunwaySectionId(sectionId)) {
+                let geoEnds: { leIdent: string; heIdent: string } | undefined
+                if (
+                    flight.latitude !== undefined &&
+                    flight.longitude !== undefined &&
+                    flight.currentAltitude !== undefined
+                ) {
+                    const geo = isOnAnyRunway(
+                        flight.latitude,
+                        flight.longitude,
+                        flight.currentAltitude,
+                        config.myAirports
+                    )
+                    if (geo?.onRunway && geo.runway) geoEnds = geo.runway
+                }
+                const pair = resolveEssaPairForFlight(
+                    flight,
+                    config.activeRunways,
+                    config.myAirports,
+                    geoEnds
+                )
+                if (pair) {
+                    const pairSectionId = essaRunwaySectionId(pair)
+                    const pairBay =
+                        config.sectionToBay.get(pairSectionId) ??
+                        config.sectionToBay.get(sectionId)
+                    if (pairBay) {
+                        return {
+                            bayId: pairBay,
+                            sectionId: pairSectionId,
+                            ruleId: rule.id
+                        }
+                    }
+                }
+            }
+            const bayId = config.sectionToBay.get(sectionId)
             if (!bayId) {
-                console.error(`Section "${rule.sectionId}" from rule "${rule.id}" not found in layout`)
+                console.error(`Section "${sectionId}" from rule "${rule.id}" not found in layout`)
                 continue
             }
             return {
                 bayId,
-                sectionId: rule.sectionId,
+                sectionId,
                 ruleId: rule.id
             }
         }
@@ -482,7 +541,12 @@ function evaluateActionRule(
             ? logicalSectionId(sectionId)
             : sectionId
         if (rule.sectionId !== effectiveSection) {
-            return false
+            // ESSA: YAML arr_runway/dep_runway actions also match dynamic runway_* sections
+            const ruleIsRunway = isEssaLegacyRunwaySectionId(rule.sectionId)
+            const sectionIsRunway = isEssaLegacyRunwaySectionId(effectiveSection)
+            if (!(isEssaRolesConfig(config) && ruleIsRunway && sectionIsRunway)) {
+                return false
+            }
         }
     }
 
@@ -632,7 +696,15 @@ function evaluateMoveRule(
     if (rule.fromSectionIdContains !== undefined && !fromSectionId.includes(rule.fromSectionIdContains) && !fromId.includes(rule.fromSectionIdContains)) {
         return false
     }
-    if (rule.toSectionId !== toId) {
+
+    // Check to-section conditions (exact and/or substring)
+    if (rule.toSectionId !== undefined && rule.toSectionId !== toId) {
+        return false
+    }
+    if (rule.toSectionIdContains !== undefined && !toSectionId.includes(rule.toSectionIdContains) && !toId.includes(rule.toSectionIdContains)) {
+        return false
+    }
+    if (rule.toSectionId === undefined && rule.toSectionIdContains === undefined) {
         return false
     }
 

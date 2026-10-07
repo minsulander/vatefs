@@ -116,6 +116,37 @@
             <span class="fpl-val fpl-val-small">{{ flight.nextController || '---' }}</span>
           </div>
         </div>
+
+        <!-- CDM / vIFF times — only fields that are present -->
+        <template v-if="hasCdmTimes">
+          <div class="fpl-section-header">CDM</div>
+          <div class="fpl-grid">
+            <div v-if="flight.tobt" class="fpl-field">
+              <span class="fpl-label">TOBT<span v-if="flight.tobtSetBy" class="fpl-setby"> ({{ flight.tobtSetBy }})</span></span>
+              <span class="fpl-val">{{ flight.tobt }}</span>
+            </div>
+            <div v-if="flight.tsat" class="fpl-field">
+              <span class="fpl-label">TSAT</span>
+              <span class="fpl-val">{{ flight.tsat }}</span>
+            </div>
+            <div v-if="flight.ctot" class="fpl-field" :title="flight.ctotReason || undefined">
+              <span class="fpl-label">CTOT</span>
+              <span class="fpl-val">{{ flight.ctot }}</span>
+            </div>
+            <div v-if="flight.asrt" class="fpl-field">
+              <span class="fpl-label">ASRT</span>
+              <span class="fpl-val">{{ flight.asrt }}</span>
+            </div>
+            <div v-if="flight.cdmSts" class="fpl-field">
+              <span class="fpl-label">STS</span>
+              <span class="fpl-val">{{ flight.cdmSts }}</span>
+            </div>
+          </div>
+          <div v-if="flight.ctot && flight.ctotReason" class="fpl-route-row">
+            <span class="fpl-label">CTOT REASON</span>
+            <span class="fpl-route-val">{{ flight.ctotReason }}</span>
+          </div>
+        </template>
       </div>
 
       <div class="fpl-actions">
@@ -154,6 +185,13 @@ const flightRulesLabel = computed(() => {
     case 'Z': return 'Z'
     default: return props.strip.flightRules
   }
+})
+
+/** Show CDM block when any vIFF/CDM time or status is present */
+const hasCdmTimes = computed(() => {
+  const f = flight.value
+  if (!f) return false
+  return !!(f.tobt || f.tsat || f.ctot || f.asrt || f.cdmSts)
 })
 
 function formatFL(feet: number | undefined | null): string {
@@ -275,6 +313,12 @@ watch(dialogOpen, (open) => {
 
 .fpl-val-small {
   font-size: 10px;
+}
+
+.fpl-setby {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .fpl-route-row {

@@ -134,6 +134,18 @@ export interface SectionRule {
      */
     notMyRole?: ControllerRole[]
 
+    /**
+     * ESSA role-picker families that must be selected (at least one).
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+
+    /**
+     * ESSA role-picker families that must NOT be selected.
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
 }
@@ -205,6 +217,18 @@ export interface ActionRule {
      * (e.g. notMyRole: [GND] = GND is online, I'm not covering GND duties).
      */
     notMyRole?: ControllerRole[]
+
+    /**
+     * ESSA role-picker families that must be selected (at least one).
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+
+    /**
+     * ESSA role-picker families that must NOT be selected.
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
 
     /**
      * The flight's next controller (from the plugin) must have one of these roles.
@@ -304,12 +328,21 @@ export interface MoveRule {
     /**
      * Matches when the from-section ID contains this substring.
      * Useful for "any runway section" rules in common config (e.g. "runway" matches
-     * "runway", "arr_runway", "dep_runway", etc.)
+     * "runway", "arr_runway", "dep_runway", "runway_01L_19R", etc.)
      */
     fromSectionIdContains?: string
 
-    /** Section the strip is moving TO */
-    toSectionId: string
+    /**
+     * Section the strip is moving TO — exact match.
+     * Optional if toSectionIdContains is used instead.
+     */
+    toSectionId?: string
+
+    /**
+     * Matches when the to-section ID contains this substring
+     * (e.g. "runway" matches ESSA dynamic pair sections).
+     */
+    toSectionIdContains?: string
 
     /** Flight direction at our airport */
     direction?: FlightDirection
@@ -374,6 +407,15 @@ export interface EfsStaticConfig {
 
     /** Active runways per airport, extracted from rwyconfig */
     activeRunways?: Record<string, { arr: string[]; dep: string[] }>
+
+    /**
+     * Extra ESSA runway ends assigned on flight plans (arrRwy/depRwy).
+     * Used with activeRunways to decide which RWY headers to show.
+     */
+    essaAssignedRunways?: { arr: string[]; dep: string[] }
+
+    /** Fingerprint of last ESSA RWY header set (skip layout churn when unchanged) */
+    essaRunwayLayoutFingerprint?: string
 
     /** My controller role (DEL, GND, TWR, APP, CTR) derived from callsign */
     myRole?: ControllerRole

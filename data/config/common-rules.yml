@@ -255,7 +255,7 @@ actionRules:
     action: XFER
     direction: either
     controller: myself
-    groundstates: ['', NSTS, ARR]
+    groundstates: ['', NSTS, ARR, TXIN]
     airborne: false
     handoffInitiated: false
     myRole: [TWR, APP, CTR]

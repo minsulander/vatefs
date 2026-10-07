@@ -250,8 +250,11 @@ export function loadConfig(configPath: string): EfsStaticConfig {
             if (rule.fromSectionId && !sectionToBay.has(rule.fromSectionId)) {
                 throw new Error(`Move rule "${rule.id}" references unknown fromSection "${rule.fromSectionId}"`)
             }
-            if (!sectionToBay.has(rule.toSectionId)) {
+            if (rule.toSectionId && !sectionToBay.has(rule.toSectionId)) {
                 throw new Error(`Move rule "${rule.id}" references unknown toSection "${rule.toSectionId}"`)
+            }
+            if (!rule.toSectionId && !rule.toSectionIdContains) {
+                throw new Error(`Move rule "${rule.id}" needs toSectionId or toSectionIdContains`)
             }
         }
     }

@@ -16,6 +16,11 @@ export interface EssaRwyCombination {
     /** Config id as published (e.g. "13", "15A") */
     id: string
     arr: string[]
+    /**
+     * Alternate ARR sets that still identify as this config.
+     * e.g. config 1: ARR 01R or ARR 01L+01R with DEP 01L.
+     */
+    arrAliases?: string[][]
     /** Bare runway(s) used for matching (suffixes like -LT/-Q stripped) */
     dep: string[]
     /** Arrival runway as in the PDF (e.g. "19L", "26") */
@@ -57,8 +62,26 @@ export const ESSA_QUICKREF_KEYS = [
 
 /** Published combinations in document / VatIRIS order */
 export const ESSA_RWY_COMBINATIONS: EssaRwyCombination[] = [
-    { id: '1', arr: ['01R'], dep: ['01L'], arrName: '01R', depName: '01L', quickrefKey: '01R/01L' },
-    { id: '2', arr: ['19L'], dep: ['19R'], arrName: '19L', depName: '19R', quickrefKey: '19L/19R' },
+    // Config 1: ARR 01R (or both 01L+01R) / DEP 01L
+    {
+        id: '1',
+        arr: ['01R'],
+        arrAliases: [['01L', '01R']],
+        dep: ['01L'],
+        arrName: '01R',
+        depName: '01L',
+        quickrefKey: '01R/01L',
+    },
+    // Config 2: ARR 19L (or both 19L+19R) / DEP 19R
+    {
+        id: '2',
+        arr: ['19L'],
+        arrAliases: [['19L', '19R']],
+        dep: ['19R'],
+        arrName: '19L',
+        depName: '19R',
+        quickrefKey: '19L/19R',
+    },
     { id: '3', arr: ['01L'], dep: ['01L'], arrName: '01L', depName: '01L', quickrefKey: '01L' },
     { id: '4', arr: ['01L'], dep: ['08'], arrName: '01L', depName: '08-LT', quickrefKey: '01L/08' },
     { id: '5', arr: ['01R'], dep: ['08'], arrName: '01R', depName: '08-LT', quickrefKey: '01R/08' },
@@ -117,11 +140,24 @@ export function formatEssaRwyPdfName(combo: EssaRwyCombination): string {
     return `ARR ${combo.arrName} / DEP ${combo.depName}`
 }
 
-/** Configs whose ARR/DEP match the given active runways */
+/** Compact dual-parallel ARR label: 01L+01R → 01L+R */
+export function formatEssaArrDisplay(arr: string[]): string {
+    const n = arr.map(normalizeEssaRwy).sort()
+    if (sameSet(n, ['01L', '01R'])) return '01L+R'
+    if (sameSet(n, ['19L', '19R'])) return '19L+R'
+    return arr.length > 0 ? arr.map(normalizeEssaRwy).join('/') : '?'
+}
+
+function arrMatchesCombo(arr: string[], combo: EssaRwyCombination): boolean {
+    if (sameSet(combo.arr, arr)) return true
+    return (combo.arrAliases ?? []).some(alias => sameSet(alias, arr))
+}
+
+/** Configs whose ARR/DEP match the given active runways (including dual-ARR aliases) */
 export function findMatchingEssaRwyConfigs(arr: string[], dep: string[]): EssaRwyCombination[] {
     if (arr.length === 0 || dep.length === 0) return []
     return ESSA_RWY_COMBINATIONS.filter(
-        c => sameSet(c.arr, arr) && sameSet(c.dep, dep)
+        c => arrMatchesCombo(arr, c) && sameSet(c.dep, dep)
     )
 }
 
@@ -180,13 +216,19 @@ export function formatEssaRwyConfigLabel(
 
     if (id) {
         const combo = getEssaRwyCombination(id)
-        if (combo) return `RWY: ${id} - ${formatEssaRwyPdfName(combo)}`
+        if (combo) {
+            // Dual ARR (01L+R / 19L+R): show live ARR set, keep published DEP name
+            if (combo.arrAliases?.some(alias => sameSet(alias, arr))) {
+                return `RWY: ${id} - ARR ${formatEssaArrDisplay(arr)} / DEP ${combo.depName}`
+            }
+            return `RWY: ${id} - ${formatEssaRwyPdfName(combo)}`
+        }
         return `RWY: ${id}`
     }
 
     // Unmatched ES runways — show bare ARR/DEP
-    const arrStr = arr.length > 0 ? arr.join('/') : '?'
-    const depStr = dep.length > 0 ? dep.join('/') : '?'
+    const arrStr = formatEssaArrDisplay(arr)
+    const depStr = dep.length > 0 ? dep.map(normalizeEssaRwy).join('/') : '?'
     return `RWY: ARR ${arrStr} / DEP ${depStr}`
 }
 
@@ -214,4 +256,51 @@ export function essaRwyQuickrefImageUrl(
 ): string | null {
     const id = essaRwyQuickrefImageId(configId, type)
     return id ? `${VATIRIS_QUICKREF_BASE}/${id}.png` : null
+}
+
+/**
+ * Physical ESSA runway strips (both ends). Used for EFS runway section headers
+ * e.g. "RUNWAY 01L/19R", "RUNWAY 08/26", "RUNWAY 01R/19L".
+ */
+export interface EssaPhysicalRwyPair {
+    /** Stable id for section keys (e.g. "01L_19R") */
+    id: string
+    /** Display label without RUNWAY prefix (e.g. "01L/19R") */
+    label: string
+    /** Both runway ends belonging to this physical strip */
+    ends: readonly [string, string]
+}
+
+/** West parallel, east parallel, then crosswind — display order when several headers show */
+export const ESSA_PHYSICAL_RWY_PAIRS: readonly EssaPhysicalRwyPair[] = [
+    { id: '01L_19R', label: '01L/19R', ends: ['01L', '19R'] },
+    { id: '01R_19L', label: '01R/19L', ends: ['01R', '19L'] },
+    { id: '08_26', label: '08/26', ends: ['08', '26'] },
+] as const
+
+const ESSA_RWY_TO_PAIR = new Map<string, EssaPhysicalRwyPair>()
+for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
+    for (const end of pair.ends) {
+        ESSA_RWY_TO_PAIR.set(normalizeEssaRwy(end), pair)
+    }
+}
+
+/** Resolve physical strip for a bare runway id (01L, 19R, 08, …) */
+export function essaPhysicalPairForRunway(rwy: string | undefined | null): EssaPhysicalRwyPair | undefined {
+    if (!rwy) return undefined
+    return ESSA_RWY_TO_PAIR.get(normalizeEssaRwy(rwy))
+}
+
+/** Section id for a physical strip: runway_01L_19R (matches fromSectionIdContains: runway) */
+export function essaRunwaySectionId(pair: EssaPhysicalRwyPair): string {
+    return `runway_${pair.id}`
+}
+
+/** Header title: "RUNWAY 01L/19R" */
+export function formatEssaRunwaySectionTitle(pair: EssaPhysicalRwyPair): string {
+    return `RUNWAY ${pair.label}`
+}
+
+export function isEssaDynamicRunwaySectionId(sectionId: string): boolean {
+    return sectionId.startsWith('runway_') && sectionId !== 'arr_runway' && sectionId !== 'dep_runway'
 }

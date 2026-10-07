@@ -11,6 +11,10 @@ import { getVisibleLayout, IDLE_BAY_ID, isMultiAirportConfig, resolveBayForAirpo
 import {
     filterEssaLayout,
     isEssaRolesConfig,
+    collectEssaRunwayPairs,
+    applyEssaRunwayPairLayout,
+    syncEssaRunwaySectionToBay,
+    essaRunwayPairsFingerprint,
     activeOnlineTwrRoles,
     remapStripsForEssaGndOnly,
     remapBayIdsToLayout,
@@ -453,6 +457,16 @@ class EfsStore {
                 staticConfig.sectionVisibleFor,
                 activeTwr
             )
+            const placements = collectEssaRunwayPairs(
+                staticConfig.activeRunways,
+                staticConfig.myAirports,
+                staticConfig.essaAssignedRunways
+            )
+            const { layout: rwyLayout, sectionToBay: rwySectionToBay } =
+                applyEssaRunwayPairLayout(withHeights, placements)
+            withHeights = rwyLayout
+            syncEssaRunwaySectionToBay(staticConfig.sectionToBay, rwySectionToBay)
+            staticConfig.essaRunwayLayoutFingerprint = essaRunwayPairsFingerprint(placements)
         }
 
         return resolveLayoutTemplates(withHeights, staticConfig)

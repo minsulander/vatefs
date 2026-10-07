@@ -12,6 +12,7 @@ import type {
 import { flightHasRequiredData } from "./types.js"
 import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign } from "./config.js"
 import type { EfsStaticConfig } from "./config.js"
+import { formatEssaDisplaySi, isEssaRolesConfig } from "./essa-roles.js"
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
 import { findStandForPosition } from "./stand-data.js"
@@ -251,6 +252,25 @@ class FlightStore {
      */
     getAllFlights(): Flight[] {
         return Array.from(this.flights.values())
+    }
+
+    /**
+     * ESSA arr/dep runway ends currently assigned on flight plans (for RWY headers).
+     */
+    getEssaAssignedRunways(): { arr: string[]; dep: string[] } {
+        const arr = new Set<string>()
+        const dep = new Set<string>()
+        for (const flight of this.flights.values()) {
+            if (flight.deleted || flight.manuallyDeleted) continue
+            const originIsEssa = flight.origin === 'ESSA'
+            const destIsEssa = flight.destination === 'ESSA'
+            if (destIsEssa && flight.arrRwy) arr.add(flight.arrRwy.toUpperCase())
+            if (originIsEssa && flight.depRwy) dep.add(flight.depRwy.toUpperCase())
+        }
+        return {
+            arr: [...arr].sort(),
+            dep: [...dep].sort(),
+        }
     }
 
     /**
@@ -915,6 +935,37 @@ class FlightStore {
     }
 
     /**
+     * CDM TOBT/TSAT only apply to ESSA IFR (I/Y) departures — not VFR/local.
+     */
+    private isCdmEligibleFlight(flight: Flight): boolean {
+        if (flight.flightRules !== 'I' && flight.flightRules !== 'Y') return false
+        if (flight.origin !== 'ESSA') return false
+        // Local (both ends at our airports) uses stripType local — no CDM UI
+        if (
+            flight.destination &&
+            this.config.myAirports.includes(flight.origin) &&
+            this.config.myAirports.includes(flight.destination)
+        ) {
+            return false
+        }
+        return true
+    }
+
+    private clearCdmFields(flight: Flight): boolean {
+        let changed = false
+        if (flight.tobt !== undefined) { flight.tobt = undefined; changed = true }
+        if (flight.tsat !== undefined) { flight.tsat = undefined; changed = true }
+        if (flight.tobtSetBy !== undefined) { flight.tobtSetBy = undefined; changed = true }
+        if (flight.tobtSetByAt !== undefined) { flight.tobtSetByAt = undefined; changed = true }
+        if (flight.asrt !== undefined) { flight.asrt = undefined; changed = true }
+        if (flight.cdmSts !== undefined) { flight.cdmSts = undefined; changed = true }
+        if (flight.localCdmTobt !== undefined) { flight.localCdmTobt = undefined; changed = true }
+        if (flight.localCdmTsat !== undefined) { flight.localCdmTsat = undefined; changed = true }
+        if (flight.localCdmAt !== undefined) { flight.localCdmAt = undefined; changed = true }
+        return changed
+    }
+
+    /**
      * Apply TOBT/TSAT/CTOT from local CDM_data_*.txt (via EuroScope plugin).
      * Faster than HTTP poll; does not clear fields when absent in the file.
      */
@@ -951,6 +1002,14 @@ class FlightStore {
             if (!callsign || rejected.has(callsign)) continue
             const flight = this.flights.get(callsign)
             if (!flight) continue
+
+            if (!this.isCdmEligibleFlight(flight)) {
+                if (this.clearCdmFields(flight)) {
+                    const strip = this.regenerateStrip(callsign)
+                    if (strip) strips.push(strip)
+                }
+                continue
+            }
 
             let changed = false
             // Pin local ES CDM_data values so the slower HTTP poll cannot overwrite them
@@ -1506,10 +1565,17 @@ class FlightStore {
             else if (isTrackedByMe) transferPending = 'out'
         }
 
-        const ownerSi = (flight.controllerId || getControllerPositionId(flight.controller)) || undefined
-        const transferSi = hasHandoff
+        const rawOwnerSi = (flight.controllerId || getControllerPositionId(flight.controller)) || undefined
+        const rawTransferSi = hasHandoff
             ? (flight.handoffTargetControllerId || getControllerPositionId(handoffTarget) || undefined)
             : undefined
+        // ESSA mode: SAD→CD, AGE/AGN/AGW→GE/GN/GW; TWR and others unchanged
+        const ownerSi = isEssaRolesConfig(this.config)
+            ? formatEssaDisplaySi(rawOwnerSi)
+            : rawOwnerSi
+        const transferSi = isEssaRolesConfig(this.config)
+            ? formatEssaDisplaySi(rawTransferSi)
+            : rawTransferSi
         const formatFreq = (mhz: number | undefined) =>
             mhz != null && mhz > 0 && mhz < 199 ? mhz.toFixed(3) : undefined
         const ownerFrequency = !isUntracked ? formatFreq(getFrequencyForCallsign(flight.controller)) : undefined
@@ -1610,7 +1676,18 @@ class FlightStore {
                     highlightActions.push('XFER')
                 }
             }
+
+            // XFER highlight: arrival/local vacated runway (TWR → GND)
+            if (actions.includes('XFER') && (stripType === 'arrival' || stripType === 'local')) {
+                const onRunway = isOnAnyRunway(flight.latitude, flight.longitude, flight.currentAltitude, actionConfig.myAirports)
+                if (!onRunway) {
+                    highlightActions.push('XFER')
+                }
+            }
         }
+
+        const cdmEligible = this.isCdmEligibleFlight(flight)
+        const ifrDeparture = stripType === 'departure' && (flightRules === 'I' || flightRules === 'Y')
 
         return {
             id: airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign,
@@ -1654,13 +1731,14 @@ class FlightStore {
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,
-            tobt: flight.tobt,
-            tsat: flight.tsat,
-            tobtSetBy: flight.tobtSetBy,
-            asrt: flight.asrt,
-            ctot: flight.ctot,
-            cdmSts: flight.cdmSts,
-            ctotReason: flight.ctotReason,
+            // CDM times only on ESSA IFR departures (not VFR / local)
+            tobt: cdmEligible ? flight.tobt : undefined,
+            tsat: cdmEligible ? flight.tsat : undefined,
+            tobtSetBy: cdmEligible ? flight.tobtSetBy : undefined,
+            asrt: cdmEligible ? flight.asrt : undefined,
+            cdmSts: cdmEligible ? flight.cdmSts : undefined,
+            ctot: ifrDeparture ? flight.ctot : undefined,
+            ctotReason: ifrDeparture ? flight.ctotReason : undefined,
             remarks: flight.remarks || undefined,
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,

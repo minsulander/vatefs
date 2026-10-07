@@ -32,6 +32,7 @@ export {
     setMyFrequency,
     setMyPositionId,
     setActiveRunways,
+    setEssaAssignedRunways,
     applyConfig,
     parseControllerRole,
     setMyRole,

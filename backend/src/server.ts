@@ -41,12 +41,14 @@ import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
 import type { EuroscopeCommand, EssaPositionRole } from "./config.js"
 import {
     normalizeEssaRoles,
     remapBayIdsToLayout,
     remapStripsForEssaGndOnly,
+    collectEssaRunwayPairs,
+    essaRunwayPairsFingerprint,
 } from "./essa-roles.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
@@ -1364,6 +1366,29 @@ function broadcastLayout() {
     broadcast(message)
 }
 
+/**
+ * ESSA: refresh RWY pair headers from active RWY config + FPL-assigned runways.
+ * When the header set changes, rebroadcast layout and reprocess strips.
+ */
+function maybeRefreshEssaRunwayHeaders(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    setEssaAssignedRunways(flightStore.getEssaAssignedRunways())
+    const placements = collectEssaRunwayPairs(
+        staticConfig.activeRunways,
+        staticConfig.myAirports,
+        staticConfig.essaAssignedRunways
+    )
+    const fp = essaRunwayPairsFingerprint(placements)
+    if (fp === staticConfig.essaRunwayLayoutFingerprint) return false
+    console.log(
+        `[ESSA] RWY headers: ${placements.map(p => p.title).join(", ") || "(none)"}`
+    )
+    broadcastLayout()
+    store.reprocessAllFlights()
+    broadcastRefresh("ESSA RWY headers changed")
+    return true
+}
+
 // Send all strips to a client
 function sendStrips(socket: WebSocket) {
     const strips = store.getAllStrips()
@@ -2301,6 +2326,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (!tobtStrip) break
             if (tobtStrip.stripType !== "departure") break
             if (tobtStrip.adep !== "ESSA") break
+            if (tobtStrip.flightRules !== "I" && tobtStrip.flightRules !== "Y") break
             const tobt = message.tobt.trim()
             if (!/^\d{4}$/.test(tobt)) {
                 console.log(`[VIFF] Invalid TOBT "${message.tobt}" for ${tobtStrip.callsign}`)
@@ -2857,7 +2883,9 @@ udpIn.on("message", (msg, rinfo) => {
                 // Re-broadcast layout + ATIS (includes arr/dep runways for ESSA RWY label)
                 if (runwaysChanged) {
                     console.log(`Active runways changed: ${JSON.stringify(activeRunways)}`)
-                    broadcastLayout()
+                    if (!maybeRefreshEssaRunwayHeaders()) {
+                        broadcastLayout()
+                    }
                     broadcastAtisUpdate()
                 }
 
@@ -3034,6 +3062,11 @@ udpIn.on("message", (msg, rinfo) => {
                         tryAutoSendDcl(flight)
                     }
                 }
+            }
+
+            // ESSA: add RWY headers for FPL-assigned runways not already in RWY config
+            if (result.strip || (result.strips && result.strips.length > 0)) {
+                maybeRefreshEssaRunwayHeaders()
             }
             // If result is empty (no strip, no delete), nothing changed - don't log
         } else {
