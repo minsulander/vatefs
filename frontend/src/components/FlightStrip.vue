@@ -480,8 +480,58 @@ watch(isTransferIn, (incoming) => {
     assumeIncomingFlashing.value = false
   }
 }, { immediate: true })
+const hasRofRequest = computed(() => !!props.strip.rofRequestCallsign || !!props.strip.rofRequestSi)
+/** Inbound: ROF sent to us (we track). Outbound: we sent ROF (cooldown). */
+const isRofInbound = computed(() => hasRofRequest.value && !!props.strip.isAssumed)
+const isRofOutbound = computed(() => hasRofRequest.value && !props.strip.isAssumed)
+const isRofActive = computed(() => hasRofRequest.value)
+const rofNowMs = ref(Date.now())
+/** Inbound flash window (1 min); outbound flashes for whole cooldown */
+const isRofFlashing = computed(() => {
+  if (isRofOutbound.value) return true
+  if (!isRofInbound.value) return false
+  const until = props.strip.rofFlashUntil
+  return until != null && rofNowMs.value < until
+})
+/** true = pink phase (ROF text / pink XFER); false = other half */
+const rofFlashPink = ref(true)
+let rofAlternateTimer: ReturnType<typeof setInterval> | null = null
+let rofClockTimer: ReturnType<typeof setInterval> | null = null
+const ROF_ALTERNATE_MS = 1000
+
+watch(isRofFlashing, (flashing) => {
+  if (rofAlternateTimer) {
+    clearInterval(rofAlternateTimer)
+    rofAlternateTimer = null
+  }
+  if (flashing) {
+    rofFlashPink.value = true
+    rofAlternateTimer = setInterval(() => {
+      rofFlashPink.value = !rofFlashPink.value
+    }, ROF_ALTERNATE_MS)
+  } else {
+    rofFlashPink.value = false
+  }
+}, { immediate: true })
+
+watch(isRofInbound, (inbound) => {
+  if (rofClockTimer) {
+    clearInterval(rofClockTimer)
+    rofClockTimer = null
+  }
+  if (inbound) {
+    rofNowMs.value = Date.now()
+    rofClockTimer = setInterval(() => {
+      rofNowMs.value = Date.now()
+    }, 500)
+  }
+}, { immediate: true })
+
 const showOwnerSi = computed(() => {
-  if (!store.showStripOwnership || isNote.value) return false
+  if (isNote.value) return false
+  // ROF pending: keep SI visible for alternate / requester indication
+  if (isRofActive.value) return true
+  if (!store.showStripOwnership) return false
   if (isTransferIn.value) return !!props.strip.ownerSi
   if (isTransferOut.value) return !!props.strip.transferSi
   return !!props.strip.ownerSi
@@ -496,24 +546,50 @@ const shouldDimOwnership = computed(() =>
 )
 /**
  * SI label:
- * - transfer in  → initiator (current owner) SI, arrow after (from them)
- * - transfer out → destination SI, arrow before (to them)
- * - otherwise    → current owner SI
+ * - inbound ROF flashing → pink ROF ↔ →requester SI
+ * - inbound ROF after flash → →requester SI
+ * - outbound ROF → pink ROF ↔ owner SI
+ * - transfer in/out → handoff SIs
  */
 const ownerSiText = computed(() => {
+  if (isRofInbound.value) {
+    if (isRofFlashing.value && rofFlashPink.value) return 'ROF'
+    return props.strip.rofRequestSi || props.strip.rofRequestCallsign || ''
+  }
+  if (isRofOutbound.value) {
+    if (rofFlashPink.value) return 'ROF'
+    return props.strip.ownerSi || ''
+  }
   if (isTransferIn.value) return props.strip.ownerSi || ''
   if (isTransferOut.value) return props.strip.transferSi || ''
   return props.strip.ownerSi || ''
 })
-const ownerSiClass = computed(() => ({
-  'si-transfer-in': isTransferIn.value,
-  'si-transfer-out': isTransferOut.value,
-}))
+const ownerSiClass = computed(() => {
+  const showingRofText = isRofFlashing.value && rofFlashPink.value
+  return {
+    'si-rof-request': showingRofText && (isRofInbound.value || isRofOutbound.value),
+    // Arrow pointing at requester SI (inbound, when not showing pink ROF)
+    'si-rof-target': isRofInbound.value && !showingRofText,
+    'si-transfer-in': !isRofActive.value && isTransferIn.value,
+    'si-transfer-out': !isRofActive.value && isTransferOut.value,
+  }
+})
 const ownerSiTitle = computed(() => {
   const withFreq = (callsign: string | undefined, freq: string | undefined, fallbackSi: string | undefined) => {
     const who = callsign || fallbackSi
     if (!who) return undefined
     return freq ? `${who} ${freq}` : who
+  }
+  if (isRofActive.value) {
+    const from = withFreq(
+      props.strip.rofRequestCallsign,
+      props.strip.rofRequestFrequency,
+      props.strip.rofRequestSi
+    )
+    if (isRofInbound.value) {
+      return from ? `ROF from ${from}` : 'Incoming ROF'
+    }
+    return from ? `ROF sent (${from})` : 'ROF sent'
   }
   if (isTransferIn.value) {
     const from = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
@@ -873,6 +949,8 @@ onUnmounted(() => {
   if (tsatChangedTimer) clearTimeout(tsatChangedTimer)
   if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
   if (assumeIncomingFlashTimer) clearTimeout(assumeIncomingFlashTimer)
+  if (rofAlternateTimer) clearInterval(rofAlternateTimer)
+  if (rofClockTimer) clearInterval(rofClockTimer)
 })
 
 /** Normalize CDM times (HHMM or HHMMSS) to minutes since midnight */
@@ -1053,15 +1131,19 @@ function onReaBadgeClick(event: MouseEvent) {
 function actionButtonClass(action: string): Record<string, boolean> {
   const classes: Record<string, boolean> = {}
 
-  // Highlight actions (TXI, PARK, XFER) — yellow attention
-  if (props.strip.highlightActions?.includes(action)) {
+  // Inbound ROF: XFER alternates yellow/orange ↔ ROF pink for 1 minute only
+  if (action === 'XFER' && isRofInbound.value && isRofFlashing.value) {
+    if (rofFlashPink.value) classes['action-rof-pink'] = true
+    else classes['action-highlight'] = true
+  } else if (props.strip.highlightActions?.includes(action)) {
+    // Highlight actions (TXI, PARK, XFER) — yellow attention
     classes['action-highlight'] = true
   }
 
-  // ASSUME needs condensed text; green (brief grey↔green flash) on inbound transfer
-  if (action === 'ASSUME') {
+  // ASSUME/ROF: condensed text, fill strip-right; green flash on inbound transfer (ASSUME only)
+  if (action === 'ASSUME' || action === 'ROF') {
     classes['action-assume'] = true
-    if (props.strip.transferPending === 'in') {
+    if (action === 'ASSUME' && props.strip.transferPending === 'in') {
       classes['action-assume-incoming'] = true
       if (assumeIncomingFlashing.value) {
         classes['action-assume-incoming-flash'] = true
@@ -1667,6 +1749,22 @@ function onGroundStateClick(action: string) {
   color: #b05a00;
 }
 
+.owner-si.si-rof-request {
+  color: #dc7cae;
+}
+
+/* Inbound ROF: arrow pointing to requester SI (→ SI) */
+.owner-si.si-rof-target::before {
+  content: '→';
+  position: absolute;
+  right: 100%;
+  top: 0;
+}
+
+.owner-si.si-rof-target {
+  color: #dc7cae;
+}
+
 .flight-strip.owned-by-other {
   opacity: 0.55;
 }
@@ -2134,8 +2232,9 @@ function onGroundStateClick(action: string) {
 }
 
 .action-button {
-  min-width: 36px;
-  width: auto;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 0 4px;
   border: none;
   background: linear-gradient(to bottom, #e8e8e8, #c8c8c8);
@@ -2189,6 +2288,20 @@ function onGroundStateClick(action: string) {
 
 .action-highlight:hover {
   background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
+}
+
+/* Inbound ROF: pink half of XFER yellow ↔ pink alternate */
+.action-rof-pink {
+  background: linear-gradient(to bottom, #e8a8c8, #dc7cae) !important;
+}
+
+.action-rof-pink:hover {
+  background: linear-gradient(to bottom, #f0bcd4, #e08bb8) !important;
+}
+
+.action-rof-pink .action-text,
+.action-rof-pink .action-freq {
+  color: #3a1028;
 }
 
 /* Incoming transfer: solid green after flash */

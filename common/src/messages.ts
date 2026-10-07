@@ -114,7 +114,14 @@ export interface UserSettingsMessage {
     settings: UiSettings
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage
+/** Transient UI toast (e.g. ROF send failure) */
+export interface NotifyMessage {
+    type: 'notify'
+    level: 'error' | 'info'
+    text: string
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage
 
 // Client -> Server messages
 
@@ -305,7 +312,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
-           type === 'controllers' || type === 'userSettings'
+           type === 'controllers' || type === 'userSettings' || type === 'notify'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {

@@ -35,6 +35,7 @@ export {
     setEssaAssignedRunways,
     applyConfig,
     parseControllerRole,
+    isParallelTwr,
     setMyRole,
     updateOnlineController,
     removeOnlineController,

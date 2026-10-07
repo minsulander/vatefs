@@ -34,6 +34,12 @@
       </div>
     </div>
     <EfsBottomBar />
+    <div
+      v-if="store.notifyVisible"
+      class="efs-notify"
+      :class="store.notifyLevel === 'error' ? 'efs-notify--error' : 'efs-notify--info'"
+      @click="store.dismissNotify()"
+    >{{ store.notifyText }}</div>
   </div>
 </template>
 
@@ -64,6 +70,7 @@ function onContainerClick() {
 
 <style scoped>
 .efs-bay-container {
+  position: relative;
   height: 100vh;
   overflow: hidden;
   background: #080a0c;
@@ -188,5 +195,33 @@ function onContainerClick() {
       0 0 22px color-mix(in srgb, var(--bay-accent) 70%, white);
     filter: brightness(1.35);
   }
+}
+
+.efs-notify {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: min(90vw, 560px);
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.efs-notify--error {
+  background: #5c1a1a;
+  color: #ffcdd2;
+  border: 1px solid #e57373;
+}
+
+.efs-notify--info {
+  background: #1a2a3a;
+  color: #bbdefb;
+  border: 1px solid #64b5f6;
 }
 </style>

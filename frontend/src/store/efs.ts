@@ -104,6 +104,31 @@ export const useEfsStore = defineStore("efs", () => {
     const dclError = ref<string | undefined>(undefined)
     const dclMode = ref<DclMode>('manual')
 
+    // Transient toast (ROF failures, etc.)
+    const notifyText = ref('')
+    const notifyLevel = ref<'error' | 'info'>('info')
+    const notifyVisible = ref(false)
+    let notifyHideTimer: ReturnType<typeof setTimeout> | null = null
+
+    function showNotify(text: string, level: 'error' | 'info' = 'info') {
+        notifyText.value = text
+        notifyLevel.value = level
+        notifyVisible.value = true
+        if (notifyHideTimer) clearTimeout(notifyHideTimer)
+        notifyHideTimer = setTimeout(() => {
+            notifyVisible.value = false
+            notifyHideTimer = null
+        }, 8000)
+    }
+
+    function dismissNotify() {
+        notifyVisible.value = false
+        if (notifyHideTimer) {
+            clearTimeout(notifyHideTimer)
+            notifyHideTimer = null
+        }
+    }
+
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
 
@@ -240,6 +265,9 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
+                        break
+                    case 'notify':
+                        showNotify(message.text, message.level)
                         break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
@@ -1203,6 +1231,10 @@ export const useEfsStore = defineStore("efs", () => {
 
     return {
         connected,
+        notifyText,
+        notifyLevel,
+        notifyVisible,
+        dismissNotify,
         getBays,
         layout,
         strips,

@@ -115,7 +115,7 @@ sectionRules:
     priority: 95
 
 actionRules:
-  # ARR RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR/APP/CTR top-down)
+  # ARR RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR/APP/CTR)
   goa_arr_runway:
     action: GOA
     sectionId: arr_runway
@@ -124,9 +124,10 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [GND, DEL]
     priority: 95
 
-  # DEP RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR/APP/CTR top-down)
+  # DEP RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR/APP/CTR)
   goa_dep_runway:
     action: GOA
     sectionId: dep_runway
@@ -135,6 +136,7 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [GND, DEL]
     priority: 95
 
 moveRules:

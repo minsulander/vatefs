@@ -91,6 +91,10 @@ export interface Flight {
     // Backend-managed state flags
     clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
     missedApproach?: boolean  // Aircraft on missed approach (scratchpad MISAP_)
+    /** TopSky ROF requester login callsign (from /LAM/ROF/{cs}; persisted until transfer) */
+    rofRequestFrom?: string
+    /** Epoch ms until inbound ROF SI/XFER flash ends (request itself stays until XFER) */
+    rofFlashUntil?: number
     airborne?: boolean        // Aircraft is airborne after departure
     deleted?: boolean         // Strip is soft-deleted (hidden from user)
     manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)

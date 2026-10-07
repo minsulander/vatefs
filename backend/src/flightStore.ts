@@ -233,6 +233,10 @@ function extractDisplaySid(flight: Flight): string | undefined {
 /**
  * Store for managing Flight objects built from EuroScope plugin messages
  */
+const ROF_COOLDOWN_MS = 60_000
+/** Inbound ROF SI/XFER flash duration; pending request stays until transfer */
+const ROF_FLASH_MS = 60_000
+
 class FlightStore {
     private flights: Map<string, Flight> = new Map()
     private config: EfsStaticConfig
@@ -243,8 +247,92 @@ class FlightStore {
     /** Counter for generating strip positions */
     private positionCounters: Map<string, number> = new Map() // key: bayId:sectionId
 
+    /** ROF button cooldown per callsign (hide for 1 minute after send) */
+    private rofCooldownUntil: Map<string, number> = new Map()
+    private rofCooldownTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+
+    /** Inbound ROF flash-end timers (regenerate strip when alternate stops; request kept) */
+    private rofFlashTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+    private rofFlashEndHandler?: (callsign: string) => void
+
     constructor(config: EfsStaticConfig) {
         this.config = config
+    }
+
+    setRofRequestExpireHandler(handler: (callsign: string) => void): void {
+        // Kept name for server.ts — fires when inbound flash ends (not when request clears)
+        this.rofFlashEndHandler = handler
+    }
+
+    isRofCoolingDown(callsign: string): boolean {
+        const until = this.rofCooldownUntil.get(callsign.toUpperCase())
+        return until !== undefined && Date.now() < until
+    }
+
+    /**
+     * Start 1-minute ROF cooldown for a callsign. onExpire regenerates the strip when the button can show again.
+     */
+    startRofCooldown(callsign: string, onExpire?: () => void): void {
+        const key = callsign.toUpperCase()
+        this.rofCooldownUntil.set(key, Date.now() + ROF_COOLDOWN_MS)
+        const existing = this.rofCooldownTimers.get(key)
+        if (existing) clearTimeout(existing)
+        const timer = setTimeout(() => {
+            this.rofCooldownUntil.delete(key)
+            this.rofCooldownTimers.delete(key)
+            onExpire?.()
+        }, ROF_COOLDOWN_MS)
+        this.rofCooldownTimers.set(key, timer)
+    }
+
+    /** Clear outbound ROF cooldown (e.g. plugin reported send failure) */
+    clearRofCooldown(callsign: string): void {
+        const key = callsign.toUpperCase()
+        this.rofCooldownUntil.delete(key)
+        const existing = this.rofCooldownTimers.get(key)
+        if (existing) {
+            clearTimeout(existing)
+            this.rofCooldownTimers.delete(key)
+        }
+    }
+
+    /** Active incoming ROF requester callsign (until XFER / clear) */
+    getPendingRofRequest(flight: Flight): string | undefined {
+        return flight.rofRequestFrom || undefined
+    }
+
+    clearRofRequest(flight: Flight): void {
+        flight.rofRequestFrom = undefined
+        flight.rofFlashUntil = undefined
+        const key = flight.callsign.toUpperCase()
+        const timer = this.rofFlashTimers.get(key)
+        if (timer) {
+            clearTimeout(timer)
+            this.rofFlashTimers.delete(key)
+        }
+    }
+
+    /**
+     * Persist an incoming TopSky ROF (/LAM/ROF/{requester}). Scratch clears immediately.
+     * Flash for 1 minute; request itself stays until transfer.
+     */
+    setRofRequest(flight: Flight, requester: string): void {
+        const from = requester.trim().toUpperCase()
+        if (!from) return
+        flight.rofRequestFrom = from
+        flight.rofFlashUntil = Date.now() + ROF_FLASH_MS
+        const key = flight.callsign.toUpperCase()
+        const existing = this.rofFlashTimers.get(key)
+        if (existing) clearTimeout(existing)
+        const timer = setTimeout(() => {
+            this.rofFlashTimers.delete(key)
+            if (flight.rofRequestFrom === from) {
+                // Flash window ended — refresh strip UI; keep pending ROF
+                this.rofFlashEndHandler?.(flight.callsign)
+            }
+        }, ROF_FLASH_MS)
+        this.rofFlashTimers.set(key, timer)
+        console.log(`[ROF] ${flight.callsign} request from ${from}`)
     }
 
     /**
@@ -1121,6 +1209,8 @@ class FlightStore {
             // Someone else (or nobody) tracking — optimistic outbound handoff is done
             if (message.controller !== this.config.myCallsign) {
                 flight.handoffOptimisticUntil = undefined
+                // Incoming ROF is only relevant while we own the strip
+                if (flight.rofRequestFrom) this.clearRofRequest(flight)
             }
         }
         if (message.controllerId !== undefined) {
@@ -1259,10 +1349,17 @@ class FlightStore {
         } else if (message.scratch === '') {
             flight.missedApproach = false
         }
+        // TopSky ROF ack: /LAM/ROF/{requester} — persist (scratch clears immediately)
+        if (message.scratch !== undefined) {
+            const lamRof = message.scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
+            if (lamRof?.[1]) {
+                this.setRofRequest(flight, lamRof[1])
+            }
+        }
         // Process scratchpad-based remarks:
         // - ".TEXT" → remark TEXT (VatEFS convention)
         // - "SLOW" (no leading ".") → keep as remark (ES/TopSky slow flag)
-        // - "MISAP_" and other specials → leave remarks unchanged
+        // - "MISAP_" / "/LAM/ROF/..." and other specials → leave remarks unchanged
         // - "" → remark cleared in EuroScope
         if (message.scratch !== undefined) {
             const scratch = message.scratch
@@ -1273,7 +1370,7 @@ class FlightStore {
                 nextRemarks = 'SLOW'
             } else if (scratch === '') {
                 nextRemarks = undefined
-            } else if (scratch === 'MISAP_') {
+            } else if (scratch === 'MISAP_' || /^\/LAM\/ROF\//i.test(scratch)) {
                 nextRemarks = null // special flag — do not hide strip remarks
             } else {
                 // Other non-remark scratch values (TopSky ops, etc.) — clear remark
@@ -1586,6 +1683,8 @@ class FlightStore {
               )
             : undefined
 
+        const pendingRofFrom = isTrackedByMe ? this.getPendingRofRequest(flight) : undefined
+
         if (!clearedForTakeoff) {
             if (isTrackedByMe) {
                 // We're the tracking controller - show action from rules
@@ -1596,6 +1695,12 @@ class FlightStore {
                 } else if (defaultAction) {
                     actions = [defaultAction]
                 }
+                // Incoming TopSky ROF: XFER first so one-tap handoff to requester
+                if (pendingRofFrom) {
+                    if (!actions) actions = ['XFER']
+                    else if (!actions.includes('XFER')) actions = ['XFER', ...actions]
+                    else actions = ['XFER', ...actions.filter(a => a !== 'XFER')]
+                }
             } else if ((isUntracked || isHandoffToMe) && actionConfig.isController) {
                 // Untracked or being handed off to us - let action rules decide
                 // Rules with controller:myself won't match; rules with controller:not_myself or
@@ -1603,16 +1708,29 @@ class FlightStore {
                 const action = determineActionForFlight(flight, sectionId, actionConfig)
                 if (action === 'ASSUME') {
                     actions = ['ASSUME']
+                } else if (action === 'ROF') {
+                    // ROF is for other-owned traffic only; ignore here
                 } else if (action) {
                     actions = [action, 'ASSUME']
                 }
                 // No matching rule → no actions (e.g., transferred departures in CTR DEP)
+            } else if (!isUntracked && !isTrackedByMe && actionConfig.isController) {
+                // Tracked by someone else — ROF only (ASSUME is for untracked / handoff-to-me above)
+                const action = determineActionForFlight(flight, sectionId, actionConfig)
+                if (action === 'ROF' && !this.isRofCoolingDown(flight.callsign)) {
+                    actions = ['ROF']
+                }
             }
-            // If tracked by someone else (not us, not handoff to us) - no actions
         }
 
         let xferFrequency: string | undefined
-        if (flight.nextControllerFrequency && flight.nextController) {
+        if (pendingRofFrom) {
+            const rofFreq = getFrequencyForCallsign(pendingRofFrom)
+            if (rofFreq != null && rofFreq > 0 && rofFreq < 199) {
+                xferFrequency = rofFreq.toFixed(3)
+            }
+        }
+        if (!xferFrequency && flight.nextControllerFrequency && flight.nextController) {
             xferFrequency = flight.nextControllerFrequency.toFixed(3)
         }
 
@@ -1635,6 +1753,33 @@ class FlightStore {
                     const freq = getControllerFrequency('GND')
                     if (freq) xferFrequency = freq.toFixed(3)
                 }
+            }
+        }
+
+        // ROF display fields (pink SI + tooltip):
+        // - inbound: we track the strip and got /LAM/ROF/{requester}
+        // - outbound: we just sent ROF (cooldown) for other-owned traffic
+        let rofRequestSi: string | undefined
+        let rofRequestCallsign: string | undefined
+        let rofRequestFrequency: string | undefined
+        let rofFlashUntil: number | undefined
+        if (pendingRofFrom) {
+            rofRequestCallsign = pendingRofFrom
+            const rawRofSi = getControllerPositionId(pendingRofFrom)
+            rofRequestSi = isEssaRolesConfig(this.config)
+                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
+                : rawRofSi
+            rofRequestFrequency = xferFrequency
+            rofFlashUntil = flight.rofFlashUntil
+        } else if (!isTrackedByMe && this.isRofCoolingDown(flight.callsign) && this.config.myCallsign) {
+            rofRequestCallsign = this.config.myCallsign
+            const rawRofSi = getControllerPositionId(this.config.myCallsign) || this.config.myPositionId
+            rofRequestSi = isEssaRolesConfig(this.config)
+                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
+                : rawRofSi
+            const myFreq = this.config.myFrequency
+            if (myFreq != null && myFreq > 0 && myFreq < 199) {
+                rofRequestFrequency = myFreq.toFixed(3)
             }
         }
 
@@ -1686,6 +1831,8 @@ class FlightStore {
             }
         }
 
+        // Incoming ROF: XFER yellow↔pink flash is frontend-only for rofFlashUntil; no sticky highlight
+
         const cdmEligible = this.isCdmEligibleFlight(flight)
         const ifrDeparture = stripType === 'departure' && (flightRules === 'I' || flightRules === 'Y')
 
@@ -1728,6 +1875,10 @@ class FlightStore {
             missedApproach: flight.missedApproach || undefined,
             canEditClearance: canEditClearance || undefined,
             xferFrequency,
+            rofRequestSi,
+            rofRequestCallsign,
+            rofRequestFrequency,
+            rofFlashUntil,
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,

@@ -32,6 +32,7 @@ import type {
     ControllersMessage,
     ControllerInfo,
     UserSettingsMessage,
+    NotifyMessage,
     ServerMessage,
     ClientMessage,
     AirportAtisInfo,
@@ -425,6 +426,8 @@ function reevaluateAndBroadcast(callsign: string) {
     broadcastStrip(result.strip, result.sectionChanged ? { autoMoved: true } : undefined)
 }
 
+flightStore.setRofRequestExpireHandler((callsign) => reevaluateAndBroadcast(callsign))
+
 type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
     | { type: "setGroundState"; callsign: string; state: string }
@@ -440,6 +443,7 @@ type OutboundPluginCommand =
     | { type: "assignCfl"; callsign: string; altitude: number }
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
+    | { type: "rof"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
     | { type: "setScratch"; callsign: string; value: string }
     | { type: "setEobt"; callsign: string; eobt: string }
@@ -451,6 +455,11 @@ type OutboundPluginCommand =
  * Based on my callsign role and the strip/flight context.
  */
 function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): string | undefined {
+    // Incoming TopSky ROF: always hand off to the requesting controller
+    if (flight) {
+        const rofFrom = flightStore.getPendingRofRequest(flight)
+        if (rofFrom) return rofFrom
+    }
     const myRole = staticConfig.myRole ?? 'TWR'
     switch (myRole) {
         case 'DEL':
@@ -506,6 +515,8 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "resetSquawk", callsign }
         case "GOA":
             return { type: "goaround", callsign }
+        case "ROF":
+            return { type: "rof", callsign }
         default:
             return null
     }
@@ -1585,6 +1596,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
                         flight.handoffOptimisticUntil = Date.now() + 3000
+                        // Clear incoming ROF once we hand off to the requester
+                        if (flight.rofRequestFrom) flightStore.clearRofRequest(flight)
                     }
                 // PARK is a compound action: set PARK groundstate + release
                 } else if (message.action === "PARK") {
@@ -1594,6 +1607,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "CTL_GS") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
                     sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                // ROF: TopSky request-on-frequency; hide button for 1 minute
+                } else if (message.action === "ROF") {
+                    sendUdp(JSON.stringify({ type: "rof", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                    flightStore.startRofCooldown(strip.callsign, () => reevaluateAndBroadcast(strip.callsign))
+                    reevaluateAndBroadcast(strip.callsign)
                 } else if (message.action === "toggleClearanceFlag") {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
@@ -2687,6 +2705,28 @@ udpIn.on("message", (msg, rinfo) => {
     recordMessage(text)
     try {
         const data = JSON.parse(text)
+
+        // Plugin ROF send result — clear optimistic cooldown on failure and toast in EFS
+        if (data.type === "rofResult") {
+            const callsign = typeof data.callsign === "string" ? data.callsign.toUpperCase() : ""
+            const ok = data.ok === true
+            const error = typeof data.error === "string" ? data.error : "Failed to send ROF"
+            if (!callsign) return
+            if (ok) {
+                console.log(`[ROF] sent ok for ${callsign}`)
+                return
+            }
+            console.log(`[ROF] send failed for ${callsign}: ${error}`)
+            flightStore.clearRofCooldown(callsign)
+            reevaluateAndBroadcast(callsign)
+            const notify: NotifyMessage = {
+                type: "notify",
+                level: "error",
+                text: `ROF failed for ${callsign}: ${error}`,
+            }
+            broadcast(notify)
+            return
+        }
 
         // Handle connectionTypeUpdate - connection type 0 means logged off
         if (data.type === "connectionTypeUpdate" && data.connectionType === 0) {

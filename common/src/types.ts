@@ -80,6 +80,13 @@ export interface FlightStrip {
     // Transfer frequency (shown on XFER button when handoff target matches next controller)
     xferFrequency?: string
 
+    // TopSky ROF (request on frequency): inbound LAM requester, or ourselves while outbound cooldown
+    rofRequestSi?: string
+    rofRequestCallsign?: string
+    rofRequestFrequency?: string
+    /** Epoch ms; inbound ROF flash (SI/XFER alternate) until this time */
+    rofFlashUntil?: number
+
     // Slow aircraft indicator (light WTC or specific medium turboprops)
     isSlow?: boolean
 

@@ -96,6 +96,25 @@ sectionRules:
     groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
 
+  # GND: after assuming a vacated arrival, move INBOUND → TAXI ARR
+  taxi_arr_assumed_gnd:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    onRunway: false
+    controller: myself
+    myRole: [GND]
+    priority: 105
+
+  taxi_arr_assumed_local_gnd:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    onRunway: false
+    controller: myself
+    myRole: [GND]
+    priority: 105
+
   # GND (not covering TWR): CTR / runway arrivals appear in INBOUND TWR
   inbound_airborne_arr_gnd:
     sectionId: inbound
@@ -128,6 +147,27 @@ sectionRules:
     myRole: [GND]
     notMyRole: [TWR]
     priority: 210
+
+  # GND (not covering TWR): keep other-owned vacated arrivals in INBOUND until GND assumes
+  inbound_vacated_arr_gnd:
+    sectionId: inbound
+    direction: arrival
+    airborne: false
+    onRunway: false
+    controller: not_myself
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 100
+
+  inbound_vacated_local_gnd:
+    sectionId: inbound
+    direction: local
+    airborne: false
+    onRunway: false
+    controller: not_myself
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 100
 
   # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
 
@@ -249,6 +289,7 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [GND, DEL]
     priority: 95
 
   goa_dep_runway:
@@ -259,7 +300,20 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [GND, DEL]
     priority: 95
+
+  # Override common-rules: split taxi uses taxi_dep (not unified taxi)
+  rof_taxi_dep_twr:
+    action: ROF
+    sectionId: taxi_dep
+    groundstates: [TAXI]
+    airborne: false
+    controller: not_myself
+    notParallelTwrOwner: true
+    withinCtr: true
+    myRole: [TWR]
+    priority: 40
 
 moveRules:
   # Override common-rules taxi moves for split sections

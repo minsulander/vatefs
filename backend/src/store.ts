@@ -122,6 +122,12 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "ownerFrequency",
     "transferCallsign",
     "transferFrequency",
+    "xferFrequency",
+    // Incoming TopSky ROF
+    "rofRequestSi",
+    "rofRequestCallsign",
+    "rofRequestFrequency",
+    "rofFlashUntil",
 ]
 
 /**

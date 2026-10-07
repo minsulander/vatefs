@@ -47,6 +47,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
     bool UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet = false);
+    /** Send TopSky ROF for target callsign (/ROF/TARGET/MYSELF on a writable FP). */
+    bool SendRof(const std::string &targetCallsign);
     void Refresh();
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
     /** Poll tracking/handoff ownership and push UDP when ES state changes without a callback */

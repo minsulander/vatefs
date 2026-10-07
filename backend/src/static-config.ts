@@ -391,6 +391,19 @@ export function parseControllerRole(callsign: string, _myAirports: string[]): Co
 }
 
 /**
+ * Parallel TWR: both positions are TWR at the same airport (ICAO prefix),
+ * e.g. ESSA_E_TWR and ESSA_W_TWR. Used to suppress ROF between split towers.
+ */
+export function isParallelTwr(myCallsign: string | undefined, otherCallsign: string | undefined): boolean {
+    if (!myCallsign || !otherCallsign) return false
+    const me = myCallsign.toUpperCase()
+    const other = otherCallsign.toUpperCase()
+    if (me === other) return false
+    if (parseControllerRole(me, []) !== 'TWR' || parseControllerRole(other, []) !== 'TWR') return false
+    return me.slice(0, 4) === other.slice(0, 4)
+}
+
+/**
  * Set my controller role and recompute effective roles per airport.
  */
 export function setMyRole(role: ControllerRole) {

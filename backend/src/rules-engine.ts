@@ -20,7 +20,7 @@ import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
-import { parseControllerRole } from "./static-config.js"
+import { parseControllerRole, isParallelTwr } from "./static-config.js"
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
 import { essaRunwaySectionId } from "@vatefs/common"
 import {
@@ -432,6 +432,14 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
+    // Check handoff initiated condition
+    if (rule.handoffInitiated !== undefined) {
+        const hasHandoff = !!flight.handoffTargetController && flight.handoffTargetController !== ''
+        if (hasHandoff !== rule.handoffInitiated) {
+            return false
+        }
+    }
+
     return true
 }
 
@@ -560,6 +568,33 @@ function evaluateActionRule(
         if (hasHandoff !== rule.handoffInitiated) {
             return false
         }
+    }
+
+    // Check withinCtr condition (real CTR/TIZ boundary data from LFV)
+    if (rule.withinCtr !== undefined) {
+        if (flight.latitude === undefined || flight.longitude === undefined || flight.currentAltitude === undefined) {
+            return false
+        }
+        const ctrResult = isWithinCtr(config.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
+        if (ctrResult === undefined) {
+            return false
+        }
+        if (ctrResult !== rule.withinCtr) {
+            return false
+        }
+    }
+
+    // Tracked by someone else who is not a parallel TWR (e.g. other ESSA TWR)
+    if (rule.notParallelTwrOwner === true) {
+        if (!flight.controller) return false
+        if (isParallelTwr(config.myCallsign, flight.controller)) return false
+    }
+
+    // Tracking controller role (e.g. ownerRole: [TWR] for GND→TWR ROF)
+    if (rule.ownerRole) {
+        if (!flight.controller) return false
+        const ownerRole = parseControllerRole(flight.controller, config.myAirports)
+        if (!rule.ownerRole.includes(ownerRole)) return false
     }
 
     return true

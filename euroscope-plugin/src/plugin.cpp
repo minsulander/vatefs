@@ -1389,6 +1389,94 @@ bool VatEFSPlugin::UpdateScratchPad(const std::string &inCallsign, const std::st
     return false;
 }
 
+bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
+{
+    auto postResult = [this](const std::string &callsign, bool ok, const std::string &error = "") {
+        nlohmann::json result = nlohmann::json::object();
+        result["type"] = "rofResult";
+        result["callsign"] = callsign;
+        result["ok"] = ok;
+        if (!ok && !error.empty()) result["error"] = error;
+        PostJson(result, "SendRof");
+    };
+
+    try {
+        std::string target = targetCallsign;
+        for (auto &c : target)
+            c = (char)std::toupper((unsigned char)c);
+        if (target.empty()) {
+            const std::string err = "Invalid callsign";
+            DisplayMessage("rof: " + err);
+            postResult(target, false, err);
+            return false;
+        }
+        auto myself = ControllerMyself();
+        if (!myself.IsValid()) {
+            const std::string err = "Not logged in as controller";
+            DisplayMessage("rof: " + err);
+            postResult(target, false, err);
+            return false;
+        }
+        // TopSky coordination: /ROF/TARGET/REQUESTER on a scratchpad ES lets us write.
+        // Do not clear immediately — TopSky reads then clears (see live /ROF/ then empty).
+        const std::string scratch = std::string("/ROF/") + target + "/" + myself.GetCallsign();
+
+        std::vector<std::string> vehicles;
+        // Prefer aircraft we track (observed TopSky vehicle for ROF)
+        for (auto fp = FlightPlanSelectFirst(); fp.IsValid(); fp = FlightPlanSelectNext(fp)) {
+            if (!fp.GetTrackingControllerIsMe()) continue;
+            const char *cs = fp.GetCallsign();
+            if (!cs || !cs[0]) continue;
+            std::string v = cs;
+            for (auto &c : v)
+                c = (char)std::toupper((unsigned char)c);
+            if (v != target) vehicles.push_back(v);
+        }
+        // Then the target itself (works if we can write its scratch)
+        vehicles.push_back(target);
+        // Finally any other FP that accepts a scratch write
+        for (auto fp = FlightPlanSelectFirst(); fp.IsValid(); fp = FlightPlanSelectNext(fp)) {
+            const char *cs = fp.GetCallsign();
+            if (!cs || !cs[0]) continue;
+            std::string v = cs;
+            for (auto &c : v)
+                c = (char)std::toupper((unsigned char)c);
+            if (v == target) continue;
+            bool already = false;
+            for (const auto &e : vehicles)
+                if (e == v) {
+                    already = true;
+                    break;
+                }
+            if (!already) vehicles.push_back(v);
+        }
+
+        for (const auto &vehicle : vehicles) {
+            auto fp = FlightPlanSelect(vehicle.c_str());
+            if (!fp.IsValid()) continue;
+            if (fp.GetControllerAssignedData().SetScratchPadString(scratch.c_str())) {
+                DebugMessage("ROF sent for " + target + " via " + vehicle + ": " + scratch);
+                postResult(target, true);
+                return true;
+            }
+        }
+
+        const std::string err = "Assume at least one aircraft first (TopSky needs a tracked scratch vehicle)";
+        DisplayMessage("rof: Failed to send — " + err);
+        postResult(target, false, err);
+        return false;
+    } catch (const std::exception &e) {
+        const std::string err = std::string("Exception: ") + e.what();
+        DisplayMessage("rof " + err);
+        postResult(targetCallsign, false, err);
+    } catch (...) {
+        const std::string err = "Unknown exception";
+        DisplayMessage("rof: " + err);
+        postResult(targetCallsign, false, err);
+    }
+    return false;
+}
+
 void VatEFSPlugin::Refresh()
 {
     for (EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid();
@@ -1656,6 +1744,11 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         UpdateScratchPad(callsign, "MISAP_", false);
                     } else {
                         DisplayMessage("goaround: Invalid callsign");
+                    }
+                } else if (message["type"] == "rof") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!SendRof(callsign)) {
+                        // SendRof already displayed a specific error
                     }
                 } else if (message["type"] == "clearScratchpad") {
                     auto callsign = message["callsign"].get<std::string>();

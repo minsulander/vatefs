@@ -14,7 +14,7 @@ export type ControllerRole = 'DEL' | 'GND' | 'TWR' | 'APP' | 'CTR'
 /**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA' | 'ROF'
 
 /**
  * Flight direction relative to our airport.
@@ -148,6 +148,12 @@ export interface SectionRule {
 
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
+
+    /**
+     * Whether a handoff has been initiated (handoffTargetController is non-empty).
+     * Used e.g. so GND keeps TWR-owned vacated arrivals in INBOUND until TWR transfers.
+     */
+    handoffInitiated?: boolean
 }
 
 /**
@@ -240,6 +246,24 @@ export interface ActionRule {
 
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
+
+    /**
+     * Whether the aircraft must be within (true) or outside (false) a CTR/TIZ zone.
+     * If CTR data is not available, this condition fails (rule does not match).
+     */
+    withinCtr?: boolean
+
+    /**
+     * When true: flight must be tracked by someone else who is NOT a parallel TWR
+     * (same airport ICAO prefix, both TWR roles — e.g. ESSA_E_TWR vs ESSA_W_TWR).
+     */
+    notParallelTwrOwner?: boolean
+
+    /**
+     * Tracking controller's role (from callsign) must be one of these.
+     * E.g. ownerRole: [TWR] for GND ROF of tower-owned inbound traffic.
+     */
+    ownerRole?: ControllerRole[]
 }
 
 /**

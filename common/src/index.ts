@@ -55,6 +55,7 @@ export type {
     ControllerInfo,
     ControllersMessage,
     UserSettingsMessage,
+    NotifyMessage,
     ServerMessage,
     RequestMessage,
     MoveStripMessage,

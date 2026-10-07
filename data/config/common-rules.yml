@@ -239,12 +239,13 @@ actionRules:
     myRole: [GND]
     priority: 112
 
-  # GND: ASSUME on-ground arrivals (handoff from TWR)
+  # GND: ASSUME on-ground arrivals when TWR has initiated transfer
   assume_arr_gnd:
     action: ASSUME
     direction: arrival
     controller: not_myself
     airborne: false
+    handoffInitiated: true
     myRole: [GND]
     priority: 111
 
@@ -265,12 +266,14 @@ actionRules:
 
   # === EXISTING RULES (with role conditions where needed) ===
 
-  # INBOUND arrivals: ASSUME to take control (TWR/APP/CTR top-down)
+  # INBOUND arrivals: ASSUME when transfer initiated (TWR/APP/CTR top-down)
+  # Without handoff, TWR uses ROF for APP/ACC-owned traffic instead
   assume_inbound:
     action: ASSUME
     sectionId: inbound
     direction: arrival
     controller: not_myself
+    handoffInitiated: true
     myRole: [TWR, APP, CTR]
     priority: 100
 
@@ -375,6 +378,70 @@ actionRules:
     myRole: [GND]
     priority: 70
 
+  # TopSky ROF: INBOUND APP — airborne arrivals owned by APP/ACC
+  # Priority above assume_inbound (100) so ROF shows until handoff is initiated
+  rof_inbound_arr:
+    action: ROF
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    controller: not_myself
+    ownerRole: [APP, CTR]
+    handoffInitiated: false
+    myRole: [TWR]
+    priority: 120
+
+  # TopSky ROF: CTR ARR — on final owned by APP/ACC
+  rof_ctr_arr_twr:
+    action: ROF
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    controller: not_myself
+    ownerRole: [APP, CTR]
+    handoffInitiated: false
+    myRole: [TWR]
+    priority: 120
+
+  # TopSky ROF: taxi-out other-owned traffic (TWR only). ESSA overrides sectionId → taxi_dep.
+  rof_taxi_dep_twr:
+    action: ROF
+    sectionId: taxi
+    groundstates: [TAXI]
+    airborne: false
+    controller: not_myself
+    notParallelTwrOwner: true
+    withinCtr: true
+    myRole: [TWR]
+    priority: 40
+
+  # GND ROF: TWR-owned inbound still on the runway
+  # Priority above assume_arr_gnd (111) so ROF wins while TWR still owns the track
+  rof_gnd_inbound_on_rwy:
+    action: ROF
+    sectionId: inbound
+    controller: not_myself
+    ownerRole: [TWR]
+    onRunway: true
+    handoffInitiated: false
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 120
+
+  # GND ROF: TWR-owned inbound vacated after landing (until GND assumes)
+  # (any groundstate — only geography + ownership matter)
+  rof_gnd_inbound_vacated:
+    action: ROF
+    sectionId: inbound
+    controller: not_myself
+    ownerRole: [TWR]
+    airborne: false
+    onRunway: false
+    handoffInitiated: false
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 120
+
   # === CATCH-ALL ASSUME RULES ===
 
   # Assume any departure/local tracked by someone else when I'm covering DEL duties
@@ -386,11 +453,12 @@ actionRules:
     myRole: [DEL]
     priority: 10
 
-  # Assume any untracked arrival (GND/TWR/APP/CTR)
+  # GND: ASSUME arrival only when transfer has been initiated (or untracked via fallback)
   assume_arrival:
     action: ASSUME
     direction: arrival
     controller: not_myself
+    handoffInitiated: true
     myRole: [GND]
     priority: 10
 

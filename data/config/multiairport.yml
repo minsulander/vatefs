@@ -309,6 +309,7 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
+    notMyRole: [GND, DEL]
     priority: 95
 
   cto_lineup:
