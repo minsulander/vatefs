@@ -62,7 +62,7 @@ import type { DclStatus } from "./hoppie-service.js"
 import { ViffService } from "./viff-service.js"
 import type { ViffPollResult } from "./viff-service.js"
 import { loadDclSound, playDclSound, loadTransferSounds, playTransferSound } from "./sound.js"
-import { loadIcaoAirports, getIcaoAirportName } from "./icao-airports.js"
+import { loadIcaoAirports, getIcaoAirportName, getIcaoAirportInfo } from "./icao-airports.js"
 import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
 import { initUserSettings, loadUserSettings, saveUserSettings, resolveUiSettings } from "./user-settings.js"
@@ -412,6 +412,7 @@ type OutboundPluginCommand =
     | { type: "transfer"; callsign: string; targetCallsign?: string }
     | { type: "release"; callsign: string }
     | { type: "assume"; callsign: string }
+    | { type: "refuse"; callsign: string }
     | { type: "toggleClearanceFlag"; callsign: string; desired?: boolean }
     | { type: "resetSquawk"; callsign: string }
     | { type: "assignDepartureRunway"; callsign: string; runway: string }
@@ -478,6 +479,8 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "transfer", callsign }
         case "ASSUME":
             return { type: "assume", callsign }
+        case "REFUSE":
+            return { type: "refuse", callsign }
         case "toggleClearanceFlag":
             return { type: "toggleClearanceFlag", callsign }
         case "resetSquawk":
@@ -1488,6 +1491,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
+                        flight.handoffOptimisticUntil = Date.now() + 3000
                     }
                 // XFER: initiate handoff to the appropriate next controller
                 } else if (message.action === "XFER") {
@@ -1497,6 +1501,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     // Optimistic: show pending outbound transfer immediately
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
+                        flight.handoffOptimisticUntil = Date.now() + 3000
                     }
                 // PARK is a compound action: set PARK groundstate + release
                 } else if (message.action === "PARK") {
@@ -1551,6 +1556,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.controllerId = staticConfig.myPositionId
                             flight.handoffTargetController = ""
                             break
+                        case "REFUSE":
+                            flight.handoffTargetController = ""
+                            flight.handoffTargetControllerId = undefined
+                            break
                         case "resetSquawk": {
                             const sq = String(Math.floor(2000 + Math.random() * 5777)).padStart(4, "0")
                             flight.squawk = sq
@@ -1585,12 +1594,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         case "XFER": {
                             const target = resolveXferTarget(strip, flight)
                             flight.handoffTargetController = target || ""
+                            if (target) flight.handoffOptimisticUntil = Date.now() + 3000
                             break
                         }
                         case "READY": {
                             flight.groundstate = "DE-ICE"
                             const readyTarget = resolveXferTarget(strip, flight)
                             flight.handoffTargetController = readyTarget || ""
+                            if (readyTarget) flight.handoffOptimisticUntil = Date.now() + 3000
                             break
                         }
                         case "FRQ":
@@ -1619,6 +1630,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (
                     message.action === "toggleClearanceFlag" ||
                     message.action === "ASSUME" ||
+                    message.action === "REFUSE" ||
                     message.action === "XFER" ||
                     message.action === "READY"
                 ) {
@@ -1627,6 +1639,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.controller = staticConfig.myCallsign
                         flight.controllerId = staticConfig.myPositionId
                         flight.handoffTargetController = ""
+                        flight.handoffOptimisticUntil = undefined
+                    } else if (message.action === "REFUSE" && flight) {
+                        flight.handoffTargetController = ""
+                        flight.handoffTargetControllerId = undefined
+                        flight.handoffOptimisticUntil = undefined
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }
@@ -1790,6 +1807,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {
                 flight.handoffTargetController = message.targetCallsign
+                flight.handoffOptimisticUntil = Date.now() + 3000
                 reevaluateAndBroadcast(strip.callsign)
             }
             break
@@ -2493,7 +2511,11 @@ app.get("/api/withinctr", (req, res) => {
 
 app.get("/api/airports", (req, res) => {
     const prefix = typeof req.query.prefix === "string" ? req.query.prefix : "ES"
-    res.json({ airports: listAirportIcaos(prefix) })
+    const airports = listAirportIcaos(prefix).map((icao) => {
+        const info = getIcaoAirportInfo(icao)
+        return { icao, name: info?.name ?? null, country: info?.country ?? null }
+    })
+    res.json({ airports })
 })
 
 app.get("/api/airport-name", (req, res) => {
@@ -2502,8 +2524,8 @@ app.get("/api/airport-name", (req, res) => {
         res.status(400).json({ error: "Missing icao parameter" })
         return
     }
-    const name = getIcaoAirportName(icao)
-    res.json({ name: name ?? null })
+    const info = getIcaoAirportInfo(icao)
+    res.json({ name: info?.name ?? getIcaoAirportName(icao) ?? null, country: info?.country ?? null })
 })
 
 app.get("/api/dcl/status", (req, res) => {

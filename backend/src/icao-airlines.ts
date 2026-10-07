@@ -39,6 +39,7 @@ export function loadIcaoAirlines(filePath: string) {
 /**
  * Extract telephony callsign from FPL item 18 remarks (VATScout-compatible).
  * Recognises CALLSIGN IS / CALLSIGN/=_ / C/S=_ / CS/
+ * Captures only the first token (e.g. CALLSIGN/BLUESCAN ... → BLUESCAN).
  */
 export function extractRtfFromFplRemarks(remarks: string): string | undefined {
     // Pad so \W can match at start of remarks (same trick as needing a boundary)
@@ -47,11 +48,10 @@ export function extractRtfFromFplRemarks(remarks: string): string | undefined {
         return undefined
     }
 
-    const m = padded.match(/(\WCALLSIGN IS |\WCALLSIGN[/=_ ]+|\WC\/S[=_ ]|\WCS\/)([\w\s-_"]+?)(TCAS|SIMBRIEF|\s\w+\/|[,\.\/\(]|$)/i)
-    if (!m?.[2]) return undefined
+    const m = padded.match(/(\WCALLSIGN IS |\WCALLSIGN[/=_ ]+|\WC\/S[=_ ]|\WCS\/)(["']?)([A-Za-z][\w-]*)/i)
+    if (!m?.[3]) return undefined
 
-    const remarkCallsign = m[2].replaceAll('"', "").trim()
-    return remarkCallsign || undefined
+    return m[3].trim() || undefined
 }
 
 /**

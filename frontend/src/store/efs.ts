@@ -85,7 +85,8 @@ export const useEfsStore = defineStore("efs", () => {
     const esAirports = ref<string[]>([])
     const columnAirports = ref<(string | null)[]>([])
     const columnCount = ref(4)
-    const airportOptions = ref<string[]>([])
+    /** Swedish (ES*) airports for RTC column picker — includes name/country when known */
+    const airportOptions = ref<Array<{ icao: string; name?: string; country?: string }>>([])
 
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
@@ -349,11 +350,25 @@ export const useEfsStore = defineStore("efs", () => {
         try {
             const res = await fetch('/api/airports?prefix=ES')
             if (!res.ok) return
-            const data = await res.json() as { airports?: string[] }
-            if (data.airports) airportOptions.value = data.airports
+            const data = await res.json() as {
+                airports?: Array<string | { icao: string; name?: string | null; country?: string | null }>
+            }
+            if (!data.airports) return
+            airportOptions.value = data.airports.map((a) => {
+                if (typeof a === 'string') return { icao: a }
+                return {
+                    icao: a.icao,
+                    name: a.name ?? undefined,
+                    country: a.country ?? undefined,
+                }
+            })
         } catch (err) {
             console.warn('Failed to fetch airport list', err)
         }
+    }
+
+    function airportMeta(icao: string): { name?: string; country?: string } | undefined {
+        return airportOptions.value.find((a) => a.icao === icao)
     }
 
     function setColumnAirport(columnIndex: number, airport: string | null) {
@@ -1054,6 +1069,7 @@ export const useEfsStore = defineStore("efs", () => {
         columnAirports,
         columnCount,
         airportOptions,
+        airportMeta,
         idleAirports,
         pendingIdleSwap,
         flashingColumnIndex,

@@ -60,6 +60,8 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "flightRules",
     "adep",
     "ades",
+    "adepName",
+    "adesName",
     "route",
     "sid",
     "rfl",

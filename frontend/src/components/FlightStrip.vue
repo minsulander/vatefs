@@ -23,6 +23,9 @@
       <v-list-item v-if="strip.transferPending === 'out' && !isNote && store.isController" @click="onAssumeClick">
         <v-list-item-title>Assume</v-list-item-title>
       </v-list-item>
+      <v-list-item v-if="strip.transferPending === 'in' && !isNote && store.isController" @click="onRefuseClick">
+        <v-list-item-title>Refuse</v-list-item-title>
+      </v-list-item>
       <v-list-item v-if="strip.isAssumed && !isNote" @click="onReleaseClick">
         <v-list-item-title>Release</v-list-item-title>
       </v-list-item>
@@ -110,7 +113,7 @@
   </v-menu>
 
   <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimOwnership, 'transfer-pending-in': isTransferIn, 'transfer-pending-out': isTransferOut }]" :style="stripStyle"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimOwnership }]" :style="stripStyle"
     :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
     @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
@@ -303,15 +306,15 @@
         <div class="strip-section strip-airports">
           <template v-if="store.myAirports.length > 1">
             <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' || strip.stripType === 'local' }">
-              <span class="icao">{{ strip.adep }}</span>
+              <span class="icao" :title="strip.adepName || undefined">{{ strip.adep }}</span>
             </div>
             <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' || strip.stripType === 'local' }">
-              <span class="icao">{{ strip.ades }}</span>
+              <span class="icao" :title="strip.adesName || undefined">{{ strip.ades }}</span>
             </div>
           </template>
           <template v-else>
             <div class="airport highlight single-airport">
-              <span class="icao">{{ (strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adep : strip.ades }}</span>
+              <span class="icao" :title="((strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adepName : strip.adesName) || undefined">{{ (strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adep : strip.ades }}</span>
             </div>
           </template>
         </div>
@@ -457,6 +460,26 @@ const deleteDialogOpen = ref(false)
 const isNote = computed(() => props.strip.stripType === 'note')
 const isTransferIn = computed(() => !isNote.value && props.strip.transferPending === 'in')
 const isTransferOut = computed(() => !isNote.value && props.strip.transferPending === 'out')
+/** Flash ASSUME grey↔green briefly when an inbound transfer appears, then stay solid green */
+const assumeIncomingFlashing = ref(false)
+let assumeIncomingFlashTimer: ReturnType<typeof setTimeout> | null = null
+const ASSUME_INCOMING_FLASH_MS = 2000
+
+watch(isTransferIn, (incoming) => {
+  if (assumeIncomingFlashTimer) {
+    clearTimeout(assumeIncomingFlashTimer)
+    assumeIncomingFlashTimer = null
+  }
+  if (incoming) {
+    assumeIncomingFlashing.value = true
+    assumeIncomingFlashTimer = setTimeout(() => {
+      assumeIncomingFlashing.value = false
+      assumeIncomingFlashTimer = null
+    }, ASSUME_INCOMING_FLASH_MS)
+  } else {
+    assumeIncomingFlashing.value = false
+  }
+}, { immediate: true })
 const showOwnerSi = computed(() => {
   if (!store.showStripOwnership || isNote.value) return false
   if (isTransferIn.value) return !!props.strip.ownerSi
@@ -844,6 +867,7 @@ onUnmounted(() => {
   if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
   if (tsatChangedTimer) clearTimeout(tsatChangedTimer)
   if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
+  if (assumeIncomingFlashTimer) clearTimeout(assumeIncomingFlashTimer)
 })
 
 /** Normalize CDM times (HHMM or HHMMSS) to minutes since midnight */
@@ -1024,14 +1048,20 @@ function onReaBadgeClick(event: MouseEvent) {
 function actionButtonClass(action: string): Record<string, boolean> {
   const classes: Record<string, boolean> = {}
 
-  // Highlight actions (TXI, PARK, XFER)
+  // Highlight actions (TXI, PARK, XFER) — yellow attention
   if (props.strip.highlightActions?.includes(action)) {
     classes['action-highlight'] = true
   }
 
-  // ASSUME needs condensed text
+  // ASSUME needs condensed text; green (brief grey↔green flash) on inbound transfer
   if (action === 'ASSUME') {
     classes['action-assume'] = true
+    if (props.strip.transferPending === 'in') {
+      classes['action-assume-incoming'] = true
+      if (assumeIncomingFlashing.value) {
+        classes['action-assume-incoming-flash'] = true
+      }
+    }
   }
 
   // GOA gets its own colour
@@ -1472,6 +1502,12 @@ function onAssumeClick() {
   store.sendStripAction(props.strip.id, 'ASSUME')
 }
 
+/** Refuse pending inbound handoff */
+function onRefuseClick() {
+  menuOpen.value = false
+  store.sendStripAction(props.strip.id, 'REFUSE')
+}
+
 function onTransferClick(targetCallsign: string) {
   menuOpen.value = false
   transferMenuOpen.value = false
@@ -1632,15 +1668,6 @@ function onGroundStateClick(action: string) {
 
 .flight-strip.owned-by-other:hover {
   opacity: 0.75;
-}
-
-.flight-strip.transfer-pending-in {
-  opacity: 1;
-  box-shadow: inset 0 0 0 2px #2e8b57;
-}
-
-.flight-strip.transfer-pending-out {
-  box-shadow: inset 0 0 0 2px #c47a00;
 }
 
 .flight-rules {
@@ -2157,6 +2184,47 @@ function onGroundStateClick(action: string) {
 
 .action-highlight:hover {
   background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
+}
+
+/* Incoming transfer: solid green after flash */
+.action-assume-incoming {
+  background: linear-gradient(to bottom, #66bb6a, #2e7d32) !important;
+}
+
+.action-assume-incoming:hover {
+  background: linear-gradient(to bottom, #81c784, #388e3c) !important;
+}
+
+.action-assume-incoming .action-text {
+  color: #fff;
+}
+
+/* First seconds of inbound transfer: alternate grey ↔ green (no opacity) */
+.action-assume-incoming-flash {
+  animation: assume-grey-green-flash 0.7s ease-in-out infinite;
+}
+
+.action-assume-incoming-flash:hover {
+  animation: none;
+}
+
+.action-assume-incoming-flash .action-text {
+  animation: assume-text-grey-green-flash 0.7s ease-in-out infinite;
+}
+
+.action-assume-incoming-flash:hover .action-text {
+  animation: none;
+  color: #fff;
+}
+
+@keyframes assume-grey-green-flash {
+  0%, 100% { background: linear-gradient(to bottom, #66bb6a, #2e7d32); }
+  50% { background: linear-gradient(to bottom, #e8e8e8, #c8c8c8); }
+}
+
+@keyframes assume-text-grey-green-flash {
+  0%, 100% { color: #fff; }
+  50% { color: #333; }
 }
 
 /* DCL status coloring for CLNC button */

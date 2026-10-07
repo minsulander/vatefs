@@ -5,6 +5,7 @@ import type {
     FlightPlanDataUpdateMessage,
     ControllerAssignedDataUpdateMessage,
     RadarTargetPositionUpdateMessage,
+    OwnershipUpdateMessage,
     FlightStripPushedMessage,
     GroundState
 } from "./types.js"
@@ -18,6 +19,7 @@ import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { getRtfCallsign } from "./icao-airlines.js"
+import { getIcaoAirportName } from "./icao-airports.js"
 import { hasSidInEse, getSidInfo } from "./sid-data.js"
 import {
     getRelevantActiveAirports,
@@ -110,13 +112,13 @@ function detectTransferSound(
     const hadOutbound = prevCtrl === myCallsign && prevHo !== '' && prevHo !== myCallsign
     if (!hadOutbound) return undefined
 
-    // Other controller assumed our outbound transfer
-    if (nextCtrl !== '' && nextCtrl !== myCallsign) {
+    // Other controller assumed our outbound transfer (controller may briefly be empty)
+    if (nextCtrl !== myCallsign) {
         return 'accept'
     }
 
     // Outbound cancelled / refused while we still track
-    if (nextCtrl === myCallsign && nextHo === '') {
+    if (nextHo === '') {
         return 'refuse'
     }
 
@@ -853,6 +855,9 @@ class FlightStore {
             case 'radarTargetPositionUpdate':
                 return this.handleRadarTargetPositionUpdate(message)
 
+            case 'ownershipUpdate':
+                return this.handleOwnershipUpdate(message)
+
             case 'flightPlanFlightStripPushed':
                 return this.handleFlightStripPushed(message)
 
@@ -1021,6 +1026,59 @@ class FlightStore {
     }
 
     /**
+     * Apply tracking/handoff fields from plugin. Protects EFS-optimistic outbound handoff
+     * from being cleared by a premature empty dump right after InitiateHandoff.
+     */
+    private applyOwnershipFromPlugin(
+        flight: Flight,
+        message: {
+            controller?: string
+            controllerId?: string
+            handoffTargetController?: string
+            handoffTargetControllerId?: string
+        },
+        logTag: string
+    ) {
+        const callsign = flight.callsign
+        if (message.controller !== undefined && message.controller !== flight.controller)
+            console.log(`[${logTag}] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller || '(cleared)'}`)
+        if (message.handoffTargetController !== undefined && message.handoffTargetController !== flight.handoffTargetController)
+            console.log(`[${logTag}] ${callsign} handoff: ${flight.handoffTargetController ?? '-'} -> ${message.handoffTargetController || '(cleared)'}`)
+
+        if (message.controller !== undefined) {
+            flight.controller = message.controller
+            if (!message.controller) flight.controllerId = undefined
+            // Someone else (or nobody) tracking — optimistic outbound handoff is done
+            if (message.controller !== this.config.myCallsign) {
+                flight.handoffOptimisticUntil = undefined
+            }
+        }
+        if (message.controllerId !== undefined) {
+            flight.controllerId = message.controllerId || undefined
+        }
+        if (message.handoffTargetController !== undefined) {
+            const clearing = !message.handoffTargetController
+            const protectOptimistic =
+                clearing &&
+                !!flight.handoffTargetController &&
+                flight.handoffOptimisticUntil !== undefined &&
+                Date.now() < flight.handoffOptimisticUntil &&
+                (flight.controller === this.config.myCallsign || flight.controller === undefined)
+            if (!protectOptimistic) {
+                flight.handoffTargetController = message.handoffTargetController
+                if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
+                if (message.handoffTargetController) flight.handoffOptimisticUntil = undefined
+            }
+        }
+        if (message.handoffTargetControllerId !== undefined) {
+            // Don't clobber SI while optimistic handoff is protected
+            if (!flight.handoffOptimisticUntil || message.handoffTargetController) {
+                flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
+            }
+        }
+    }
+
+    /**
      * Handle flightPlanDataUpdate message
      */
     private handleFlightPlanDataUpdate(message: FlightPlanDataUpdateMessage): ProcessMessageResult {
@@ -1029,12 +1087,6 @@ class FlightStore {
         const hadRequiredData = flightHasRequiredData(flight)
         const prevController = flight.controller
         const prevHandoff = flight.handoffTargetController
-
-        // Log significant state changes before applying them
-        if (message.controller !== undefined && message.controller !== flight.controller)
-            console.log(`[DATA] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller}`)
-        if (message.handoffTargetController !== undefined && message.handoffTargetController !== flight.handoffTargetController)
-            console.log(`[DATA] ${callsign} handoff: ${flight.handoffTargetController ?? '-'} -> ${message.handoffTargetController || '(cleared)'}`)
 
         // Update flight data
         if (message.origin !== undefined) flight.origin = message.origin
@@ -1052,18 +1104,7 @@ class FlightStore {
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
         if (message.sid !== undefined) flight.sid = message.sid
-        if (message.controller !== undefined) {
-            flight.controller = message.controller
-            if (!message.controller) flight.controllerId = undefined
-        }
-        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
-        if (message.handoffTargetController !== undefined) {
-            flight.handoffTargetController = message.handoffTargetController
-            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
-        }
-        if (message.handoffTargetControllerId !== undefined) {
-            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
-        }
+        this.applyOwnershipFromPlugin(flight, message, 'DATA')
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         flight.lastUpdate = Date.now()
@@ -1081,6 +1122,38 @@ class FlightStore {
     }
 
     /**
+     * Handle lightweight ownership poll (transfer assume/accept/refuse).
+     */
+    private handleOwnershipUpdate(message: OwnershipUpdateMessage): ProcessMessageResult {
+        const callsign = message.callsign
+        const flight = this.flights.get(callsign)
+        if (!flight) return {}
+
+        const prevController = flight.controller
+        const prevHandoff = flight.handoffTargetController
+        this.applyOwnershipFromPlugin(flight, message, 'OWN')
+
+        // trackedByMe=false is authoritative when callsign fields lag after a remote accept
+        if (message.trackedByMe === false && flight.controller === this.config.myCallsign) {
+            console.log(`[OWN] ${callsign} trackedByMe=false while controller still me — clearing ownership (remote accept)`)
+            flight.controller = ''
+            flight.controllerId = undefined
+            flight.handoffTargetController = ''
+            flight.handoffTargetControllerId = undefined
+            flight.handoffOptimisticUntil = undefined
+        }
+
+        flight.lastUpdate = Date.now()
+
+        return this.withTransferSound(
+            this.finalizeFlightStrips(callsign, flight, !this.stripAssignments.get(callsign)),
+            prevController,
+            prevHandoff,
+            flight
+        )
+    }
+
+    /**
      * Handle controllerAssignedDataUpdate message
      */
     private handleControllerAssignedDataUpdate(message: ControllerAssignedDataUpdateMessage): ProcessMessageResult {
@@ -1090,9 +1163,6 @@ class FlightStore {
         const prevController = flight.controller
         const prevHandoff = flight.handoffTargetController
 
-        // Log significant state changes before applying them
-        if (message.controller !== undefined && message.controller !== flight.controller)
-            console.log(`[ASSIGN] ${callsign} controller: ${flight.controller ?? '-'} -> ${message.controller}`)
         if (message.groundstate !== undefined && message.groundstate !== flight.groundstate
                 && (message.groundstate !== '' || (flight.groundstate ?? '') !== ''))
             console.log(`[ASSIGN] ${callsign} groundstate: ${flight.groundstate ?? '-'} -> ${message.groundstate}`)
@@ -1104,18 +1174,7 @@ class FlightStore {
             console.log(`[ASSIGN] ${callsign} missedApproach cleared`)
 
         // Update flight data
-        if (message.controller !== undefined) {
-            flight.controller = message.controller
-            if (!message.controller) flight.controllerId = undefined
-        }
-        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
-        if (message.handoffTargetController !== undefined) {
-            flight.handoffTargetController = message.handoffTargetController
-            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
-        }
-        if (message.handoffTargetControllerId !== undefined) {
-            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
-        }
+        this.applyOwnershipFromPlugin(flight, message, 'ASSIGN')
         if (message.squawk !== undefined) flight.squawk = message.squawk
         if (message.rfl !== undefined) flight.rfl = message.rfl
         if (message.cfl !== undefined) flight.cfl = message.cfl
@@ -1240,24 +1299,9 @@ class FlightStore {
             return {}
         }
 
-        const prevController = flight.controller
-        const prevHandoff = flight.handoffTargetController
-
-        // Update radar data
+        // Update radar data (ownership intentionally ignored — polled via ownershipUpdate)
         flight.currentAltitude = message.altitude
         if (message.ete !== undefined) flight.ete = message.ete
-        if (message.controller !== undefined) {
-            flight.controller = message.controller
-            if (!message.controller) flight.controllerId = undefined
-        }
-        if (message.controllerId !== undefined) flight.controllerId = message.controllerId || undefined
-        if (message.handoffTargetController !== undefined) {
-            flight.handoffTargetController = message.handoffTargetController
-            if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
-        }
-        if (message.handoffTargetControllerId !== undefined) {
-            flight.handoffTargetControllerId = message.handoffTargetControllerId || undefined
-        }
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         if (message.latitude !== undefined) flight.latitude = message.latitude
@@ -1287,15 +1331,10 @@ class FlightStore {
             flight.airborne = false
         }
 
-        return this.withTransferSound(
-            this.finalizeFlightStrips(
-                callsign,
-                flight,
-                !this.stripAssignments.get(callsign)
-            ),
-            prevController,
-            prevHandoff,
-            flight
+        return this.finalizeFlightStrips(
+            callsign,
+            flight,
+            !this.stripAssignments.get(callsign)
         )
     }
 
@@ -1558,6 +1597,8 @@ class FlightStore {
             flightRules,
             adep: flight.origin ?? '????',
             ades: flight.destination ?? '????',
+            adepName: flight.origin ? getIcaoAirportName(flight.origin) : undefined,
+            adesName: flight.destination ? getIcaoAirportName(flight.destination) : undefined,
             route: flight.route,
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,

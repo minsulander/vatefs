@@ -404,6 +404,8 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
     std::stringstream out;
     out << "FlightPlanDisconnect " << FlightPlan.GetCallsign();
     DebugMessage(out.str());
+    const char *cs = FlightPlan.GetCallsign();
+    if (cs && cs[0] != '\0') lastOwnershipSnapshot.erase(cs);
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
     SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
@@ -494,7 +496,8 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
     }
     auto fp = RadarTarget.GetCorrelatedFlightPlan();
     if (fp.IsValid()) {
-        AppendOwnershipFields(message, fp);
+        // Ownership is polled separately (PollOwnershipChanges) — do not attach it here.
+        // Radar ticks can lag behind handoff accept/refuse and would overwrite fresher ownership.
         const char *nextController = fp.GetCoordinatedNextController();
         if (nextController && strlen(nextController) < 20) {
             SetJsonIfValidUtf8(message, "nextController", nextController);
@@ -566,22 +569,25 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         if (handoffToMe) {
             fp.AcceptHandoff();
             DisplayMessage("Accepted handoff for " + callsign);
+            OnFlightPlanFlightPlanDataUpdate(fp);
             return true;
         }
         if (outgoingHandoff) {
             // Re-assume cancels a pending outbound handoff we initiated
             bool ok = fp.StartTracking();
-            if (ok)
+            if (ok) {
                 DisplayMessage("Cancelled handoff for " + callsign);
-            else
+                OnFlightPlanFlightPlanDataUpdate(fp);
+            } else
                 DisplayMessage("Failed to cancel handoff for " + callsign);
             return true;
         }
         if (untracked) {
             bool ok = fp.StartTracking();
-            if (ok)
+            if (ok) {
                 DisplayMessage("Started tracking " + callsign);
-            else
+                OnFlightPlanFlightPlanDataUpdate(fp);
+            } else
                 DisplayMessage("Failed to start tracking " + callsign);
             return true;
         }
@@ -607,15 +613,17 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         bool hasNext = nextCtr && nextCtr[0] != '\0';
         if (hasNext) {
             bool ok = fp.InitiateHandoff(nextCtr);
-            if (ok)
+            if (ok) {
                 DisplayMessage("Handoff initiated to " + std::string(nextCtr) + " for " + callsign);
-            else
+                OnFlightPlanFlightPlanDataUpdate(fp);
+            } else
                 DisplayMessage("Failed to initiate handoff for " + callsign);
         } else {
             bool ok = fp.EndTracking();
-            if (ok)
+            if (ok) {
                 DisplayMessage("Ended tracking " + callsign);
-            else
+                OnFlightPlanFlightPlanDataUpdate(fp);
+            } else
                 DisplayMessage("Failed to end tracking " + callsign);
         }
         return true;
@@ -864,6 +872,8 @@ void VatEFSPlugin::OnTimer(int counter)
 
         if (std::time(NULL) - enabledTime < 10) return;
         if (counter % 5 == 0) UpdateMyself();
+        // Ownership (assume / transfer / accept / refuse) often has no ES callback — poll every tick.
+        PollOwnershipChanges();
         // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.
         // Heartbeat every 5s refreshes backend local-prefer TTL without re-sending all times
         // (avoids locking in a corrupt mid-write read for untouched callsigns).
@@ -1724,15 +1734,17 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             }
                             if (!targetStr.empty()) {
                                 bool ok = fp.InitiateHandoff(targetStr.c_str());
-                                if (ok)
+                                if (ok) {
                                     DebugMessage("Handoff initiated to " + targetStr + " for " + callsign);
-                                else
+                                    OnFlightPlanFlightPlanDataUpdate(fp);
+                                } else
                                     DisplayMessage("Failed to initiate handoff to " + targetStr + " for " + callsign);
                             } else {
                                 bool ok = fp.EndTracking();
-                                if (ok)
+                                if (ok) {
                                     DebugMessage("Ended tracking " + callsign);
-                                else
+                                    OnFlightPlanFlightPlanDataUpdate(fp);
+                                } else
                                     DisplayMessage("Failed to end tracking " + callsign);
                             }
                         } else {
@@ -1740,6 +1752,30 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         }
                     } else {
                         DisplayMessage("transfer: Empty callsign");
+                    }
+                } else if (message["type"] == "refuse") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (!callsign.empty()) {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (fp.IsValid()) {
+                            const char *handoffTarget = fp.GetHandoffTargetControllerCallsign();
+                            bool handoffToMe =
+                                handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
+                                strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
+                            if (handoffToMe) {
+                                fp.RefuseHandoff();
+                                DebugMessage("Refused handoff for " + callsign);
+                                OnFlightPlanFlightPlanDataUpdate(fp);
+                            } else {
+                                DisplayMessage("refuse: No inbound handoff for " + callsign);
+                            }
+                        } else {
+                            DisplayMessage("refuse: Flight plan not found: " + callsign);
+                        }
+                    } else {
+                        DisplayMessage("refuse: Empty callsign");
                     }
                 } else if (message["type"] == "release") {
                     auto callsign = message["callsign"].get<std::string>();
@@ -1749,9 +1785,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         auto fp = FlightPlanSelect(callsign.c_str());
                         if (fp.IsValid()) {
                             bool ok = fp.EndTracking();
-                            if (ok)
+                            if (ok) {
                                 DebugMessage("Released (end tracking) " + callsign);
-                            else
+                                OnFlightPlanFlightPlanDataUpdate(fp);
+                            } else
                                 DisplayMessage("Failed to release " + callsign);
                         } else {
                             DebugMessage("release: Flight plan not found: " + callsign);
@@ -2282,22 +2319,74 @@ void VatEFSPlugin::AppendOwnershipFields(nlohmann::json &message, EuroScopePlugI
         return "";
     };
 
+    // Always emit ownership keys (including "") so clears propagate — omitting keys leaves stale backend state
+    // (e.g. downstream accept clears handoff but nullptr would otherwise keep transferPending: out).
     const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
-    if (trackingController && strlen(trackingController) < 20) {
-        if (out && trackingController[0] != '\0') *out << " controller " << trackingController;
-        SetJsonIfValidUtf8(message, "controller", trackingController);
-        std::string si = resolveSi(FlightPlan.GetTrackingControllerId(), trackingController);
-        SetJsonIfValidUtf8(message, "controllerId", si.c_str());
-        if (out && !si.empty()) *out << " controllerId " << si;
+    std::string trackingStr;
+    if (trackingController && trackingController[0] != '\0' && strlen(trackingController) < 20 &&
+        IsValidUtf8(trackingController)) {
+        trackingStr = trackingController;
     }
+    message["controller"] = trackingStr;
+    std::string si = resolveSi(FlightPlan.GetTrackingControllerId(), trackingStr.c_str());
+    message["controllerId"] = si;
+    if (out && !trackingStr.empty()) *out << " controller " << trackingStr;
+    if (out && !si.empty()) *out << " controllerId " << si;
 
     const char *handoffTarget = FlightPlan.GetHandoffTargetControllerCallsign();
-    if (handoffTarget && strlen(handoffTarget) < 20) {
-        if (out && handoffTarget[0] != '\0') *out << " handoffTargetController " << handoffTarget;
-        SetJsonIfValidUtf8(message, "handoffTargetController", handoffTarget);
-        std::string hoSi = resolveSi(FlightPlan.GetHandoffTargetControllerId(), handoffTarget);
-        SetJsonIfValidUtf8(message, "handoffTargetControllerId", hoSi.c_str());
-        if (out && !hoSi.empty()) *out << " handoffTargetControllerId " << hoSi;
+    std::string handoffStr;
+    if (handoffTarget && handoffTarget[0] != '\0' && strlen(handoffTarget) < 20 && IsValidUtf8(handoffTarget)) {
+        handoffStr = handoffTarget;
+    }
+    message["handoffTargetController"] = handoffStr;
+    std::string hoSi = resolveSi(FlightPlan.GetHandoffTargetControllerId(), handoffStr.c_str());
+    message["handoffTargetControllerId"] = hoSi;
+    if (out && !handoffStr.empty()) *out << " handoffTargetController " << handoffStr;
+    if (out && !hoSi.empty()) *out << " handoffTargetControllerId " << hoSi;
+
+    const char *cs = FlightPlan.GetCallsign();
+    if (cs && cs[0] != '\0') {
+        int state = FlightPlan.GetState();
+        bool trackedByMe = FlightPlan.GetTrackingControllerIsMe();
+        lastOwnershipSnapshot[cs] = trackingStr + "|" + handoffStr + "|" + std::to_string(state) + "|" +
+                                    (trackedByMe ? "1" : "0");
+    }
+}
+
+void VatEFSPlugin::PollOwnershipChanges()
+{
+    for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid(); fp = FlightPlanSelectNext(fp)) {
+        if (!FilterFlightPlan(fp)) continue;
+
+        const char *cs = fp.GetCallsign();
+        if (!cs || cs[0] == '\0') continue;
+
+        const char *tracking = fp.GetTrackingControllerCallsign();
+        const char *handoff = fp.GetHandoffTargetControllerCallsign();
+        std::string trackingStr =
+            (tracking && tracking[0] != '\0' && strlen(tracking) < 20) ? tracking : "";
+        std::string handoffStr = (handoff && handoff[0] != '\0' && strlen(handoff) < 20) ? handoff : "";
+        // Include ES FP state + trackedByMe so remote accept/refuse is detected even when
+        // callsign fields briefly lag behind the transfer state machine.
+        int state = fp.GetState();
+        bool trackedByMe = fp.GetTrackingControllerIsMe();
+        std::string snapshot = trackingStr + "|" + handoffStr + "|" + std::to_string(state) + "|" +
+                               (trackedByMe ? "1" : "0");
+
+        auto it = lastOwnershipSnapshot.find(cs);
+        if (it != lastOwnershipSnapshot.end() && it->second == snapshot) continue;
+
+        DebugMessage(std::string("Ownership change detected for ") + cs + ": " +
+                     (it != lastOwnershipSnapshot.end() ? it->second : "(none)") + " -> " + snapshot);
+
+        // Lightweight ownership-only UDP (avoid heavy FP dump / possible OnTimer reentrancy issues)
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "ownershipUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs);
+        message["fpState"] = state;
+        message["trackedByMe"] = trackedByMe;
+        AppendOwnershipFields(message, fp);
+        PostJson(message, "PollOwnershipChanges");
     }
 }
 

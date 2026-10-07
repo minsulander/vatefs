@@ -44,6 +44,22 @@ function resolvePluginSound(euroscopeDir: string, fileName: string): string | nu
     return null
 }
 
+/** EuroScope built-in Sounds/ directory candidates (install may differ from APPDATA package dir). */
+function euroscopeSoundsDirs(euroscopeDir: string): string[] {
+    const dirs = [path.join(euroscopeDir, "Sounds")]
+    const programFiles = path.join("C:", "Program Files (x86)", "EuroScope", "Sounds")
+    if (!dirs.includes(programFiles)) dirs.push(programFiles)
+    return dirs
+}
+
+function resolveEuroscopeSound(euroscopeDir: string, fileName: string): string | null {
+    for (const dir of euroscopeSoundsDirs(euroscopeDir)) {
+        const soundFile = path.join(dir, fileName)
+        if (fs.existsSync(soundFile)) return soundFile
+    }
+    return null
+}
+
 let dclSoundPath: string | null = null
 let transferRequestSoundPath: string | null = null
 let transferAcceptSoundPath: string | null = null
@@ -63,15 +79,15 @@ export function loadDclSound(euroscopeDir: string) {
 }
 
 /**
- * Load TopSky coordination sounds used for transfer alerts.
- * - request: TopSkySoundCoord.wav
- * - accept:  TopSkySoundCoordACP.wav
- * - refuse:  TopSkySoundCoordRJC.wav
+ * Load EuroScope handoff sounds used for transfer alerts.
+ * - request: Sounds/handoff_request.wav
+ * - accept:  Sounds/handoff_accept.wav
+ * - refuse:  Sounds/handoff_refused.wav
  */
 export function loadTransferSounds(euroscopeDir: string) {
-    transferRequestSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoord.wav")
-    transferAcceptSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoordACP.wav")
-    transferRefuseSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoordRJC.wav")
+    transferRequestSoundPath = resolveEuroscopeSound(euroscopeDir, "handoff_request.wav")
+    transferAcceptSoundPath = resolveEuroscopeSound(euroscopeDir, "handoff_accept.wav")
+    transferRefuseSoundPath = resolveEuroscopeSound(euroscopeDir, "handoff_refused.wav")
 
     const loaded = [
         transferRequestSoundPath && "request",
@@ -82,7 +98,7 @@ export function loadTransferSounds(euroscopeDir: string) {
     if (loaded.length > 0) {
         console.log(`Transfer sounds loaded: ${loaded.join(", ")}`)
     } else {
-        console.log("Transfer sound files not found in ESAA/Plugins (TopSkySoundCoord*.wav)")
+        console.log("Transfer sound files not found in EuroScope Sounds/ (handoff_request/accept/refused.wav)")
     }
 }
 

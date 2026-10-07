@@ -104,6 +104,9 @@ export interface Flight {
     // Special strip tracking
     synthetic?: boolean       // Flight was created from UI (VFR DEP/ARR/CROSS), not from EuroScope
 
+    /** Until this timestamp, ignore plugin clears of handoffTarget (EFS-initiated XFER optimistic) */
+    handoffOptimisticUntil?: number
+
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
     latitude?: number         // Current latitude from radar
@@ -242,6 +245,18 @@ export interface RadarTargetPositionUpdateMessage {
     squawk?: string       // Transponder code (optional)
 }
 
+/** Lightweight ownership poll from plugin (assume / transfer / accept / refuse) */
+export interface OwnershipUpdateMessage {
+    type: 'ownershipUpdate'
+    callsign: string
+    controller?: string
+    controllerId?: string
+    handoffTargetController?: string
+    handoffTargetControllerId?: string
+    fpState?: number
+    trackedByMe?: boolean
+}
+
 /** Fast-path CDM times from local CDM_data_*.txt (written by CDM plugin) */
 export interface CdmLocalFlightUpdate {
     callsign: string
@@ -276,6 +291,7 @@ export type PluginMessage =
     | ControllerDisconnectMessage
     | MyselfUpdateMessage
     | RadarTargetPositionUpdateMessage
+    | OwnershipUpdateMessage
     | CdmLocalUpdateMessage
     | CdmLocalHeartbeatMessage
 
@@ -296,6 +312,7 @@ export function isPluginMessage(data: unknown): data is PluginMessage {
         type === 'controllerDisconnect' ||
         type === 'myselfUpdate' ||
         type === 'radarTargetPositionUpdate' ||
+        type === 'ownershipUpdate' ||
         type === 'cdmLocalUpdate' ||
         type === 'cdmLocalHeartbeat'
     )

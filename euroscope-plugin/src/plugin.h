@@ -49,6 +49,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     bool UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet = false);
     void Refresh();
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
+    /** Poll tracking/handoff ownership and push UDP when ES state changes without a callback */
+    void PollOwnershipChanges();
 
     bool disabled;
     bool debug;
@@ -86,6 +88,9 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
 
     // Last snapshot of CDM_data_*.txt lines: callsign -> "tobt|tsat|ttot|ctot|reason|setBy"
     std::map<std::string, std::string> lastCdmFileSnapshot;
+
+    // Last sent tracking|handoff ownership per callsign (detects ES-initiated assume/transfer/accept)
+    std::map<std::string, std::string> lastOwnershipSnapshot;
 
     static bool IsValidUtf8(const char* str);
     static std::string SanitizeUtf8(const char* str);

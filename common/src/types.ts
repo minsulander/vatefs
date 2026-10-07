@@ -18,6 +18,10 @@ export interface FlightStrip {
     // Route info
     adep: string               // Departure aerodrome (ICAO)
     ades: string               // Destination aerodrome (ICAO)
+    /** Full airport name for adep (tooltip) */
+    adepName?: string
+    /** Full airport name for ades (tooltip) */
+    adesName?: string
     route?: string             // Flight planned route
     sid?: string               // Standard Instrument Departure
     star?: string              // Standard Terminal Arrival Route
@@ -157,7 +161,7 @@ export interface UiSettings {
     showStripOwnership: boolean
     /** Dim strips assumed by other positions */
     dimOtherOwnedStrips: boolean
-    /** Play TopSky Coord sounds for transfer request / accept / refuse */
+    /** Play EuroScope handoff sounds for transfer request / accept / refuse */
     transferSoundsEnabled: boolean
 }
 
@@ -167,7 +171,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     flashTsatWindow: true,
     showStripOwnership: true,
     dimOtherOwnedStrips: true,
-    transferSoundsEnabled: true,
+    transferSoundsEnabled: false,
 }
 
 export interface AirportAtisInfo {

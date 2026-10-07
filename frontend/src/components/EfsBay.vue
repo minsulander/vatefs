@@ -71,6 +71,10 @@
               @click="selectAirport(opt.icao)"
             >
               <span class="item-icao">{{ opt.icao }}</span>
+              <span class="item-meta">
+                <span v-if="opt.name" class="item-name">{{ opt.name }}</span>
+                <span v-if="opt.country" class="item-country">{{ opt.country }}</span>
+              </span>
               <span class="item-traffic">
                 <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
                 <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
@@ -132,12 +136,13 @@ const accent = computed(() =>
 
 const pickerOptions = computed(() => {
   const opts = new Set<string>([
-    ...store.airportOptions,
+    ...store.airportOptions.map((a) => a.icao),
     ...store.activeAirports,
     ...store.columnAirports.filter((a): a is string => !!a),
   ])
   return [...opts]
     .map(icao => {
+      const meta = store.airportMeta(icao)
       const isActive = store.isAirportRelevant(icao)
       const counts = isActive ? store.airportTrafficCounts(icao) : { arr: 0, dep: 0 }
       const { arr, dep } = counts
@@ -145,7 +150,17 @@ const pickerOptions = computed(() => {
       const taken = isTakenElsewhere(icao)
       // Relevant/ES first; traffic only affects sort among relevant airports
       const priority = (isActive ? 0 : 2) + (isActive && total > 0 ? 0 : 1)
-      return { icao, arr, dep, total, isActive, taken, priority }
+      return {
+        icao,
+        name: meta?.name,
+        country: meta?.country,
+        arr,
+        dep,
+        total,
+        isActive,
+        taken,
+        priority,
+      }
     })
     .sort((a, b) => {
       if (a.priority !== b.priority) return a.priority - b.priority
@@ -159,7 +174,11 @@ const pickerOptions = computed(() => {
 const filteredOptions = computed(() => {
   const q = searchQuery.value.trim().toUpperCase()
   if (!q) return pickerOptions.value
-  return pickerOptions.value.filter(o => o.icao.includes(q))
+  return pickerOptions.value.filter((o) =>
+    o.icao.includes(q) ||
+    (o.name?.toUpperCase().includes(q) ?? false) ||
+    (o.country?.toUpperCase().includes(q) ?? false)
+  )
 })
 
 function isTakenElsewhere(icao: string): boolean {
@@ -353,7 +372,7 @@ onMounted(() => {
   background: #1e2126;
   border: 1px solid #3a3f46;
   border-radius: 4px;
-  width: min(240px, calc(100vw - 16px));
+  width: min(340px, calc(100vw - 16px));
   max-height: 360px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   overflow: hidden;
@@ -465,12 +484,38 @@ onMounted(() => {
   font-weight: 600;
   letter-spacing: 0.05em;
   min-width: 42px;
+  flex-shrink: 0;
+}
+
+.item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.item-name {
+  font-size: 11px;
+  color: #bbb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-country {
+  font-size: 10px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .item-traffic {
   display: flex;
   gap: 6px;
-  flex: 1;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .item-taken {

@@ -84,7 +84,7 @@
                     @update:model-value="onTransferSounds"
                 />
                 <p class="text-caption text-grey ownership-suboption-hint">
-                    Play TopSky Coord sounds for transfer request, accept, and refuse.
+                    Play EuroScope handoff sounds for transfer request, accept, and refuse.
                 </p>
             </div>
         </v-container>

@@ -47,7 +47,7 @@
         <div v-if="showAirportSelector" class="dialog-field">
           <label class="dialog-label">{{ airportLabel }}</label>
           <select ref="airportSelect" v-model="selectedAirport" class="dialog-input dialog-select" @keydown.enter="onOk">
-            <option v-for="ap in airports" :key="ap" :value="ap">{{ ap }}</option>
+            <option v-for="ap in airports" :key="ap" :value="ap">{{ airportOptionLabel(ap) }}</option>
           </select>
         </div>
       </div>
@@ -102,6 +102,14 @@ const airports = computed(() => {
   }
   return store.myAirports
 })
+
+function airportOptionLabel(icao: string): string {
+  const meta = store.airportMeta(icao)
+  if (meta?.name && meta?.country) return `${icao} — ${meta.name} (${meta.country})`
+  if (meta?.country) return `${icao} — ${meta.country}`
+  if (meta?.name) return `${icao} — ${meta.name}`
+  return icao
+}
 
 const showAirportSelector = computed(() => {
   if (airports.value.length === 0) return false
