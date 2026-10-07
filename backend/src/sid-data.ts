@@ -210,6 +210,8 @@ export function getSidInfo(airport: string, sidName: string, runway?: string): S
  *
  * This naturally returns the CTR→APP coordination altitude since early
  * waypoints in the SID are the initial coordination fixes.
+ *
+ * Also checks COPX keyed under `*` (any-airport COPX lines).
  */
 export function getSidAltitude(airport: string, sidName: string): number | undefined {
     const airportSids = sids.get(airport)
@@ -224,17 +226,40 @@ export function getSidAltitude(airport: string, sidName: string): number | undef
 
     if (!sidInfo) return undefined
 
-    // Look up COPX entries for this airport
     const airportCopx = copx.get(airport)
-    if (!airportCopx) return undefined
+    const anyCopx = copx.get("*")
 
-    // Find the first waypoint with a COPX entry
+    // Find the first waypoint with a COPX entry (airport-specific, then *)
     for (const waypoint of sidInfo.waypoints) {
-        const altitude = airportCopx.get(waypoint)
+        const altitude = airportCopx?.get(waypoint) ?? anyCopx?.get(waypoint)
         if (altitude !== undefined) {
             return altitude
         }
     }
 
     return undefined
+}
+
+/**
+ * Initial climb when COPX has no match for a known Swedish TMA SID airport.
+ * SLOW: 3000 ft; ESMS: 4000 ft; ESSA/ESGG: 5000 ft.
+ */
+export function getDefaultInitialClimbFt(airport: string, slow = false): number | undefined {
+    const apt = airport.toUpperCase()
+    if (apt !== "ESSA" && apt !== "ESGG" && apt !== "ESMS") return undefined
+    if (slow) return 3000
+    if (apt === "ESMS") return 4000
+    return 5000
+}
+
+/**
+ * SID COPX altitude, or Swedish TMA default initial climb when the SID exists
+ * in ESE but no COPX fix matches (e.g. track/SLOW SIDs).
+ */
+export function resolveSidAltitude(
+    airport: string,
+    sidName: string,
+    slow = false
+): number | undefined {
+    return getSidAltitude(airport, sidName) ?? getDefaultInitialClimbFt(airport, slow)
 }

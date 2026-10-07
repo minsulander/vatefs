@@ -244,18 +244,19 @@ async function fetchSids() {
 /**
  * Preferred SID: ESSA (config + SLOW) or ESMS (K/L, or G/H when EKCH RWY 30 active in ES).
  * Reassigns when uncleared so runway/config changes update the letter group.
+ * Returns the SID that should be used for auto-CFL (newly assigned or matched preferred).
  */
-async function applyPreferredSid() {
+async function applyPreferredSid(): Promise<string | undefined> {
   preferredSidSortGroup.value = []
   preferredSidMatched.value = null
 
-  if (!isPreferredSidIfrDep()) return
+  if (!isPreferredSidIfrDep()) return undefined
 
   const airport = props.strip.adep
   const runway = props.strip.runway
-  if (!airport || !runway) return
+  if (!airport || !runway) return undefined
 
-  if (airport === 'ESSA' && !store.essaRwyConfigIdResolved) return
+  if (airport === 'ESSA' && !store.essaRwyConfigIdResolved) return undefined
 
   // Already cleared — keep assigned SID
   const mayReassign =
@@ -270,42 +271,68 @@ async function applyPreferredSid() {
     if (props.strip.route) params.set('route', props.strip.route)
 
     const res = await fetch(`/api/preferred-sid?${params}`)
-    if (!res.ok) return
+    if (!res.ok) return undefined
     const data = await res.json() as { sid: string | null; sortGroup?: string[] }
     preferredSidSortGroup.value = data.sortGroup ?? []
     preferredSidMatched.value = data.sid
 
     if (mayReassign && data.sid && data.sid !== props.strip.sid) {
       store.sendAssignment(props.strip.id, 'assignSid', data.sid)
-      // Strip SID may not update until WS round-trip — fetch CFL for the new SID directly
-      try {
-        const altRes = await fetch(`/api/sidalt?airport=${airport}&sid=${encodeURIComponent(data.sid)}`)
-        if (altRes.ok) {
-          const altData = await altRes.json()
-          if (altData.altitude) {
-            store.sendAssignment(props.strip.id, 'assignCfl', String(altData.altitude))
-          }
-        }
-      } catch {
-        // ignore
-      }
+      // CFL is applied by applyDefaultCfl with this SID (strip may not have updated yet)
+      return data.sid
     }
+    return data.sid ?? undefined
   } catch {
-    // ignore
+    return undefined
   }
 }
 
-// Fetch the SID altitude and assign CFL if not already set
-async function applyDefaultCfl() {
+/** True when strip already has a controller-set CFL (not blank / not just RFL echo). */
+function hasAssignedCfl(): boolean {
+  const cfl = props.strip.clearedAltitude
+  if (!cfl) return false
+  // Uncleared: CFL equal to RFL is often ES "no temporary" display echo — treat as unset
+  if (!props.strip.clearance && props.strip.rfl && cfl === props.strip.rfl) return false
+  return true
+}
+
+/** Swedish TMA initial climb when COPX lookup misses (SLOW → 3000, ESMS → 4000, else 5000). */
+function defaultInitialClimbFt(airport: string): number | undefined {
+  const apt = airport.toUpperCase()
+  if (apt !== 'ESSA' && apt !== 'ESGG' && apt !== 'ESMS') return undefined
+  if (isSlowForClr()) return 3000
+  if (apt === 'ESMS') return 4000
+  return 5000
+}
+
+/**
+ * Fetch the SID altitude and assign CFL if not already set.
+ * Prefer preferred/display SID — strip.sid may still be a route fix while the
+ * preview SID is what the controller sees (and what we just assigned).
+ */
+async function applyDefaultCfl(sidOverride?: string) {
   const airport = props.strip.adep
-  const sid = props.strip.sid
-  if (!airport || !sid || props.strip.clearedAltitude) return
+  const sid =
+    sidOverride ||
+    preferredSidMatched.value ||
+    store.displaySidForStrip(props.strip) ||
+    props.strip.sid
+  if (!airport || airport === '????' || !sid || hasAssignedCfl()) return
   try {
-    const res = await fetch(`/api/sidalt?airport=${airport}&sid=${sid}`)
+    const params = new URLSearchParams({ airport, sid })
+    if (isSlowForClr()) params.set('slow', '1')
+    const res = await fetch(`/api/sidalt?${params}`)
     if (res.ok) {
-      const data = await res.json()
-      if (data.altitude) {
-        store.sendAssignment(props.strip.id, 'assignCfl', String(data.altitude))
+      const data = await res.json() as { altitude: number | null }
+      // Backend already applies Swedish TMA fallback; keep a client-side fallback too
+      const altitude = data.altitude ?? defaultInitialClimbFt(airport)
+      if (altitude) {
+        store.sendAssignment(props.strip.id, 'assignCfl', String(altitude))
+      }
+    } else {
+      const fallback = defaultInitialClimbFt(airport)
+      if (fallback) {
+        store.sendAssignment(props.strip.id, 'assignCfl', String(fallback))
       }
     }
   } catch {
@@ -330,8 +357,8 @@ watch(dialogOpen, async (open) => {
     fetchDestinationName()
     fetchDepartureName()
     await fetchSids()
-    await applyPreferredSid()
-    applyDefaultCfl()
+    const preferredSid = await applyPreferredSid()
+    await applyDefaultCfl(preferredSid)
     applyDefaultSquawk()
   } else {
     activeDropdown.value = null

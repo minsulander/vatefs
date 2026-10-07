@@ -59,7 +59,8 @@ import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-
 import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands, hasStandData } from "./stand-data.js"
-import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
+import { loadSidData, getSidsForRunway, resolveSidAltitude } from "./sid-data.js"
+import { isSlowAircraft } from "./slow-aircraft.js"
 import { loadEseAirspace } from "./ese-airspace.js"
 import { startAfvTransceiverPolling } from "./afv-transceivers.js"
 import {
@@ -1187,7 +1188,10 @@ function canAutoSendDcl(flight: Flight): boolean {
 function autoAssignCflAndSquawk(flight: Flight) {
     // Auto-assign CFL from SID altitude if not already set
     if (flight.sid && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
-        const sidAlt = getSidAltitude(flight.origin, flight.sid)
+        const slow =
+            isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "") ||
+            flight.remarks === "SLOW"
+        const sidAlt = resolveSidAltitude(flight.origin, flight.sid, slow)
         if (sidAlt !== undefined) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
             console.log(`[DCL AUTO] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${flight.sid})`)
@@ -1953,7 +1957,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     case "assignSid":
                         if (message.value) {
                             pluginCommand = { type: "assignSid", callsign: strip.callsign, sid: message.value }
-                            const sidAlt = getSidAltitude(strip.adep, message.value)
+                            const slow =
+                                !!strip.isSlow ||
+                                strip.remarks === "SLOW"
+                            const sidAlt = resolveSidAltitude(strip.adep, message.value, slow)
                             if (sidAlt !== undefined) {
                                 sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
                                 console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
@@ -2904,13 +2911,15 @@ app.get("/api/sids", (req, res) => {
 app.get("/api/sidalt", (req, res) => {
     const airport = req.query.airport as string
     const sid = req.query.sid as string
+    const slow = req.query.slow === "1" || req.query.slow === "true"
 
     if (!airport || !sid) {
         res.status(400).json({ error: "Missing parameters", usage: "/api/sidalt?airport=ESGG&sid=LABAN4J" })
         return
     }
 
-    const altitude = getSidAltitude(airport, sid)
+    // COPX match, else Swedish TMA default (ESSA/ESGG 5000, ESMS 4000, SLOW 3000)
+    const altitude = resolveSidAltitude(airport, sid, slow)
     res.json({ altitude: altitude ?? null })
 })
 
