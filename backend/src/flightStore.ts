@@ -10,12 +10,24 @@ import type {
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign, getControllerCallsign, parseControllerRole } from "./config.js"
+import {
+    formatEsggAppSi,
+    resolveEsggDepApp,
+    resolveEsggMisapApp,
+} from "./esgg-app.js"
+import { exclusiveCustomSiAirportFromConfig, formatCustomDisplaySi } from "./display-si.js"
 import type { EfsStaticConfig } from "./config.js"
-import { formatEssaDisplaySi, isEssaRolesConfig } from "./essa-roles.js"
+import { isEssaRolesConfig, ALL_GND_POSITIONS } from "./essa-roles.js"
+import {
+    resolveEssaNextSi,
+    recordFlightMovement,
+    isInSelectedGndAor,
+    shouldOfferGndSequenceXfer,
+} from "./essa-next-si.js"
 import { getAirportCoords } from "./airport-data.js"
-import { isWithinRangeOfAnyAirport, findNearestAirport } from "./geo-utils.js"
-import { findStandForPosition } from "./stand-data.js"
+import { isWithinRangeOfAnyAirport, isWithinStripVisibilityRange, findNearestAirport } from "./geo-utils.js"
+import { findStandForPosition, hasStandData } from "./stand-data.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
@@ -71,6 +83,12 @@ export interface ProcessMessageResult {
 
     /** Scratchpad value to push to EuroScope (e.g. auto-SLOW remark) */
     setScratchValue?: string
+
+    /** Clear EuroScope scratchpad for this callsign (e.g. after consuming TopSky ROF) */
+    clearScratchpadCallsign?: string
+
+    /** Delay before clearScratchpadCallsign (ms); lets TopSky read outbound /ROF/ first */
+    clearScratchpadDelayMs?: number
 
     /** Transfer sound to play (handoff request / accept / refuse) */
     transferSound?: 'request' | 'accept' | 'refuse'
@@ -160,17 +178,25 @@ function firstSignificantRouteFix(route: string): string | undefined {
 }
 
 /**
- * Departure runway for strip display: ES depRwy, else /rwy suffix on the first route term
- * (e.g. ESSA/19R or TOVRI1A/19R) when GetDepartureRwy is empty.
+ * Departure runway for strip display:
+ * 1. ES/FPL depRwy
+ * 2. /rwy suffix on the first route term (e.g. ESSA/19R or TOVRI1A/19R)
+ * 3. Active ES departure runway for the origin (when FPL has none selected)
  */
-function extractDisplayDepRunway(flight: Flight): string | undefined {
+function extractDisplayDepRunway(
+    flight: Flight,
+    activeDepRunways?: string[]
+): string | undefined {
     if (flight.depRwy) return flight.depRwy
-    if (!flight.route) return undefined
-    const firstTerm = flight.route.split(/\s+/)[0]!
-    const slashIdx = firstTerm.indexOf("/")
-    if (slashIdx < 0) return undefined
-    const rwy = firstTerm.substring(slashIdx + 1).toUpperCase()
-    if (/^\d{1,2}[LRC]?$/.test(rwy)) return rwy
+    if (flight.route) {
+        const firstTerm = flight.route.split(/\s+/)[0]!
+        const slashIdx = firstTerm.indexOf("/")
+        if (slashIdx >= 0) {
+            const rwy = firstTerm.substring(slashIdx + 1).toUpperCase()
+            if (/^\d{1,2}[LRC]?$/.test(rwy)) return rwy
+        }
+    }
+    if (activeDepRunways?.length) return activeDepRunways[0]
     return undefined
 }
 
@@ -231,11 +257,25 @@ function extractDisplaySid(flight: Flight): string | undefined {
 }
 
 /**
+ * EuroScope-style communication suffix after callsign (#15).
+ * Voice (/v) omitted; only non-voice /t (text) and /r (receive-only).
+ */
+function formatCommunicationSuffix(communicationType: string | undefined): string | undefined {
+    if (!communicationType) return undefined
+    const c = communicationType.trim().toUpperCase()
+    if (c === 'T') return '/t'
+    if (c === 'R') return '/r'
+    return undefined
+}
+
+/**
  * Store for managing Flight objects built from EuroScope plugin messages
  */
 const ROF_COOLDOWN_MS = 60_000
 /** Inbound ROF SI/XFER flash duration; pending request stays until transfer */
 const ROF_FLASH_MS = 60_000
+/** Must stay stationary at a stand this long before Auto PARK fires */
+const AUTO_PARK_DWELL_MS = 3_000
 
 class FlightStore {
     private flights: Map<string, Flight> = new Map()
@@ -255,8 +295,25 @@ class FlightStore {
     private rofFlashTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
     private rofFlashEndHandler?: (callsign: string) => void
 
+    /** User setting: Auto PARK for assumed arrivals at stands (default on). */
+    private getAutoParkEnabled: () => boolean = () => true
+
+    /** Notify host to send PARK (+ release) to EuroScope when Auto PARK fires. */
+    private autoParkCommandHandler?: (callsign: string) => void
+
+    /** Epoch ms when callsign first met Auto PARK stationary-at-stand conditions */
+    private autoParkStationarySince: Map<string, number> = new Map()
+
     constructor(config: EfsStaticConfig) {
         this.config = config
+    }
+
+    setAutoParkEnabledGetter(getter: () => boolean): void {
+        this.getAutoParkEnabled = getter
+    }
+
+    setAutoParkCommandHandler(handler: (callsign: string) => void): void {
+        this.autoParkCommandHandler = handler
     }
 
     setRofRequestExpireHandler(handler: (callsign: string) => void): void {
@@ -313,7 +370,8 @@ class FlightStore {
     }
 
     /**
-     * Persist an incoming TopSky ROF (/LAM/ROF/{requester}). Scratch clears immediately.
+     * Persist an incoming TopSky ROF (/LAM/ROF/{requester}).
+     * Caller should clear the scratchpad after this (TopSky often leaves it set).
      * Flash for 1 minute; request itself stays until transfer.
      */
     setRofRequest(flight: Flight, requester: string): void {
@@ -417,37 +475,113 @@ class FlightStore {
     }
 
     /**
-     * Auto-set groundstate to PARK for uncontrolled arrivals that are
-     * stationary at a stand. Supports observer mode where no controller
-     * is setting groundstates via EuroScope.
+     * Auto-set groundstate to PARK for assumed arrivals that are
+     * stationary at a stand for AUTO_PARK_DWELL_MS. Sends PARK + release
+     * to EuroScope via handler.
      *
-     * Conditions:
-     * - Flight is an arrival at one of our airports
-     * - No controller is tracking the flight
-     * - Flight has a stand assigned
-     * - Aircraft is stationary (ground speed <= 2 knots)
-     * - Groundstate is not already set to a meaningful value
+     * Stand detection matches the yellow PARK highlight: live position in a
+     * GRP stand polygon (does not rely on flight.stand from pre-movement only).
      */
     private tryAutoSetParked(flight: Flight) {
-        // Must be an arrival at our airport (skip local flights where origin=destination)
-        if (!flight.destination || !this.config.myAirports.includes(flight.destination)) return
-        if (flight.origin && flight.origin === flight.destination) return
+        const key = flight.callsign.toUpperCase()
+        const clearDwell = () => {
+            this.autoParkStationarySince.delete(key)
+        }
 
-        // Must be uncontrolled
-        if (flight.controller && flight.controller !== '') return
+        if (!this.getAutoParkEnabled()) {
+            clearDwell()
+            return
+        }
 
-        // Must have a stand
-        if (!flight.stand || flight.stand === '') return
+        // Arrival/local at our airport (PARK action is direction: either)
+        const destOk =
+            !!flight.destination && this.config.myAirports.includes(flight.destination)
+        const originOk =
+            !!flight.origin && this.config.myAirports.includes(flight.origin)
+        if (!destOk && !originOk) {
+            clearDwell()
+            return
+        }
+        const standAirport = destOk ? flight.destination! : flight.origin!
+        if (!hasStandData(standAirport)) {
+            clearDwell()
+            return
+        }
 
-        // Must be stationary
-        if (flight.groundSpeed === undefined || flight.groundSpeed > 2) return
+        // Must be assumed by me
+        const myCallsign = this.config.myCallsign
+        if (!myCallsign || flight.controller !== myCallsign) {
+            clearDwell()
+            return
+        }
 
-        // Only set if groundstate is empty/unset (don't override meaningful states)
+        // Must be stationary (allow slight radar jitter above 0)
+        if (flight.groundSpeed === undefined || flight.groundSpeed > 5) {
+            clearDwell()
+            return
+        }
+
+        // PARK strip action is shown for TXIN; also allow ARR/empty briefly after landing
         const gs = flight.groundstate ?? ''
-        if (gs !== '' && gs !== 'NSTS' && gs !== 'ARR') return
+        if (gs !== '' && gs !== 'NSTS' && gs !== 'ARR' && gs !== 'TXIN') {
+            clearDwell()
+            return
+        }
+
+        if (flight.latitude === undefined || flight.longitude === undefined) {
+            clearDwell()
+            return
+        }
+
+        // Same stand check as yellow PARK highlight
+        const nearestAirport = findNearestAirport(
+            flight.latitude,
+            flight.longitude,
+            this.config.myAirports,
+            getAirportCoords
+        )
+        if (!nearestAirport || !hasStandData(nearestAirport)) {
+            clearDwell()
+            return
+        }
+        const standAtPos = findStandForPosition(nearestAirport, flight.latitude, flight.longitude)
+        if (!standAtPos) {
+            clearDwell()
+            return
+        }
+
+        const now = Date.now()
+        let since = this.autoParkStationarySince.get(key)
+        if (since === undefined) {
+            this.autoParkStationarySince.set(key, now)
+            return
+        }
+        if (now - since < AUTO_PARK_DWELL_MS) return
+
+        this.autoParkStationarySince.delete(key)
+        if (!flight.stand) flight.stand = standAtPos
 
         flight.groundstate = 'PARK'
-        console.log(`Auto-PARK: ${flight.callsign} stationary at stand ${flight.stand} (observer mode)`)
+        console.log(
+            `Auto-PARK: ${flight.callsign} assumed, stationary ${AUTO_PARK_DWELL_MS}ms at stand ${standAtPos}`
+        )
+        this.autoParkCommandHandler?.(flight.callsign)
+    }
+
+    /**
+     * Re-run Auto PARK checks on all flights (e.g. after enabling the setting).
+     * Returns callsigns that newly received PARK.
+     */
+    applyAutoParkToEligibleFlights(): string[] {
+        const changed: string[] = []
+        for (const flight of this.flights.values()) {
+            const before = flight.groundstate
+            this.tryAutoSetParked(flight)
+            if (before !== 'PARK' && flight.groundstate === 'PARK') {
+                changed.push(flight.callsign)
+            }
+        }
+        return changed
     }
 
     /**
@@ -455,7 +589,7 @@ class FlightStore {
      * Requirements:
      * 1. Flight has a radar position (lat/lon)
      * 2. Flight's origin, destination, or alternate is in myAirports
-     * 3. Flight is within radarRangeNm of any myAirport
+     * 3. Within radarRangeNm, OR (arrival to my airport AND (within arrivalRangeNm OR ETE ≤ arrivalEtaMinutes))
      */
     isEligibleForStrip(flight: Flight, config: EfsStaticConfig = this.config): boolean {
         // Must have radar position
@@ -474,12 +608,14 @@ class FlightStore {
             return false
         }
 
-        // Must be within radar range of any of our airports
-        return isWithinRangeOfAnyAirport(
-            flight.latitude,
-            flight.longitude,
+        return isWithinStripVisibilityRange(
+            flight,
             myAirports,
-            config.radarRangeNm,
+            {
+                radarRangeNm: config.radarRangeNm,
+                arrivalRangeNm: config.arrivalRangeNm,
+                arrivalEtaMinutes: config.arrivalEtaMinutes,
+            },
             getAirportCoords
         )
     }
@@ -1255,6 +1391,9 @@ class FlightStore {
         if (message.aircraftType !== undefined) flight.aircraftType = message.aircraftType
         if (message.wakeTurbulence !== undefined) flight.wakeTurbulence = message.wakeTurbulence
         if (message.flightRules !== undefined) flight.flightRules = message.flightRules
+        if (message.communicationType !== undefined) {
+            flight.communicationType = message.communicationType || undefined
+        }
         if (message.route !== undefined) flight.route = message.route
         if (message.eobt !== undefined) flight.eobt = message.eobt
         if (message.ete !== undefined) flight.ete = message.ete
@@ -1341,6 +1480,9 @@ class FlightStore {
         if (message.groundstate !== undefined) flight.groundstate = message.groundstate
         if (message.clearance !== undefined) flight.clearance = message.clearance
         if (message.clearedToLand !== undefined) flight.clearedToLand = message.clearedToLand
+        if (message.communicationType !== undefined) {
+            flight.communicationType = message.communicationType || undefined
+        }
         // Process scratchpad-based missedApproach flag:
         // Plugin sends scratch: "MISAP_" when on missed approach, scratch: "" when cleared
         if (message.scratch === 'MISAP_') {
@@ -1349,17 +1491,26 @@ class FlightStore {
         } else if (message.scratch === '') {
             flight.missedApproach = false
         }
-        // TopSky ROF ack: /LAM/ROF/{requester} — persist (scratch clears immediately)
+        // TopSky ROF: consume then clear scratch (TopSky often leaves /LAM/ROF/ and /ROF/ set)
+        let clearScratchpadCallsign: string | undefined
+        let clearScratchpadDelayMs: number | undefined
         if (message.scratch !== undefined) {
-            const lamRof = message.scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
+            const scratch = message.scratch
+            const lamRof = scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
             if (lamRof?.[1]) {
                 this.setRofRequest(flight, lamRof[1])
+                clearScratchpadCallsign = callsign
+                clearScratchpadDelayMs = 100
+            } else if (/^\/ROF\//i.test(scratch)) {
+                // Outbound ROF on a scratch vehicle — give TopSky time to read, then wipe
+                clearScratchpadCallsign = callsign
+                clearScratchpadDelayMs = 800
             }
         }
         // Process scratchpad-based remarks:
         // - ".TEXT" → remark TEXT (VatEFS convention)
         // - "SLOW" (no leading ".") → keep as remark (ES/TopSky slow flag)
-        // - "MISAP_" / "/LAM/ROF/..." and other specials → leave remarks unchanged
+        // - "MISAP_" / "/LAM/ROF/..." / "/ROF/..." and other specials → leave remarks unchanged
         // - "" → remark cleared in EuroScope
         if (message.scratch !== undefined) {
             const scratch = message.scratch
@@ -1370,7 +1521,11 @@ class FlightStore {
                 nextRemarks = 'SLOW'
             } else if (scratch === '') {
                 nextRemarks = undefined
-            } else if (scratch === 'MISAP_' || /^\/LAM\/ROF\//i.test(scratch)) {
+            } else if (
+                scratch === 'MISAP_' ||
+                /^\/LAM\/ROF\//i.test(scratch) ||
+                /^\/ROF\//i.test(scratch)
+            ) {
                 nextRemarks = null // special flag — do not hide strip remarks
             } else {
                 // Other non-remark scratch values (TopSky ops, etc.) — clear remark
@@ -1393,7 +1548,7 @@ class FlightStore {
         // Auto-detect stand from position if not already set
         this.trySetStandFromPosition(flight)
 
-        return this.withTransferSound(
+        const result = this.withTransferSound(
             this.finalizeFlightStrips(
                 callsign,
                 flight,
@@ -1403,6 +1558,11 @@ class FlightStore {
             prevHandoff,
             flight
         )
+        if (clearScratchpadCallsign) {
+            result.clearScratchpadCallsign = clearScratchpadCallsign
+            result.clearScratchpadDelayMs = clearScratchpadDelayMs
+        }
+        return result
     }
 
     /**
@@ -1491,10 +1651,14 @@ class FlightStore {
         //if (message.squawk !== undefined) flight.squawk = message.squawk
         flight.lastUpdate = Date.now()
 
+        if (flight.latitude !== undefined && flight.longitude !== undefined) {
+            recordFlightMovement(callsign, flight.latitude, flight.longitude, flight.groundSpeed)
+        }
+
         // Auto-detect stand from position if not already set
         this.trySetStandFromPosition(flight)
 
-        // Auto-set PARK for uncontrolled arrivals stationary at a stand (observer mode support)
+        // Auto-set PARK for assumed arrivals stationary at a stand
         this.tryAutoSetParked(flight)
 
         const wasAirborne = flight.airborne ?? false
@@ -1666,13 +1830,10 @@ class FlightStore {
         const rawTransferSi = hasHandoff
             ? (flight.handoffTargetControllerId || getControllerPositionId(handoffTarget) || undefined)
             : undefined
-        // ESSA mode: SAD→CD, AGE/AGN/AGW→GE/GN/GW; TWR and others unchanged
-        const ownerSi = isEssaRolesConfig(this.config)
-            ? formatEssaDisplaySi(rawOwnerSi)
-            : rawOwnerSi
-        const transferSi = isEssaRolesConfig(this.config)
-            ? formatEssaDisplaySi(rawTransferSi)
-            : rawTransferSi
+        // Custom SI (ESSA / ESGG / ESMS) only when exactly one of those airports is active
+        const exclusiveSi = exclusiveCustomSiAirportFromConfig(this.config)
+        const ownerSi = formatCustomDisplaySi(exclusiveSi, rawOwnerSi, flight.controller)
+        const transferSi = formatCustomDisplaySi(exclusiveSi, rawTransferSi, handoffTarget)
         const formatFreq = (mhz: number | undefined) =>
             mhz != null && mhz > 0 && mhz < 199 ? mhz.toFixed(3) : undefined
         const ownerFrequency = !isUntracked ? formatFreq(getFrequencyForCallsign(flight.controller)) : undefined
@@ -1696,24 +1857,28 @@ class FlightStore {
                     actions = [defaultAction]
                 }
                 // Incoming TopSky ROF: XFER first so one-tap handoff to requester
-                if (pendingRofFrom) {
+                if (pendingRofFrom && transferPending !== 'out') {
                     if (!actions) actions = ['XFER']
                     else if (!actions.includes('XFER')) actions = ['XFER', ...actions]
                     else actions = ['XFER', ...actions.filter(a => a !== 'XFER')]
                 }
             } else if ((isUntracked || isHandoffToMe) && actionConfig.isController) {
-                // Untracked or being handed off to us - let action rules decide
-                // Rules with controller:myself won't match; rules with controller:not_myself or
-                // no controller condition will match (ASSUME, CLNC, etc.)
-                const action = determineActionForFlight(flight, sectionId, actionConfig)
-                if (action === 'ASSUME') {
+                // Inbound handoff → always ASSUME (ROF/taxi rules must not hide it)
+                if (isHandoffToMe) {
                     actions = ['ASSUME']
-                } else if (action === 'ROF') {
-                    // ROF is for other-owned traffic only; ignore here
-                } else if (action) {
-                    actions = [action, 'ASSUME']
+                } else {
+                    // Untracked — let action rules decide (ASSUME, CLNC, etc.)
+                    // Rules with controller:myself won't match; not_myself / no controller will
+                    const action = determineActionForFlight(flight, sectionId, actionConfig)
+                    if (action === 'ASSUME') {
+                        actions = ['ASSUME']
+                    } else if (action === 'ROF') {
+                        // ROF is for other-owned traffic only; ignore here
+                    } else if (action) {
+                        actions = [action, 'ASSUME']
+                    }
+                    // No matching rule → no actions (e.g., transferred departures in CTR DEP)
                 }
-                // No matching rule → no actions (e.g., transferred departures in CTR DEP)
             } else if (!isUntracked && !isTrackedByMe && actionConfig.isController) {
                 // Tracked by someone else — ROF only (ASSUME is for untracked / handoff-to-me above)
                 const action = determineActionForFlight(flight, sectionId, actionConfig)
@@ -1724,30 +1889,168 @@ class FlightStore {
         }
 
         let xferFrequency: string | undefined
+        let nextSi: string | undefined
+        let nextSiCallsign: string | undefined
+
+        // ESSA sequence: next SI/freq before transfer (ROF overrides inside resolver)
+        const essaNext = isEssaRolesConfig(actionConfig)
+            ? resolveEssaNextSi(flight, { stripType, sectionId, transferPending }, { rofFrom: pendingRofFrom })
+            : undefined
+        const essaRoles = actionConfig.essaRoles ?? []
+        const coveringGndOnly =
+            isEssaRolesConfig(actionConfig) &&
+            (actionConfig.myRole === "GND" || essaRoles.some((r) => ALL_GND_POSITIONS.includes(r))) &&
+            actionConfig.myRole !== "TWR" &&
+            !essaRoles.some((r) => r.startsWith("TWR-"))
+
+        const coveringTwr =
+            actionConfig.myRole === "TWR" || essaRoles.some((r) => r.startsWith("TWR-"))
+
+        if (essaNext?.callsign) {
+            nextSiCallsign = essaNext.callsign
+            // Custom ESSA SI labels (CD/GE…) only when ESSA is the sole custom-SI airport
+            nextSi =
+                exclusiveSi === "ESSA"
+                    ? essaNext.displaySi || essaNext.si
+                    : essaNext.si
+            if (essaNext.frequency != null && essaNext.frequency > 0 && essaNext.frequency < 199) {
+                xferFrequency = essaNext.frequency.toFixed(3)
+            }
+            // Arrival taxi: next GND beats PARK only when leaving our AoR / moving toward them
+            if (isTrackedByMe && transferPending !== "out" && actions?.[0] === "PARK") {
+                if (
+                    !coveringGndOnly ||
+                    shouldOfferGndSequenceXfer(flight, essaRoles, essaNext)
+                ) {
+                    actions = ["XFER"]
+                }
+            }
+            // TWR-only (GND separate): vacated arrival/local → XFER to next GND via ESSA sequence
+            // (EuroScope nextController is often APP/empty, so action rules alone miss this)
+            if (
+                coveringTwr &&
+                !coveringGndOnly &&
+                isTrackedByMe &&
+                transferPending !== "out" &&
+                (stripType === "arrival" || stripType === "local") &&
+                flight.airborne === false &&
+                parseControllerRole(essaNext.callsign, actionConfig.myAirports) === "GND"
+            ) {
+                const vacated =
+                    flight.latitude === undefined ||
+                    flight.longitude === undefined ||
+                    flight.currentAltitude === undefined ||
+                    !isOnAnyRunway(
+                        flight.latitude,
+                        flight.longitude,
+                        flight.currentAltitude,
+                        actionConfig.myAirports
+                    )?.onRunway
+                if (vacated) {
+                    actions = ["XFER"]
+                }
+            }
+        }
+
+        // GND: suppress sequence XFER while still in our AoR and not moving toward next
+        if (
+            coveringGndOnly &&
+            isTrackedByMe &&
+            transferPending !== "out" &&
+            actions?.[0] === "XFER" &&
+            essaNext &&
+            !shouldOfferGndSequenceXfer(flight, essaRoles, essaNext)
+        ) {
+            if (stripType === "arrival" || stripType === "local") {
+                actions = ["PARK"]
+            }
+        }
+
+        // Outbound handoff started — hide XFER/READY until accept/refuse
+        if (transferPending === "out" && actions?.length) {
+            actions = actions.filter((a) => a !== "XFER" && a !== "READY")
+            if (actions.length === 0) actions = undefined
+        }
+
         if (pendingRofFrom) {
             const rofFreq = getFrequencyForCallsign(pendingRofFrom)
             if (rofFreq != null && rofFreq > 0 && rofFreq < 199) {
                 xferFrequency = rofFreq.toFixed(3)
             }
         }
-        if (!xferFrequency && flight.nextControllerFrequency && flight.nextController) {
+
+        const myRole = actionConfig.myRole ?? 'TWR'
+        const primaryAction = actions?.[0]
+        // READY → GND: never use EuroScope nextController (often APP) when sequence missed
+        if (!xferFrequency && primaryAction === 'READY' && (myRole === 'DEL' || isEssaRolesConfig(actionConfig))) {
+            const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
+            if (freq) xferFrequency = freq.toFixed(3)
+        }
+
+        const isEsgg = actionConfig.myAirports.some((a) => a.toUpperCase() === 'ESGG')
+        const esggOnline = actionConfig.onlineControllers?.values()
+
+        // ESGG TWR→APP: auto SI from DEP RNAV SID (appendix) or MISAP runway
+        if (isEsgg && (myRole === 'TWR' || coveringTwr) && !essaNext) {
+            const app = flight.missedApproach
+                ? resolveEsggMisapApp(
+                      flight.arrRwy || actionConfig.activeRunways?.['ESGG']?.arr?.[0],
+                      esggOnline
+                  )
+                : stripType === 'departure'
+                  ? resolveEsggDepApp(
+                        flight.depRwy || actionConfig.activeRunways?.['ESGG']?.dep?.[0],
+                        flight.sid || extractDisplaySid(flight),
+                        esggOnline,
+                        "ESGG",
+                        flight.route
+                    )
+                  : undefined
+            if (app) {
+                nextSiCallsign = app.callsign
+                const appPosId = getControllerPositionId(app.callsign)
+                // Custom APP letter (A/W) only when ESGG is the sole custom-SI airport
+                nextSi =
+                    exclusiveSi === "ESGG"
+                        ? formatEsggAppSi(app.callsign, app.side, appPosId)
+                        : appPosId || app.side
+                if (primaryAction === 'XFER') {
+                    xferFrequency = app.frequency.toFixed(3)
+                }
+            }
+        }
+
+        // Missed approach (non-ESGG): always XFER to APP (ignore ES nextController — often DEL/GND)
+        if (
+            !isEsgg &&
+            (myRole === 'TWR' || coveringTwr) &&
+            flight.missedApproach &&
+            primaryAction === 'XFER'
+        ) {
+            if (
+                !(
+                    essaNext?.callsign &&
+                    parseControllerRole(essaNext.callsign, actionConfig.myAirports) === 'APP'
+                )
+            ) {
+                const appCs = getControllerCallsign('APP')
+                if (appCs) {
+                    nextSiCallsign = appCs
+                    nextSi = getControllerPositionId(appCs) || nextSi
+                }
+                const appFreq = getControllerFrequency('APP')
+                if (appFreq) xferFrequency = appFreq.toFixed(3)
+            }
+            // else ESSA essaNext already set APP SI/freq
+        } else if (!xferFrequency && flight.nextControllerFrequency && flight.nextController) {
             xferFrequency = flight.nextControllerFrequency.toFixed(3)
         }
 
         // Supplement xferFrequency from online controller tracking when flight data doesn't have it
         if (!xferFrequency && actions?.length) {
-            const myRole = actionConfig.myRole ?? 'TWR'
-            const primaryAction = actions[0]
-            if (primaryAction === 'READY' && myRole === 'DEL') {
-                const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
-                if (freq) xferFrequency = freq.toFixed(3)
-            } else if (primaryAction === 'XFER') {
+            if (primaryAction === 'XFER') {
                 if (myRole === 'GND') {
                     const freq = getControllerFrequency('TWR')
-                    if (freq) xferFrequency = freq.toFixed(3)
-                } else if (myRole === 'TWR' && flight.missedApproach) {
-                    // Missed approach: XFER goes to APP, not GND
-                    const freq = getControllerFrequency('APP')
                     if (freq) xferFrequency = freq.toFixed(3)
                 } else if (myRole === 'TWR' && (stripType === 'arrival' || stripType === 'local')) {
                     const freq = getControllerFrequency('GND')
@@ -1766,17 +2069,13 @@ class FlightStore {
         if (pendingRofFrom) {
             rofRequestCallsign = pendingRofFrom
             const rawRofSi = getControllerPositionId(pendingRofFrom)
-            rofRequestSi = isEssaRolesConfig(this.config)
-                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
-                : rawRofSi
+            rofRequestSi = formatCustomDisplaySi(exclusiveSi, rawRofSi, pendingRofFrom)
             rofRequestFrequency = xferFrequency
             rofFlashUntil = flight.rofFlashUntil
         } else if (!isTrackedByMe && this.isRofCoolingDown(flight.callsign) && this.config.myCallsign) {
             rofRequestCallsign = this.config.myCallsign
             const rawRofSi = getControllerPositionId(this.config.myCallsign) || this.config.myPositionId
-            rofRequestSi = isEssaRolesConfig(this.config)
-                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
-                : rawRofSi
+            rofRequestSi = formatCustomDisplaySi(exclusiveSi, rawRofSi, this.config.myCallsign)
             const myFreq = this.config.myFrequency
             if (myFreq != null && myFreq > 0 && myFreq < 199) {
                 rofRequestFrequency = myFreq.toFixed(3)
@@ -1814,19 +2113,34 @@ class FlightStore {
                 }
             }
 
-            // XFER highlight: departure outside CTR
-            if (actions.includes('XFER') && stripType === 'departure') {
-                const withinCtr = isWithinCtr(actionConfig.myAirports, flight.latitude, flight.longitude, flight.currentAltitude)
-                if (withinCtr === false) {
-                    highlightActions.push('XFER')
-                }
-            }
-
-            // XFER highlight: arrival/local vacated runway (TWR → GND)
-            if (actions.includes('XFER') && (stripType === 'arrival' || stripType === 'local')) {
-                const onRunway = isOnAnyRunway(flight.latitude, flight.longitude, flight.currentAltitude, actionConfig.myAirports)
-                if (!onRunway) {
-                    highlightActions.push('XFER')
+            if (actions.includes('XFER') && transferPending !== 'out') {
+                if (coveringGndOnly && isEssaRolesConfig(actionConfig)) {
+                    // GND: highlight only outside our AoR (XFER itself gated the same way)
+                    if (!isInSelectedGndAor(flight, essaRoles)) {
+                        highlightActions.push('XFER')
+                    }
+                } else if (stripType === 'departure') {
+                    // TWR/etc: departure outside CTR
+                    const withinCtr = isWithinCtr(
+                        actionConfig.myAirports,
+                        flight.latitude,
+                        flight.longitude,
+                        flight.currentAltitude
+                    )
+                    if (withinCtr === false) {
+                        highlightActions.push('XFER')
+                    }
+                } else if (stripType === 'arrival' || stripType === 'local') {
+                    // TWR→GND: vacated runway
+                    const onRunway = isOnAnyRunway(
+                        flight.latitude,
+                        flight.longitude,
+                        flight.currentAltitude,
+                        actionConfig.myAirports
+                    )
+                    if (!onRunway) {
+                        highlightActions.push('XFER')
+                    }
                 }
             }
         }
@@ -1840,6 +2154,7 @@ class FlightStore {
             id: airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign,
             callsign: flight.callsign,
             rtfCallsign: getRtfCallsign(flight.callsign, flight.fplRemarks),
+            communicationSuffix: formatCommunicationSuffix(flight.communicationType),
             aircraftType: flight.aircraftType ?? 'UNKN',
             wakeTurbulence,
             flightRules,
@@ -1859,8 +2174,14 @@ class FlightStore {
             assignedSpeed: flight.asp ? String(flight.asp) : undefined,
             stand: flight.stand,
             runway: stripType === 'departure' || stripType === 'local'
-                ? (extractDisplayDepRunway(flight) || flight.arrRwy)
-                : flight.arrRwy,
+                ? (extractDisplayDepRunway(
+                      flight,
+                      flight.origin ? this.config.activeRunways?.[flight.origin]?.dep : undefined
+                  ) || flight.arrRwy)
+                : (flight.arrRwy
+                    || (flight.destination
+                        ? this.config.activeRunways?.[flight.destination]?.arr?.[0]
+                        : undefined)),
             stripType,
             bayId,
             sectionId,
@@ -1875,6 +2196,8 @@ class FlightStore {
             missedApproach: flight.missedApproach || undefined,
             canEditClearance: canEditClearance || undefined,
             xferFrequency,
+            nextSi,
+            nextSiCallsign,
             rofRequestSi,
             rofRequestCallsign,
             rofRequestFrequency,
@@ -1889,6 +2212,7 @@ class FlightStore {
             asrt: cdmEligible ? flight.asrt : undefined,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
             ctot: ifrDeparture ? flight.ctot : undefined,
+            ctotCancelled: ifrDeparture && flight.ctotCancelled ? true : undefined,
             ctotReason: ifrDeparture ? flight.ctotReason : undefined,
             remarks: flight.remarks || undefined,
             isSlow,
@@ -1896,6 +2220,32 @@ class FlightStore {
             isAssumed: isTrackedByMe || undefined,
             ownerSi,
             ownedByOther: (!isTrackedByMe && !isUntracked) || undefined,
+            // Dimming: INBOUND dimmed unless assumed / pending transfer;
+            // TWR pending+cleared when DEL/GND online.
+            dimmed: (() => {
+                // Assumed by me or any pending handoff → full brightness
+                if (isTrackedByMe) return undefined
+                if (transferPending === 'in' || transferPending === 'out') return undefined
+
+                // INBOUND: dim everything else (other-owned / untracked)
+                if (sectionId === 'inbound' || sectionId.endsWith('_inbound')) {
+                    return true
+                }
+
+                // TWR: dim PENDING DEP / CLEARED when DEL or GND is separately online
+                if (
+                    actionConfig.myRole === 'TWR' &&
+                    (getControllerCallsign('DEL') || getControllerCallsign('GND')) &&
+                    (sectionId === 'pending_dep' ||
+                        sectionId === 'cleared' ||
+                        sectionId.endsWith('_pending_dep') ||
+                        sectionId.endsWith('_cleared'))
+                ) {
+                    return true
+                }
+
+                return undefined
+            })(),
             transferPending,
             transferSi: transferSi || undefined,
             ownerCallsign: (!isUntracked && flight.controller) || undefined,
@@ -2323,6 +2673,32 @@ class FlightStore {
             return { flight }
         }
         return this.finalizeFlightStrips(callsign, flight, false)
+    }
+
+    /** Update strip placement bookkeeping (used when shifting / restoring). */
+    setStripAssignment(
+        stripId: string,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean }
+    ) {
+        this.stripAssignments.set(stripId, assignment)
+    }
+
+    /**
+     * Recreate a strip after trash restore (flags already cleared).
+     */
+    restoreStripToSection(
+        stripId: string,
+        flight: Flight,
+        bayId: string,
+        sectionId: string,
+        position: number
+    ): FlightStrip | undefined {
+        if (!flightHasRequiredData(flight)) return undefined
+        const parsed = parseStripAirportId(stripId)
+        const airport = parsed?.airport
+        const scoped = airport ? withAirportScope(this.config, airport) : this.config
+        this.stripAssignments.set(stripId, { bayId, sectionId, position, bottom: false })
+        return this.createStrip(flight, bayId, sectionId, position, false, airport, scoped)
     }
 
     /**

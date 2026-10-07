@@ -30,8 +30,8 @@ layout:
           visibleFor: [TWR]
         taxi_arr:
           title: TAXI ARR
-          # TWR sees this when covering GND solo; when GND is separate, TWR-only
-          # hold rules keep landed traffic on RWY until GND assumes.
+          # TWR-only: still-on-RWY hold; once vacated → TAXI ARR + XFER to GND.
+          # With GND selected, TWR uses this for assumed taxi-in as usual.
           visibleFor: [GND, TWR]
 
     bay2:
@@ -232,14 +232,14 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 95
 
-  # === TWR-ONLY + separate GND: keep landed traffic on RWY until GND assumes ===
-  # Role picker TWR without GND, and not covering GND top-down (GND online).
-  # When ARR==DEP runway, arr_runway assignments collapse to dep_runway.
+  # === TWR-ONLY + separate GND: hold on RWY while still geographically on runway ===
+  # Once vacated → taxi_arr (priority 30) + XFER to GND. Do not hold until GND assumes.
 
   runway_hold_twr_only_arr:
     sectionId: arr_runway
     direction: arrival
     airborne: false
+    onRunway: true
     groundstates: ['', NSTS, ARR, TXIN]
     controller: myself
     essaFamilies: [TWR]
@@ -251,6 +251,7 @@ sectionRules:
     sectionId: arr_runway
     direction: local
     airborne: false
+    onRunway: true
     groundstates: [ARR, TXIN]
     controller: myself
     essaFamilies: [TWR]
@@ -262,6 +263,7 @@ sectionRules:
     sectionId: dep_runway
     direction: arrival
     airborne: false
+    onRunway: true
     groundstates: ['', NSTS, ARR, TXIN]
     controller: myself
     essaFamilies: [TWR]
@@ -273,6 +275,7 @@ sectionRules:
     sectionId: dep_runway
     direction: local
     airborne: false
+    onRunway: true
     groundstates: [ARR, TXIN]
     controller: myself
     essaFamilies: [TWR]
@@ -281,6 +284,7 @@ sectionRules:
     priority: 85
 
 actionRules:
+  # GOA while CTL — runway or CTR ARR. Do not use notMyRole:[GND] (hides GOA for solo TWR).
   goa_arr_runway:
     action: GOA
     sectionId: arr_runway
@@ -289,7 +293,6 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
-    notMyRole: [GND, DEL]
     priority: 95
 
   goa_dep_runway:
@@ -300,7 +303,16 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
-    notMyRole: [GND, DEL]
+    priority: 95
+
+  goa_ctr_arr:
+    action: GOA
+    sectionId: ctr_arr
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
     priority: 95
 
   # Override common-rules: split taxi uses taxi_dep (not unified taxi)
@@ -312,6 +324,7 @@ actionRules:
     controller: not_myself
     notParallelTwrOwner: true
     withinCtr: true
+    handoffInitiated: false
     myRole: [TWR]
     priority: 40
 

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo } from "@vatefs/common"
 import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS, resolveEssaRwyConfigId } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
@@ -15,6 +15,8 @@ export const useEfsStore = defineStore("efs", () => {
     /** Sections where the user manually reordered; time-sort resumes when E/TOBT or TSAT changes */
     const manualOrderSections = ref<Set<string>>(new Set())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
+    /** Soft-deleted strips for trash recovery */
+    const deletedStrips = ref<DeletedStripInfo[]>([])
 
     const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
 
@@ -160,14 +162,24 @@ export const useEfsStore = defineStore("efs", () => {
     const showStripOwnership = ref(DEFAULT_UI_SETTINGS.showStripOwnership)
     const dimOtherOwnedStrips = ref(DEFAULT_UI_SETTINGS.dimOtherOwnedStrips)
     const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
+    const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
+    const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
+    /** Backend: any myAirport has GNG stand data */
+    const autoParkAvailable = ref(false)
 
-    function applyUserSettings(settings: UiSettings) {
+    function applyUserSettings(settings: UiSettings, available?: boolean) {
         dclSoundEnabled.value = settings.dclSoundEnabled
         flashChangedTimes.value = settings.flashChangedTimes
         flashTsatWindow.value = settings.flashTsatWindow
         showStripOwnership.value = settings.showStripOwnership
         dimOtherOwnedStrips.value = settings.dimOtherOwnedStrips
         transferSoundsEnabled.value = settings.transferSoundsEnabled
+        showAppDepXcFrequency.value = settings.showAppDepXcFrequency
+        autoParkEnabled.value =
+            typeof settings.autoParkEnabled === 'boolean'
+                ? settings.autoParkEnabled
+                : DEFAULT_UI_SETTINGS.autoParkEnabled
+        if (typeof available === 'boolean') autoParkAvailable.value = available
     }
 
     /** Update one or more UI settings (optimistic local apply + persist via backend). */
@@ -178,6 +190,8 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.showStripOwnership === 'boolean') showStripOwnership.value = partial.showStripOwnership
         if (typeof partial.dimOtherOwnedStrips === 'boolean') dimOtherOwnedStrips.value = partial.dimOtherOwnedStrips
         if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
+        if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
+        if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
         sendMessage({ type: 'updateUserSettings', settings: partial })
     }
     function connect() {
@@ -261,13 +275,16 @@ export const useEfsStore = defineStore("efs", () => {
                         controllers.value = message.controllers
                         break
                     case 'userSettings':
-                        applyUserSettings(message.settings)
+                        applyUserSettings(message.settings, message.autoParkAvailable)
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
                         break
                     case 'notify':
                         showNotify(message.text, message.level)
+                        break
+                    case 'deletedStrips':
+                        deletedStrips.value = message.strips
                         break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
@@ -1145,6 +1162,14 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function listDeletedStrips() {
+        sendMessage({ type: 'listDeletedStrips' })
+    }
+
+    function restoreStrip(stripId: string) {
+        sendMessage({ type: 'restoreStrip', stripId })
+    }
+
     function createStrip(
         stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note',
         callsign?: string,
@@ -1305,6 +1330,9 @@ export const useEfsStore = defineStore("efs", () => {
         sendStripAction,
         sendAssignment,
         deleteStrip,
+        deletedStrips,
+        listDeletedStrips,
+        restoreStrip,
         GAP_BUFFER,
         atisInfo,
         dclStatus,
@@ -1338,6 +1366,9 @@ export const useEfsStore = defineStore("efs", () => {
         showStripOwnership,
         dimOtherOwnedStrips,
         transferSoundsEnabled,
+        showAppDepXcFrequency,
+        autoParkEnabled,
+        autoParkAvailable,
         updateUserSettings,
     }
 })

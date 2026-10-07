@@ -17,16 +17,16 @@ sectionRules:
     clearance: false
     priority: 40
 
-  # CLEARED: Departures with clearance flag
+  # CLEARED / TSAT (ESSA): cleared IFR waiting for push — includes RDY (DE-ICE)
   cleared:
     sectionId: cleared
     direction: departure
     airborne: false
     clearance: true
-    groundstates: ['', NSTS, ONFREQ, DE-ICE]  # Not yet pushing
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
     priority: 50
 
-  # PUSH&START: Departures with STUP or PUSH
+  # PUSH&START: Departures with STUP or PUSH (after push approved)
   push_start:
     sectionId: push_start
     direction: departure
@@ -68,21 +68,21 @@ sectionRules:
     clearance: false
     priority: 40
 
-  # CLEARED: Local flights with clearance flag
+  # CLEARED / TSAT: Local flights with clearance (includes RDY / DE-ICE)
   cleared_local:
     sectionId: cleared
     direction: local
     airborne: false
     clearance: true
-    groundstates: ['', NSTS, ONFREQ]
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
     priority: 50
 
-  # PUSH&START: Local flights with DE-ICE/STUP/PUSH
+  # PUSH&START: Local flights with STUP/PUSH
   push_start_local:
     sectionId: push_start
     direction: local
     airborne: false
-    groundstates: [DE-ICE, STUP, PUSH]
+    groundstates: [STUP, PUSH]
     priority: 60
 
   # TAXI: Local flights taxiing out (pre-departure phase)
@@ -215,14 +215,15 @@ actionRules:
     direction: either
     controller: myself
     groundstates: [TAXI]
+    handoffInitiated: false
     myRole: [GND]
     notMyRole: [TWR]
     priority: 115
 
-  # GND/TWR/APP/CTR: PUSH for DE-ICE departures/local (after assuming from DEL)
+  # GND/TWR/APP/CTR: PUSH for DE-ICE (RDY) in TSAT/cleared after assuming from DEL
   push_deice_gnd:
     action: PUSH
-    sectionId: push_start
+    sectionId: cleared
     direction: either
     controller: myself
     groundstates: [DE-ICE]
@@ -250,8 +251,8 @@ actionRules:
     priority: 111
 
   # TWR/APP/CTR: XFER to GND for on-ground arrivals/local when GND is separately online
-  # nextControllerRole ensures we only show XFER when the plugin says the next controller
-  # is actually a GND position, not e.g. an en-route CTR that happens to be online.
+  # nextControllerRole: if ES sets nextController it must be GND; if unset (ESSA), allow
+  # and let ESSA sequence / flightStore fill the XFER target.
   xfer_twr_to_gnd:
     action: XFER
     direction: either
@@ -367,7 +368,8 @@ actionRules:
     myRole: [DEL]
     priority: 65
 
-  # CLEARED departures/local: PUSH (approve startup/pushback) (GND/TWR/APP/CTR)
+  # CLEARED / TSAT: PUSH for cleared not-yet-RDY (GND)
+  # DE-ICE / RDY uses push_deice_gnd (higher priority)
   push_cleared:
     action: PUSH
     sectionId: cleared
@@ -404,6 +406,7 @@ actionRules:
     priority: 120
 
   # TopSky ROF: taxi-out other-owned traffic (TWR only). ESSA overrides sectionId → taxi_dep.
+  # handoffInitiated: false so inbound transfer shows ASSUME, not ROF
   rof_taxi_dep_twr:
     action: ROF
     sectionId: taxi
@@ -412,6 +415,7 @@ actionRules:
     controller: not_myself
     notParallelTwrOwner: true
     withinCtr: true
+    handoffInitiated: false
     myRole: [TWR]
     priority: 40
 

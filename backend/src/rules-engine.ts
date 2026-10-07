@@ -17,7 +17,7 @@ import type {
     EuroscopeCommand
 } from "./config-types.js"
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
-import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
+import { findNearestAirport, isWithinRangeOfAnyAirport, isWithinStripVisibilityRange } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole, isParallelTwr } from "./static-config.js"
@@ -374,11 +374,13 @@ function evaluateCommonConditions(
         }
     }
 
-    // nextControllerRole: flight.nextController callsign must resolve to one of these roles
+    // nextControllerRole: when EuroScope sets nextController, it must match.
+    // If unset (common at ESSA — sequence uses ESE OWNER, not ES next), allow the rule.
     if (rule.nextControllerRole) {
-        if (!flight.nextController) return false
-        const nextRole = parseControllerRole(flight.nextController, config.myAirports)
-        if (!rule.nextControllerRole.includes(nextRole)) return false
+        if (flight.nextController) {
+            const nextRole = parseControllerRole(flight.nextController, config.myAirports)
+            if (!rule.nextControllerRole.includes(nextRole)) return false
+        }
     }
 
     // missedApproach: if specified, must match flight.missedApproach (default false)
@@ -610,16 +612,18 @@ export function determineActionForFlight(
 ): StripAction | undefined {
     const sortedRules = sortByPriorityDesc(config.actionRules)
 
-    // Find first matching rule
+    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
+
+    // Find first matching rule (never ROF when the handoff is to us — ASSUME wins)
     for (const rule of sortedRules) {
         if (evaluateActionRule(flight, sectionId, rule, config)) {
+            if (transferredToMe && rule.action === 'ROF') continue
             return rule.action
         }
     }
 
     // Fallback: ASSUME when nobody has the track or flight is transferred to me
     const uncontrolled = !flight.controller
-    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
     if (uncontrolled || transferredToMe) {
         return 'ASSUME'
     }
@@ -652,7 +656,7 @@ function evaluateDeleteRule(
         }
     }
 
-    // Check beyond range condition
+    // Check beyond range condition (same visibility rules as strip create)
     if (rule.beyondRange === true) {
         // Can't evaluate without airports or position data
         if (config.myAirports.length === 0) {
@@ -661,16 +665,20 @@ function evaluateDeleteRule(
         if (flight.latitude === undefined || flight.longitude === undefined) {
             return false // Can't evaluate without position
         }
-        // Check if flight is within range - if it is, rule doesn't match
-        const withinRange = isWithinRangeOfAnyAirport(
-            flight.latitude,
-            flight.longitude,
-            config.myAirports,
-            config.radarRangeNm,
-            getAirportCoords
-        )
-        if (withinRange) {
-            return false // Flight is within range, don't delete
+        // Within radar (any) or arrival 100nm / ETA≤20 → keep strip
+        if (
+            isWithinStripVisibilityRange(
+                flight,
+                config.myAirports,
+                {
+                    radarRangeNm: config.radarRangeNm,
+                    arrivalRangeNm: config.arrivalRangeNm,
+                    arrivalEtaMinutes: config.arrivalEtaMinutes,
+                },
+                getAirportCoords
+            )
+        ) {
+            return false // Still visible, don't delete
         }
     }
 

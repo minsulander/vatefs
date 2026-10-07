@@ -2,342 +2,1873 @@
   "1": {
     "depRunway": "01L",
     "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "C" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "C" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "C" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "C" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "C" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "C" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "C" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "C" }
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "240" },
-      { "exits": ["RESNA", "KOGAV"], "track": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "360", "heading": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "240"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "360",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "2": {
     "depRunway": "19R",
     "prefs": [
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "G" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "G" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "G" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "G" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "G" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "G" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "G" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "G" }
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "RESNA", "KOGAV"], "sid": "HAPZI", "letter": "G" },
-      { "exits": ["BABAP", "TOVRI"], "track": "190", "heading": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "HAPZI",
+        "letter": "G"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "190",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "3": {
     "depRunway": "01L",
     "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "C" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "C" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "C" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "C" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "C" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "C" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "C" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "C" }
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "240" },
-      { "exits": ["RESNA", "KOGAV"], "track": "270", "heading": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "240"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "270",
+        "heading": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
   },
   "4": {
     "depRunway": "08",
     "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "L" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "L" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "L" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "L" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "L" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "L" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "L" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "L" }
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "L",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "L",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "040", "heading": "250" },
-      { "exits": ["RESNA", "KOGAV"], "track": "040", "heading": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "040",
+        "heading": "250"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "040",
+        "heading": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
   },
   "5": {
     "depRunway": "08",
     "prefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "sid": "KOGAV", "letter": "L" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "L" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "L" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "L" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "L" }
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "sid": "KOGAV",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "L",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "L",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "040", "heading": "250" },
-      { "exits": ["RESNA", "KOGAV"], "track": "040", "heading": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "080", "heading": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "040",
+        "heading": "250"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "040",
+        "heading": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "080",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
   },
   "6": {
     "depRunway": "01R",
     "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "B" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "B" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "B" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "B" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "B" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "B" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "B" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "B" }
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "B",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "B",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "B",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "240" },
-      { "exits": ["RESNA", "KOGAV"], "track": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "240"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-E",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "7": {
     "depRunway": "08",
     "prefs": [
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "R" },
-      { "exits": ["PETEV"], "sid": "ABENI", "letter": "R" },
-      { "exits": ["NOSLI"], "sid": "DIGLI", "letter": "R" },
-      { "exits": ["INWIQ"], "sid": "GALNU", "letter": "R" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "L" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "L" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "R" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "R" }
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "ABENI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "DIGLI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "GALNU",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "L",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "R",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "R",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "160", "heading": "250" },
-      { "exits": ["RESNA", "KOGAV"], "track": "330" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "160",
+        "heading": "250"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "330"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-E",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 360,
+    "mapAltitudeFt": 4000
   },
   "8": {
     "depRunway": "19L",
     "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "Q" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "Q" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "Q" },
-      { "exits": ["PETEV"], "sid": "ABENI", "letter": "Q" },
-      { "exits": ["NOSLI"], "sid": "DIGLI", "letter": "Q" },
-      { "exits": ["INWIQ"], "sid": "GALNU", "letter": "Q" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "ABENI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "DIGLI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "GALNU",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV"], "track": "190", "heading": "240" },
-      { "exits": ["NOSLI", "INWIQ"], "track": "160" },
-      { "exits": ["RESNA", "KOGAV"], "track": "090", "heading": "010" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV"
+        ],
+        "track": "190",
+        "heading": "240"
+      },
+      {
+        "exits": [
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "160"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "090",
+        "heading": "010"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 360,
+    "mapAltitudeFt": 4000
+  },
+  "10": {
+    "depRunway": "08",
+    "prefs": [
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "ABENI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "DIGLI",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "GALNU",
+        "letter": "R",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "R",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "R",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "160",
+        "heading": "250"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "160",
+        "heading": "270"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "070",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
+  },
+  "11": {
+    "depRunway": "19L",
+    "prefs": [
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "150",
+        "heading": "270"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "150",
+        "heading": "290"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "090",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
+  },
+  "12": {
+    "depRunway": "19R",
+    "prefs": [
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "HAPZI",
+        "letter": "G"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 270,
+    "mapAltitudeFt": 4000
+  },
+  "13": {
+    "depRunway": "01L",
+    "prefs": [
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "C",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "C",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "TOVRI",
+          "BABAP"
+        ],
+        "track": "010",
+        "heading": "240"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "010",
+        "heading": "330"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 180,
+    "mapAltitudeFt": 4000
+  },
+  "14": {
+    "depRunway": "19R",
+    "prefs": [
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "G",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "HAPZI",
+        "letter": "G"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "190",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 300,
+    "mapAltitudeFt": 4000
+  },
+  "16": {
+    "depRunway": "26",
+    "prefs": [
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "RESNA",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "KOGAV",
+        "letter": "K",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "K",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "K",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "slowPrefs": [
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV",
+          "ARS"
+        ],
+        "track": "300"
+      },
+      {
+        "exits": [
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "BABAP"
+        ],
+        "track": "230"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "track": "300",
+        "heading": "040"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 180,
+    "mapAltitudeFt": 4000
   },
   "9A": {
     "depRunway": "19L",
     "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "Q" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "Q" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "Q" },
-      { "exits": ["PETEV"], "sid": "ABENI", "letter": "Q" },
-      { "exits": ["NOSLI"], "sid": "DIGLI", "letter": "Q" },
-      { "exits": ["INWIQ"], "sid": "GALNU", "letter": "Q" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "ABENI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "DIGLI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "GALNU",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "270" },
-      { "exits": ["RESNA", "KOGAV"], "track": "290" },
-      { "exits": ["BABAP", "TOVRI"], "track": "090", "heading": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "270"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "290"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "090",
+        "heading": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "9B": {
     "depRunway": "19L",
     "slowFollowSid": true,
     "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "Q" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "Q" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "Q" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "E" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "E" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "E" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
-    ]
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "9C": {
     "depRunway": "19L",
     "prefs": [
-      { "exits": ["RESNA", "KOGAV"], "sid": "ARS", "letter": "E" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "E" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "E" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "E" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "E" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "RESNA", "KOGAV"], "track": "290" },
-      { "exits": ["BABAP", "TOVRI"], "track": "090", "heading": "120" }
-    ]
-  },
-  "10": {
-    "depRunway": "08",
-    "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "R" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "R" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "R" },
-      { "exits": ["PETEV"], "sid": "ABENI", "letter": "R" },
-      { "exits": ["NOSLI"], "sid": "DIGLI", "letter": "R" },
-      { "exits": ["INWIQ"], "sid": "GALNU", "letter": "R" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "R" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "R" }
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "290"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "090",
+        "heading": "120"
+      }
     ],
-    "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "160", "heading": "250" },
-      { "exits": ["RESNA", "KOGAV"], "track": "160", "heading": "270" },
-      { "exits": ["BABAP", "TOVRI"], "track": "070", "heading": "120" }
-    ]
-  },
-  "11": {
-    "depRunway": "19L",
-    "prefs": [
-      { "exits": ["RESNA", "KOGAV"], "sid": "ARS", "letter": "E" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "E" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "E" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "E" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "E" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
-    ],
-    "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "150", "heading": "270" },
-      { "exits": ["RESNA", "KOGAV"], "track": "150", "heading": "290" },
-      { "exits": ["BABAP", "TOVRI"], "track": "090", "heading": "120" }
-    ]
-  },
-  "12": {
-    "depRunway": "19R",
-    "prefs": [
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "G" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "G" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "G" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "G" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "G" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "G" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "G" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "G" }
-    ],
-    "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "RESNA", "KOGAV"], "sid": "HAPZI", "letter": "G" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
-  },
-  "13": {
-    "depRunway": "01L",
-    "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "C" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "C" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "C" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "C" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "C" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "C" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "C" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "C" }
-    ],
-    "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "TOVRI", "BABAP"], "track": "010", "heading": "240" },
-      { "exits": ["RESNA", "KOGAV"], "track": "010", "heading": "330" }
-    ]
-  },
-  "14": {
-    "depRunway": "19R",
-    "prefs": [
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "G" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "G" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "G" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "G" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "G" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "G" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "G" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "G" }
-    ],
-    "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "RESNA", "KOGAV"], "sid": "HAPZI", "letter": "G" },
-      { "exits": ["BABAP", "TOVRI"], "track": "190", "heading": "120" }
-    ]
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-E",
+    "mapHeading": 90,
+    "mapAltitudeFt": 4000
   },
   "15A": {
     "depRunway": "19L",
     "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "Q" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "Q" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "Q" },
-      { "exits": ["PETEV"], "sid": "ABENI", "letter": "Q" },
-      { "exits": ["NOSLI"], "sid": "DIGLI", "letter": "Q" },
-      { "exits": ["INWIQ"], "sid": "GALNU", "letter": "Q" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "ABENI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "DIGLI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "GALNU",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ"], "track": "250", "heading": "270" },
-      { "exits": ["RESNA", "KOGAV"], "track": "250", "heading": "290" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ"
+        ],
+        "track": "250",
+        "heading": "270"
+      },
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "250",
+        "heading": "290"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
+    ],
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 300,
+    "mapAltitudeFt": 4000
   },
   "15B": {
     "depRunway": "19L",
     "slowFollowSid": true,
     "prefs": [
-      { "exits": ["RESNA"], "sid": "LUMAX", "letter": "Q" },
-      { "exits": ["KOGAV"], "sid": "TALEK", "letter": "Q" },
-      { "exits": ["ARS"], "sid": "ROKNI", "letter": "Q" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "E" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "E" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "E" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
-    ]
+      {
+        "exits": [
+          "RESNA"
+        ],
+        "sid": "LUMAX",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "KOGAV"
+        ],
+        "sid": "TALEK",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ROKNI",
+        "letter": "Q",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
+    ],
+    "mapNextSector": "ARR-W",
+    "mapHeading": 300,
+    "mapAltitudeFt": 4000
   },
   "15C": {
     "depRunway": "19L",
     "prefs": [
-      { "exits": ["RESNA", "KOGAV"], "sid": "ARS", "letter": "E" },
-      { "exits": ["ARS"], "sid": "ARS", "letter": "E" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "E" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "E" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "E" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "E" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "E" }
+      {
+        "exits": [
+          "RESNA",
+          "KOGAV"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "ARS"
+        ],
+        "sid": "ARS",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "PETEV"
+        ],
+        "sid": "PETEV",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "NOSLI"
+        ],
+        "sid": "NOSLI",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "INWIQ"
+        ],
+        "sid": "INWIQ",
+        "letter": "E",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
+          "TOVRI"
+        ],
+        "sid": "TOVRI",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      },
+      {
+        "exits": [
+          "BABAP"
+        ],
+        "sid": "BABAP",
+        "letter": "E",
+        "nextSector": "DEP-E"
+      }
     ],
     "slowPrefs": [
-      { "exits": ["ARS", "PETEV", "NOSLI", "INWIQ", "RESNA", "KOGAV"], "track": "190", "heading": "210" },
-      { "exits": ["BABAP", "TOVRI"], "track": "120" }
-    ]
-  },
-  "16": {
-    "depRunway": "26",
-    "prefs": [
-      { "exits": ["ARS"], "sid": "ARS", "letter": "K" },
-      { "exits": ["PETEV"], "sid": "PETEV", "letter": "K" },
-      { "exits": ["NOSLI"], "sid": "NOSLI", "letter": "K" },
-      { "exits": ["INWIQ"], "sid": "INWIQ", "letter": "K" },
-      { "exits": ["RESNA"], "sid": "RESNA", "letter": "K" },
-      { "exits": ["KOGAV"], "sid": "KOGAV", "letter": "K" },
-      { "exits": ["TOVRI"], "sid": "TOVRI", "letter": "K" },
-      { "exits": ["BABAP"], "sid": "BABAP", "letter": "K" }
+      {
+        "exits": [
+          "ARS",
+          "PETEV",
+          "NOSLI",
+          "INWIQ",
+          "RESNA",
+          "KOGAV"
+        ],
+        "track": "190",
+        "heading": "210"
+      },
+      {
+        "exits": [
+          "BABAP",
+          "TOVRI"
+        ],
+        "track": "120"
+      }
     ],
-    "slowPrefs": [
-      { "exits": ["RESNA", "KOGAV", "ARS"], "track": "300" },
-      { "exits": ["PETEV", "NOSLI", "INWIQ", "BABAP"], "track": "230" },
-      { "exits": ["TOVRI"], "track": "300", "heading": "040" }
-    ]
+    "slowNextSector": "ARR-W",
+    "mapNextSector": "ARR-W",
+    "mapHeading": 300,
+    "mapAltitudeFt": 4000
   }
 }

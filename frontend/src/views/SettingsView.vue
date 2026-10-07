@@ -87,14 +87,60 @@
                     Play EuroScope handoff sounds for transfer request, accept, and refuse.
                 </p>
             </div>
+
+            <v-switch
+                v-if="showAppDepXcOption"
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Force display XC frequencies"
+                class="mt-2"
+                :model-value="efs.showAppDepXcFrequency"
+                @update:model-value="onShowAppDepXcFrequency"
+            />
+            <p
+                v-if="showAppDepXcOption"
+                class="text-caption text-grey ml-13"
+                style="margin-top: -15px"
+            >
+                Always show the ideal SI and frequency on XFER, even when AFV does not detect the
+                covering position monitoring that frequency.
+            </p>
+
+            <v-switch
+                v-if="efs.autoParkAvailable"
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Auto PARK"
+                class="mt-2"
+                :model-value="efs.autoParkEnabled"
+                @update:model-value="onAutoParkEnabled"
+            />
+            <p
+                v-if="efs.autoParkAvailable"
+                class="text-caption text-grey ml-13"
+                style="margin-top: -15px"
+            >
+                Automatically set PARK when an assumed arrival is stationary at a stand
+                (requires GRP stand data).
+            </p>
         </v-container>
     </v-main>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue"
 import { useEfsStore } from "@/store/efs"
 
 const efs = useEfsStore()
+
+const showAppDepXcOption = computed(() =>
+    efs.myAirports.some((a) => {
+        const u = a.toUpperCase()
+        return u === "ESSA" || u === "ESGG"
+    }),
+)
 
 function onDclSound(value: boolean | null) {
     if (typeof value !== "boolean") return
@@ -124,6 +170,16 @@ function onShowStripOwnership(value: boolean | null) {
 function onDimOtherOwnedStrips(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ dimOtherOwnedStrips: value })
+}
+
+function onShowAppDepXcFrequency(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ showAppDepXcFrequency: value })
+}
+
+function onAutoParkEnabled(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ autoParkEnabled: value })
 }
 </script>
 

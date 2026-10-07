@@ -6,9 +6,12 @@
  */
 
 import fs from "fs"
+import { getEssaRwyCombination, normalizeEssaRwy } from "@vatefs/common"
 import { getSidsForRunway } from "./sid-data.js"
 
 const TRACK_SEP = "\u00B7" // middle dot ·
+
+export type AppDepSector = "DEP-W" | "DEP-E" | "ARR-W" | "ARR-E"
 
 export interface NamedSidPref {
     exits: string[]
@@ -16,6 +19,8 @@ export interface NamedSidPref {
     letter: string
     track?: undefined
     heading?: undefined
+    /** Appendix A receiving sector for this SID/exit */
+    nextSector?: AppDepSector
 }
 
 export interface TrackSidPref {
@@ -24,6 +29,7 @@ export interface TrackSidPref {
     heading?: string
     sid?: undefined
     letter?: undefined
+    nextSector?: AppDepSector
 }
 
 export type SidPref = NamedSidPref | TrackSidPref
@@ -34,6 +40,14 @@ export interface EssaSidConfigPrefs {
     slowPrefs?: SidPref[]
     /** Night configs: low-speed traffic follows normal SID */
     slowFollowSid?: boolean
+    /** Low-speed delivery sector (06–22 LT) */
+    slowNextSector?: AppDepSector
+    /** Missed approach / GOA delivery sector */
+    mapNextSector?: AppDepSector
+    /** Appendix A MAP delivery heading (e.g. H270 → 270) */
+    mapHeading?: number
+    /** Appendix A MAP delivery altitude feet (e.g. 4000 FT) */
+    mapAltitudeFt?: number
 }
 
 let prefsByConfig: Map<string, EssaSidConfigPrefs> = new Map()
@@ -175,6 +189,87 @@ export interface PreferredSidResult {
     /** All ESE SID names matching any active pref pattern (for dropdown sort) */
     sortGroup: string[]
     exit?: string
+    nextSector?: AppDepSector
+}
+
+const SECTOR_TO_SI: Record<AppDepSector, string> = {
+    "DEP-W": "DW",
+    "DEP-E": "DE",
+    "ARR-W": "W",
+    "ARR-E": "E",
+}
+
+export function appDepSectorToSi(sector: AppDepSector): string {
+    return SECTOR_TO_SI[sector]
+}
+
+/**
+ * Appendix A missed-approach delivery (HDG / ALT / next sector).
+ * HDG/CFL only when `arrRwy` matches the config's primary ARR (or arrRwy is unset).
+ * Differing ARR (e.g. 01L under config 1) → sector only, no heading/altitude.
+ */
+export function resolveMapDelivery(
+    configId: string,
+    arrRwy?: string
+): {
+    sector: AppDepSector
+    heading?: number
+    altitudeFt?: number
+} {
+    const config = prefsByConfig.get(configId)
+    const sector = config?.mapNextSector ?? "ARR-E"
+    const combo = getEssaRwyCombination(configId)
+    const configArr = combo?.arrName ? normalizeEssaRwy(combo.arrName) : undefined
+    const flightArr = arrRwy ? normalizeEssaRwy(arrRwy) : undefined
+
+    const arrMatches =
+        !flightArr || !configArr || flightArr === configArr
+
+    if (!arrMatches) {
+        return { sector }
+    }
+
+    return {
+        sector,
+        heading: config?.mapHeading,
+        altitudeFt: config?.mapAltitudeFt,
+    }
+}
+
+/**
+ * Appendix A next APP/DEP sector for TWR handoff (normal SID / slow / MAP).
+ */
+export function resolveAppDepNextSector(options: {
+    configId: string
+    route?: string
+    slow?: boolean
+    missedApproach?: boolean
+}): AppDepSector {
+    const config = prefsByConfig.get(options.configId)
+    if (!config) return "DEP-W"
+
+    if (options.missedApproach) {
+        return resolveMapDelivery(options.configId).sector
+    }
+
+    const useSlow = !!options.slow && !config.slowFollowSid
+    if (useSlow && config.slowNextSector) {
+        return config.slowNextSector
+    }
+
+    const prefs = activePrefList(config, useSlow)
+    const allExits = prefs.flatMap((p) => p.exits)
+    const exit = findRouteExit(options.route, allExits)
+    if (exit) {
+        const pref = prefs.find((p) => p.exits.some((e) => e.toUpperCase() === exit))
+        if (pref?.nextSector) return pref.nextSector
+    }
+
+    // Prefer first pref with nextSector, else DEP-W
+    for (const p of prefs) {
+        if (p.nextSector) return p.nextSector
+    }
+    return "DEP-W"
 }
 
 /**
@@ -203,7 +298,7 @@ export function resolvePreferredSid(options: {
     if (!pref) return { sid: null, sortGroup, exit }
 
     const sid = resolvePrefSid(options.airport, runway, pref, exit) ?? null
-    return { sid, sortGroup, exit }
+    return { sid, sortGroup, exit, nextSector: pref.nextSector }
 }
 
 /** SIDs matching any pref in the active list (named letter-group or track patterns). */

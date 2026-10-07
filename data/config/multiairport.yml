@@ -225,6 +225,7 @@ actionRules:
     direction: either
     controller: myself
     groundstates: [TAXI]
+    handoffInitiated: false
     myRole: [GND]
     notMyRole: [TWR]
     priority: 115
@@ -309,7 +310,16 @@ actionRules:
     airborne: true
     clearedToLand: true
     myRole: [TWR, APP, CTR]
-    notMyRole: [GND, DEL]
+    priority: 95
+
+  goa_ctr_arr:
+    action: GOA
+    sectionId: ctr_arr
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
     priority: 95
 
   cto_lineup:

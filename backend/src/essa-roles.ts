@@ -18,6 +18,7 @@ import {
     normalizeEssaRwy,
     type EssaPhysicalRwyPair,
 } from "@vatefs/common"
+import { getGndOwnerChain, type EssaGndFamily } from "./ese-airspace.js"
 
 /** Fine-grained ESSA positions shown in the role picker / headers (physical only) */
 export type EssaPositionRole =
@@ -165,6 +166,56 @@ export function parseOnlineEssaLoginIds(callsigns: Iterable<string>): EssaLoginI
     return [...set]
 }
 
+/** Login GND role → EuroScope SI (AGE/AGN/AGW). */
+function gndRoleToSi(role: EssaPositionRole): string | undefined {
+    if (role === 'GND-E') return 'AGE'
+    if (role === 'GND-N') return 'AGN'
+    if (role === 'GND-W') return 'AGW'
+    return undefined
+}
+
+function gndFamilyToRole(family: EssaGndFamily): EssaPositionRole {
+    if (family === 'GE') return 'GND-E'
+    if (family === 'GN') return 'GND-N'
+    return 'GND-W'
+}
+
+/**
+ * GND-* roles covered by this login via ESE OWNER (first online SI in each family chain).
+ * e.g. GW online + GN online + AGE off → GW gets GND-W + GND-E; GN gets GND-N only.
+ */
+export function resolveGndRolesFromOwnerCoverage(
+    myCallsign: string,
+    onlineCallsigns: Iterable<string>
+): EssaPositionRole[] {
+    const myLogin = parseEssaLoginId(myCallsign)
+    const mySi = myLogin && myLogin.startsWith('GND-') ? gndRoleToSi(myLogin as EssaPositionRole) : undefined
+
+    /** SI → callsign for online ESSA GND */
+    const onlineBySi = new Map<string, string>()
+    const add = (cs: string) => {
+        const id = parseEssaLoginId(cs)
+        if (!id || !id.startsWith('GND-')) return
+        const si = gndRoleToSi(id as EssaPositionRole)
+        if (si) onlineBySi.set(si, cs.toUpperCase())
+    }
+    for (const cs of onlineCallsigns) add(cs)
+    add(myCallsign)
+
+    const covered: EssaPositionRole[] = []
+    for (const family of ['GE', 'GN', 'GW'] as const) {
+        for (const si of getGndOwnerChain(family)) {
+            const holder = onlineBySi.get(si.toUpperCase())
+            if (!holder) continue
+            if (holder === myCallsign.toUpperCase() || si.toUpperCase() === mySi) {
+                covered.push(gndFamilyToRole(family))
+            }
+            break
+        }
+    }
+    return sortEssaRoles(covered)
+}
+
 /**
  * Compute auto-selected ESSA roles from effective coverage + AOR solo rules.
  *
@@ -172,7 +223,8 @@ export function parseOnlineEssaLoginIds(callsigns: Iterable<string>): EssaLoginI
  * (TWR alone → DEL+GND+TWR; GND online → TWR only; GND alone → DEL+GND).
  * TWR never gets CD without GND. Manual picker may break that on purpose.
  *
- * - GND: if ≤1 GND online, select all GND-*; else only own sector.
+ * - GND: ≤1 ESSA GND online → all GND-* (solo covers everything, e.g. GN alone).
+ *   Multiple online → ESE OWNER (first online SI per family): GW+GN → GW gets E+W, GN only N.
  * - TWR: physical E/W only; TWR-S inherits per resolvePhysicalTwrsForLogin.
  */
 export function computeAutoEssaRoles(
@@ -198,10 +250,13 @@ export function computeAutoEssaRoles(
             (p): p is EssaPositionRole => p === 'GND-E' || p === 'GND-N' || p === 'GND-W'
         )
         if (onlineGnd.length <= 1) {
+            // Solo GND (any of E/N/W) covers all ground sectors
             result.push(...ALL_GND_POSITIONS)
-        } else if (mine && (mine === 'GND-E' || mine === 'GND-N' || mine === 'GND-W')) {
-            result.push(mine)
+        } else if (callsign && mine && (mine === 'GND-E' || mine === 'GND-N' || mine === 'GND-W')) {
+            const covered = resolveGndRolesFromOwnerCoverage(callsign, onlineCallsigns)
+            result.push(...(covered.length > 0 ? covered : [mine]))
         } else {
+            // Top-down GND without an ESSA_*_GND login — all sectors
             result.push(...ALL_GND_POSITIONS)
         }
     }

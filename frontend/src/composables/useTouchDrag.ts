@@ -18,6 +18,7 @@ const dragElement = ref<HTMLElement | null>(null)
 const dragClone = ref<HTMLElement | null>(null)
 const currentDropTarget = ref<HTMLElement | null>(null)
 const isOverBottomZone = ref(false)
+const isOverTrash = ref(false)
 
 // Offset from touch point to element top-left
 let offsetX = 0
@@ -80,15 +81,25 @@ export function useTouchDrag() {
     const elementUnder = document.elementFromPoint(touch.clientX, touch.clientY)
     dragClone.value.style.display = ''
 
+    // Trash can (bottom bar) — delete on drop
+    const trashZone = elementUnder?.closest('.efs-trash-drop') as HTMLElement | null
+    isOverTrash.value = trashZone !== null
+    document.querySelectorAll('.efs-trash-drop.drag-over').forEach((el) => {
+      if (el !== trashZone) el.classList.remove('drag-over')
+    })
+    if (trashZone) trashZone.classList.add('drag-over')
+
     // Check if over bottom drop zone OR bottom strips container
     const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
     const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
-    const isOverBottom = bottomZone !== null || bottomStripsContainer !== null
+    const isOverBottom = !trashZone && (bottomZone !== null || bottomStripsContainer !== null)
     isOverBottomZone.value = isOverBottom
 
     // Find the section-content element (or the section wrapper for bottom zone)
     let dropTarget: HTMLElement | null = null
-    if (isOverBottom) {
+    if (trashZone) {
+      dropTarget = trashZone
+    } else if (isOverBottom) {
       // When over bottom zone or bottom strips, use the parent section-content for positioning
       // but don't highlight the section-content itself
       dropTarget = (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
@@ -136,6 +147,7 @@ export function useTouchDrag() {
     data: DragData | null
     dropPosition: number
     isBottomDrop: boolean
+    isTrashDrop: boolean
     touchY: number
     draggedStripTop: number
     cloneRect: DOMRect | null
@@ -149,6 +161,7 @@ export function useTouchDrag() {
       data: dragData.value,
       dropPosition: 0,
       isBottomDrop: isOverBottomZone.value,
+      isTrashDrop: isOverTrash.value,
       touchY: lastTouchY,
       draggedStripTop,
       cloneRect
@@ -200,9 +213,13 @@ export function useTouchDrag() {
     document.querySelectorAll('.bottom-strips-container.drag-over').forEach(el => {
       el.classList.remove('drag-over')
     })
+    document.querySelectorAll('.efs-trash-drop.drag-over').forEach((el) => {
+      el.classList.remove('drag-over')
+    })
 
     isDragging.value = false
     isOverBottomZone.value = false
+    isOverTrash.value = false
     dragData.value = null
     dragElement.value = null
 
@@ -223,8 +240,12 @@ export function useTouchDrag() {
       currentDropTarget.value.classList.remove('drag-over')
       currentDropTarget.value = null
     }
+    document.querySelectorAll('.efs-trash-drop.drag-over').forEach((el) => {
+      el.classList.remove('drag-over')
+    })
 
     isDragging.value = false
+    isOverTrash.value = false
     dragData.value = null
     dragElement.value = null
 

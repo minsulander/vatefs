@@ -149,8 +149,11 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (alternate && strlen(alternate) < 10)
             SetJsonIfValidUtf8(message, "alternate", alternate);
         SetJsonIfValidUtf8(message, "flightRules", fpData.GetPlanType());
-        SetJsonIfValidUtf8(message, "communicationType",
-                           (std::string("") + fpData.GetCommunicationType()).c_str());
+        {
+            char comm = fpData.GetCommunicationType();
+            char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
+            SetJsonIfValidUtf8(message, "communicationType", commStr);
+        }
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
@@ -266,9 +269,14 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             }
             break;
         }
-        case EuroScopePlugIn::CTR_DATA_TYPE_COMMUNICATION_TYPE:
-            out << " comm " << ctrData.GetCommunicationType();
+        case EuroScopePlugIn::CTR_DATA_TYPE_COMMUNICATION_TYPE: {
+            char comm = ctrData.GetCommunicationType();
+            out << " comm " << comm;
+            // Printable single char (0 → '0') so JSON/UTF-8 helpers accept it
+            char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
+            SetJsonIfValidUtf8(message, "communicationType", commStr);
             break;
+        }
         case EuroScopePlugIn::CTR_DATA_TYPE_SCRATCH_PAD_STRING: {
             const char *scratchStr = ctrData.GetScratchPadString();
             if (!scratchStr) return;
@@ -1418,7 +1426,7 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
             return false;
         }
         // TopSky coordination: /ROF/TARGET/REQUESTER on a scratchpad ES lets us write.
-        // Do not clear immediately — TopSky reads then clears (see live /ROF/ then empty).
+        // Backend clears the vehicle scratch after a short delay (TopSky often leaves it set).
         const std::string scratch = std::string("/ROF/") + target + "/" + myself.GetCallsign();
 
         std::vector<std::string> vehicles;
@@ -1456,7 +1464,13 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
             if (!fp.IsValid()) continue;
             if (fp.GetControllerAssignedData().SetScratchPadString(scratch.c_str())) {
                 DebugMessage("ROF sent for " + target + " via " + vehicle + ": " + scratch);
-                postResult(target, true);
+                // Include vehicle so backend can clear the scratch after TopSky reads it
+                nlohmann::json result = nlohmann::json::object();
+                result["type"] = "rofResult";
+                result["callsign"] = target;
+                result["ok"] = true;
+                result["vehicle"] = vehicle;
+                PostJson(result, "SendRof");
                 return true;
             }
         }

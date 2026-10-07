@@ -15,7 +15,7 @@ console.log = (...args: unknown[]) => { fs.writeSync(1, formatArgs(args) + "\n")
 console.warn = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 console.error = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 
-import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
+import { constants, isClientMessage, parseGapKey, resolveEssaRwyConfigId } from "@vatefs/common"
 import type {
     LayoutMessage,
     StripMessage,
@@ -58,9 +58,19 @@ import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
 import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
-import { loadStands } from "./stand-data.js"
+import { loadStands, hasStandData } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
-import { loadEssaSidPrefs, resolvePreferredSid } from "./essa-sid-prefs.js"
+import { loadEseAirspace } from "./ese-airspace.js"
+import { startAfvTransceiverPolling } from "./afv-transceivers.js"
+import {
+    isEssaStripVisibleForRoles,
+    resolveEssaNextSi,
+    resolveEssaXferCallsign,
+    setForceIdealAppDepFrequency,
+} from "./essa-next-si.js"
+import { loadEssaSidPrefs, resolvePreferredSid, resolveMapDelivery } from "./essa-sid-prefs.js"
+import { resolveEsmsPreferredSid, isEkchRwy30Active } from "./esms-sid.js"
+import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
@@ -214,6 +224,13 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
     }
     try {
+        loadEseAirspace(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    } catch (err) {
+        console.warn(`Failed to load ESE airspace: ${err instanceof Error ? err.message : err}`)
+    }
+    // AFV multi-freq (VATSIM Radar "Monitoring") for APP/DEP XC detection
+    startAfvTransceiverPolling()
+    try {
         loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
     } catch (err) {
         console.warn(`Failed to load ICAO airlines: ${err instanceof Error ? err.message : err}`)
@@ -279,6 +296,12 @@ let currentUiSettings: UiSettings = { ...DEFAULT_UI_SETTINGS }
 {
     const saved = loadUserSettings()
     currentUiSettings = resolveUiSettings(saved)
+    setForceIdealAppDepFrequency(currentUiSettings.showAppDepXcFrequency)
+}
+flightStore.setAutoParkEnabledGetter(() => currentUiSettings.autoParkEnabled)
+
+function isAutoParkAvailable(): boolean {
+    return staticConfig.myAirports.some((a) => hasStandData(a))
 }
 
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
@@ -386,6 +409,20 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
  */
 function reevaluateAndBroadcast(callsign: string) {
     const result = flightStore.reevaluateStrip(callsign)
+
+    // Soft-delete (e.g. Auto PARK → delete_parked): stash in trash + remove from clients
+    if (result.softDeleted) {
+        const reason = result.flight?.lastDeleteRule
+        const stashed = store.softDeleteCallsignToTrash(callsign, reason)
+        for (const id of stashed) {
+            broadcastStripDelete(id)
+        }
+        if (stashed.length > 0) {
+            console.log(`Strip(s) soft-deleted to trash: ${stashed.join(", ")} (${reason ?? "rule"})`)
+        }
+        return
+    }
+
     if (!result.strip) return
 
     // Handle section change: recompute positions in old section
@@ -427,6 +464,19 @@ function reevaluateAndBroadcast(callsign: string) {
 }
 
 flightStore.setRofRequestExpireHandler((callsign) => reevaluateAndBroadcast(callsign))
+flightStore.setAutoParkCommandHandler((callsign) => {
+    sendUdp(JSON.stringify({ type: "setGroundState", callsign, state: "PARK" }))
+    sendUdp(JSON.stringify({ type: "release", callsign }))
+    // Optimistic local ownership clear so strip updates immediately (matches PARK button)
+    const flight = flightStore.getFlight(callsign)
+    if (flight) {
+        flight.controller = ""
+        flight.controllerId = undefined
+        flight.handoffTargetController = undefined
+        flight.handoffTargetControllerId = undefined
+    }
+    reevaluateAndBroadcast(callsign)
+})
 
 type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
@@ -456,10 +506,15 @@ type OutboundPluginCommand =
  */
 function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): string | undefined {
     // Incoming TopSky ROF: always hand off to the requesting controller
-    if (flight) {
-        const rofFrom = flightStore.getPendingRofRequest(flight)
-        if (rofFrom) return rofFrom
+    const rofFrom = flight ? flightStore.getPendingRofRequest(flight) : undefined
+    if (rofFrom) return rofFrom
+
+    // ESSA: sector / taxi-sequence next SI
+    if (flight && isEssaRolesConfig(staticConfig)) {
+        const essaTarget = resolveEssaXferCallsign(flight, strip, undefined)
+        if (essaTarget) return essaTarget
     }
+
     const myRole = staticConfig.myRole ?? 'TWR'
     switch (myRole) {
         case 'DEL':
@@ -467,6 +522,28 @@ function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): stri
         case 'GND':
             return getControllerCallsign('TWR')
         case 'TWR':
+            if (flight && staticConfig.myAirports.some((a) => a.toUpperCase() === "ESGG")) {
+                const online = staticConfig.onlineControllers?.values()
+                if (flight.missedApproach) {
+                    // ESGG split APP: MISAP 03→W, 21→E
+                    const arrRwy =
+                        flight.arrRwy || staticConfig.activeRunways?.["ESGG"]?.arr?.[0]
+                    const app = resolveEsggMisapApp(arrRwy, online)
+                    if (app) return app.callsign
+                } else if (strip.stripType === "departure") {
+                    // DEP RNAV SID → APP-E/W (appendix p.4 / p.7)
+                    const depRwy =
+                        flight.depRwy || staticConfig.activeRunways?.["ESGG"]?.dep?.[0]
+                    const app = resolveEsggDepApp(
+                        depRwy,
+                        flight.sid || strip.sid,
+                        online,
+                        "ESGG",
+                        flight.route
+                    )
+                    if (app) return app.callsign
+                }
+            }
             if (flight?.missedApproach) return getControllerCallsign('APP')
             if (strip.stripType === 'arrival' || strip.stripType === 'local') return getControllerCallsign('GND')
             return getControllerCallsign('APP')
@@ -572,12 +649,27 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
 /**
  * Map strip bayIds to the visible ESSA layout (CD ALL+TSAT merge, GND-only inbound).
  * Store keeps canonical bayIds; clients only see filtered layout bays.
+ * Returns null when ESSA role/sequence filter hides the strip.
  */
-function stripForClient(strip: FlightStrip): FlightStrip {
+function stripForClient(strip: FlightStrip): FlightStrip | null {
     if (!isEssaRolesConfig(staticConfig)) return strip
+
+    const roles = staticConfig.essaRoles ?? []
+    if (roles.length > 0 && strip.stripType !== "note") {
+        const flight = flightStore.getFlight(strip.callsign)
+        const next = flight
+            ? resolveEssaNextSi(flight, strip, {
+                  rofFrom: flightStore.getPendingRofRequest(flight),
+              })
+            : undefined
+        if (!isEssaStripVisibleForRoles(flight, strip, roles, next)) {
+            return null
+        }
+    }
+
     const gndRemapped = remapStripsForEssaGndOnly(
         [strip],
-        staticConfig.essaRoles ?? [],
+        roles,
         staticConfig.sectionToBay
     )
     const [remapped] = remapBayIdsToLayout(gndRemapped, store.getLayout())
@@ -590,9 +682,14 @@ function gapForClient(gap: Gap): Gap {
     return remapped ?? gap
 }
 
-// Broadcast a strip update
+// Broadcast a strip update (or delete when ESSA role filter hides it)
 function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; autoMoved?: boolean }) {
-    const message: StripMessage = { type: "strip", strip: stripForClient(strip) }
+    const clientStrip = stripForClient(strip)
+    if (!clientStrip) {
+        broadcastStripDelete(strip.id, options?.exclude)
+        return
+    }
+    const message: StripMessage = { type: "strip", strip: clientStrip }
     if (options?.autoMoved) message.autoMoved = true
     broadcast(message, options?.exclude)
 }
@@ -953,12 +1050,20 @@ function sendDclStatus(socket: WebSocket) {
 }
 
 function sendUserSettings(socket: WebSocket) {
-    const message: UserSettingsMessage = { type: "userSettings", settings: { ...currentUiSettings } }
+    const message: UserSettingsMessage = {
+        type: "userSettings",
+        settings: { ...currentUiSettings },
+        autoParkAvailable: isAutoParkAvailable(),
+    }
     sendMessage(socket, message)
 }
 
 function broadcastUserSettings() {
-    const message: UserSettingsMessage = { type: "userSettings", settings: { ...currentUiSettings } }
+    const message: UserSettingsMessage = {
+        type: "userSettings",
+        settings: { ...currentUiSettings },
+        autoParkAvailable: isAutoParkAvailable(),
+    }
     broadcast(message)
 }
 
@@ -1400,17 +1505,21 @@ function maybeRefreshEssaRunwayHeaders(): boolean {
     return true
 }
 
-// Send all strips to a client
+// Send all strips to a client (ESSA role/sequence filter applied)
 function sendStrips(socket: WebSocket) {
     const strips = store.getAllStrips()
+    let sent = 0
     strips.forEach((strip) => {
+        const clientStrip = stripForClient(strip)
+        if (!clientStrip) return
         const message: StripMessage = {
             type: "strip",
-            strip: strip,
+            strip: clientStrip,
         }
         sendMessage(socket, message)
+        sent++
     })
-    console.log(`Sent ${strips.length} strips to client`)
+    console.log(`Sent ${sent} strips to client`)
 }
 
 // Send all gaps to a client
@@ -1616,6 +1725,60 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
                     sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
+                // GOA: MISAP_ + MAP heading/CFL (ESSA Appendix A or ESGG H020/H200 + A030)
+                } else if (message.action === "GOA") {
+                    sendUdp(JSON.stringify({ type: "goaround", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                    const goaFlight = flightStore.getFlight(strip.callsign)
+                    if (goaFlight) {
+                        let heading: number | undefined
+                        let altitudeFt: number | undefined
+                        let logExtra = ""
+                        if (isEssaRolesConfig(staticConfig)) {
+                            const essa = staticConfig.activeRunways?.["ESSA"]
+                            const configId =
+                                resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? []) ?? "1"
+                            const map = resolveMapDelivery(configId, goaFlight.arrRwy)
+                            heading = map.heading
+                            altitudeFt = map.altitudeFt
+                            logExtra =
+                                map.heading != null
+                                    ? `ESSA ${configId} arr=${goaFlight.arrRwy ?? "?"} → ${map.sector}`
+                                    : `ESSA ${configId} arr=${goaFlight.arrRwy ?? "?"} ≠ config ARR — MISAP only`
+                        } else if (staticConfig.myAirports.some((a) => a.toUpperCase() === "ESGG")) {
+                            const arrRwy =
+                                goaFlight.arrRwy ||
+                                staticConfig.activeRunways?.["ESGG"]?.arr?.[0]
+                            const map = resolveEsggMapDelivery(arrRwy)
+                            heading = map.heading
+                            altitudeFt = map.altitudeFt
+                            logExtra = `ESGG arr=${arrRwy ?? "?"} → APP-${map.appSide}`
+                        }
+                        if (heading != null && heading > 0) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "assignHeading",
+                                    callsign: strip.callsign,
+                                    heading,
+                                } satisfies OutboundPluginCommand)
+                            )
+                        }
+                        if (altitudeFt != null && altitudeFt > 0) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "assignCfl",
+                                    callsign: strip.callsign,
+                                    altitude: altitudeFt,
+                                } satisfies OutboundPluginCommand)
+                            )
+                        }
+                        if (logExtra) {
+                            console.log(
+                                heading != null
+                                    ? `[GOA] ${strip.callsign} ${logExtra}: H${String(heading).padStart(3, "0")}/${altitudeFt ?? "?"}FT`
+                                    : `[GOA] ${strip.callsign} ${logExtra}`
+                            )
+                        }
+                    }
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
@@ -1688,10 +1851,25 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.clearedToLand = true
                             flight.missedApproach = false
                             break
-                        case "GOA":
+                        case "GOA": {
                             flight.clearedToLand = false
                             flight.missedApproach = true
+                            if (isEssaRolesConfig(staticConfig)) {
+                                const essa = staticConfig.activeRunways?.["ESSA"]
+                                const configId =
+                                    resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? []) ?? "1"
+                                const map = resolveMapDelivery(configId, flight.arrRwy)
+                                if (map.heading != null && map.heading > 0) flight.ahdg = map.heading
+                                if (map.altitudeFt != null && map.altitudeFt > 0) flight.cfl = map.altitudeFt
+                            } else if (staticConfig.myAirports.some((a) => a.toUpperCase() === "ESGG")) {
+                                const arrRwy =
+                                    flight.arrRwy || staticConfig.activeRunways?.["ESGG"]?.arr?.[0]
+                                const map = resolveEsggMapDelivery(arrRwy)
+                                if (map.heading != null && map.heading > 0) flight.ahdg = map.heading
+                                if (map.altitudeFt > 0) flight.cfl = map.altitudeFt
+                            }
                             break
+                        }
                         case "XFER": {
                             const target = resolveXferTarget(strip, flight)
                             flight.handoffTargetController = target || ""
@@ -1733,7 +1911,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.action === "ASSUME" ||
                     message.action === "REFUSE" ||
                     message.action === "XFER" ||
-                    message.action === "READY"
+                    message.action === "READY" ||
+                    message.action === "DEICE"
                 ) {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
@@ -1745,6 +1924,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetController = ""
                         flight.handoffTargetControllerId = undefined
                         flight.handoffOptimisticUntil = undefined
+                    } else if ((message.action === "READY" || message.action === "DEICE") && flight) {
+                        flight.groundstate = "DE-ICE"
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }
@@ -1860,6 +2041,37 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(`[DELETE] Strip ${message.stripId} manually deleted`)
             } else {
                 console.log(`[DELETE] Strip ${message.stripId} not found`)
+            }
+            break
+        }
+
+        case "listDeletedStrips": {
+            sendMessage(socket, {
+                type: "deletedStrips",
+                strips: store.getDeletedStripInfos(),
+            })
+            break
+        }
+
+        case "restoreStrip": {
+            const restored = store.restoreDeletedStrip(message.stripId)
+            if (restored) {
+                broadcastStrip(restored)
+                for (const s of store.getStripsForSection(restored.bayId, restored.sectionId, false)) {
+                    if (s.id !== restored.id) broadcastStrip(s)
+                }
+                sendMessage(socket, {
+                    type: "deletedStrips",
+                    strips: store.getDeletedStripInfos(),
+                })
+                console.log(`[TRASH] Restored strip ${message.stripId}`)
+            } else {
+                console.log(`[TRASH] Strip ${message.stripId} not found in trash`)
+                sendMessage(socket, {
+                    type: "notify",
+                    level: "error",
+                    text: `Could not restore ${message.stripId}`,
+                })
             }
             break
         }
@@ -2094,10 +2306,29 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.transferSoundsEnabled = incoming.transferSoundsEnabled
                 update.transferSoundsEnabled = incoming.transferSoundsEnabled
             }
+            if (typeof incoming.showAppDepXcFrequency === "boolean") {
+                currentUiSettings.showAppDepXcFrequency = incoming.showAppDepXcFrequency
+                update.showAppDepXcFrequency = incoming.showAppDepXcFrequency
+                setForceIdealAppDepFrequency(incoming.showAppDepXcFrequency)
+            }
+            if (typeof incoming.autoParkEnabled === "boolean") {
+                currentUiSettings.autoParkEnabled = incoming.autoParkEnabled
+                update.autoParkEnabled = incoming.autoParkEnabled
+            }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
                 console.log(`[SETTINGS] Updated: ${JSON.stringify(update)}`)
                 broadcastUserSettings()
+                if (typeof update.showAppDepXcFrequency === "boolean") {
+                    // Refresh XFER SI/freq on strips (ideal vs covering)
+                    store.reprocessAllFlights()
+                    broadcastRefresh("APP/DEP XC frequency setting changed")
+                }
+                if (update.autoParkEnabled === true) {
+                    flightStore.applyAutoParkToEligibleFlights()
+                    store.reprocessAllFlights()
+                    broadcastRefresh("Auto PARK enabled")
+                }
             }
             break
         }
@@ -2609,17 +2840,33 @@ app.get("/api/sidalt", (req, res) => {
 })
 
 /**
- * ESSA preferred SID for active runway config (+ SLOW track/HAPZI when slow=1).
- * Query: airport, runway, config, route?, slow=0|1
+ * Preferred SID:
+ * - ESSA: config-aware (+ SLOW track/HAPZI when slow=1). Query: airport, runway, config, route?, slow=
+ * - ESMS: LOA K/L (or G/H when EKCH RWY 30 active in ES). Query: airport, runway, route?
  */
 app.get("/api/preferred-sid", (req, res) => {
-    const airport = req.query.airport as string
+    const airport = ((req.query.airport as string) || "").toUpperCase()
     const runway = req.query.runway as string
     const configId = req.query.config as string
     const route = (req.query.route as string) || undefined
     const slow = req.query.slow === "1" || req.query.slow === "true"
 
-    if (!airport || !runway || !configId) {
+    if (!airport || !runway) {
+        res.status(400).json({
+            error: "Missing parameters",
+            usage: "/api/preferred-sid?airport=ESSA&runway=19L&config=9A&route=DCT%20RESNA&slow=0",
+        })
+        return
+    }
+
+    if (airport === "ESMS") {
+        const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
+        const result = resolveEsmsPreferredSid({ runway, route, ekch30 })
+        res.json({ ...result, ekch30 })
+        return
+    }
+
+    if (!configId) {
         res.status(400).json({
             error: "Missing parameters",
             usage: "/api/preferred-sid?airport=ESSA&runway=19L&config=9A&route=DCT%20RESNA&slow=0",
@@ -2714,6 +2961,14 @@ udpIn.on("message", (msg, rinfo) => {
             if (!callsign) return
             if (ok) {
                 console.log(`[ROF] sent ok for ${callsign}`)
+                // Clear /ROF/… left on the scratch vehicle (TopSky often does not)
+                const vehicle = typeof data.vehicle === "string" ? data.vehicle.toUpperCase() : ""
+                if (vehicle) {
+                    setTimeout(() => {
+                        sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: vehicle } satisfies OutboundPluginCommand))
+                        console.log(`[ROF] Cleared scratchpad on vehicle ${vehicle}`)
+                    }, 800)
+                }
                 return
             }
             console.log(`[ROF] send failed for ${callsign}: ${error}`)
@@ -2910,6 +3165,7 @@ udpIn.on("message", (msg, rinfo) => {
                             console.log(`Airports changed, clearing store`)
                             store.clear()
                             broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
+                            broadcastUserSettings()
                         }
                     }
                 }
@@ -2977,6 +3233,17 @@ udpIn.on("message", (msg, rinfo) => {
         const result = store.tryProcessPluginMessage(data)
 
         if (result) {
+            // Clear consumed TopSky ROF scratch (/LAM/ROF/… or outbound /ROF/…)
+            if (result.clearScratchpadCallsign) {
+                const cs = result.clearScratchpadCallsign
+                const delay = result.clearScratchpadDelayMs ?? 0
+                const clear = () => {
+                    sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: cs } satisfies OutboundPluginCommand))
+                    console.log(`[ROF] Cleared scratchpad on ${cs}`)
+                }
+                if (delay > 0) setTimeout(clear, delay)
+                else clear()
+            }
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.transferSound && currentUiSettings.showStripOwnership && currentUiSettings.transferSoundsEnabled) {
                 playTransferSound(result.transferSound)
@@ -3279,8 +3546,45 @@ function applyViffPoll(result: ViffPollResult) {
             const newTobtSetBy = cdmEntry?.tobtSetBy
             const newTaxi = cdmEntry?.taxiMinutes
 
-            if (flight.ctot !== newCtot) {
-                flight.ctot = newCtot
+            const stsUpper = newSts?.trim().toUpperCase()
+            const isSlc = stsUpper === "SLC" || stsUpper === "SCL"
+            const CTOT_SLC_GRACE_MS = 180_000
+            // CTOT cancelled (network SLC): latch so strip shows SCL in the CTOT slot
+            if (newCtot) {
+                if (flight.ctot !== newCtot || flight.ctotCancelled || flight.ctotClearedAt) {
+                    flight.ctot = newCtot
+                    flight.ctotCancelled = undefined
+                    flight.ctotClearedAt = undefined
+                    changed = true
+                }
+            } else if (flight.ctot) {
+                flight.ctot = undefined
+                if (isSlc) {
+                    flight.ctotCancelled = true
+                    flight.ctotClearedAt = undefined
+                } else {
+                    flight.ctotCancelled = undefined
+                    flight.ctotClearedAt = Date.now()
+                }
+                changed = true
+            } else if (
+                isSlc &&
+                !flight.ctotCancelled &&
+                flight.ctotClearedAt != null &&
+                Date.now() - flight.ctotClearedAt < CTOT_SLC_GRACE_MS
+            ) {
+                flight.ctotCancelled = true
+                flight.ctotClearedAt = undefined
+                changed = true
+            } else if (flight.ctotCancelled && !isSlc) {
+                flight.ctotCancelled = undefined
+                flight.ctotClearedAt = undefined
+                changed = true
+            } else if (
+                flight.ctotClearedAt != null &&
+                Date.now() - flight.ctotClearedAt >= CTOT_SLC_GRACE_MS
+            ) {
+                flight.ctotClearedAt = undefined
                 changed = true
             }
             if (flight.ctotReason !== newReason) {
@@ -3323,8 +3627,18 @@ function applyViffPoll(result: ViffPollResult) {
                 flight.taxiMinutes = newTaxi
                 changed = true
             }
-        } else if (flight.ctot || flight.cdmSts || flight.ctotReason || flight.tobt || flight.tsat || flight.tobtSetBy) {
+        } else if (
+            flight.ctot ||
+            flight.ctotCancelled ||
+            flight.cdmSts ||
+            flight.ctotReason ||
+            flight.tobt ||
+            flight.tsat ||
+            flight.tobtSetBy
+        ) {
             flight.ctot = undefined
+            flight.ctotCancelled = undefined
+            flight.ctotClearedAt = undefined
             flight.cdmSts = undefined
             flight.ctotReason = undefined
             flight.tobt = undefined

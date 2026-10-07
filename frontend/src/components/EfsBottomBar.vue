@@ -5,8 +5,23 @@
     :initial-airport="dialogInitialAirport"
     @create="onDialogCreate"
   />
+  <TrashDialog v-model="trashOpen" />
 
   <div class="efs-bottom-bar">
+    <button
+      type="button"
+      class="trash-btn efs-trash-drop"
+      :class="{ 'drag-over': trashDragOver }"
+      title="Recover deleted strip · drop strip to delete"
+      @click="onTrashClick"
+      @dragover.prevent="onTrashDragOver"
+      @dragenter.prevent="onTrashDragEnter"
+      @dragleave="onTrashDragLeave"
+      @drop.prevent="onTrashDrop"
+    >
+      <v-icon size="22">mdi-delete-outline</v-icon>
+    </button>
+
     <div class="tiny-strips">
       <template v-if="store.myAirports.length > 0">
         <div
@@ -77,12 +92,54 @@
 import { ref } from 'vue'
 import { useEfsStore } from '@/store/efs'
 import StripCreationDialog from './StripCreationDialog.vue'
+import TrashDialog from './TrashDialog.vue'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
 
 const store = useEfsStore()
 
+const trashOpen = ref(false)
+const trashDragOver = ref(false)
 const dialogOpen = ref(false)
+/** Suppress click-open after a strip was dropped on the trash */
+let suppressTrashClick = false
+
+function onTrashClick() {
+  if (suppressTrashClick) {
+    suppressTrashClick = false
+    return
+  }
+  trashOpen.value = true
+}
+
+function onTrashDragOver(event: DragEvent) {
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  trashDragOver.value = true
+}
+
+function onTrashDragEnter() {
+  trashDragOver.value = true
+}
+
+function onTrashDragLeave(event: DragEvent) {
+  const related = event.relatedTarget as Node | null
+  const btn = event.currentTarget as HTMLElement
+  if (related && btn.contains(related)) return
+  trashDragOver.value = false
+}
+
+function onTrashDrop(event: DragEvent) {
+  trashDragOver.value = false
+  suppressTrashClick = true
+  const raw = event.dataTransfer?.getData('application/json')
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw) as { stripId?: string }
+    if (data.stripId) store.deleteStrip(data.stripId)
+  } catch {
+    // ignore malformed drag payload
+  }
+}
 const dialogStripType = ref<SpecialStripType>('vfrDep')
 const dialogInitialAirport = ref<string | undefined>(undefined)
 const dialogTargetBayId = ref<string | undefined>(undefined)
@@ -381,6 +438,37 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   border-top: 1px solid #3a3e42;
   flex-shrink: 0;
   padding-bottom: 10px;
+  position: relative;
+}
+
+.trash-btn {
+  position: absolute;
+  left: 10px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #4a4e54;
+  background: #35373c;
+  color: #9ca3af;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.trash-btn:hover {
+  color: #e8e8e8;
+  border-color: #6b7280;
+  background: #3f4248;
+}
+
+.trash-btn.drag-over {
+  color: #fecaca;
+  border-color: #ef4444;
+  background: #5c2a2a;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
 }
 
 .tiny-strips {

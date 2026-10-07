@@ -113,7 +113,7 @@
   </v-menu>
 
   <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimOwnership }]" :style="stripStyle"
+    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimStrip }]" :style="stripStyle"
     :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
     @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
@@ -144,10 +144,19 @@
     <template v-else>
     <!-- Left section: Callsign block (always visible) -->
     <div class="strip-left">
-      <div class="callsign" :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }" :title="strip.rtfCallsign || undefined" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
+      <div
+        class="callsign"
+        :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }"
+        :title="strip.rtfCallsign || undefined"
+        @click.stop="onCallsignClick"
+        @touchend.stop.prevent="onCallsignTouch"
+      >{{ strip.callsign }}<span v-if="strip.communicationSuffix" class="comm-suffix">{{ strip.communicationSuffix }}</span></div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
-        <span class="aircraft-type">{{ strip.aircraftType }} {{ strip.wakeTurbulence }}</span>
+        <span class="aircraft-type">
+          {{ strip.aircraftType }}
+          <span class="wtc" :class="{ 'wtc-highlight': strip.wakeTurbulence && strip.wakeTurbulence !== 'M' }">{{ strip.wakeTurbulence }}</span>
+        </span>
         <span
           v-if="showOwnerSi"
           class="owner-si"
@@ -271,30 +280,42 @@
               <div
                 v-if="showCtot"
                 class="time-col ctot-col"
-                :class="{ 'ctot-clickable': store.isController }"
-                :title="strip.ctotReason || 'CTOT'"
+                :class="{ 'ctot-clickable': store.isController && !showCtotCancelled }"
+                :title="showCtotCancelled ? 'Slot cancelled (SLC)' : (strip.ctotReason || 'CTOT')"
                 @click.stop="onCtotClick"
               >
                 <div
-                  v-if="networkStatusBadge"
+                  v-if="networkStatusBadge && !showCtotCancelled"
                   class="time-sts-label"
                   :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
                   :title="canClearRea ? 'Remove REA' : undefined"
                   @click.stop="onReaBadgeClick"
                 >{{ networkStatusBadge }}</div>
-                <div class="time-value time-ctot" :class="{ 'time-changed': ctotChanged }">{{ strip.ctot }}</div>
-                <div class="time-label time-label-ctot">CTOT</div>
+                <div
+                  class="time-value time-ctot"
+                  :class="{ 'time-changed': ctotChanged, 'time-ctot-cancelled': showCtotCancelled }"
+                >{{ showCtotCancelled ? 'SCL' : strip.ctot }}</div>
+                <div v-if="!showCtotCancelled" class="time-label time-label-ctot">CTOT</div>
               </div>
             </div>
           </template>
         </div>
         <div class="strip-divider"></div>
 
-        <!-- SID section -->
-        <template  v-if="strip.stripType === 'departure'">
+        <!-- SID section (departures); G/A arrivals show CFL/AHDG in the same slot -->
+        <template v-if="strip.stripType === 'departure'">
           <div class="strip-section strip-sid">
               <div class="sid-value">{{ store.displaySidForStrip(strip) }}</div>
               <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
+                <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
+                <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
+              </div>
+          </div>
+          <div class="strip-divider"></div>
+        </template>
+        <template v-else-if="strip.missedApproach && (strip.clearedAltitude || strip.assignedHeading)">
+          <div class="strip-section strip-sid strip-goa-cleared">
+              <div class="cleared-data">
                 <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
                 <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
               </div>
@@ -460,26 +481,6 @@ const deleteDialogOpen = ref(false)
 const isNote = computed(() => props.strip.stripType === 'note')
 const isTransferIn = computed(() => !isNote.value && props.strip.transferPending === 'in')
 const isTransferOut = computed(() => !isNote.value && props.strip.transferPending === 'out')
-/** Flash ASSUME grey↔green briefly when an inbound transfer appears, then stay solid green */
-const assumeIncomingFlashing = ref(false)
-let assumeIncomingFlashTimer: ReturnType<typeof setTimeout> | null = null
-const ASSUME_INCOMING_FLASH_MS = 2000
-
-watch(isTransferIn, (incoming) => {
-  if (assumeIncomingFlashTimer) {
-    clearTimeout(assumeIncomingFlashTimer)
-    assumeIncomingFlashTimer = null
-  }
-  if (incoming) {
-    assumeIncomingFlashing.value = true
-    assumeIncomingFlashTimer = setTimeout(() => {
-      assumeIncomingFlashing.value = false
-      assumeIncomingFlashTimer = null
-    }, ASSUME_INCOMING_FLASH_MS)
-  } else {
-    assumeIncomingFlashing.value = false
-  }
-}, { immediate: true })
 const hasRofRequest = computed(() => !!props.strip.rofRequestCallsign || !!props.strip.rofRequestSi)
 /** Inbound: ROF sent to us (we track). Outbound: we sent ROF (cooldown). */
 const isRofInbound = computed(() => hasRofRequest.value && !!props.strip.isAssumed)
@@ -529,11 +530,12 @@ watch(isRofInbound, (inbound) => {
 
 const showOwnerSi = computed(() => {
   if (isNote.value) return false
+  // Pending transfer always shows who from / who to (overrides ROF alternate)
+  if (isTransferIn.value) return !!props.strip.ownerSi
+  if (isTransferOut.value) return !!props.strip.transferSi
   // ROF pending: keep SI visible for alternate / requester indication
   if (isRofActive.value) return true
   if (!store.showStripOwnership) return false
-  if (isTransferIn.value) return !!props.strip.ownerSi
-  if (isTransferOut.value) return !!props.strip.transferSi
   return !!props.strip.ownerSi
 })
 /** Dim other-owned strips only when ownership display (and dimming) are enabled */
@@ -544,14 +546,25 @@ const shouldDimOwnership = computed(() =>
   !isTransferIn.value &&
   !isNote.value
 )
+/** Ownership dim, or backend dimmed (INBOUND / TWR pending). Pending transfers stay bright. */
+const shouldDimStrip = computed(() =>
+  !isNote.value &&
+  !isTransferIn.value &&
+  !isTransferOut.value &&
+  (shouldDimOwnership.value || !!props.strip.dimmed)
+)
 /**
  * SI label:
+ * - transfer in → owner SI (from whom); overrides any ROF alternate
+ * - transfer out → transfer SI (to whom)
  * - inbound ROF flashing → pink ROF ↔ →requester SI
  * - inbound ROF after flash → →requester SI
  * - outbound ROF → pink ROF ↔ owner SI
- * - transfer in/out → handoff SIs
+ * (nextSi is XFER-target only — never shown as strip SI)
  */
 const ownerSiText = computed(() => {
+  if (isTransferIn.value) return props.strip.ownerSi || ''
+  if (isTransferOut.value) return props.strip.transferSi || ''
   if (isRofInbound.value) {
     if (isRofFlashing.value && rofFlashPink.value) return 'ROF'
     return props.strip.rofRequestSi || props.strip.rofRequestCallsign || ''
@@ -560,18 +573,16 @@ const ownerSiText = computed(() => {
     if (rofFlashPink.value) return 'ROF'
     return props.strip.ownerSi || ''
   }
-  if (isTransferIn.value) return props.strip.ownerSi || ''
-  if (isTransferOut.value) return props.strip.transferSi || ''
   return props.strip.ownerSi || ''
 })
 const ownerSiClass = computed(() => {
+  if (isTransferIn.value) return { 'si-transfer-in': true }
+  if (isTransferOut.value) return { 'si-transfer-out': true }
   const showingRofText = isRofFlashing.value && rofFlashPink.value
   return {
     'si-rof-request': showingRofText && (isRofInbound.value || isRofOutbound.value),
     // Arrow pointing at requester SI (inbound, when not showing pink ROF)
     'si-rof-target': isRofInbound.value && !showingRofText,
-    'si-transfer-in': !isRofActive.value && isTransferIn.value,
-    'si-transfer-out': !isRofActive.value && isTransferOut.value,
   }
 })
 const ownerSiTitle = computed(() => {
@@ -579,6 +590,14 @@ const ownerSiTitle = computed(() => {
     const who = callsign || fallbackSi
     if (!who) return undefined
     return freq ? `${who} ${freq}` : who
+  }
+  if (isTransferIn.value) {
+    const from = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
+    return from ? `Transfer from ${from}` : 'Incoming transfer'
+  }
+  if (isTransferOut.value) {
+    const target = withFreq(props.strip.transferCallsign, props.strip.transferFrequency, props.strip.transferSi)
+    return target ? `Transfer to ${target}` : 'Pending transfer'
   }
   if (isRofActive.value) {
     const from = withFreq(
@@ -590,14 +609,6 @@ const ownerSiTitle = computed(() => {
       return from ? `ROF from ${from}` : 'Incoming ROF'
     }
     return from ? `ROF sent (${from})` : 'ROF sent'
-  }
-  if (isTransferIn.value) {
-    const from = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
-    return from ? `Transfer from ${from}` : 'Incoming transfer'
-  }
-  if (isTransferOut.value) {
-    const target = withFreq(props.strip.transferCallsign, props.strip.transferFrequency, props.strip.transferSi)
-    return target ? `Transfer to ${target}` : 'Pending transfer'
   }
   const owner = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
   return owner ? `Tracked by ${owner}` : undefined
@@ -765,9 +776,14 @@ const showCdm = computed(() =>
   !props.strip.clearedForTakeoff
 )
 
-/** CTOT shown for any bay/section while still a ground IFR departure */
+/** CTOT (or SCL after slot cancel) for ground IFR departures */
+const showCtotCancelled = computed(() =>
+  isDepartingIfr.value && !!props.strip.ctotCancelled && !props.strip.ctot && !props.strip.clearedForTakeoff
+)
 const showCtot = computed(() =>
-  isDepartingIfr.value && !!props.strip.ctot && !props.strip.clearedForTakeoff
+  isDepartingIfr.value &&
+  !props.strip.clearedForTakeoff &&
+  (!!props.strip.ctot || showCtotCancelled.value)
 )
 
 /** Hide EOBT on taxi+ when CTOT is shown (CDM primary times already gated by showCdm) */
@@ -778,7 +794,7 @@ const showPrimaryTime = computed(() =>
 /**
  * Parse vIFF/CDM network status for strip UI.
  * Shown: REA (badge), FLS variants (time label + tooltip).
- * Not shown: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC, etc.
+ * Not shown as badge: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC (SCL shown in CTOT slot), etc.
  */
 function parseCdmSts(sts: string | undefined): {
   kind: 'rea' | 'fls'
@@ -846,7 +862,7 @@ const networkStatusClass = computed(() => {
 })
 
 const canSendRea = computed(() =>
-  store.isController && showCtot.value && !isRea.value
+  store.isController && showCtot.value && !showCtotCancelled.value && !isRea.value
 )
 
 /** REA can appear above TOBT (no CTOT) or CTOT — allow clear in both cases */
@@ -948,7 +964,6 @@ onUnmounted(() => {
   if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
   if (tsatChangedTimer) clearTimeout(tsatChangedTimer)
   if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
-  if (assumeIncomingFlashTimer) clearTimeout(assumeIncomingFlashTimer)
   if (rofAlternateTimer) clearInterval(rofAlternateTimer)
   if (rofClockTimer) clearInterval(rofClockTimer)
 })
@@ -1086,7 +1101,7 @@ function onTimeEditBlur() {
 }
 
 function onCtotClick(event: MouseEvent) {
-  if (!store.isController || !showCtot.value) return
+  if (!store.isController || !showCtot.value || showCtotCancelled.value) return
   menuPosition.value = [event.clientX, event.clientY]
   menuOpen.value = false
   transferMenuOpen.value = false
@@ -1140,14 +1155,11 @@ function actionButtonClass(action: string): Record<string, boolean> {
     classes['action-highlight'] = true
   }
 
-  // ASSUME/ROF: condensed text, fill strip-right; green flash on inbound transfer (ASSUME only)
+  // ASSUME/ROF: condensed text, fill strip-right; solid green on inbound transfer (ASSUME)
   if (action === 'ASSUME' || action === 'ROF') {
     classes['action-assume'] = true
     if (action === 'ASSUME' && props.strip.transferPending === 'in') {
       classes['action-assume-incoming'] = true
-      if (assumeIncomingFlashing.value) {
-        classes['action-assume-incoming-flash'] = true
-      }
     }
   }
 
@@ -1239,6 +1251,13 @@ function onDragAreaTouchEnd(event: TouchEvent) {
 
   if (isDragging.value) {
     const result = touchDrag.endDrag()
+
+    if (result.isTrashDrop && result.data) {
+      store.deleteStrip(result.data.stripId)
+      isDragging.value = false
+      touchStarted = false
+      return
+    }
 
     if (result.dropTarget && result.data) {
       // Find the section info from the drop target
@@ -1675,10 +1694,10 @@ function onGroundStateClick(action: string) {
   background: #888;
 }
 
-/* Left section - Callsign block (always visible) */
+/* Left section - Callsign block (always visible; wide enough for 4-letter SI + →) */
 .strip-left {
-  width: 75px;
-  min-width: 75px;
+  width: 85px;
+  min-width: 85px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1699,6 +1718,14 @@ function onGroundStateClick(action: string) {
   touch-action: manipulation;
 }
 
+.callsign .comm-suffix {
+  font-weight: 700;
+  font-size: 11px;
+  color: #b45309;
+  letter-spacing: 0;
+  margin-left: 1px;
+}
+
 .callsign-sub {
   display: flex;
   gap: 4px;
@@ -1710,7 +1737,7 @@ function onGroundStateClick(action: string) {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
-  padding-right: 1.5em; /* reserved for SI (arrow overlays, does not expand) */
+  padding-right: 3.2em; /* reserved for 4-letter SI + → arrow */
 }
 
 .owner-si {
@@ -1783,6 +1810,11 @@ function onGroundStateClick(action: string) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.aircraft-type .wtc-highlight {
+  font-weight: 700;
+  color: #000;
 }
 
 .squawk-stand-row {
@@ -1947,6 +1979,11 @@ function onGroundStateClick(action: string) {
 
 .time-ctot {
   color: #d97706;
+}
+
+.time-ctot.time-ctot-cancelled {
+  color: #9ca3af;
+  letter-spacing: 0.5px;
 }
 
 .time-label-ctot {
@@ -2120,6 +2157,13 @@ function onGroundStateClick(action: string) {
   gap: 4px;
   font-size: 9px;
   margin-top: 2px;
+}
+
+/* G/A arrival: CFL/AHDG without SID */
+.strip-goa-cleared .cleared-data {
+  margin-top: 0;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .alt {
@@ -2304,7 +2348,7 @@ function onGroundStateClick(action: string) {
   color: #3a1028;
 }
 
-/* Incoming transfer: solid green after flash */
+/* Incoming transfer: solid green ASSUME */
 .action-assume-incoming {
   background: linear-gradient(to bottom, #66bb6a, #2e7d32) !important;
 }
@@ -2315,34 +2359,6 @@ function onGroundStateClick(action: string) {
 
 .action-assume-incoming .action-text {
   color: #fff;
-}
-
-/* First seconds of inbound transfer: alternate grey ↔ green (no opacity) */
-.action-assume-incoming-flash {
-  animation: assume-grey-green-flash 0.7s ease-in-out infinite;
-}
-
-.action-assume-incoming-flash:hover {
-  animation: none;
-}
-
-.action-assume-incoming-flash .action-text {
-  animation: assume-text-grey-green-flash 0.7s ease-in-out infinite;
-}
-
-.action-assume-incoming-flash:hover .action-text {
-  animation: none;
-  color: #fff;
-}
-
-@keyframes assume-grey-green-flash {
-  0%, 100% { background: linear-gradient(to bottom, #66bb6a, #2e7d32); }
-  50% { background: linear-gradient(to bottom, #e8e8e8, #c8c8c8); }
-}
-
-@keyframes assume-text-grey-green-flash {
-  0%, 100% { color: #fff; }
-  50% { color: #333; }
 }
 
 /* DCL status coloring for CLNC button */
