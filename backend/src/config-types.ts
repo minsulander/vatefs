@@ -297,8 +297,8 @@ export interface DeleteRule {
     minAltitudeAboveField?: number
 
     /**
-     * Delete if aircraft is beyond radar range of all configured airports.
-     * When true, flight must be outside radarRangeNm to match.
+     * Delete if aircraft is outside strip visibility range:
+     * beyond radarRangeNm, and (if arrival) also beyond arrivalRangeNm with ETE > arrivalEtaMinutes.
      */
     beyondRange?: boolean
 
@@ -404,6 +404,18 @@ export interface EfsStaticConfig {
 
     /** Radar range in nautical miles for strip filtering (default: 25) */
     radarRangeNm: number
+
+    /**
+     * Arrivals (ADES at my airport) also create/keep strips within this range (default: 100).
+     * Combined with arrivalEtaMinutes (OR).
+     */
+    arrivalRangeNm: number
+
+    /**
+     * Arrivals also create/keep strips when EuroScope ETE (≈ minutes) is ≤ this (default: 20).
+     * Combined with arrivalRangeNm (OR).
+     */
+    arrivalEtaMinutes: number
 
     /** Ground range in nautical miles - tighter range for ground-based rules (airborne=false) (default: 3) */
     groundRangeNm: number

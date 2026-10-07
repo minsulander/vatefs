@@ -40,6 +40,10 @@ interface YamlConfig {
     name?: string
     include?: string[]
     radarRange?: number
+    /** Arrivals: strip if within this nm (default 100), OR ETA ≤ arrivalEtaMinutes */
+    arrivalRange?: number
+    /** Arrivals: strip if ETE minutes ≤ this (default 20), OR within arrivalRange */
+    arrivalEtaMinutes?: number
     groundRange?: number
     layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
     columnCount?: number
@@ -262,6 +266,8 @@ export function loadConfig(configPath: string): EfsStaticConfig {
     const config: EfsStaticConfig = {
         myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
+        arrivalRangeNm: yamlConfig.arrivalRange ?? 100,
+        arrivalEtaMinutes: yamlConfig.arrivalEtaMinutes ?? 20,
         groundRangeNm: yamlConfig.groundRange ?? 3,
         layout,
         sectionToBay,
@@ -279,7 +285,9 @@ export function loadConfig(configPath: string): EfsStaticConfig {
 
     console.log(`Loaded config from ${configPath}:`)
     console.log(`  Mode: ${layoutMode}`)
-    console.log(`  Radar range: ${config.radarRangeNm}nm, ground range: ${config.groundRangeNm}nm`)
+    console.log(
+        `  Radar range: ${config.radarRangeNm}nm, arrival: ${config.arrivalRangeNm}nm / ETA≤${config.arrivalEtaMinutes}min, ground: ${config.groundRangeNm}nm`
+    )
     console.log(`  Bays: ${config.layout.bays.length}`)
     console.log(`  Sections: ${sectionToBay.size}`)
     console.log(`  Section rules: ${config.sectionRules.length}`)

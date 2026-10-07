@@ -746,7 +746,11 @@ export function resolveEssaNextSi(
     const cdPhase = isCdPhase(flight, stripType)
     const gndRoleForSkip: ControllerRole | undefined = coveringGnd ? "GND" : role
 
-    if (coveringCd && cdPhase) {
+    // Missed approach / G/A → APP before arrival taxi hops (else GND/DEL wins)
+    if (coveringTwr && flight.missedApproach) {
+        const sector = resolveIdealAppDepSector(flight, true)
+        hops = [{ kind: "app", sector }]
+    } else if (coveringCd && cdPhase) {
         const fam = delTargetGndFamily(parking, ageOnline)
         hops = [{ kind: "gnd", family: fam }]
         relevant.add("CD")
@@ -772,9 +776,6 @@ export function resolveEssaNextSi(
             const myFam = myLoggedInGndFamily()
             if (myFam) hops = skipCurrentGnd(hops, myFam, "GND")
         }
-    } else if (coveringTwr && flight.missedApproach) {
-        const sector = resolveIdealAppDepSector(flight, true)
-        hops = [{ kind: "app", sector }]
     } else if (coveringTwr && flight.airborne && (stripType === "departure" || stripType === "local")) {
         const sector = resolveIdealAppDepSector(flight, false)
         hops = [{ kind: "app", sector }]

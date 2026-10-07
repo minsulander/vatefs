@@ -1,4 +1,5 @@
-import type { EfsLayout, FlightStrip, Section, Bay, Gap } from "@vatefs/common"
+import type { EfsLayout, FlightStrip, Section, Bay, Gap, DeletedStripInfo } from "@vatefs/common"
+import { determineSectionForFlight } from "./config.js"
 import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
 import type { EfsStaticConfig } from "./config-types.js"
@@ -111,6 +112,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "asrt",
     "cdmSts",
     "ctot",
+    "ctotCancelled",
     "ctotReason",
     // Ownership / transfer — SI and pending handoff must refresh clients
     "isAssumed",
@@ -167,10 +169,16 @@ export interface SetGapResult {
     deleted: boolean
 }
 
+type DeletedStripEntry = {
+    strip: FlightStrip
+    deletedAt: number
+    reason?: string
+}
+
 class EfsStore {
     private layout: EfsLayout
     private strips: Map<string, FlightStrip>
-    private deletedStrips: Map<string, FlightStrip>  // Soft-deleted strips (hidden but recoverable)
+    private deletedStrips: Map<string, DeletedStripEntry>  // Soft-deleted (trash recovery)
     private gaps: Map<string, Gap>  // key: bayId:sectionId:index
 
     constructor() {
@@ -178,6 +186,29 @@ class EfsStore {
         this.strips = new Map()
         this.deletedStrips = new Map()
         this.gaps = new Map()
+    }
+
+    private stashDeletedStrip(strip: FlightStrip, reason?: string) {
+        this.deletedStrips.set(strip.id, {
+            strip: { ...strip },
+            deletedAt: Date.now(),
+            reason,
+        })
+    }
+
+    /**
+     * Soft-delete active strips for a callsign into trash (e.g. Auto PARK → delete_parked).
+     * Returns the strip ids removed.
+     */
+    softDeleteCallsignToTrash(callsign: string, reason?: string): string[] {
+        const matches = [...this.strips.values()].filter((s) => s.callsign === callsign)
+        const ids: string[] = []
+        for (const strip of matches) {
+            this.stashDeletedStrip(strip, reason)
+            this.strips.delete(strip.id)
+            ids.push(strip.id)
+        }
+        return ids
     }
 
     // Initialize store, optionally with mock data
@@ -265,8 +296,14 @@ class EfsStore {
 
             for (const update of result.multiUpdates) {
                 if (update.deleteStripId) {
+                    const existing = this.strips.get(update.deleteStripId)
+                    if (existing && update.softDeleted) {
+                        const flight = flightStore.getFlight(existing.callsign)
+                        this.stashDeletedStrip(existing, flight?.lastDeleteRule)
+                    } else {
+                        this.deletedStrips.delete(update.deleteStripId)
+                    }
                     this.strips.delete(update.deleteStripId)
-                    this.deletedStrips.delete(update.deleteStripId)
                     deletedStripIds.push(update.deleteStripId)
                     continue
                 }
@@ -329,13 +366,13 @@ class EfsStore {
                 : { transferSound, ...scratchClear }
         }
 
-        if (result.deleteStripId) {
+        if (result.deleteStripId && !result.softDeleted) {
             this.strips.delete(result.deleteStripId)
             this.deletedStrips.delete(result.deleteStripId)
             return { deleteStripId: result.deleteStripId, transferSound, ...scratchClear }
         }
 
-        if (result.deletedStripIds && result.deletedStripIds.length > 0) {
+        if (result.deletedStripIds && result.deletedStripIds.length > 0 && !result.softDeleted) {
             for (const id of result.deletedStripIds) {
                 this.strips.delete(id)
                 this.deletedStrips.delete(id)
@@ -343,20 +380,48 @@ class EfsStore {
             return {
                 deletedStripIds: result.deletedStripIds,
                 deleteStripId: result.deletedStripIds[0],
-                softDeleted: true,
                 transferSound,
                 ...scratchClear,
             }
         }
 
-        // Handle soft-delete: move strip to deletedStrips map
-        if (result.softDeleted && result.flight) {
-            const stripId = result.flight.callsign
-            const existingStrip = this.strips.get(stripId)
-            if (existingStrip) {
-                this.deletedStrips.set(stripId, existingStrip)
-                this.strips.delete(stripId)
-                return { deleteStripId: stripId, softDeleted: true, transferSound, ...scratchClear }
+        // Handle soft-delete: move strip to deletedStrips map (trash)
+        if (result.softDeleted) {
+            const reason = result.flight?.lastDeleteRule
+            const ids =
+                result.deletedStripIds ??
+                (result.deleteStripId ? [result.deleteStripId] : [])
+            // Prefer explicit ids; else match by callsign (single-airport)
+            if (ids.length > 0) {
+                for (const stripId of ids) {
+                    const existingStrip = this.strips.get(stripId)
+                    if (existingStrip) this.stashDeletedStrip(existingStrip, reason)
+                    this.strips.delete(stripId)
+                }
+                return {
+                    deletedStripIds: ids,
+                    deleteStripId: ids[0],
+                    softDeleted: true,
+                    transferSound,
+                    ...scratchClear,
+                }
+            }
+            if (result.flight) {
+                const callsign = result.flight.callsign
+                const matches = [...this.strips.values()].filter((s) => s.callsign === callsign)
+                for (const existingStrip of matches) {
+                    this.stashDeletedStrip(existingStrip, reason)
+                    this.strips.delete(existingStrip.id)
+                }
+                if (matches.length > 0) {
+                    return {
+                        deletedStripIds: matches.map((s) => s.id),
+                        deleteStripId: matches[0]!.id,
+                        softDeleted: true,
+                        transferSound,
+                        ...scratchClear,
+                    }
+                }
             }
             return { softDeleted: true, transferSound, ...scratchClear }
         }
@@ -811,10 +876,6 @@ class EfsStore {
         const strip = this.strips.get(stripId)
         if (!strip) return undefined
 
-        // Move strip to deleted store
-        this.deletedStrips.set(stripId, strip)
-        this.strips.delete(stripId)
-
         // Mark the flight as manually deleted so it won't be auto-restored
         const flight = flightStore.getFlight(strip.callsign)
         if (flight) {
@@ -823,8 +884,110 @@ class EfsStore {
             flight.lastDeleteRule = 'manual'
         }
 
+        this.stashDeletedStrip(strip, 'manual')
+        this.strips.delete(stripId)
+
         console.log(`Strip ${stripId} manually deleted by user`)
         return stripId
+    }
+
+    /** List soft-deleted strips for trash recovery UI (newest first). */
+    getDeletedStripInfos(): DeletedStripInfo[] {
+        return [...this.deletedStrips.values()]
+            .map(({ strip, deletedAt, reason }) => ({
+                stripId: strip.id,
+                callsign: strip.callsign || (strip.stripType === 'note' ? '(note)' : strip.id),
+                stripType: strip.stripType,
+                adep: strip.adep,
+                ades: strip.ades,
+                aircraftType: strip.aircraftType,
+                sectionId: strip.sectionId,
+                bayId: strip.bayId,
+                noteText: strip.noteText,
+                deletedAt,
+                reason,
+            }))
+            .sort((a, b) => b.deletedAt - a.deletedAt)
+    }
+
+    /**
+     * Restore a soft-deleted strip from the trash.
+     * Clears deleted flags and recreates the strip in the rule-chosen (or previous) section.
+     */
+    restoreDeletedStrip(stripId: string): FlightStrip | undefined {
+        const entry = this.deletedStrips.get(stripId)
+        if (!entry) return undefined
+        const saved = entry.strip
+        this.deletedStrips.delete(stripId)
+
+        const flight = flightStore.getFlight(saved.callsign)
+        if (flight) {
+            flight.deleted = false
+            flight.manuallyDeleted = false
+            flight.deletedByBeyondRange = false
+            flight.lastDeleteRule = undefined
+            flight.noSectionFound = false
+        }
+
+        // Prefer current section rules; fall back to where it was deleted from
+        let bayId = saved.bayId
+        let sectionId = saved.sectionId
+        if (flight) {
+            const target = determineSectionForFlight(flight, staticConfig)
+            if (target) {
+                bayId = target.bayId
+                sectionId = target.sectionId
+            }
+        }
+
+        // Insert at top of section (shift others down)
+        const sectionStrips = this.getStripsForSection(bayId, sectionId, false)
+            .filter((s) => s.id !== saved.id)
+            .sort((a, b) => a.position - b.position)
+        for (const s of sectionStrips) {
+            s.position += 1
+            this.strips.set(s.id, s)
+            flightStore.setStripAssignment(s.id, {
+                bayId,
+                sectionId,
+                position: s.position,
+                bottom: false,
+            })
+        }
+
+        // Notes / unmatched specials: restore snapshot
+        if (saved.stripType === 'note' || !flight) {
+            const restored: FlightStrip = {
+                ...saved,
+                bayId,
+                sectionId,
+                position: 0,
+                bottom: false,
+                actions: undefined,
+            }
+            this.strips.set(restored.id, restored)
+            console.log(`Strip ${stripId} restored from trash → ${sectionId}`)
+            return restored
+        }
+
+        const restored = flightStore.restoreStripToSection(saved.id, flight, bayId, sectionId, 0)
+        if (restored) {
+            this.strips.set(restored.id, restored)
+            console.log(`Strip ${restored.id} restored from trash → ${sectionId}`)
+            return restored
+        }
+
+        // Fallback: put saved strip back
+        const fallback: FlightStrip = {
+            ...saved,
+            bayId,
+            sectionId,
+            position: 0,
+            bottom: false,
+        }
+        this.strips.set(fallback.id, fallback)
+        console.log(`Strip ${stripId} restored from trash (snapshot) → ${sectionId}`)
+        return fallback
     }
 
     // Clean up trailing gaps - returns deleted keys

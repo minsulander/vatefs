@@ -3,7 +3,9 @@
 # or can be set via --airport CLI argument
 
 name: 1RWY4BAY
-radarRange: 25  # nm
+radarRange: 25  # nm (deps / general)
+arrivalRange: 100  # nm — arrivals also show within this range
+arrivalEtaMinutes: 20  # arrivals also show when ETE ≤ this (minutes)
 
 include:
   - common-rules.yml

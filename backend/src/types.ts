@@ -20,9 +20,11 @@ export interface Flight {
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z
+    /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
+    communicationType?: string
     route?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
-    ete?: number               // Estimated Time Enroute (seconds)
+    ete?: number               // ES prediction points ≈ minutes to destination
     /** Flight plan item 18 remarks (from EuroScope GetRemarks) */
     fplRemarks?: string
 
@@ -76,6 +78,10 @@ export interface Flight {
     asrt?: string
     taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
     ctot?: string                 // Calculated Take Off Time (HHmm)
+    /** Had CTOT, now cancelled (cdmSts SLC) — strip shows SCL in CTOT slot */
+    ctotCancelled?: boolean
+    /** Epoch ms: CTOT cleared recently; allow SLC on a later poll to latch cancel */
+    ctotClearedAt?: number
     cdmSts?: string               // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
     ctotReason?: string           // mostPenalisingRegulation
     /** Last TOBT from local CDM_data_*.txt (EuroScope) — preferred over lagging HTTP */
@@ -145,9 +151,11 @@ export interface FlightPlanDataUpdateMessage {
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
     flightRules?: string      // I/V/Y/Z
+    /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
+    communicationType?: string
     route?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
-    ete?: number               // Estimated Time Enroute (seconds)
+    ete?: number               // ES prediction points ≈ minutes to destination
     rfl?: number              // Requested flight level (feet)
     /** Flight plan item 18 remarks */
     fplRemarks?: string
@@ -177,6 +185,8 @@ export interface ControllerAssignedDataUpdateMessage {
     groundstate?: GroundState
     clearance?: boolean
     clearedToLand?: boolean
+    /** EuroScope communication type: V/R/T/0 */
+    communicationType?: string
     scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")
     stand?: string
     asp?: number

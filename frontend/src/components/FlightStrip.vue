@@ -144,7 +144,13 @@
     <template v-else>
     <!-- Left section: Callsign block (always visible) -->
     <div class="strip-left">
-      <div class="callsign" :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }" :title="strip.rtfCallsign || undefined" @click.stop="onCallsignClick" @touchend.stop.prevent="onCallsignTouch">{{ strip.callsign }}</div>
+      <div
+        class="callsign"
+        :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }"
+        :title="strip.rtfCallsign || undefined"
+        @click.stop="onCallsignClick"
+        @touchend.stop.prevent="onCallsignTouch"
+      >{{ strip.callsign }}<span v-if="strip.communicationSuffix" class="comm-suffix">{{ strip.communicationSuffix }}</span></div>
       <div class="callsign-sub">
         <span class="flight-rules">{{ strip.flightRules }}</span>
         <span class="aircraft-type">
@@ -274,19 +280,22 @@
               <div
                 v-if="showCtot"
                 class="time-col ctot-col"
-                :class="{ 'ctot-clickable': store.isController }"
-                :title="strip.ctotReason || 'CTOT'"
+                :class="{ 'ctot-clickable': store.isController && !showCtotCancelled }"
+                :title="showCtotCancelled ? 'Slot cancelled (SLC)' : (strip.ctotReason || 'CTOT')"
                 @click.stop="onCtotClick"
               >
                 <div
-                  v-if="networkStatusBadge"
+                  v-if="networkStatusBadge && !showCtotCancelled"
                   class="time-sts-label"
                   :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
                   :title="canClearRea ? 'Remove REA' : undefined"
                   @click.stop="onReaBadgeClick"
                 >{{ networkStatusBadge }}</div>
-                <div class="time-value time-ctot" :class="{ 'time-changed': ctotChanged }">{{ strip.ctot }}</div>
-                <div class="time-label time-label-ctot">CTOT</div>
+                <div
+                  class="time-value time-ctot"
+                  :class="{ 'time-changed': ctotChanged, 'time-ctot-cancelled': showCtotCancelled }"
+                >{{ showCtotCancelled ? 'SCL' : strip.ctot }}</div>
+                <div v-if="!showCtotCancelled" class="time-label time-label-ctot">CTOT</div>
               </div>
             </div>
           </template>
@@ -537,9 +546,12 @@ const shouldDimOwnership = computed(() =>
   !isTransferIn.value &&
   !isNote.value
 )
-/** Ownership dim, or backend dimmed (e.g. GND INBOUND until RWY vacated) */
+/** Ownership dim, or backend dimmed (INBOUND / TWR pending). Pending transfers stay bright. */
 const shouldDimStrip = computed(() =>
-  !isNote.value && (shouldDimOwnership.value || !!props.strip.dimmed)
+  !isNote.value &&
+  !isTransferIn.value &&
+  !isTransferOut.value &&
+  (shouldDimOwnership.value || !!props.strip.dimmed)
 )
 /**
  * SI label:
@@ -548,6 +560,7 @@ const shouldDimStrip = computed(() =>
  * - inbound ROF flashing → pink ROF ↔ →requester SI
  * - inbound ROF after flash → →requester SI
  * - outbound ROF → pink ROF ↔ owner SI
+ * (nextSi is XFER-target only — never shown as strip SI)
  */
 const ownerSiText = computed(() => {
   if (isTransferIn.value) return props.strip.ownerSi || ''
@@ -763,9 +776,14 @@ const showCdm = computed(() =>
   !props.strip.clearedForTakeoff
 )
 
-/** CTOT shown for any bay/section while still a ground IFR departure */
+/** CTOT (or SCL after slot cancel) for ground IFR departures */
+const showCtotCancelled = computed(() =>
+  isDepartingIfr.value && !!props.strip.ctotCancelled && !props.strip.ctot && !props.strip.clearedForTakeoff
+)
 const showCtot = computed(() =>
-  isDepartingIfr.value && !!props.strip.ctot && !props.strip.clearedForTakeoff
+  isDepartingIfr.value &&
+  !props.strip.clearedForTakeoff &&
+  (!!props.strip.ctot || showCtotCancelled.value)
 )
 
 /** Hide EOBT on taxi+ when CTOT is shown (CDM primary times already gated by showCdm) */
@@ -776,7 +794,7 @@ const showPrimaryTime = computed(() =>
 /**
  * Parse vIFF/CDM network status for strip UI.
  * Shown: REA (badge), FLS variants (time label + tooltip).
- * Not shown: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC, etc.
+ * Not shown as badge: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC (SCL shown in CTOT slot), etc.
  */
 function parseCdmSts(sts: string | undefined): {
   kind: 'rea' | 'fls'
@@ -844,7 +862,7 @@ const networkStatusClass = computed(() => {
 })
 
 const canSendRea = computed(() =>
-  store.isController && showCtot.value && !isRea.value
+  store.isController && showCtot.value && !showCtotCancelled.value && !isRea.value
 )
 
 /** REA can appear above TOBT (no CTOT) or CTOT — allow clear in both cases */
@@ -1083,7 +1101,7 @@ function onTimeEditBlur() {
 }
 
 function onCtotClick(event: MouseEvent) {
-  if (!store.isController || !showCtot.value) return
+  if (!store.isController || !showCtot.value || showCtotCancelled.value) return
   menuPosition.value = [event.clientX, event.clientY]
   menuOpen.value = false
   transferMenuOpen.value = false
@@ -1233,6 +1251,13 @@ function onDragAreaTouchEnd(event: TouchEvent) {
 
   if (isDragging.value) {
     const result = touchDrag.endDrag()
+
+    if (result.isTrashDrop && result.data) {
+      store.deleteStrip(result.data.stripId)
+      isDragging.value = false
+      touchStarted = false
+      return
+    }
 
     if (result.dropTarget && result.data) {
       // Find the section info from the drop target
@@ -1669,10 +1694,10 @@ function onGroundStateClick(action: string) {
   background: #888;
 }
 
-/* Left section - Callsign block (always visible) */
+/* Left section - Callsign block (always visible; wide enough for 4-letter SI + →) */
 .strip-left {
-  width: 75px;
-  min-width: 75px;
+  width: 85px;
+  min-width: 85px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1693,6 +1718,14 @@ function onGroundStateClick(action: string) {
   touch-action: manipulation;
 }
 
+.callsign .comm-suffix {
+  font-weight: 700;
+  font-size: 11px;
+  color: #b45309;
+  letter-spacing: 0;
+  margin-left: 1px;
+}
+
 .callsign-sub {
   display: flex;
   gap: 4px;
@@ -1704,7 +1737,7 @@ function onGroundStateClick(action: string) {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
-  padding-right: 1.5em; /* reserved for SI (arrow overlays, does not expand) */
+  padding-right: 3.2em; /* reserved for 4-letter SI + → arrow */
 }
 
 .owner-si {
@@ -1946,6 +1979,11 @@ function onGroundStateClick(action: string) {
 
 .time-ctot {
   color: #d97706;
+}
+
+.time-ctot.time-ctot-cancelled {
+  color: #9ca3af;
+  letter-spacing: 0.5px;
 }
 
 .time-label-ctot {

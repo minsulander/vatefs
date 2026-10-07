@@ -135,7 +135,7 @@ export function loadStands(euroscopeDir: string, packageFilter?: string): number
             // Parse STAND:<airport>:<name>
             const parts = line.substring(6).split(':')
             if (parts.length >= 2) {
-                currentAirport = parts[0]
+                currentAirport = parts[0].toUpperCase()
                 currentStand = { name: parts[1], coords: [] }
             } else {
                 currentAirport = undefined
@@ -222,7 +222,7 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
  * Returns the stand name, or undefined if no match.
  */
 export function findStandForPosition(airport: string, lat: number, lon: number): string | undefined {
-    const airportStands = stands.get(airport)
+    const airportStands = stands.get(airport.toUpperCase())
     if (!airportStands) return undefined
 
     // First check polygon stands
@@ -253,6 +253,18 @@ export function findStandForPosition(airport: string, lat: number, lon: number):
     return nearestName
 }
 
+/** True if GRpluginStands.txt loaded at least one stand for this airport. */
+export function hasStandData(airport: string): boolean {
+    if (!airport) return false
+    const list = stands.get(airport.toUpperCase())
+    return !!list && list.length > 0
+}
+
+/** ICAO codes that currently have loaded stand geometry. */
+export function airportsWithStands(): string[] {
+    return Array.from(stands.keys()).filter((icao) => (stands.get(icao)?.length ?? 0) > 0)
+}
+
 /**
  * Centroid (or first vertex) of a named stand at an airport.
  */
@@ -260,7 +272,7 @@ export function getStandCoords(
     airport: string,
     standName: string
 ): { lat: number; lon: number } | undefined {
-    const airportStands = stands.get(airport)
+    const airportStands = stands.get(airport.toUpperCase())
     if (!airportStands || !standName) return undefined
 
     const want = standName.toUpperCase()

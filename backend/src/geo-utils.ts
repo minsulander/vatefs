@@ -58,6 +58,68 @@ export function isWithinRangeOfAnyAirport(
 }
 
 /**
+ * Strip visibility range: within radarRangeNm for any flight, or for arrivals
+ * (destination at my airport) within arrivalRangeNm OR ETE ≤ arrivalEtaMinutes.
+ * ETE is EuroScope prediction point count ≈ minutes to destination.
+ */
+export function isWithinStripVisibilityRange(
+    flight: {
+        latitude?: number
+        longitude?: number
+        ete?: number
+        destination?: string
+    },
+    myAirports: string[],
+    ranges: {
+        radarRangeNm: number
+        arrivalRangeNm: number
+        arrivalEtaMinutes: number
+    },
+    getAirport: GetAirportCoords
+): boolean {
+    if (flight.latitude === undefined || flight.longitude === undefined) {
+        return false
+    }
+    if (
+        isWithinRangeOfAnyAirport(
+            flight.latitude,
+            flight.longitude,
+            myAirports,
+            ranges.radarRangeNm,
+            getAirport
+        )
+    ) {
+        return true
+    }
+
+    const isArrival =
+        flight.destination !== undefined && myAirports.includes(flight.destination)
+    if (!isArrival) return false
+
+    if (
+        isWithinRangeOfAnyAirport(
+            flight.latitude,
+            flight.longitude,
+            myAirports,
+            ranges.arrivalRangeNm,
+            getAirport
+        )
+    ) {
+        return true
+    }
+
+    if (
+        flight.ete != null &&
+        flight.ete > 0 &&
+        flight.ete <= ranges.arrivalEtaMinutes
+    ) {
+        return true
+    }
+
+    return false
+}
+
+/**
  * Find the nearest airport from a list of airports to a given position.
  * Returns the ICAO code of the nearest airport, or undefined if none found.
  */

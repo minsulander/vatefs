@@ -20,6 +20,7 @@ export interface UserSettings {
     dimOtherOwnedStrips?: boolean
     transferSoundsEnabled?: boolean
     showAppDepXcFrequency?: boolean
+    autoParkEnabled?: boolean
     /** Manual ESSA role selection (physical positions) */
     essaRoles?: string[]
     essaRolesManual?: boolean
@@ -99,5 +100,9 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.showAppDepXcFrequency === "boolean"
                 ? saved.showAppDepXcFrequency
                 : DEFAULT_UI_SETTINGS.showAppDepXcFrequency,
+        autoParkEnabled:
+            typeof saved.autoParkEnabled === "boolean"
+                ? saved.autoParkEnabled
+                : DEFAULT_UI_SETTINGS.autoParkEnabled,
     }
 }

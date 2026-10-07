@@ -149,8 +149,11 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (alternate && strlen(alternate) < 10)
             SetJsonIfValidUtf8(message, "alternate", alternate);
         SetJsonIfValidUtf8(message, "flightRules", fpData.GetPlanType());
-        SetJsonIfValidUtf8(message, "communicationType",
-                           (std::string("") + fpData.GetCommunicationType()).c_str());
+        {
+            char comm = fpData.GetCommunicationType();
+            char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
+            SetJsonIfValidUtf8(message, "communicationType", commStr);
+        }
         // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
@@ -266,9 +269,14 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             }
             break;
         }
-        case EuroScopePlugIn::CTR_DATA_TYPE_COMMUNICATION_TYPE:
-            out << " comm " << ctrData.GetCommunicationType();
+        case EuroScopePlugIn::CTR_DATA_TYPE_COMMUNICATION_TYPE: {
+            char comm = ctrData.GetCommunicationType();
+            out << " comm " << comm;
+            // Printable single char (0 → '0') so JSON/UTF-8 helpers accept it
+            char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
+            SetJsonIfValidUtf8(message, "communicationType", commStr);
             break;
+        }
         case EuroScopePlugIn::CTR_DATA_TYPE_SCRATCH_PAD_STRING: {
             const char *scratchStr = ctrData.GetScratchPadString();
             if (!scratchStr) return;

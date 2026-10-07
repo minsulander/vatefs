@@ -106,6 +106,25 @@
                 Always show the ideal SI and frequency on XFER, even when AFV does not detect the
                 covering position monitoring that frequency.
             </p>
+
+            <v-switch
+                v-if="efs.autoParkAvailable"
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Auto PARK"
+                class="mt-2"
+                :model-value="efs.autoParkEnabled"
+                @update:model-value="onAutoParkEnabled"
+            />
+            <p
+                v-if="efs.autoParkAvailable"
+                class="text-caption text-grey ml-13"
+                style="margin-top: -15px"
+            >
+                Automatically set PARK when an assumed arrival is stationary at a stand
+                (requires GRP stand data).
+            </p>
         </v-container>
     </v-main>
 </template>
@@ -156,6 +175,11 @@ function onDimOtherOwnedStrips(value: boolean | null) {
 function onShowAppDepXcFrequency(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ showAppDepXcFrequency: value })
+}
+
+function onAutoParkEnabled(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ autoParkEnabled: value })
 }
 </script>
 

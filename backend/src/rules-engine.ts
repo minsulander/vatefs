@@ -17,7 +17,7 @@ import type {
     EuroscopeCommand
 } from "./config-types.js"
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
-import { findNearestAirport, isWithinRangeOfAnyAirport } from "./geo-utils.js"
+import { findNearestAirport, isWithinRangeOfAnyAirport, isWithinStripVisibilityRange } from "./geo-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole, isParallelTwr } from "./static-config.js"
@@ -656,7 +656,7 @@ function evaluateDeleteRule(
         }
     }
 
-    // Check beyond range condition
+    // Check beyond range condition (same visibility rules as strip create)
     if (rule.beyondRange === true) {
         // Can't evaluate without airports or position data
         if (config.myAirports.length === 0) {
@@ -665,16 +665,20 @@ function evaluateDeleteRule(
         if (flight.latitude === undefined || flight.longitude === undefined) {
             return false // Can't evaluate without position
         }
-        // Check if flight is within range - if it is, rule doesn't match
-        const withinRange = isWithinRangeOfAnyAirport(
-            flight.latitude,
-            flight.longitude,
-            config.myAirports,
-            config.radarRangeNm,
-            getAirportCoords
-        )
-        if (withinRange) {
-            return false // Flight is within range, don't delete
+        // Within radar (any) or arrival 100nm / ETA≤20 → keep strip
+        if (
+            isWithinStripVisibilityRange(
+                flight,
+                config.myAirports,
+                {
+                    radarRangeNm: config.radarRangeNm,
+                    arrivalRangeNm: config.arrivalRangeNm,
+                    arrivalEtaMinutes: config.arrivalEtaMinutes,
+                },
+                getAirportCoords
+            )
+        ) {
+            return false // Still visible, don't delete
         }
     }
 

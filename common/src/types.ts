@@ -14,6 +14,11 @@ export interface FlightStrip {
     aircraftType: string        // e.g., "A320", "B738"
     wakeTurbulence: WakeCategory
     flightRules: FlightRules
+    /**
+     * Non-voice EuroScope communication suffix shown after callsign ("/t" or "/r").
+     * Voice (/v) is omitted — same as EuroScope tags.
+     */
+    communicationSuffix?: string
 
     // Route info
     adep: string               // Departure aerodrome (ICAO)
@@ -46,6 +51,8 @@ export interface FlightStrip {
     /** Actual Start-up Request Time (HHmm) — CDM annotation ASRT / Ready Startup */
     asrt?: string
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
+    /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
+    ctotCancelled?: boolean
     cdmSts?: string            // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
     ctotReason?: string        // mostPenalisingRegulation (optional tooltip)
 
@@ -79,9 +86,9 @@ export interface FlightStrip {
 
     // Transfer frequency (shown on XFER button when handoff target matches next controller)
     xferFrequency?: string
-    /** Suggested next sector indicator (ESSA sequence) before transfer is initiated */
+    /** XFER target SI (ESSA sequence / ESGG APP-E|W) — not shown as strip ownership SI */
     nextSi?: string
-    /** Suggested next controller login callsign (ESSA sequence) */
+    /** XFER target callsign (ESSA sequence / ESGG APP-E|W) */
     nextSiCallsign?: string
 
     // TopSky ROF (request on frequency): inbound LAM requester, or ourselves while outbound cooldown
@@ -113,7 +120,7 @@ export interface FlightStrip {
     /** Tracked by a controller other than me (for ownership styling) */
     ownedByOther?: boolean
     /**
-     * Dim strip visually (e.g. GND viewing INBOUND while still airborne on final).
+     * Dim strip visually (e.g. INBOUND unless assumed / pending transfer).
      * Independent of ownership dimming settings.
      */
     dimmed?: boolean
@@ -184,6 +191,11 @@ export interface UiSettings {
      * controller is not AFV-monitoring that frequency. Auto XC detection still applies when off.
      */
     showAppDepXcFrequency: boolean
+    /**
+     * Auto-set PARK (+ release) for assumed arrivals stationary at a stand.
+     * Only applies at airports with GRP stand geometry loaded.
+     */
+    autoParkEnabled: boolean
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -194,6 +206,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     dimOtherOwnedStrips: true,
     transferSoundsEnabled: false,
     showAppDepXcFrequency: false,
+    autoParkEnabled: true,
 }
 
 export interface AirportAtisInfo {
