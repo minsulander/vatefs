@@ -15,7 +15,7 @@ console.log = (...args: unknown[]) => { fs.writeSync(1, formatArgs(args) + "\n")
 console.warn = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 console.error = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 
-import { constants, isClientMessage, parseGapKey } from "@vatefs/common"
+import { constants, isClientMessage, parseGapKey, resolveEssaRwyConfigId } from "@vatefs/common"
 import type {
     LayoutMessage,
     StripMessage,
@@ -60,7 +60,15 @@ import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands } from "./stand-data.js"
 import { loadSidData, getSidsForRunway, getSidAltitude } from "./sid-data.js"
-import { loadEssaSidPrefs, resolvePreferredSid } from "./essa-sid-prefs.js"
+import { loadEseAirspace } from "./ese-airspace.js"
+import { startAfvTransceiverPolling } from "./afv-transceivers.js"
+import {
+    isEssaStripVisibleForRoles,
+    resolveEssaNextSi,
+    resolveEssaXferCallsign,
+    setForceIdealAppDepFrequency,
+} from "./essa-next-si.js"
+import { loadEssaSidPrefs, resolvePreferredSid, resolveMapDelivery } from "./essa-sid-prefs.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
@@ -214,6 +222,13 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
     }
     try {
+        loadEseAirspace(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    } catch (err) {
+        console.warn(`Failed to load ESE airspace: ${err instanceof Error ? err.message : err}`)
+    }
+    // AFV multi-freq (VATSIM Radar "Monitoring") for APP/DEP XC detection
+    startAfvTransceiverPolling()
+    try {
         loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
     } catch (err) {
         console.warn(`Failed to load ICAO airlines: ${err instanceof Error ? err.message : err}`)
@@ -279,6 +294,7 @@ let currentUiSettings: UiSettings = { ...DEFAULT_UI_SETTINGS }
 {
     const saved = loadUserSettings()
     currentUiSettings = resolveUiSettings(saved)
+    setForceIdealAppDepFrequency(currentUiSettings.showAppDepXcFrequency)
 }
 
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
@@ -456,10 +472,15 @@ type OutboundPluginCommand =
  */
 function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): string | undefined {
     // Incoming TopSky ROF: always hand off to the requesting controller
-    if (flight) {
-        const rofFrom = flightStore.getPendingRofRequest(flight)
-        if (rofFrom) return rofFrom
+    const rofFrom = flight ? flightStore.getPendingRofRequest(flight) : undefined
+    if (rofFrom) return rofFrom
+
+    // ESSA: sector / taxi-sequence next SI
+    if (flight && isEssaRolesConfig(staticConfig)) {
+        const essaTarget = resolveEssaXferCallsign(flight, strip, undefined)
+        if (essaTarget) return essaTarget
     }
+
     const myRole = staticConfig.myRole ?? 'TWR'
     switch (myRole) {
         case 'DEL':
@@ -572,12 +593,27 @@ function broadcast(message: ServerMessage, exclude?: WebSocket) {
 /**
  * Map strip bayIds to the visible ESSA layout (CD ALL+TSAT merge, GND-only inbound).
  * Store keeps canonical bayIds; clients only see filtered layout bays.
+ * Returns null when ESSA role/sequence filter hides the strip.
  */
-function stripForClient(strip: FlightStrip): FlightStrip {
+function stripForClient(strip: FlightStrip): FlightStrip | null {
     if (!isEssaRolesConfig(staticConfig)) return strip
+
+    const roles = staticConfig.essaRoles ?? []
+    if (roles.length > 0 && strip.stripType !== "note") {
+        const flight = flightStore.getFlight(strip.callsign)
+        const next = flight
+            ? resolveEssaNextSi(flight, strip, {
+                  rofFrom: flightStore.getPendingRofRequest(flight),
+              })
+            : undefined
+        if (!isEssaStripVisibleForRoles(flight, strip, roles, next)) {
+            return null
+        }
+    }
+
     const gndRemapped = remapStripsForEssaGndOnly(
         [strip],
-        staticConfig.essaRoles ?? [],
+        roles,
         staticConfig.sectionToBay
     )
     const [remapped] = remapBayIdsToLayout(gndRemapped, store.getLayout())
@@ -590,9 +626,14 @@ function gapForClient(gap: Gap): Gap {
     return remapped ?? gap
 }
 
-// Broadcast a strip update
+// Broadcast a strip update (or delete when ESSA role filter hides it)
 function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; autoMoved?: boolean }) {
-    const message: StripMessage = { type: "strip", strip: stripForClient(strip) }
+    const clientStrip = stripForClient(strip)
+    if (!clientStrip) {
+        broadcastStripDelete(strip.id, options?.exclude)
+        return
+    }
+    const message: StripMessage = { type: "strip", strip: clientStrip }
     if (options?.autoMoved) message.autoMoved = true
     broadcast(message, options?.exclude)
 }
@@ -1400,17 +1441,21 @@ function maybeRefreshEssaRunwayHeaders(): boolean {
     return true
 }
 
-// Send all strips to a client
+// Send all strips to a client (ESSA role/sequence filter applied)
 function sendStrips(socket: WebSocket) {
     const strips = store.getAllStrips()
+    let sent = 0
     strips.forEach((strip) => {
+        const clientStrip = stripForClient(strip)
+        if (!clientStrip) return
         const message: StripMessage = {
             type: "strip",
-            strip: strip,
+            strip: clientStrip,
         }
         sendMessage(socket, message)
+        sent++
     })
-    console.log(`Sent ${strips.length} strips to client`)
+    console.log(`Sent ${sent} strips to client`)
 }
 
 // Send all gaps to a client
@@ -1616,6 +1661,39 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
                     sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
+                // GOA: MISAP_ + Appendix A MAP heading/CFL when ESSA config known
+                } else if (message.action === "GOA") {
+                    sendUdp(JSON.stringify({ type: "goaround", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                    const goaFlight = flightStore.getFlight(strip.callsign)
+                    if (goaFlight && isEssaRolesConfig(staticConfig)) {
+                        const essa = staticConfig.activeRunways?.["ESSA"]
+                        const configId =
+                            resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? []) ?? "1"
+                        const map = resolveMapDelivery(configId, goaFlight.arrRwy)
+                        if (map.heading != null && map.heading > 0) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "assignHeading",
+                                    callsign: strip.callsign,
+                                    heading: map.heading,
+                                } satisfies OutboundPluginCommand)
+                            )
+                        }
+                        if (map.altitudeFt != null && map.altitudeFt > 0) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "assignCfl",
+                                    callsign: strip.callsign,
+                                    altitude: map.altitudeFt,
+                                } satisfies OutboundPluginCommand)
+                            )
+                        }
+                        console.log(
+                            map.heading != null
+                                ? `[GOA] ${strip.callsign} MAP ${configId} arr=${goaFlight.arrRwy ?? "?"}: H${String(map.heading).padStart(3, "0")}/${map.altitudeFt ?? "?"}FT → ${map.sector}`
+                                : `[GOA] ${strip.callsign} MAP ${configId} arr=${goaFlight.arrRwy ?? "?"} ≠ config ARR — MISAP only (no HDG/CFL)`
+                        )
+                    }
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
@@ -1688,10 +1766,19 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.clearedToLand = true
                             flight.missedApproach = false
                             break
-                        case "GOA":
+                        case "GOA": {
                             flight.clearedToLand = false
                             flight.missedApproach = true
+                            if (isEssaRolesConfig(staticConfig)) {
+                                const essa = staticConfig.activeRunways?.["ESSA"]
+                                const configId =
+                                    resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? []) ?? "1"
+                                const map = resolveMapDelivery(configId, flight.arrRwy)
+                                if (map.heading != null && map.heading > 0) flight.ahdg = map.heading
+                                if (map.altitudeFt != null && map.altitudeFt > 0) flight.cfl = map.altitudeFt
+                            }
                             break
+                        }
                         case "XFER": {
                             const target = resolveXferTarget(strip, flight)
                             flight.handoffTargetController = target || ""
@@ -1733,7 +1820,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.action === "ASSUME" ||
                     message.action === "REFUSE" ||
                     message.action === "XFER" ||
-                    message.action === "READY"
+                    message.action === "READY" ||
+                    message.action === "DEICE"
                 ) {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
@@ -1745,6 +1833,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetController = ""
                         flight.handoffTargetControllerId = undefined
                         flight.handoffOptimisticUntil = undefined
+                    } else if ((message.action === "READY" || message.action === "DEICE") && flight) {
+                        flight.groundstate = "DE-ICE"
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }
@@ -2094,10 +2184,20 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.transferSoundsEnabled = incoming.transferSoundsEnabled
                 update.transferSoundsEnabled = incoming.transferSoundsEnabled
             }
+            if (typeof incoming.showAppDepXcFrequency === "boolean") {
+                currentUiSettings.showAppDepXcFrequency = incoming.showAppDepXcFrequency
+                update.showAppDepXcFrequency = incoming.showAppDepXcFrequency
+                setForceIdealAppDepFrequency(incoming.showAppDepXcFrequency)
+            }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
                 console.log(`[SETTINGS] Updated: ${JSON.stringify(update)}`)
                 broadcastUserSettings()
+                if (typeof update.showAppDepXcFrequency === "boolean") {
+                    // Refresh XFER SI/freq on strips (ideal vs covering)
+                    store.reprocessAllFlights()
+                    broadcastRefresh("APP/DEP XC frequency setting changed")
+                }
             }
             break
         }
@@ -2714,6 +2814,14 @@ udpIn.on("message", (msg, rinfo) => {
             if (!callsign) return
             if (ok) {
                 console.log(`[ROF] sent ok for ${callsign}`)
+                // Clear /ROF/… left on the scratch vehicle (TopSky often does not)
+                const vehicle = typeof data.vehicle === "string" ? data.vehicle.toUpperCase() : ""
+                if (vehicle) {
+                    setTimeout(() => {
+                        sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: vehicle } satisfies OutboundPluginCommand))
+                        console.log(`[ROF] Cleared scratchpad on vehicle ${vehicle}`)
+                    }, 800)
+                }
                 return
             }
             console.log(`[ROF] send failed for ${callsign}: ${error}`)
@@ -2977,6 +3085,17 @@ udpIn.on("message", (msg, rinfo) => {
         const result = store.tryProcessPluginMessage(data)
 
         if (result) {
+            // Clear consumed TopSky ROF scratch (/LAM/ROF/… or outbound /ROF/…)
+            if (result.clearScratchpadCallsign) {
+                const cs = result.clearScratchpadCallsign
+                const delay = result.clearScratchpadDelayMs ?? 0
+                const clear = () => {
+                    sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: cs } satisfies OutboundPluginCommand))
+                    console.log(`[ROF] Cleared scratchpad on ${cs}`)
+                }
+                if (delay > 0) setTimeout(clear, delay)
+                else clear()
+            }
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.transferSound && currentUiSettings.showStripOwnership && currentUiSettings.transferSoundsEnabled) {
                 playTransferSound(result.transferSound)

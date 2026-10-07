@@ -116,6 +116,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "isAssumed",
     "ownerSi",
     "ownedByOther",
+    "dimmed",
     "transferPending",
     "transferSi",
     "ownerCallsign",
@@ -123,6 +124,8 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "transferCallsign",
     "transferFrequency",
     "xferFrequency",
+    "nextSi",
+    "nextSiCallsign",
     // Incoming TopSky ROF
     "rofRequestSi",
     "rofRequestCallsign",
@@ -240,11 +243,17 @@ class EfsStore {
         shiftedGaps?: Gap[]
         deletedGapKeys?: string[]
         setScratchValue?: string
+        clearScratchpadCallsign?: string
+        clearScratchpadDelayMs?: number
         transferSound?: ProcessMessageResult['transferSound']
         multiUpdates?: ProcessMessageResult['multiUpdates']
     } {
         const result = flightStore.processMessage(message)
         const transferSound = result.transferSound
+        const scratchClear = {
+            clearScratchpadCallsign: result.clearScratchpadCallsign,
+            clearScratchpadDelayMs: result.clearScratchpadDelayMs,
+        }
 
         // Multi-airport: apply each update
         if (result.multiUpdates && result.multiUpdates.length > 0) {
@@ -299,6 +308,7 @@ class EfsStore {
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
+                ...scratchClear,
                 transferSound,
                 multiUpdates: result.multiUpdates
             }
@@ -314,13 +324,15 @@ class EfsStore {
                     changed.push(strip)
                 }
             }
-            return changed.length > 0 ? { strips: changed, transferSound } : { transferSound }
+            return changed.length > 0
+                ? { strips: changed, transferSound, ...scratchClear }
+                : { transferSound, ...scratchClear }
         }
 
         if (result.deleteStripId) {
             this.strips.delete(result.deleteStripId)
             this.deletedStrips.delete(result.deleteStripId)
-            return { deleteStripId: result.deleteStripId, transferSound }
+            return { deleteStripId: result.deleteStripId, transferSound, ...scratchClear }
         }
 
         if (result.deletedStripIds && result.deletedStripIds.length > 0) {
@@ -328,7 +340,13 @@ class EfsStore {
                 this.strips.delete(id)
                 this.deletedStrips.delete(id)
             }
-            return { deletedStripIds: result.deletedStripIds, deleteStripId: result.deletedStripIds[0], softDeleted: true, transferSound }
+            return {
+                deletedStripIds: result.deletedStripIds,
+                deleteStripId: result.deletedStripIds[0],
+                softDeleted: true,
+                transferSound,
+                ...scratchClear,
+            }
         }
 
         // Handle soft-delete: move strip to deletedStrips map
@@ -338,9 +356,9 @@ class EfsStore {
             if (existingStrip) {
                 this.deletedStrips.set(stripId, existingStrip)
                 this.strips.delete(stripId)
-                return { deleteStripId: stripId, softDeleted: true, transferSound }
+                return { deleteStripId: stripId, softDeleted: true, transferSound, ...scratchClear }
             }
-            return { softDeleted: true, transferSound }
+            return { softDeleted: true, transferSound, ...scratchClear }
         }
 
         // Handle restore: move strip back from deletedStrips
@@ -356,8 +374,12 @@ class EfsStore {
             const stripChanged = isNew || !stripsEqual(existingStrip, result.strip)
 
             // If nothing changed and no section change, skip the update
+            // (still forward scratch clears — e.g. consumed /ROF/ with no strip field change)
             if (!stripChanged && !result.sectionChanged && !result.restored) {
-                return transferSound ? { transferSound } : {}
+                if (transferSound || scratchClear.clearScratchpadCallsign) {
+                    return { transferSound, ...scratchClear }
+                }
+                return {}
             }
 
             // Log which fields changed for non-trivial updates (helps trace misbehavior to code)
@@ -409,11 +431,15 @@ class EfsStore {
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
+                ...scratchClear,
                 transferSound
             }
         }
 
-        return transferSound ? { transferSound } : {}
+        if (transferSound || scratchClear.clearScratchpadCallsign) {
+            return { transferSound, ...scratchClear }
+        }
+        return {}
     }
 
     /**

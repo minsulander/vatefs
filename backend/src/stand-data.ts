@@ -252,3 +252,29 @@ export function findStandForPosition(airport: string, lat: number, lon: number):
 
     return nearestName
 }
+
+/**
+ * Centroid (or first vertex) of a named stand at an airport.
+ */
+export function getStandCoords(
+    airport: string,
+    standName: string
+): { lat: number; lon: number } | undefined {
+    const airportStands = stands.get(airport)
+    if (!airportStands || !standName) return undefined
+
+    const want = standName.toUpperCase()
+    const stand =
+        airportStands.find((s) => s.name.toUpperCase() === want) ??
+        airportStands.find((s) => s.name.toUpperCase().startsWith(want))
+    if (!stand || stand.coords.length === 0) return undefined
+
+    let lat = 0
+    let lon = 0
+    for (const c of stand.coords) {
+        lat += c.lat
+        lon += c.lon
+    }
+    const n = stand.coords.length
+    return { lat: lat / n, lon: lon / n }
+}

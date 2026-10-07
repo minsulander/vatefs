@@ -160,6 +160,7 @@ export const useEfsStore = defineStore("efs", () => {
     const showStripOwnership = ref(DEFAULT_UI_SETTINGS.showStripOwnership)
     const dimOtherOwnedStrips = ref(DEFAULT_UI_SETTINGS.dimOtherOwnedStrips)
     const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
+    const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
 
     function applyUserSettings(settings: UiSettings) {
         dclSoundEnabled.value = settings.dclSoundEnabled
@@ -168,6 +169,7 @@ export const useEfsStore = defineStore("efs", () => {
         showStripOwnership.value = settings.showStripOwnership
         dimOtherOwnedStrips.value = settings.dimOtherOwnedStrips
         transferSoundsEnabled.value = settings.transferSoundsEnabled
+        showAppDepXcFrequency.value = settings.showAppDepXcFrequency
     }
 
     /** Update one or more UI settings (optimistic local apply + persist via backend). */
@@ -178,6 +180,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.showStripOwnership === 'boolean') showStripOwnership.value = partial.showStripOwnership
         if (typeof partial.dimOtherOwnedStrips === 'boolean') dimOtherOwnedStrips.value = partial.dimOtherOwnedStrips
         if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
+        if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         sendMessage({ type: 'updateUserSettings', settings: partial })
     }
     function connect() {
@@ -1338,6 +1341,7 @@ export const useEfsStore = defineStore("efs", () => {
         showStripOwnership,
         dimOtherOwnedStrips,
         transferSoundsEnabled,
+        showAppDepXcFrequency,
         updateUserSettings,
     }
 })

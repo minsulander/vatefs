@@ -19,6 +19,7 @@ export interface UserSettings {
     showStripOwnership?: boolean
     dimOtherOwnedStrips?: boolean
     transferSoundsEnabled?: boolean
+    showAppDepXcFrequency?: boolean
     /** Manual ESSA role selection (physical positions) */
     essaRoles?: string[]
     essaRolesManual?: boolean
@@ -94,5 +95,9 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.transferSoundsEnabled === "boolean"
                 ? saved.transferSoundsEnabled
                 : DEFAULT_UI_SETTINGS.transferSoundsEnabled,
+        showAppDepXcFrequency:
+            typeof saved.showAppDepXcFrequency === "boolean"
+                ? saved.showAppDepXcFrequency
+                : DEFAULT_UI_SETTINGS.showAppDepXcFrequency,
     }
 }

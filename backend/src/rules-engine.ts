@@ -374,11 +374,13 @@ function evaluateCommonConditions(
         }
     }
 
-    // nextControllerRole: flight.nextController callsign must resolve to one of these roles
+    // nextControllerRole: when EuroScope sets nextController, it must match.
+    // If unset (common at ESSA — sequence uses ESE OWNER, not ES next), allow the rule.
     if (rule.nextControllerRole) {
-        if (!flight.nextController) return false
-        const nextRole = parseControllerRole(flight.nextController, config.myAirports)
-        if (!rule.nextControllerRole.includes(nextRole)) return false
+        if (flight.nextController) {
+            const nextRole = parseControllerRole(flight.nextController, config.myAirports)
+            if (!rule.nextControllerRole.includes(nextRole)) return false
+        }
     }
 
     // missedApproach: if specified, must match flight.missedApproach (default false)
@@ -610,16 +612,18 @@ export function determineActionForFlight(
 ): StripAction | undefined {
     const sortedRules = sortByPriorityDesc(config.actionRules)
 
-    // Find first matching rule
+    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
+
+    // Find first matching rule (never ROF when the handoff is to us — ASSUME wins)
     for (const rule of sortedRules) {
         if (evaluateActionRule(flight, sectionId, rule, config)) {
+            if (transferredToMe && rule.action === 'ROF') continue
             return rule.action
         }
     }
 
     // Fallback: ASSUME when nobody has the track or flight is transferred to me
     const uncontrolled = !flight.controller
-    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
     if (uncontrolled || transferredToMe) {
         return 'ASSUME'
     }

@@ -8,7 +8,8 @@
         "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js && cp -r public/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
         "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js",
         "start": "tsx --watch src/server.ts",
-        "playback": "tsx src/playback.ts"
+        "playback": "tsx src/playback.ts",
+        "test": "tsx src/ese-airspace.test.ts && tsx src/essa-roles.test.ts && tsx src/essa-next-si.test.ts && tsx src/afv-transceivers.test.ts"
     },
     "keywords": [],
     "author": "",

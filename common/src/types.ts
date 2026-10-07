@@ -79,6 +79,10 @@ export interface FlightStrip {
 
     // Transfer frequency (shown on XFER button when handoff target matches next controller)
     xferFrequency?: string
+    /** Suggested next sector indicator (ESSA sequence) before transfer is initiated */
+    nextSi?: string
+    /** Suggested next controller login callsign (ESSA sequence) */
+    nextSiCallsign?: string
 
     // TopSky ROF (request on frequency): inbound LAM requester, or ourselves while outbound cooldown
     rofRequestSi?: string
@@ -108,6 +112,11 @@ export interface FlightStrip {
     ownerSi?: string
     /** Tracked by a controller other than me (for ownership styling) */
     ownedByOther?: boolean
+    /**
+     * Dim strip visually (e.g. GND viewing INBOUND while still airborne on final).
+     * Independent of ownership dimming settings.
+     */
+    dimmed?: boolean
     /**
      * Pending handoff relative to me:
      * - 'in'  — someone is transferring the strip to me
@@ -170,6 +179,11 @@ export interface UiSettings {
     dimOtherOwnedStrips: boolean
     /** Play EuroScope handoff sounds for transfer request / accept / refuse */
     transferSoundsEnabled: boolean
+    /**
+     * Force display XC frequencies: always show ideal SI+freq on XFER, even when the covering
+     * controller is not AFV-monitoring that frequency. Auto XC detection still applies when off.
+     */
+    showAppDepXcFrequency: boolean
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -179,6 +193,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     showStripOwnership: true,
     dimOtherOwnedStrips: true,
     transferSoundsEnabled: false,
+    showAppDepXcFrequency: false,
 }
 
 export interface AirportAtisInfo {
