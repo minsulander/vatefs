@@ -1,0 +1,316 @@
+# VatEFS ESSA role-based layout.
+# Sections appear/hide based on selected ESSA positions (CD, GND-E/N/W, TWR-E/S/W).
+# Same dual-runway routing rules as dualrwy4bays.yml; titles follow SAAB EFS naming.
+
+name: ESSA
+layoutMode: essaRoles
+radarRange: 25  # nm
+
+include:
+  - common-rules.yml
+
+layout:
+  bays:
+    # Left → right: arrivals L→R, departure stages R←L (CD/TSAT on the right).
+    # Max 4 columns: if CD+GND+TWR would show 5, CD ALL stacks above TSAT in one bay.
+    bay1:
+      sections:
+        inbound:
+          title: INBOUND
+          visibleFor: [GND, TWR]
+        ctr_arr:
+          title: CTR ARR
+          visibleFor: [TWR]
+        arr_runway:
+          title: RUNWAY ARR <arwy>
+          visibleFor: [TWR]
+        taxi_arr:
+          title: TAXI ARR
+          visibleFor: [GND]
+
+    bay2:
+      sections:
+        ctr_dep:
+          title: CTR DEP
+          visibleFor: [TWR]
+        dep_runway:
+          title: RUNWAY DEP <drwy>
+          visibleFor: [TWR]
+
+    bay3:
+      sections:
+        taxi_dep:
+          title: TAXI DEP
+          visibleFor: [GND, TWR]
+        push_start:
+          title: PUSH BACK / START-UP
+          visibleFor: [GND]
+
+    bay4:
+      sections:
+        cleared:
+          # Cleared IFR, waiting for push/startup (CD and GND)
+          title: TSAT
+          visibleFor: [CD, GND]
+
+    bay5:
+      sections:
+        pending_dep:
+          title: CD ALL
+          visibleFor: [CD]
+
+sectionRules:
+  # Override common-rules taxi → split taxi_dep / taxi_arr
+  taxi_dep:
+    sectionId: taxi_dep
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    priority: 30
+
+  taxi_dep_local:
+    sectionId: taxi_dep
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    priority: 30
+
+  taxi_arr_local:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    groundstates: [ARR, TXIN]
+    priority: 35
+
+  taxi_arr:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR, TAXI, TXIN]
+    priority: 30
+
+  # GND (not covering TWR): CTR / runway arrivals appear in INBOUND TWR
+  inbound_airborne_arr_gnd:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 110
+
+  inbound_airborne_local_gnd:
+    sectionId: inbound
+    direction: local
+    airborne: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 110
+
+  inbound_on_runway_arr_gnd:
+    sectionId: inbound
+    direction: arrival
+    onRunway: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
+
+  inbound_on_runway_local_gnd:
+    sectionId: inbound
+    direction: local
+    onRunway: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
+
+  # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
+
+  on_runway_geographic_dep:
+    sectionId: dep_runway
+    onRunway: true
+    depRunway: true
+    priority: 201
+
+  on_runway_geographic_arr:
+    sectionId: arr_runway
+    onRunway: true
+    arrRunway: true
+    priority: 200
+
+  on_runway_geographic_third_dep:
+    sectionId: dep_runway
+    onRunway: true
+    depRunway: false
+    arrRunway: false
+    direction: departure
+    priority: 191
+
+  on_runway_geographic_third_arr:
+    sectionId: arr_runway
+    onRunway: true
+    depRunway: false
+    arrRunway: false
+    direction: arrival
+    priority: 190
+
+  # === RUNWAY SECTION RULES ===
+
+  runway_lineup_depa_dep:
+    sectionId: dep_runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    depRunway: true
+    priority: 91
+
+  runway_lineup_depa_arr:
+    sectionId: arr_runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    depRunway: false
+    priority: 90
+
+  runway_cleared_to_land_dep:
+    sectionId: dep_runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    depRunway: true
+    priority: 96
+
+  runway_cleared_to_land_arr:
+    sectionId: arr_runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
+
+actionRules:
+  goa_arr_runway:
+    action: GOA
+    sectionId: arr_runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  goa_dep_runway:
+    action: GOA
+    sectionId: dep_runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+moveRules:
+  # Override common-rules taxi moves for split sections
+  move_push_to_taxi:
+    fromSectionId: push_start
+    toSectionId: taxi_dep
+    direction: either
+    myRole: [GND]
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  undo_taxi_to_push:
+    fromSectionId: taxi_dep
+    toSectionId: push_start
+    direction: either
+    command:
+      type: setGroundstate
+      value: PUSH
+
+  move_taxi_to_dep_runway:
+    fromSectionId: taxi_dep
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_taxi_to_arr_runway:
+    fromSectionId: taxi_dep
+    toSectionId: arr_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_inbound_to_arr_runway:
+    fromSectionId: inbound
+    toSectionId: arr_runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_inbound_to_dep_runway:
+    fromSectionId: inbound
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_ctr_arr_to_arr_runway:
+    fromSectionId: ctr_arr
+    toSectionId: arr_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_ctr_arr_to_dep_runway:
+    fromSectionId: ctr_arr
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_arr_runway_to_taxi_dep:
+    fromSectionId: arr_runway
+    toSectionId: taxi_dep
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_arr_runway_to_taxi:
+    fromSectionId: arr_runway
+    toSectionId: taxi_arr
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN
+
+  move_dep_runway_to_taxi_dep:
+    fromSectionId: dep_runway
+    toSectionId: taxi_dep
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_dep_runway_to_taxi:
+    fromSectionId: dep_runway
+    toSectionId: taxi_arr
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN

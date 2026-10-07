@@ -389,8 +389,20 @@ export interface EfsStaticConfig {
      */
     myRolesByAirport?: Map<string, ControllerRole[]>
 
-    /** Layout mode — multiAirport expands bayTemplate into column slots */
-    layoutMode?: 'standard' | 'multiAirport'
+    /** Layout mode — multiAirport expands bayTemplate; essaRoles filters sections by ESSA positions */
+    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
+
+    /**
+     * Per-section visibility families for essaRoles mode (sectionId → CD/GND/TWR).
+     * Built from YAML `visibleFor` at load time.
+     */
+    sectionVisibleFor?: Map<string, Array<'CD' | 'GND' | 'TWR'>>
+
+    /** Selected ESSA positions for layout filtering (physical roles only) */
+    essaRoles?: Array<'CD' | 'GND-E' | 'GND-N' | 'GND-W' | 'TWR-E' | 'TWR-W'>
+
+    /** True when essaRoles were set manually (skip auto-detect until cleared) */
+    essaRolesManual?: boolean
 
     /** Bay template for multiAirport mode (logical section ids) */
     bayTemplate?: {

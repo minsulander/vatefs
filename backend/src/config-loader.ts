@@ -18,6 +18,7 @@ import {
     normalizeColumnAirports,
     type BayTemplate
 } from "./multi-airport.js"
+import type { EssaFamily } from "./essa-roles.js"
 
 /**
  * Metadata for a discovered config file
@@ -40,12 +41,17 @@ interface YamlConfig {
     include?: string[]
     radarRange?: number
     groundRange?: number
-    layoutMode?: 'standard' | 'multiAirport'
+    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
     columnCount?: number
     bayTemplate?: BayTemplate
     layout?: {
         bays: Record<string, {
-            sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
+            sections: Record<string, {
+                title: string
+                addFromTop?: boolean
+                height?: number
+                visibleFor?: EssaFamily[]
+            }>
         }>
     }
     sectionRules?: Record<string, Omit<SectionRule, 'id'>>
@@ -58,9 +64,14 @@ interface YamlConfig {
  * Transform YAML layout (key-based) to internal format (id-based).
  * Also builds sectionToBay lookup map.
  */
-function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layout: EfsLayout; sectionToBay: Map<string, string> } {
+function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): {
+    layout: EfsLayout
+    sectionToBay: Map<string, string>
+    sectionVisibleFor: Map<string, EssaFamily[]>
+} {
     const bays: Bay[] = []
     const sectionToBay = new Map<string, string>()
+    const sectionVisibleFor = new Map<string, EssaFamily[]>()
 
     for (const [bayId, bayData] of Object.entries(yamlLayout.bays)) {
         const sections: Section[] = []
@@ -70,6 +81,10 @@ function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layou
                 throw new Error(`Duplicate section ID "${sectionId}" found in bay "${bayId}" (already exists in bay "${sectionToBay.get(sectionId)}")`)
             }
             sectionToBay.set(sectionId, bayId)
+
+            if (sectionData.visibleFor && sectionData.visibleFor.length > 0) {
+                sectionVisibleFor.set(sectionId, sectionData.visibleFor)
+            }
 
             sections.push({
                 id: sectionId,
@@ -85,7 +100,7 @@ function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): { layou
         })
     }
 
-    return { layout: { bays }, sectionToBay }
+    return { layout: { bays }, sectionToBay, sectionVisibleFor }
 }
 
 function transformRules<T extends { id: string }>(
@@ -156,6 +171,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
 
     let layout: EfsLayout
     let sectionToBay: Map<string, string>
+    let sectionVisibleFor: Map<string, EssaFamily[]> | undefined
     let bayTemplate: BayTemplate | undefined
     let columnCount: number | undefined
 
@@ -178,6 +194,9 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         const transformed = transformLayout(yamlConfig.layout)
         layout = transformed.layout
         sectionToBay = transformed.sectionToBay
+        if (transformed.sectionVisibleFor.size > 0) {
+            sectionVisibleFor = transformed.sectionVisibleFor
+        }
     }
 
     const sectionRules = yamlConfig.sectionRules
@@ -248,6 +267,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         deleteRules,
         moveRules,
         layoutMode,
+        sectionVisibleFor,
         bayTemplate,
         columnCount,
         activeAirports: isMulti ? [] : undefined,

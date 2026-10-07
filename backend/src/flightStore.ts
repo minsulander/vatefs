@@ -126,8 +126,17 @@ function detectTransferSound(
 }
 
 /**
+ * ICAO FPL speed/level group (Doc 4444), e.g. N0450F350, N0450A050, M078F350, K0800S1130.
+ * Not a navigational fix — must not appear as the strip "SID"/first-point display.
+ */
+function isIcaoSpeedLevelGroup(token: string): boolean {
+    return /^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(token)
+}
+
+/**
  * First significant FPL route fix for display when no ESE SID applies.
- * Skips DCT and airport/runway tokens (e.g. ESGJ/01); returns just the fix (RESNA).
+ * Skips DCT, airport/runway tokens (e.g. ESGJ/01), and initial speed/level groups
+ * (e.g. N0450F100); returns the next fix (RESNA).
  */
 function firstSignificantRouteFix(route: string): string | undefined {
     for (const raw of route.split(/\s+/)) {
@@ -142,6 +151,8 @@ function firstSignificantRouteFix(route: string): string | undefined {
         if (/^\d{1,2}[LRC]?$/i.test(token)) continue
         // Airport/rwy prefix (4-letter ICAO)
         if (slashIdx >= 0 && /^[A-Z]{4}$/.test(token)) continue
+        // Initial cruise speed/level (often first token after ADEP/rwy)
+        if (isIcaoSpeedLevelGroup(token)) continue
         return token
     }
     return undefined
@@ -1190,13 +1201,26 @@ class FlightStore {
             flight.missedApproach = false
         }
         // Process scratchpad-based remarks:
-        // Scratch values starting with "." are user remarks (e.g. ".SLOW" -> "SLOW").
-        // Any other scratch value, including "", means the remark was removed in EuroScope.
+        // - ".TEXT" → remark TEXT (VatEFS convention)
+        // - "SLOW" (no leading ".") → keep as remark (ES/TopSky slow flag)
+        // - "MISAP_" and other specials → leave remarks unchanged
+        // - "" → remark cleared in EuroScope
         if (message.scratch !== undefined) {
-            const nextRemarks = message.scratch.startsWith('.')
-                ? (message.scratch.substring(1).trim() || undefined)
-                : undefined
-            if (nextRemarks !== flight.remarks) {
+            const scratch = message.scratch
+            let nextRemarks: string | undefined | null = null
+            if (scratch.startsWith('.')) {
+                nextRemarks = scratch.substring(1).trim() || undefined
+            } else if (scratch.toUpperCase() === 'SLOW') {
+                nextRemarks = 'SLOW'
+            } else if (scratch === '') {
+                nextRemarks = undefined
+            } else if (scratch === 'MISAP_') {
+                nextRemarks = null // special flag — do not hide strip remarks
+            } else {
+                // Other non-remark scratch values (TopSky ops, etc.) — clear remark
+                nextRemarks = undefined
+            }
+            if (nextRemarks !== null && nextRemarks !== flight.remarks) {
                 console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
                 this.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
                 flight.remarks = nextRemarks

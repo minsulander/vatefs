@@ -13,6 +13,14 @@ import {
     normalizeColumnAirports,
     seedColumnAirports
 } from "./multi-airport.js"
+import {
+    computeAutoEssaRoles,
+    normalizeEssaRoles,
+    isEssaRolesConfig,
+    type EssaPositionRole
+} from "./essa-roles.js"
+
+export { isEssaRolesConfig }
 
 /**
  * Top-down controller hierarchy, lowest to highest.
@@ -98,6 +106,7 @@ function recomputeMyRolesByAirport() {
     }
 
     staticConfig.myRolesByAirport = rolesByAirport
+    refreshEssaRolesIfAuto()
 }
 
 /**
@@ -134,6 +143,8 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentMyPositionId = staticConfig.myPositionId
     const currentActiveAirports = staticConfig.activeAirports
     const currentColumnAirports = staticConfig.columnAirports
+    const currentEssaRoles = staticConfig.essaRoles
+    const currentEssaRolesManual = staticConfig.essaRolesManual
 
     // Replace all config properties
     staticConfig.myAirports = config.myAirports
@@ -147,10 +158,13 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules
     staticConfig.layoutMode = config.layoutMode
+    staticConfig.sectionVisibleFor = config.sectionVisibleFor
     staticConfig.bayTemplate = config.bayTemplate
     staticConfig.columnCount = config.columnCount
     staticConfig.activeAirports = config.activeAirports
     staticConfig.columnAirports = config.columnAirports
+    staticConfig.essaRoles = undefined
+    staticConfig.essaRolesManual = undefined
 
     // Restore runtime state
     if (currentCallsign) staticConfig.myCallsign = currentCallsign
@@ -180,8 +194,15 @@ export function applyConfig(config: EfsStaticConfig) {
         rebuildMultiAirportLayout()
     }
 
+    // Restore ESSA role selection when staying in / entering essaRoles mode
+    if (isEssaRolesConfig(staticConfig) && currentEssaRolesManual && currentEssaRoles) {
+        staticConfig.essaRoles = currentEssaRoles
+        staticConfig.essaRolesManual = true
+    }
+
     // Recompute effective roles with restored runtime state
     recomputeMyRolesByAirport()
+    refreshEssaRolesIfAuto()
 }
 
 /**
@@ -401,6 +422,7 @@ export function updateOnlineController(
     }
 
     const prevRoles = staticConfig.myRolesByAirport
+    const prevEssa = essaRolesKey(staticConfig.essaRoles)
     const prev = staticConfig.onlineControllers.get(callsign)
     const positionChanged = !!(positionId && positionId !== prev?.positionId)
     staticConfig.onlineControllers.set(callsign, {
@@ -411,7 +433,11 @@ export function updateOnlineController(
     })
     recomputeMyRolesByAirport()
 
-    return rolesChanged(prevRoles, staticConfig.myRolesByAirport) || positionChanged
+    return (
+        rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
+        positionChanged ||
+        essaRolesKey(staticConfig.essaRoles) !== prevEssa
+    )
 }
 
 /**
@@ -457,9 +483,13 @@ export function removeOnlineController(callsign: string): boolean {
     if (!had) return false
 
     const prevRoles = staticConfig.myRolesByAirport
+    const prevEssa = essaRolesKey(staticConfig.essaRoles)
     recomputeMyRolesByAirport()
 
-    return rolesChanged(prevRoles, staticConfig.myRolesByAirport)
+    return (
+        rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
+        essaRolesKey(staticConfig.essaRoles) !== prevEssa
+    )
 }
 
 /**
@@ -495,3 +525,92 @@ export function clearOnlineControllers() {
     }
     recomputeMyRolesByAirport()
 }
+
+function essaRolesKey(roles: EssaPositionRole[] | undefined): string {
+    // Roles are stored in canonical order (CD → GND → TWR); join is enough for equality
+    return (roles ?? []).join(',')
+}
+
+function getEffectiveRolesUnion(): ControllerRole[] {
+    if (staticConfig.myRolesByAirport && staticConfig.myRolesByAirport.size > 0) {
+        const set = new Set<ControllerRole>()
+        for (const roles of staticConfig.myRolesByAirport.values()) {
+            for (const r of roles) set.add(r)
+        }
+        return [...set]
+    }
+    return staticConfig.myRole ? [staticConfig.myRole] : []
+}
+
+/**
+ * Recompute ESSA layout roles from callsign + coverage when not in manual override.
+ * Returns true if the selected roles changed.
+ */
+export function refreshEssaRolesIfAuto(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) {
+        if (staticConfig.essaRoles !== undefined || staticConfig.essaRolesManual) {
+            staticConfig.essaRoles = undefined
+            staticConfig.essaRolesManual = undefined
+            return true
+        }
+        return false
+    }
+
+    if (staticConfig.essaRolesManual) return false
+
+    const onlineCallsigns = staticConfig.onlineControllers
+        ? [...staticConfig.onlineControllers.keys()]
+        : []
+    const next = computeAutoEssaRoles(
+        staticConfig.myCallsign,
+        getEffectiveRolesUnion(),
+        onlineCallsigns
+    )
+    const changed = essaRolesKey(staticConfig.essaRoles) !== essaRolesKey(next)
+    staticConfig.essaRoles = next
+    return changed
+}
+
+/**
+ * Set ESSA roles (manual picker or restore from settings).
+ * When manual=false, immediately re-runs auto-detect.
+ * Returns true if roles / manual flag changed.
+ */
+export function setEssaRoles(roles: EssaPositionRole[], manual: boolean): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+
+    if (!manual) {
+        const wasManual = !!staticConfig.essaRolesManual
+        staticConfig.essaRolesManual = false
+        const autoChanged = refreshEssaRolesIfAuto()
+        return wasManual || autoChanged
+    }
+
+    const next = normalizeEssaRoles(roles) ?? []
+    const changed =
+        essaRolesKey(staticConfig.essaRoles) !== essaRolesKey(next) ||
+        !staticConfig.essaRolesManual
+    staticConfig.essaRoles = next
+    staticConfig.essaRolesManual = true
+    return changed
+}
+
+/**
+ * Restore ESSA roles from persisted user settings (call after applyConfig on startup).
+ */
+export function restoreEssaRolesFromSettings(
+    roles: EssaPositionRole[] | undefined,
+    manual: boolean | undefined
+) {
+    if (!isEssaRolesConfig(staticConfig)) return
+    if (manual && roles) {
+        staticConfig.essaRoles = normalizeEssaRoles(roles) ?? []
+        staticConfig.essaRolesManual = true
+    } else {
+        staticConfig.essaRolesManual = false
+        refreshEssaRolesIfAuto()
+    }
+}
+
+export type { EssaPositionRole }
+

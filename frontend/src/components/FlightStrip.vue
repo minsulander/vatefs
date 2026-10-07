@@ -165,8 +165,8 @@
 
     <!-- Middle section (truncatable) -->
     <div class="strip-middle">
-      <!-- Remarks row (above other fields, spans full width) -->
-      <div v-if="remarksEditing || strip.remarks" class="remarks-row" @click.stop>
+      <!-- Remarks / scratchpad row (only real remarks — auto-SLOW sets remarks via ES scratch) -->
+      <div v-if="remarksEditing || displayRemarks" class="remarks-row" @click.stop>
         <input
           v-if="remarksEditing"
           ref="remarksInput"
@@ -178,7 +178,7 @@
           @keydown.enter="onRemarksBlur"
           @keydown.escape="onRemarksCancel"
         />
-        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ strip.remarks }}</span>
+        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ displayRemarks }}</span>
       </div>
       <div class="strip-middle-content">
         <!-- Time section / clearance triangle -->
@@ -293,7 +293,7 @@
         <!-- SID section -->
         <template  v-if="strip.stripType === 'departure'">
           <div class="strip-section strip-sid">
-              <div class="sid-value">{{ strip.sid || '' }}</div>
+              <div class="sid-value">{{ store.displaySidForStrip(strip) }}</div>
               <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
                 <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
                 <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
@@ -541,6 +541,9 @@ const remarksInitialText = ref('')
 const remarksDirty = ref(false)
 const remarksInput = ref<HTMLInputElement | null>(null)
 
+/** Scratchpad / remarks text only — do not invent SLOW from isSlow (ATYP flag). */
+const displayRemarks = computed(() => props.strip.remarks?.trim() || '')
+
 function onNoteClick() {
   // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
   // Still re-focus the input (important for touch interactions).
@@ -594,7 +597,7 @@ onMounted(() => {
 
 // Remarks handlers
 function startRemarksEditing() {
-  remarksText.value = props.strip.remarks ?? ''
+  remarksText.value = props.strip.remarks?.trim() || ''
   remarksInitialText.value = remarksText.value
   remarksDirty.value = false
   remarksEditing.value = true

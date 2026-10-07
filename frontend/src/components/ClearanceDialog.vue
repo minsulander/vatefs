@@ -20,7 +20,7 @@
       <div v-if="showRoute && strip.route" class="clnc-route">{{ strip.route }}</div>
       <div class="clnc-fields">
         <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value clnc-clickable" @click="openDropdown('rwy')">{{ strip.runway || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ strip.sid || '---' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ store.displaySidForStrip(strip) || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
         <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value clnc-clickable" @click="openDropdown('cfl')">{{ strip.clearedAltitude || '---' }}</span></div>
         <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
@@ -167,6 +167,21 @@ const dropdownScrollRef = ref<HTMLElement | null>(null)
 const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
 const availableRunways = ref<string[]>([])
 const availableSids = ref<{ name: string }[]>([])
+/** Preferred SID sort group from /api/preferred-sid (letter-group or SLOW tracks) */
+const preferredSidSortGroup = ref<string[]>([])
+const preferredSidMatched = ref<string | null>(null)
+
+function isSlowForClr(): boolean {
+  return !!props.strip.isSlow || props.strip.remarks === 'SLOW'
+}
+
+function isEssaIfrDep(): boolean {
+  return (
+    props.strip.adep === 'ESSA' &&
+    props.strip.flightRules !== 'V' &&
+    (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+  )
+}
 
 // Fetch runways for the departure airport
 async function fetchRunways() {
@@ -202,6 +217,61 @@ async function fetchSids() {
   }
 }
 
+/**
+ * ESSA config-aware preferred SID (or SLOW track/HAPZI).
+ * Reassigns when uncleared (clearance flag not set), so RWY config changes
+ * (e.g. 08-LT → 08-RT) update L/R letter groups. Leaves cleared strips alone.
+ */
+async function applyPreferredSid() {
+  preferredSidSortGroup.value = []
+  preferredSidMatched.value = null
+
+  if (!isEssaIfrDep()) return
+
+  const airport = props.strip.adep
+  const runway = props.strip.runway
+  const configId = store.essaRwyConfigIdResolved
+  if (!airport || !runway || !configId) return
+
+  // Already cleared — keep assigned SID
+  const mayReassign =
+    !props.strip.clearance && !!props.strip.canEditClearance
+
+  try {
+    const params = new URLSearchParams({
+      airport,
+      runway,
+      config: configId,
+      slow: isSlowForClr() ? '1' : '0',
+    })
+    if (props.strip.route) params.set('route', props.strip.route)
+
+    const res = await fetch(`/api/preferred-sid?${params}`)
+    if (!res.ok) return
+    const data = await res.json() as { sid: string | null; sortGroup?: string[] }
+    preferredSidSortGroup.value = data.sortGroup ?? []
+    preferredSidMatched.value = data.sid
+
+    if (mayReassign && data.sid && data.sid !== props.strip.sid) {
+      store.sendAssignment(props.strip.id, 'assignSid', data.sid)
+      // Strip SID may not update until WS round-trip — fetch CFL for the new SID directly
+      try {
+        const altRes = await fetch(`/api/sidalt?airport=${airport}&sid=${encodeURIComponent(data.sid)}`)
+        if (altRes.ok) {
+          const altData = await altRes.json()
+          if (altData.altitude) {
+            store.sendAssignment(props.strip.id, 'assignCfl', String(altData.altitude))
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // Fetch the SID altitude and assign CFL if not already set
 async function applyDefaultCfl() {
   const airport = props.strip.adep
@@ -228,20 +298,25 @@ function applyDefaultSquawk() {
 }
 
 // When dialog opens, fetch data and reset remarks
-watch(dialogOpen, (open) => {
+watch(dialogOpen, async (open) => {
   if (open) {
+    remarks.value = ''
+    preferredSidSortGroup.value = []
+    preferredSidMatched.value = null
     fetchRunways()
-    fetchSids()
     fetchDestinationName()
     fetchDepartureName()
+    await fetchSids()
+    await applyPreferredSid()
     applyDefaultCfl()
     applyDefaultSquawk()
-    remarks.value = ''
   } else {
     activeDropdown.value = null
     destinationName.value = null
     departureName.value = null
     showRoute.value = false
+    preferredSidSortGroup.value = []
+    preferredSidMatched.value = null
   }
 })
 
@@ -295,9 +370,24 @@ const dropdownOptions = computed(() => {
       }))
     case 'sid': {
       const isVfr = props.strip.flightRules === 'V'
-      const sids = isVfr
+      let sids = isVfr
         ? availableSids.value.filter(sid => sid.name.startsWith('VFR'))
-        : availableSids.value
+        : [...availableSids.value]
+      if (!isVfr && preferredSidSortGroup.value.length > 0) {
+        const groupSet = new Set(preferredSidSortGroup.value)
+        const matched = preferredSidMatched.value
+        sids.sort((a, b) => {
+          const aIn = groupSet.has(a.name)
+          const bIn = groupSet.has(b.name)
+          if (aIn && !bIn) return -1
+          if (!aIn && bIn) return 1
+          if (aIn && bIn && matched) {
+            if (a.name === matched && b.name !== matched) return -1
+            if (b.name === matched && a.name !== matched) return 1
+          }
+          return 0
+        })
+      }
       return sids.map(sid => ({
         label: sid.name,
         value: sid.name,

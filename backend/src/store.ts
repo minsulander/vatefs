@@ -8,6 +8,13 @@ import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessage
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
 import { getVisibleLayout, IDLE_BAY_ID, isMultiAirportConfig, resolveBayForAirport, prefixedSectionId } from "./multi-airport.js"
+import {
+    filterEssaLayout,
+    isEssaRolesConfig,
+    activeOnlineTwrRoles,
+    remapStripsForEssaGndOnly,
+    remapBayIdsToLayout,
+} from "./essa-roles.js"
 
 /**
  * Resolve template variables in section titles.
@@ -411,11 +418,15 @@ class EfsStore {
 
     // Get layout (for sending to clients), with section title templates resolved
     getLayout(): EfsLayout {
+        // ESSA role mode: always use config bay structure so role filtering
+        // cannot resurrect a stale combined bay from the store cache.
         const base = isMultiAirportConfig(staticConfig)
             ? getVisibleLayout(staticConfig)
-            : this.layout
+            : isEssaRolesConfig(staticConfig)
+              ? staticConfig.layout
+              : this.layout
         // Prefer store layout for section heights, but drop idle bay
-        const withHeights: EfsLayout = {
+        let withHeights: EfsLayout = {
             bays: base.bays.map(bay => {
                 const storeBay = this.layout.bays.find(b => b.id === bay.id)
                 if (!storeBay) return bay
@@ -430,17 +441,41 @@ class EfsStore {
                 }
             }).filter(b => b.id !== IDLE_BAY_ID)
         }
+
+        if (isEssaRolesConfig(staticConfig)) {
+            const onlineCallsigns = staticConfig.onlineControllers
+                ? [...staticConfig.onlineControllers.keys()]
+                : []
+            const activeTwr = activeOnlineTwrRoles(onlineCallsigns)
+            withHeights = filterEssaLayout(
+                withHeights,
+                staticConfig.essaRoles ?? [],
+                staticConfig.sectionVisibleFor,
+                activeTwr
+            )
+        }
+
         return resolveLayoutTemplates(withHeights, staticConfig)
     }
 
     // Get all strips as array
     getAllStrips(): FlightStrip[] {
-        return Array.from(this.strips.values())
+        const strips = Array.from(this.strips.values())
+        if (!isEssaRolesConfig(staticConfig)) return strips
+        const remapped = remapStripsForEssaGndOnly(
+            strips,
+            staticConfig.essaRoles ?? [],
+            staticConfig.sectionToBay
+        )
+        // Align bayIds after CD ALL+TSAT column merge (max 4 columns)
+        return remapBayIdsToLayout(remapped, this.getLayout())
     }
 
     // Get all gaps as array
     getAllGaps(): Gap[] {
-        return Array.from(this.gaps.values())
+        const gaps = Array.from(this.gaps.values())
+        if (!isEssaRolesConfig(staticConfig)) return gaps
+        return remapBayIdsToLayout(gaps, this.getLayout())
     }
 
     // Get a single strip

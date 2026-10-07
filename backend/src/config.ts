@@ -21,6 +21,8 @@ export type {
     EfsStaticConfig
 } from "./config-types.js"
 
+export type { EssaPositionRole, EssaFamily } from "./essa-roles.js"
+
 // Re-export config and setter functions
 export {
     staticConfig,
@@ -43,7 +45,11 @@ export {
     setActiveAirports,
     setColumnAirport,
     setColumnCount,
-    rebuildMultiAirportLayout
+    rebuildMultiAirportLayout,
+    isEssaRolesConfig,
+    setEssaRoles,
+    refreshEssaRolesIfAuto,
+    restoreEssaRolesFromSettings
 } from "./static-config.js"
 
 // Re-export rules engine functions

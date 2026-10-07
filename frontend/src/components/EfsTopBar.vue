@@ -6,7 +6,112 @@
       <v-btn variant="text" icon="mdi-cog" size="small" class="text-grey" to="/settings" title="Settings"></v-btn>
       <!-- Callsign -->
       <span class="text-grey ml-1">{{ efs.myCallsign || 'NOT CONNECTED' }}</span>
-      <!-- ATIS / airports (MULTIAPT: open columns always; idle ICAOs only with traffic, clickable for swap) -->
+      <!-- ESSA runway combination (Appendix A/B) — click to select, hover for VatIRIS quickref -->
+      <button
+        v-if="efs.essaRolesMode"
+        ref="essaRwyBtnEl"
+        type="button"
+        class="essa-rwy-btn ml-3"
+        :title="essaRwyLabel || 'Select RWY config'"
+        @click="essaRwyDialog = true"
+        @mouseenter="onEssaRwyHoverEnter"
+        @mouseleave="onEssaRwyHoverLeave"
+      >
+        {{ essaRwyLabel || 'RWY: —' }}
+      </button>
+      <Teleport to="body">
+        <div
+          v-if="essaRwyQuickrefVisible && essaRwyQuickrefUrl"
+          class="essa-rwy-quickref"
+          :style="{ top: essaRwyQuickrefStyle.top, left: essaRwyQuickrefStyle.left }"
+        >
+          <img
+            :src="essaRwyQuickrefUrl"
+            :alt="essaRwyLabel || 'RWY quickref'"
+            class="essa-rwy-quickref-img"
+            :style="{
+              maxWidth: essaRwyQuickrefStyle.maxWidth,
+              maxHeight: essaRwyQuickrefStyle.maxHeight,
+            }"
+          />
+        </div>
+      </Teleport>
+      <v-dialog v-model="essaRwyDialog" max-width="420" scrim>
+        <v-card bg-color="#2b2d31" class="essa-rwy-dialog text-grey">
+          <v-card-title class="text-body-1 py-2">RWY config</v-card-title>
+          <v-card-text class="pt-0">
+            <div class="essa-rwy-es-hint" v-if="essaRwyEsHint">
+              ES: {{ essaRwyEsHint }}
+            </div>
+            <div class="essa-rwy-list">
+              <label
+                v-for="row in essaRwyOptions"
+                :key="row.id"
+                class="essa-rwy-option"
+                :class="{
+                  'essa-rwy-option--match': row.matchesEs,
+                  'essa-rwy-option--selected': row.id === draftEssaRwyId,
+                }"
+              >
+                <input v-model="draftEssaRwyId" type="radio" name="essa-rwy" :value="row.id" />
+                <span class="essa-rwy-id">{{ row.id }}</span>
+                <span class="essa-rwy-detail">{{ row.pdfName }}</span>
+              </label>
+            </div>
+          </v-card-text>
+          <v-card-actions class="px-4 pb-3">
+            <v-btn size="small" variant="text" class="text-grey" @click="onEssaRwyAuto">Auto</v-btn>
+            <v-spacer />
+            <v-btn size="small" variant="text" class="text-grey" @click="essaRwyDialog = false">Cancel</v-btn>
+            <v-btn size="small" color="success" variant="flat" @click="onEssaRwyOk">OK</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      <!-- ESSA roles -->
+      <button
+        v-if="efs.essaRolesMode"
+        type="button"
+        class="essa-roles-btn ml-3"
+        title="ESSA roles (click to change)"
+        @click="essaRolesDialog = true"
+      >
+        Roles: {{ essaRolesLabel }}
+      </button>
+      <v-dialog v-model="essaRolesDialog" max-width="360" scrim>
+        <v-card bg-color="#2b2d31" class="essa-roles-dialog text-grey">
+          <v-card-title class="text-body-1 py-2">Roles</v-card-title>
+          <v-card-text class="pt-0">
+            <div class="essa-role-rows">
+              <div class="essa-role-row">
+                <label v-for="role in essaTwrRoles" :key="role" class="essa-role-option">
+                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
+                  <span>{{ role }}</span>
+                </label>
+              </div>
+              <div class="essa-role-row">
+                <label v-for="role in essaGndRoles" :key="role" class="essa-role-option">
+                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
+                  <span>{{ role }}</span>
+                </label>
+              </div>
+              <div class="essa-role-row">
+                <label v-for="role in essaCdRoles" :key="role" class="essa-role-option">
+                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
+                  <span>{{ role }}</span>
+                </label>
+              </div>
+            </div>
+          </v-card-text>
+          <v-card-actions class="px-4 pb-3">
+            <v-btn size="small" variant="text" class="text-grey" @click="onEssaRolesAuto">Auto</v-btn>
+            <v-spacer />
+            <v-btn size="small" variant="text" class="text-grey" @click="essaRolesDialog = false">Cancel</v-btn>
+            <v-btn size="small" color="success" variant="flat" @click="onEssaRolesOk">OK</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      <!-- ATIS / airports (hidden in ESSA mode — RWY config indicator covers runways) -->
+      <template v-if="!efs.essaRolesMode">
       <span
         v-for="info in atisDisplayItems"
         :key="info.airport"
@@ -40,6 +145,7 @@
       <span v-if="efs.multiAirport && efs.pendingIdleSwap" class="idle-hint ml-2">
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
+      </template>
       <v-btn
         v-if="efs.dclStatus !== 'unavailable'"
         variant="text"
@@ -138,14 +244,181 @@
 
 <script setup lang="ts">
 import Clock from './Clock.vue'
-import { ref, computed, onMounted } from "vue"
+import { ref, computed, onMounted, onUnmounted, watch } from "vue"
 import { useEfsStore } from "../store/efs"
 import type { ConfigInfo, DclMode } from "@vatefs/common"
+import {
+  ESSA_RWY_COMBINATIONS,
+  formatEssaRwyConfigLabel,
+  formatEssaRwyPdfName,
+  findMatchingEssaRwyConfigs,
+  resolveEssaRwyConfigId,
+  essaRwyQuickrefImageUrl,
+} from "@vatefs/common"
 
 const efs = useEfsStore()
 const fullscreen = ref(window.innerHeight == screen.height)
 const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
 const configMenuOpen = ref(false)
+
+/** Display / picker order: CD → GND-* → TWR-E, TWR-W */
+const ESSA_ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W'] as const
+const essaCdRoles = ['CD'] as const
+const essaGndRoles = ['GND-E', 'GND-N', 'GND-W'] as const
+const essaTwrRoles = ['TWR-E', 'TWR-W'] as const
+const essaRolesDialog = ref(false)
+const draftEssaRoles = ref<string[]>([])
+const essaRwyDialog = ref(false)
+const draftEssaRwyId = ref<string | null>(null)
+/** Minute tick so night/day letter auto-switch updates without ES change */
+const essaRwyNowTick = ref(Date.now())
+let essaRwyTickTimer: ReturnType<typeof setInterval> | null = null
+const essaRwyBtnEl = ref<HTMLButtonElement | null>(null)
+const essaRwyQuickrefVisible = ref(false)
+const essaRwyQuickrefPos = ref({ top: 0, left: 0 })
+let essaRwyHoverShowTimer: ReturnType<typeof setTimeout> | null = null
+
+function sortEssaRolesDisplay(roles: string[]): string[] {
+  const order = new Map(ESSA_ROLE_ORDER.map((r, i) => [r, i]))
+  return [...roles].sort((a, b) => (order.get(a as typeof ESSA_ROLE_ORDER[number]) ?? 99) - (order.get(b as typeof ESSA_ROLE_ORDER[number]) ?? 99))
+}
+
+const essaRolesLabel = computed(() => {
+  const roles = sortEssaRolesDisplay(efs.essaRoles)
+  return roles.length > 0 ? roles.join(', ') : '(none)'
+})
+
+/** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
+const essaEsRunways = computed(() => {
+  const info = efs.atisInfo.find(a => a.airport === 'ESSA') ?? efs.atisInfo[0]
+  if (!info) return { arr: [] as string[], dep: [] as string[] }
+  return { arr: info.arrRunways ?? [], dep: info.depRunways ?? [] }
+})
+
+// When ES runway selection changes, drop manual config and follow ES
+watch(
+  essaEsRunways,
+  ({ arr, dep }) => {
+    efs.syncEssaRwyConfigFromEs(arr, dep)
+  },
+  { deep: true },
+)
+
+const essaRwyEsHint = computed(() => {
+  const { arr, dep } = essaEsRunways.value
+  if (arr.length === 0 && dep.length === 0) return null
+  return `ARR ${arr.join('/') || '?'} / DEP ${dep.join('/') || '?'}`
+})
+
+const essaRwyOptions = computed(() => {
+  const { arr, dep } = essaEsRunways.value
+  const matching = new Set(findMatchingEssaRwyConfigs(arr, dep).map(c => c.id))
+  const rows = ESSA_RWY_COMBINATIONS.map(c => ({
+    id: c.id,
+    pdfName: formatEssaRwyPdfName(c),
+    matchesEs: matching.has(c.id),
+  }))
+  // ES matches first, then document order
+  return rows.sort((a, b) => Number(b.matchesEs) - Number(a.matchesEs))
+})
+
+/** Resolved ESSA config id (manual override or ES + night/day auto) */
+const essaRwyConfigIdResolved = computed(() => {
+  void essaRwyNowTick.value
+  if (efs.essaRwyConfigManual && efs.essaRwyConfigId) return efs.essaRwyConfigId
+  const { arr, dep } = essaEsRunways.value
+  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+})
+
+/** ESSA RWY config indicator from Appendix A/B + ES runways (+ manual / night auto) */
+const essaRwyLabel = computed(() => {
+  const { arr, dep } = essaEsRunways.value
+  if (arr.length === 0 && dep.length === 0 && !efs.essaRwyConfigManual) return null
+  return formatEssaRwyConfigLabel(arr, dep, {
+    configId: efs.essaRwyConfigManual ? efs.essaRwyConfigId : undefined,
+    now: new Date(essaRwyNowTick.value),
+  })
+})
+
+/** VatIRIS TWR quickref PNG for the active config */
+const essaRwyQuickrefUrl = computed(() => {
+  const id = essaRwyConfigIdResolved.value
+  return id ? essaRwyQuickrefImageUrl(id, 'TWR') : null
+})
+
+const essaRwyQuickrefStyle = computed(() => {
+  const { top, left } = essaRwyQuickrefPos.value
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    maxWidth: `calc(100vw - ${left}px - 4px)`,
+    maxHeight: `calc(100vh - ${top}px - 4px)`,
+  }
+})
+
+function onEssaRwyHoverEnter() {
+  if (!essaRwyQuickrefUrl.value || !essaRwyBtnEl.value) return
+  if (essaRwyHoverShowTimer) clearTimeout(essaRwyHoverShowTimer)
+  essaRwyHoverShowTimer = setTimeout(() => {
+    essaRwyHoverShowTimer = null
+    if (!essaRwyBtnEl.value || !essaRwyQuickrefUrl.value) return
+    const rect = essaRwyBtnEl.value.getBoundingClientRect()
+    // Top-left of image anchored at the config text
+    essaRwyQuickrefPos.value = { top: rect.top, left: rect.left }
+    essaRwyQuickrefVisible.value = true
+  }, 500)
+}
+
+function onEssaRwyHoverLeave() {
+  if (essaRwyHoverShowTimer) {
+    clearTimeout(essaRwyHoverShowTimer)
+    essaRwyHoverShowTimer = null
+  }
+  essaRwyQuickrefVisible.value = false
+}
+
+watch(essaRolesDialog, (open) => {
+  if (open) {
+    draftEssaRoles.value = [...efs.essaRoles]
+  }
+})
+
+watch(essaRwyDialog, (open) => {
+  if (open) {
+    if (essaRwyHoverShowTimer) {
+      clearTimeout(essaRwyHoverShowTimer)
+      essaRwyHoverShowTimer = null
+    }
+    essaRwyQuickrefVisible.value = false
+    const { arr, dep } = essaEsRunways.value
+    draftEssaRwyId.value =
+      efs.essaRwyConfigManual && efs.essaRwyConfigId
+        ? efs.essaRwyConfigId
+        : resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+  }
+})
+
+function onEssaRolesOk() {
+  efs.setEssaRoles([...draftEssaRoles.value], true)
+  essaRolesDialog.value = false
+}
+
+function onEssaRolesAuto() {
+  efs.setEssaRoles([], false)
+  essaRolesDialog.value = false
+}
+
+function onEssaRwyOk() {
+  if (draftEssaRwyId.value) {
+    efs.setEssaRwyConfig(draftEssaRwyId.value, true)
+  }
+  essaRwyDialog.value = false
+}
+
+function onEssaRwyAuto() {
+  efs.setEssaRwyConfig(null, false)
+  essaRwyDialog.value = false
+}
 
 const dclModes: { label: string; value: DclMode }[] = [
   { label: 'MANUAL', value: 'manual' },
@@ -311,6 +584,20 @@ onMounted(() => {
   window.addEventListener("resize", () => {
     fullscreen.value = !!document.fullscreenElement
   })
+  essaRwyTickTimer = setInterval(() => {
+    essaRwyNowTick.value = Date.now()
+  }, 60_000)
+})
+
+onUnmounted(() => {
+  if (essaRwyTickTimer) {
+    clearInterval(essaRwyTickTimer)
+    essaRwyTickTimer = null
+  }
+  if (essaRwyHoverShowTimer) {
+    clearTimeout(essaRwyHoverShowTimer)
+    essaRwyHoverShowTimer = null
+  }
 })
 </script>
 
@@ -394,5 +681,116 @@ onMounted(() => {
 
 .config-menu {
   min-width: 160px;
+}
+
+.essa-roles-btn {
+  background: transparent;
+  border: none;
+  color: #9e9e9e;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 4px;
+}
+
+.essa-roles-btn:hover {
+  color: #ccc;
+}
+
+.essa-rwy-btn {
+  background: transparent;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0.02em;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.essa-rwy-btn:hover {
+  color: #fff;
+}
+
+/* VatIRIS quickref — top-left at config text; does not block UI underneath */
+.essa-rwy-quickref {
+  position: fixed;
+  z-index: 2000;
+  pointer-events: none;
+  line-height: 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+}
+
+.essa-rwy-quickref-img {
+  display: block;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: #1a1a1a;
+}
+
+.essa-rwy-es-hint {
+  font-size: 12px;
+  margin-bottom: 10px;
+  opacity: 0.75;
+}
+
+.essa-rwy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.essa-rwy-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 2px;
+  user-select: none;
+}
+
+.essa-rwy-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.essa-rwy-option--match {
+  background: rgba(144, 202, 249, 0.12);
+}
+
+.essa-rwy-option--selected {
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.essa-rwy-id {
+  font-weight: 600;
+  min-width: 2.5em;
+}
+
+.essa-rwy-detail {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.essa-role-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.essa-role-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.essa-role-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
 }
 </style>

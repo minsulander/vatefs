@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
-import { ref, computed } from "vue"
+import { ref, computed, watch } from "vue"
 import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings } from "@vatefs/common"
-import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS } from "@vatefs/common"
+import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS, resolveEssaRwyConfigId } from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -88,6 +88,17 @@ export const useEfsStore = defineStore("efs", () => {
     /** Swedish (ES*) airports for RTC column picker — includes name/country when known */
     const airportOptions = ref<Array<{ icao: string; name?: string; country?: string }>>([])
 
+    // ESSA role-profile mode
+    const essaRolesMode = ref(false)
+    const essaRoles = ref<string[]>([])
+    const essaRolesManual = ref(false)
+
+    /** Manual ESSA RWY combination id (Appendix A/B); cleared when ES runways change */
+    const essaRwyConfigId = ref<string | null>(null)
+    const essaRwyConfigManual = ref(false)
+    /** Fingerprint of last ES ARR/DEP used to auto-clear manual RWY config */
+    let essaRwyEsFingerprint = ''
+
     // DCL status
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
     const dclError = ref<string | undefined>(undefined)
@@ -95,6 +106,20 @@ export const useEfsStore = defineStore("efs", () => {
 
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
+
+    /** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
+    const essaEsRunways = computed(() => {
+        const info = atisInfo.value.find(a => a.airport === 'ESSA') ?? atisInfo.value[0]
+        if (!info) return { arr: [] as string[], dep: [] as string[] }
+        return { arr: info.arrRunways ?? [], dep: info.depRunways ?? [] }
+    })
+
+    /** Resolved ESSA RWY config id (manual override or ES + night/day auto) */
+    const essaRwyConfigIdResolved = computed(() => {
+        if (essaRwyConfigManual.value && essaRwyConfigId.value) return essaRwyConfigId.value
+        const { arr, dep } = essaEsRunways.value
+        return resolveEssaRwyConfigId(arr, dep)
+    })
 
     // Configuration
     const availableConfigs = ref<ConfigInfo[]>([])
@@ -325,12 +350,18 @@ export const useEfsStore = defineStore("efs", () => {
         esAirports?: string[]
         columnAirports?: (string | null)[]
         columnCount?: number
+        essaRolesMode?: boolean
+        essaRoles?: string[]
+        essaRolesManual?: boolean
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
         myRole.value = message.role
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
+        essaRolesMode.value = message.essaRolesMode ?? false
+        essaRoles.value = message.essaRoles ?? []
+        essaRolesManual.value = message.essaRolesManual ?? false
         const nextActive = message.activeAirports ?? message.airports
         markNewlyActiveAirports(nextActive)
         activeAirports.value = nextActive
@@ -950,6 +981,130 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'switchConfig', file })
     }
 
+    /** Set ESSA roles manually, or pass manual=false to return to auto-detect. */
+    function setEssaRoles(roles: string[], manual: boolean) {
+        if (manual) {
+            essaRoles.value = [...roles]
+            essaRolesManual.value = true
+        } else {
+            essaRolesManual.value = false
+        }
+        sendMessage({ type: 'setEssaRoles', roles, manual })
+    }
+
+    /**
+     * Set ESSA RWY combination manually, or pass manual=false for auto
+     * (ES runways + night/day letter selection).
+     */
+    function setEssaRwyConfig(configId: string | null, manual: boolean) {
+        if (manual && configId) {
+            essaRwyConfigId.value = configId
+            essaRwyConfigManual.value = true
+        } else {
+            essaRwyConfigId.value = null
+            essaRwyConfigManual.value = false
+        }
+        // Preferred SIDs refresh via watch(essaRwyConfigIdResolved)
+    }
+
+    /** When ES ARR/DEP change, drop manual RWY config so auto follows EuroScope. */
+    function syncEssaRwyConfigFromEs(arr: string[], dep: string[]) {
+        const fp = `${arr.join('/')}|${dep.join('/')}`
+        if (fp === essaRwyEsFingerprint) return
+        essaRwyEsFingerprint = fp
+        if (essaRwyConfigManual.value) {
+            essaRwyConfigId.value = null
+            essaRwyConfigManual.value = false
+        }
+        // Preferred SIDs refresh via watch(essaRwyConfigIdResolved) when id changes
+    }
+
+    /**
+     * Display-only preferred SIDs for uncleared ESSA IFR deps (not assigned to EuroScope).
+     * Actual assignSid happens only when opening the clearance dialog.
+     */
+    const essaPreferredSids = ref<Map<string, string>>(new Map())
+
+    function getEssaPreferredSid(stripId: string): string | undefined {
+        return essaPreferredSids.value.get(stripId)
+    }
+
+    /** SID shown on strip: preferred preview when uncleared, else assigned/route SID */
+    function displaySidForStrip(strip: FlightStrip): string {
+        if (
+            !strip.clearance &&
+            strip.adep === 'ESSA' &&
+            strip.flightRules !== 'V' &&
+            (strip.stripType === 'departure' || strip.stripType === 'local')
+        ) {
+            const preferred = essaPreferredSids.value.get(strip.id)
+            if (preferred) return preferred
+        }
+        return strip.sid || ''
+    }
+
+    /**
+     * Refresh display-only preferred SIDs (no EuroScope assign).
+     * Cleared strips are left alone / dropped from the preview map.
+     */
+    async function refreshEssaPreferredSids() {
+        if (!essaRolesMode.value) {
+            if (essaPreferredSids.value.size > 0) essaPreferredSids.value = new Map()
+            return
+        }
+        const configId = essaRwyConfigIdResolved.value
+        if (!configId) {
+            if (essaPreferredSids.value.size > 0) essaPreferredSids.value = new Map()
+            return
+        }
+
+        const candidates = [...strips.value.values()].filter(
+            s =>
+                s.adep === 'ESSA' &&
+                s.flightRules !== 'V' &&
+                (s.stripType === 'departure' || s.stripType === 'local') &&
+                !s.clearance &&
+                !!s.runway
+        )
+
+        const next = new Map<string, string>()
+        await Promise.all(
+            candidates.map(async strip => {
+                try {
+                    const params = new URLSearchParams({
+                        airport: strip.adep,
+                        runway: strip.runway!,
+                        config: configId,
+                        slow: strip.isSlow || strip.remarks === 'SLOW' ? '1' : '0',
+                    })
+                    if (strip.route) params.set('route', strip.route)
+                    const res = await fetch(`/api/preferred-sid?${params}`)
+                    if (!res.ok) return
+                    const data = (await res.json()) as { sid: string | null }
+                    if (data.sid) next.set(strip.id, data.sid)
+                } catch {
+                    // ignore per-strip failures
+                }
+            })
+        )
+        essaPreferredSids.value = next
+    }
+
+    // Config change or strip set change → refresh preferred SID previews (display only)
+    watch(essaRwyConfigIdResolved, (next, prev) => {
+        if (!next || next === prev) return
+        void refreshEssaPreferredSids()
+    })
+    let preferredSidRefreshTimer: ReturnType<typeof setTimeout> | null = null
+    watch(stripsVersion, () => {
+        if (!essaRolesMode.value) return
+        if (preferredSidRefreshTimer) clearTimeout(preferredSidRefreshTimer)
+        preferredSidRefreshTimer = setTimeout(() => {
+            preferredSidRefreshTimer = null
+            void refreshEssaPreferredSids()
+        }, 250)
+    })
+
     function deleteStrip(stripId: string) {
         // Optimistically remove from local state
         strips.value.delete(stripId)
@@ -1064,6 +1219,19 @@ export const useEfsStore = defineStore("efs", () => {
         myRole,
         isController,
         multiAirport,
+        essaRolesMode,
+        essaRoles,
+        essaRolesManual,
+        setEssaRoles,
+        essaRwyConfigId,
+        essaRwyConfigManual,
+        essaRwyConfigIdResolved,
+        essaPreferredSids,
+        getEssaPreferredSid,
+        displaySidForStrip,
+        refreshEssaPreferredSids,
+        setEssaRwyConfig,
+        syncEssaRwyConfigFromEs,
         activeAirports,
         esAirports,
         columnAirports,
