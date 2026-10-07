@@ -13,7 +13,21 @@ fi
 
 # Incomplete VS Build Tools installs are not detected by the VS generator;
 # use vcvarsall + NMake so the Win32 MSVC toolchain is available.
-cmd.exe //c "call \"$VCVARS\" x86 && cmake -G \"NMake Makefiles\" -DCMAKE_BUILD_TYPE=Release .. && cmake --build . --config Release"
+# A temp batch file avoids MSYS quoting, which otherwise hands cmd.exe a \"path\".
+WIN_VCVARS=$(cygpath -w "$VCVARS")
+WIN_BUILD=$(cygpath -w "$PWD")
+cat > build-plugin.bat << EOF
+call "${WIN_VCVARS}" x86
+if errorlevel 1 exit /b 1
+cd /d "${WIN_BUILD}"
+set "PATH=C:\\Program Files\\CMake\\bin;%PATH%"
+cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+if errorlevel 1 exit /b 1
+cmake --build . --config Release
+if errorlevel 1 exit /b 1
+EOF
+cmd.exe //c "$(cygpath -w "$PWD/build-plugin.bat")"
+rm -f build-plugin.bat
 
 # make_msi.sh expects Release/VatEFS.dll (VS multi-config layout)
 mkdir -p Release
