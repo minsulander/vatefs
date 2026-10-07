@@ -1022,6 +1022,16 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'viffReadyTobt', stripId })
     }
 
+    /** Set or clear TSAC (communicated TSAT). Empty string clears. */
+    function setTsac(stripId: string, tsac: string) {
+        sendMessage({ type: 'setTsac', stripId, tsac })
+    }
+
+    /** Set or clear CTOC (communicated CTOT). Empty string clears. */
+    function setCtoc(stripId: string, ctoc: string) {
+        sendMessage({ type: 'setCtoc', stripId, ctoc })
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -1347,6 +1357,8 @@ export const useEfsStore = defineStore("efs", () => {
         viffUpdateEobt,
         viffUpdateTobt,
         viffReadyTobt,
+        setTsac,
+        setCtoc,
         availableConfigs,
         activeConfig,
         switchConfig,

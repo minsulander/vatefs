@@ -423,8 +423,14 @@ deleteRules:
     minAltitudeAboveField: 2500
     priority: 100
 
+  # Arrivals only — never departures (PARK at gate must not hide dep strips)
   delete_parked:
-    direction: either
+    direction: arrival
+    groundstates: [PARK]
+    priority: 100
+
+  delete_parked_local:
+    direction: local
     groundstates: [PARK]
     priority: 100
 

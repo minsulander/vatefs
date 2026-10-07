@@ -499,6 +499,8 @@ type OutboundPluginCommand =
     | { type: "setEobt"; callsign: string; eobt: string }
     | { type: "setTobt"; callsign: string; tobt: string; setBy?: "A" | "P" }
     | { type: "setAsrt"; callsign: string; asrt: string }
+    | { type: "setTsac"; callsign: string; tsac: string }
+    | { type: "setCtoc"; callsign: string; ctoc: string }
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -945,6 +947,9 @@ let esRwySelectAirports: string[] = []
 
 /** After connectionType 0, request a plugin refresh on the next myselfUpdate */
 let pendingPluginRefreshAfterReconnect = false
+
+/** First myselfUpdate after backend boot — request a full ES FP/CDM dump (empty store) */
+let pendingColdPluginRefresh = true
 
 /**
  * Drop user-picked airports that are no longer relevant:
@@ -2054,8 +2059,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case "restoreStrip": {
-            const restored = store.restoreDeletedStrip(message.stripId)
-            if (restored) {
+            const result = store.restoreDeletedStrip(message.stripId)
+            if (result) {
+                const { strip: restored, clearedPark } = result
+                // Sync cleared PARK to EuroScope so delete_parked doesn't fire again
+                if (clearedPark) {
+                    sendUdp(JSON.stringify({
+                        type: "setGroundState",
+                        callsign: restored.callsign,
+                        state: "",
+                    } satisfies OutboundPluginCommand))
+                }
                 broadcastStrip(restored)
                 for (const s of store.getStripsForSection(restored.bayId, restored.sectionId, false)) {
                     if (s.id !== restored.id) broadcastStrip(s)
@@ -2064,7 +2078,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     type: "deletedStrips",
                     strips: store.getDeletedStripInfos(),
                 })
-                console.log(`[TRASH] Restored strip ${message.stripId}`)
+                console.log(
+                    `[TRASH] Restored strip ${message.stripId}` +
+                        (clearedPark ? " (cleared PARK)" : "")
+                )
             } else {
                 console.log(`[TRASH] Strip ${message.stripId} not found in trash`)
                 sendMessage(socket, {
@@ -2696,6 +2713,64 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "setTsac": {
+            const tsacStrip = store.getStrip(message.stripId)
+            if (!tsacStrip) break
+            if (tsacStrip.stripType !== "departure") break
+            if (tsacStrip.flightRules !== "I" && tsacStrip.flightRules !== "Y") break
+            if (!staticConfig.isController) break
+            const flight = flightStore.getFlight(tsacStrip.callsign)
+            if (!flight) break
+            const raw = (message.tsac ?? "").trim()
+            const tsac = raw === "" ? "" : raw
+            if (tsac !== "" && !/^\d{4}$/.test(tsac)) {
+                console.log(`[CDM] Invalid TSAC "${message.tsac}" for ${tsacStrip.callsign}`)
+                break
+            }
+            sendUdp(JSON.stringify({
+                type: "setTsac",
+                callsign: tsacStrip.callsign,
+                tsac,
+            } satisfies OutboundPluginCommand))
+            flight.tsac = tsac || undefined
+            const updated = flightStore.regenerateStrip(tsacStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            console.log(`[CDM] TSAC ${tsacStrip.callsign} → ${tsac || "(clear)"}`)
+            break
+        }
+
+        case "setCtoc": {
+            const ctocStrip = store.getStrip(message.stripId)
+            if (!ctocStrip) break
+            if (ctocStrip.stripType !== "departure") break
+            if (ctocStrip.flightRules !== "I" && ctocStrip.flightRules !== "Y") break
+            if (!staticConfig.isController) break
+            const flight = flightStore.getFlight(ctocStrip.callsign)
+            if (!flight) break
+            const raw = (message.ctoc ?? "").trim()
+            const ctoc = raw === "" ? "" : raw
+            if (ctoc !== "" && !/^\d{4}$/.test(ctoc)) {
+                console.log(`[CDM] Invalid CTOC "${message.ctoc}" for ${ctocStrip.callsign}`)
+                break
+            }
+            sendUdp(JSON.stringify({
+                type: "setCtoc",
+                callsign: ctocStrip.callsign,
+                ctoc,
+            } satisfies OutboundPluginCommand))
+            flight.ctoc = ctoc || undefined
+            const updated = flightStore.regenerateStrip(ctocStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            console.log(`[CDM] CTOC ${ctocStrip.callsign} → ${ctoc || "(clear)"}`)
+            break
+        }
+
     }
 }
 
@@ -3212,11 +3287,17 @@ udpIn.on("message", (msg, rinfo) => {
                 )
             }
 
-            // After reconnect, callsign, or AoR frequency change, dump FPs/controllers from the plugin
-            // (client-side refresh skips the plugin refresh request)
-            if (pendingPluginRefreshAfterReconnect || (callsignChanged && previousCallsign) || frequencyChanged) {
+            // After cold start, reconnect, callsign, or AoR frequency change, dump FPs + CDM
+            // from the plugin. ES only pushes clearance/CDM on status changes, not on connect.
+            if (
+                pendingColdPluginRefresh ||
+                pendingPluginRefreshAfterReconnect ||
+                (callsignChanged && previousCallsign) ||
+                frequencyChanged
+            ) {
+                pendingColdPluginRefresh = false
                 pendingPluginRefreshAfterReconnect = false
-                console.log("Requesting plugin refresh after reconnect/callsign/frequency change")
+                console.log("Requesting plugin refresh (cold start / reconnect / callsign / frequency)")
                 sendUdp(JSON.stringify({ type: "refresh" }))
             }
 

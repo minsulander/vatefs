@@ -110,6 +110,8 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "tsat",
     "tobtSetBy",
     "asrt",
+    "tsac",
+    "ctoc",
     "cdmSts",
     "ctot",
     "ctotCancelled",
@@ -913,13 +915,15 @@ class EfsStore {
     /**
      * Restore a soft-deleted strip from the trash.
      * Clears deleted flags and recreates the strip in the rule-chosen (or previous) section.
+     * If the flight was PARK'd (delete_parked), clears PARK so delete rules don't hide it again.
      */
-    restoreDeletedStrip(stripId: string): FlightStrip | undefined {
+    restoreDeletedStrip(stripId: string): { strip: FlightStrip; clearedPark: boolean } | undefined {
         const entry = this.deletedStrips.get(stripId)
         if (!entry) return undefined
         const saved = entry.strip
         this.deletedStrips.delete(stripId)
 
+        let clearedPark = false
         const flight = flightStore.getFlight(saved.callsign)
         if (flight) {
             flight.deleted = false
@@ -927,6 +931,11 @@ class EfsStore {
             flight.deletedByBeyondRange = false
             flight.lastDeleteRule = undefined
             flight.noSectionFound = false
+            // Restoring a PARK'd strip must clear PARK or delete_parked hides it immediately
+            if (flight.groundstate === 'PARK') {
+                flight.groundstate = ''
+                clearedPark = true
+            }
         }
 
         // Prefer current section rules; fall back to where it was deleted from
@@ -967,14 +976,17 @@ class EfsStore {
             }
             this.strips.set(restored.id, restored)
             console.log(`Strip ${stripId} restored from trash → ${sectionId}`)
-            return restored
+            return { strip: restored, clearedPark }
         }
 
         const restored = flightStore.restoreStripToSection(saved.id, flight, bayId, sectionId, 0)
         if (restored) {
             this.strips.set(restored.id, restored)
-            console.log(`Strip ${restored.id} restored from trash → ${sectionId}`)
-            return restored
+            console.log(
+                `Strip ${restored.id} restored from trash → ${sectionId}` +
+                    (clearedPark ? ' (cleared PARK)' : '')
+            )
+            return { strip: restored, clearedPark }
         }
 
         // Fallback: put saved strip back
@@ -987,7 +999,7 @@ class EfsStore {
         }
         this.strips.set(fallback.id, fallback)
         console.log(`Strip ${stripId} restored from trash (snapshot) → ${sectionId}`)
-        return fallback
+        return { strip: fallback, clearedPark }
     }
 
     // Clean up trailing gaps - returns deleted keys

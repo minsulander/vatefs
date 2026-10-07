@@ -479,6 +479,9 @@ class FlightStore {
      * stationary at a stand for AUTO_PARK_DWELL_MS. Sends PARK + release
      * to EuroScope via handler.
      *
+     * Never applies to pure departures (they often sit at a stand with
+     * empty/NSTS — that must not trigger PARK / delete_parked).
+     *
      * Stand detection matches the yellow PARK highlight: live position in a
      * GRP stand polygon (does not rely on flight.stand from pre-movement only).
      */
@@ -493,16 +496,17 @@ class FlightStore {
             return
         }
 
-        // Arrival/local at our airport (PARK action is direction: either)
-        const destOk =
-            !!flight.destination && this.config.myAirports.includes(flight.destination)
-        const originOk =
+        // Destination must be our airport (arrival or local). Pure departures
+        // (origin only) must never Auto PARK — they sit at stands with empty/NSTS.
+        const originIsOurs =
             !!flight.origin && this.config.myAirports.includes(flight.origin)
-        if (!destOk && !originOk) {
+        const destIsOurs =
+            !!flight.destination && this.config.myAirports.includes(flight.destination)
+        if (!destIsOurs) {
             clearDwell()
             return
         }
-        const standAirport = destOk ? flight.destination! : flight.origin!
+        const standAirport = flight.destination!
         if (!hasStandData(standAirport)) {
             clearDwell()
             return
@@ -521,9 +525,16 @@ class FlightStore {
             return
         }
 
-        // PARK strip action is shown for TXIN; also allow ARR/empty briefly after landing
+        // Groundstate: arrivals may briefly have empty/NSTS after landing;
+        // locals only after landing (ARR/TXIN) — not while still at the gate pre-dep.
         const gs = flight.groundstate ?? ''
-        if (gs !== '' && gs !== 'NSTS' && gs !== 'ARR' && gs !== 'TXIN') {
+        const isLocal = originIsOurs && destIsOurs
+        if (isLocal) {
+            if (gs !== 'ARR' && gs !== 'TXIN') {
+                clearDwell()
+                return
+            }
+        } else if (gs !== '' && gs !== 'NSTS' && gs !== 'ARR' && gs !== 'TXIN') {
             clearDwell()
             return
         }
@@ -1182,6 +1193,8 @@ class FlightStore {
         if (flight.tobtSetBy !== undefined) { flight.tobtSetBy = undefined; changed = true }
         if (flight.tobtSetByAt !== undefined) { flight.tobtSetByAt = undefined; changed = true }
         if (flight.asrt !== undefined) { flight.asrt = undefined; changed = true }
+        if (flight.tsac !== undefined) { flight.tsac = undefined; changed = true }
+        if (flight.ctoc !== undefined) { flight.ctoc = undefined; changed = true }
         if (flight.cdmSts !== undefined) { flight.cdmSts = undefined; changed = true }
         if (flight.localCdmTobt !== undefined) { flight.localCdmTobt = undefined; changed = true }
         if (flight.localCdmTsat !== undefined) { flight.localCdmTsat = undefined; changed = true }
@@ -1293,6 +1306,22 @@ class FlightStore {
                 const asrt = entry.asrt === '' ? undefined : this.normalizeCdmHhmm(entry.asrt)
                 if (asrt !== flight.asrt) {
                     flight.asrt = asrt
+                    changed = true
+                }
+            }
+            // TSAC (communicated TSAT) — annotation field 1
+            if (entry.tsac !== undefined) {
+                const tsac = entry.tsac === '' ? undefined : this.normalizeCdmHhmm(entry.tsac)
+                if (tsac !== flight.tsac) {
+                    flight.tsac = tsac
+                    changed = true
+                }
+            }
+            // CTOC (communicated CTOT) — annotation field 8
+            if (entry.ctoc !== undefined) {
+                const ctoc = entry.ctoc === '' ? undefined : this.normalizeCdmHhmm(entry.ctoc)
+                if (ctoc !== flight.ctoc) {
+                    flight.ctoc = ctoc
                     changed = true
                 }
             }
@@ -2210,6 +2239,8 @@ class FlightStore {
             tsat: cdmEligible ? flight.tsat : undefined,
             tobtSetBy: cdmEligible ? flight.tobtSetBy : undefined,
             asrt: cdmEligible ? flight.asrt : undefined,
+            tsac: cdmEligible ? flight.tsac : undefined,
+            ctoc: cdmEligible ? flight.ctoc : undefined,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
             ctot: ifrDeparture ? flight.ctot : undefined,
             ctotCancelled: ifrDeparture && flight.ctotCancelled ? true : undefined,

@@ -50,6 +50,10 @@ export interface FlightStrip {
     tobtSetBy?: 'P' | 'A'      // Who set TOBT: Pilot or ATC (blank if TOBT==EOBT)
     /** Actual Start-up Request Time (HHmm) — CDM annotation ASRT / Ready Startup */
     asrt?: string
+    /** TSAT communicated to pilot (HHmm) — CDM annotation TSAC */
+    tsac?: string
+    /** CTOT communicated to pilot (HHmm) — CDM annotation CTOC */
+    ctoc?: string
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
     /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
     ctotCancelled?: boolean

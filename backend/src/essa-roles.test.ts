@@ -6,9 +6,12 @@
 import assert from "node:assert/strict"
 import { __setGndOwnerChainsForTest } from "./ese-airspace.js"
 import {
+    applyEssaRunwayPairLayout,
+    collectEssaRunwayPairs,
     computeAutoEssaRoles,
     resolveGndRolesFromOwnerCoverage,
 } from "./essa-roles.js"
+import type { EfsLayout } from "@vatefs/common"
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -80,6 +83,53 @@ check("computeAutoEssaRoles GE opens → GW loses GND-E", () => {
         ["ESSA_W_GND", "ESSA_N_GND", "ESSA_E_GND"]
     )
     assert.deepEqual(after, ["GND-W"])
+})
+
+check("ARR-only active pair stays ARR column even if FPL has dep on that strip", () => {
+    const placements = collectEssaRunwayPairs(
+        { ESSA: { arr: ["01R"], dep: ["08"] } },
+        ["ESSA"],
+        { arr: [], dep: ["01R", "19L"] } // FPL wrongly/also assigns ARR strip as dep
+    )
+    const arr = placements.find(p => p.pair.id === "01R_19L")
+    const dep = placements.find(p => p.pair.id === "08_26")
+    assert.ok(arr)
+    assert.ok(dep)
+    assert.equal(arr!.preferDepColumn, false)
+    assert.equal(dep!.preferDepColumn, true)
+})
+
+check("ARR-only header inserts between CTR ARR and TAXI ARR in bay1", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay1",
+                sections: [
+                    { id: "ctr_arr", title: "CTR ARR" },
+                    { id: "arr_runway", title: "RUNWAY" },
+                    { id: "taxi_arr", title: "TAXI ARR" },
+                ],
+            },
+            {
+                id: "bay2",
+                sections: [
+                    { id: "ctr_dep", title: "CTR DEP" },
+                    { id: "dep_runway", title: "RUNWAY" },
+                ],
+            },
+        ],
+    }
+    const placements = collectEssaRunwayPairs(
+        { ESSA: { arr: ["01R"], dep: ["08"] } },
+        ["ESSA"]
+    )
+    const { layout: out, sectionToBay } = applyEssaRunwayPairLayout(layout, placements)
+    const bay1Ids = out.bays.find(b => b.id === "bay1")!.sections.map(s => s.id)
+    const bay2Ids = out.bays.find(b => b.id === "bay2")!.sections.map(s => s.id)
+    assert.deepEqual(bay1Ids, ["ctr_arr", "runway_01R_19L", "taxi_arr"])
+    assert.deepEqual(bay2Ids, ["ctr_dep", "runway_08_26"])
+    assert.equal(sectionToBay.get("runway_01R_19L"), "bay1")
+    assert.equal(sectionToBay.get("runway_08_26"), "bay2")
 })
 
 console.log(`\n${passed} passed`)

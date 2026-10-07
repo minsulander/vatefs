@@ -296,6 +296,22 @@ export interface ViffToggleReadyStartupMessage {
     stripId: string
 }
 
+/** Set or clear TSAC (communicated TSAT) — empty string clears */
+export interface SetTsacMessage {
+    type: 'setTsac'
+    stripId: string
+    /** HHmm to store, or empty to clear */
+    tsac: string
+}
+
+/** Set or clear CTOC (communicated CTOT) — empty string clears */
+export interface SetCtocMessage {
+    type: 'setCtoc'
+    stripId: string
+    /** HHmm to store, or empty to clear */
+    ctoc: string
+}
+
 export interface SetColumnAirportMessage {
     type: 'setColumnAirport'
     columnIndex: number
@@ -330,7 +346,7 @@ export interface SetEssaRolesMessage {
     manual: boolean
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage
 
 // Type guards for message parsing
 
@@ -352,5 +368,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles'
 }

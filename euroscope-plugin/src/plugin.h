@@ -57,6 +57,10 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     bool disabled;
     bool debug;
     std::time_t enabledTime;
+    /** After .efs start: dump all FPs + clearance + CDM (ES does not re-fire on connect) */
+    bool pendingFullRefresh;
+    /** Earliest time to run pendingFullRefresh (+2s after StartBackend for bind) */
+    std::time_t fullRefreshNotBefore;
     void* udpReceiveSocket; // SOCKET (using void* to avoid including winsock2.h in header)
     bool winsockInitialized;
     std::string connectionError;
@@ -83,12 +87,16 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::string GetCdmTobtSetBy(const std::string &callsign);
     /** CDM ASRT / Ready Startup — annotation field 0 (HHMM or empty) */
     std::string GetCdmAsrt(const std::string &callsign);
+    /** CDM TSAC — annotation field 1 (HHMM); TSAT communicated to pilot */
+    std::string GetCdmTsac(const std::string &callsign);
     /** CDM TSAT — annotation field 3 (HHMM); what ES displays, may lead CDM_data_*.txt */
     std::string GetCdmTsat(const std::string &callsign);
+    /** CDM CTOC — annotation field 8 (HHMM); CTOT communicated to pilot */
+    std::string GetCdmCtoc(const std::string &callsign);
     /** Write CDM slash-fields in annotation 0 (e.g. TOBT=2, setBy=9, ASRT=0) */
     bool SetCdmStripFields(const std::string &callsign, const std::map<int, std::string> &fields);
 
-    // Last snapshot of CDM_data_*.txt lines: callsign -> "tobt|tsat|ttot|ctot|reason|setBy"
+    // Last snapshot of CDM_data_*.txt lines: callsign -> "tobt|tsat|ttot|ctot|reason|setBy|asrt|tsac|ctoc"
     std::map<std::string, std::string> lastCdmFileSnapshot;
 
     // Last sent tracking|handoff ownership per callsign (detects ES-initiated assume/transfer/accept)

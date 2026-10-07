@@ -76,6 +76,10 @@ export interface Flight {
     tobtSetByAt?: number
     /** Actual Start-up Request Time (HHmm) — CDM ASRT / Ready Startup */
     asrt?: string
+    /** TSAT communicated to pilot (HHmm) — CDM annotation TSAC */
+    tsac?: string
+    /** CTOT communicated to pilot (HHmm) — CDM annotation CTOC */
+    ctoc?: string
     taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
     ctot?: string                 // Calculated Take Off Time (HHmm)
     /** Had CTOT, now cancelled (cdmSts SLC) — strip shows SCL in CTOT slot */
@@ -284,6 +288,10 @@ export interface CdmLocalFlightUpdate {
     tobtSetBy?: 'P' | 'A' | ''
     /** From CDM strip annotation field 0 (ASRT). Empty string = clear. */
     asrt?: string
+    /** From CDM strip annotation field 1 (TSAC). Empty string = clear. */
+    tsac?: string
+    /** From CDM strip annotation field 8 (CTOC). Empty string = clear. */
+    ctoc?: string
 }
 
 export interface CdmLocalUpdateMessage {

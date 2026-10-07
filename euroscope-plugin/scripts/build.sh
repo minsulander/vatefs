@@ -39,6 +39,9 @@ cp -f VatEFS.dll Release/VatEFS.dll
 # fi
 
 if [ -d "/c/Program Files/VatEFS" ]; then
-    cp -f Release/VatEFS.dll "/c/Program Files/VatEFS/"
-    echo "Copied DLL to /c/Program Files/VatEFS"
+    if cp -f Release/VatEFS.dll "/c/Program Files/VatEFS/" 2>/dev/null; then
+        echo "Copied DLL to /c/Program Files/VatEFS"
+    else
+        echo "Warning: could not copy DLL to /c/Program Files/VatEFS (locked?). Build output is in build/Release/VatEFS.dll"
+    fi
 fi

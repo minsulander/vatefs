@@ -441,35 +441,55 @@ export interface EssaRunwaySectionPlacement {
 /**
  * Collect unique physical runway pairs that need headers:
  * active ARR/DEP from RWY config, plus runways assigned on flight plans.
+ *
+ * Column preference is driven by **active** RWY config so FPL assignments cannot
+ * flip an ARR-only strip into the DEP column (which made RUNWAY headers jump
+ * between bay1 CTR ARR–TAXI ARR and bay2 CTR DEP).
  */
 export function collectEssaRunwayPairs(
     activeRunways: Record<string, { arr: string[]; dep: string[] }> | undefined,
     airports: string[],
     assigned?: { arr: string[]; dep: string[] }
 ): EssaRunwaySectionPlacement[] {
-    type Acc = { pair: EssaPhysicalRwyPair; preferDepColumn: boolean }
+    type Acc = {
+        pair: EssaPhysicalRwyPair
+        inActiveDep: boolean
+        inActiveArr: boolean
+        fromAssignedDep: boolean
+        fromAssignedArr: boolean
+    }
     const byId = new Map<string, Acc>()
 
-    const add = (rwy: string | undefined, asDep: boolean) => {
+    const touch = (
+        rwy: string | undefined,
+        flag: 'inActiveDep' | 'inActiveArr' | 'fromAssignedDep' | 'fromAssignedArr'
+    ) => {
         const pair = essaPhysicalPairForRunway(rwy)
         if (!pair) return
         const existing = byId.get(pair.id)
         if (existing) {
-            if (asDep) existing.preferDepColumn = true
+            existing[flag] = true
             return
         }
-        byId.set(pair.id, { pair, preferDepColumn: asDep })
+        byId.set(pair.id, {
+            pair,
+            inActiveDep: false,
+            inActiveArr: false,
+            fromAssignedDep: false,
+            fromAssignedArr: false,
+            [flag]: true,
+        })
     }
 
     for (const airport of airports) {
         const rwy = activeRunways?.[airport]
         if (!rwy) continue
-        for (const d of rwy.dep) add(d, true)
-        for (const a of rwy.arr) add(a, false)
+        for (const d of rwy.dep) touch(d, 'inActiveDep')
+        for (const a of rwy.arr) touch(a, 'inActiveArr')
     }
     if (assigned) {
-        for (const d of assigned.dep) add(d, true)
-        for (const a of assigned.arr) add(a, false)
+        for (const d of assigned.dep) touch(d, 'fromAssignedDep')
+        for (const a of assigned.arr) touch(a, 'fromAssignedArr')
     }
 
     // Stable order: physical pair table order
@@ -477,11 +497,18 @@ export function collectEssaRunwayPairs(
     for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
         const acc = byId.get(pair.id)
         if (!acc) continue
+        // Active DEP → DEP column; active ARR-only → ARR column (left bay).
+        // FPL-only pairs: dep assignment → DEP, else ARR. Never let FPL dep
+        // override an active-ARR-only strip into the DEP column.
+        let preferDepColumn: boolean
+        if (acc.inActiveDep) preferDepColumn = true
+        else if (acc.inActiveArr) preferDepColumn = false
+        else preferDepColumn = acc.fromAssignedDep
         ordered.push({
             sectionId: essaRunwaySectionId(pair),
             title: formatEssaRunwaySectionTitle(pair),
             pair,
-            preferDepColumn: acc.preferDepColumn,
+            preferDepColumn,
         })
     }
     return ordered
@@ -493,7 +520,9 @@ export function essaRunwayPairsFingerprint(placements: EssaRunwaySectionPlacemen
 
 /**
  * Replace static arr_runway/dep_runway with one header per physical strip in use.
- * Single pair → CTR DEP column. Extra pairs (e.g. second ARR) → CTR ARR column.
+ * Single pair → CTR DEP column. Extra ARR-only pairs → leftmost bay between
+ * CTR ARR and TAXI ARR. Never move ARR-preferred headers into the DEP column
+ * just to fill an empty DEP stack (that caused bay jumping).
  */
 export function applyEssaRunwayPairLayout(
     layout: EfsLayout,
@@ -547,20 +576,19 @@ export function applyEssaRunwayPairLayout(
         }
     }
 
-    // One pair → CTR DEP column. Multiple → dep-associated in DEP column, others in ARR column.
+    // One pair → CTR DEP column. Multiple → dep-associated under CTR DEP;
+    // ARR-only under CTR ARR (between CTR ARR and TAXI ARR in bay1).
     if (placements.length === 1) {
         if (depBayId) insertStack(depBayId, 'ctr_dep', placements)
         else if (arrBayId) insertStack(arrBayId, 'ctr_arr', placements)
     } else {
         const depStack = placements.filter(p => p.preferDepColumn)
         const arrStack = placements.filter(p => !p.preferDepColumn)
-        // Ensure DEP column has at least one header when CTR DEP is visible
-        if (depStack.length === 0 && arrStack.length > 0 && depBayId) {
-            depStack.push(arrStack.shift()!)
-        }
         if (depBayId && depStack.length > 0) insertStack(depBayId, 'ctr_dep', depStack)
         if (arrBayId && arrStack.length > 0) insertStack(arrBayId, 'ctr_arr', arrStack)
-        else if (depBayId && arrStack.length > 0) insertStack(depBayId, depStack[depStack.length - 1]?.sectionId ?? 'ctr_dep', arrStack)
+        else if (depBayId && arrStack.length > 0) {
+            insertStack(depBayId, depStack[depStack.length - 1]?.sectionId ?? 'ctr_dep', arrStack)
+        }
     }
 
     return {

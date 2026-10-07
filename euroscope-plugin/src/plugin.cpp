@@ -45,6 +45,8 @@ VatEFSPlugin::VatEFSPlugin()
 {
     disabled = true; // ... until connected - see OnTimer
     debug = false;
+    pendingFullRefresh = false;
+    fullRefreshNotBefore = 0;
     udpReceiveSocket = nullptr;
     winsockInitialized = false;
     backendProcess = nullptr;
@@ -798,7 +800,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         return true;
     } else if (subcommand == "refresh") {
         Refresh();
-        DisplayMessage("Refreshed all flight plans and radar targets");
+        DisplayMessage("Refreshed all flight plans, clearance/CDM, and radar targets");
         return true;
     } else if (subcommand == "start") {
         backendAutoRestartUsed = false;
@@ -862,6 +864,7 @@ void VatEFSPlugin::OnTimer(int counter)
                    GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_PLAYBACK &&
                    GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX) {
             disabled = true;
+            pendingFullRefresh = false;
             DebugMessage("EFS updates disabled");
             nlohmann::json message = nlohmann::json::object();
             message["type"] = "connectionTypeUpdate";
@@ -879,6 +882,11 @@ void VatEFSPlugin::OnTimer(int counter)
         ReceiveUdpMessages();
 
         if (std::time(NULL) - enabledTime < 10) return;
+        if (pendingFullRefresh && std::time(NULL) >= fullRefreshNotBefore) {
+            pendingFullRefresh = false;
+            DisplayMessage("Dumping flight plans, clearance, and CDM to EFS (after start)");
+            Refresh();
+        }
         if (counter % 5 == 0) UpdateMyself();
         // Ownership (assume / transfer / accept / refuse) often has no ES callback — poll every tick.
         PollOwnershipChanges();
@@ -1035,6 +1043,21 @@ std::string VatEFSPlugin::GetCdmAsrt(const std::string &callsign)
     return "";
 }
 
+std::string VatEFSPlugin::GetCdmTsac(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        // ASRT/TSAC/TOBT/TSAT/... — field 1 = TSAC
+        if (parts.size() <= 1) return "";
+        return NormalizeCdmHhmm(parts[1]);
+    } catch (...) {
+    }
+    return "";
+}
+
 std::string VatEFSPlugin::GetCdmTsat(const std::string &callsign)
 {
     try {
@@ -1045,6 +1068,21 @@ std::string VatEFSPlugin::GetCdmTsat(const std::string &callsign)
         // ASRT/TSAC/TOBT/TSAT/... — field 3 is what EuroScope CDM displays
         if (parts.size() <= 3) return "";
         return NormalizeCdmHhmm(parts[3]);
+    } catch (...) {
+    }
+    return "";
+}
+
+std::string VatEFSPlugin::GetCdmCtoc(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        // .../manualCtot/CTOC/setBy/ — field 8 = CTOC
+        if (parts.size() <= 8) return "";
+        return NormalizeCdmHhmm(parts[8]);
     } catch (...) {
     }
     return "";
@@ -1206,9 +1244,11 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
 
                 std::string reason = fields.size() > 5 ? fields[5] : "";
                 if (reason == "flowRestriction") reason.clear();
-                // TOBT-SET-BY / ASRT / TSAT from CDM strip annotation (ES display source)
+                // TOBT-SET-BY / ASRT / TSAC / TSAT / CTOC from CDM strip annotation
                 std::string setBy = GetCdmTobtSetBy(callsign);
                 std::string asrt = GetCdmAsrt(callsign);
+                std::string tsac = GetCdmTsac(callsign);
+                std::string ctoc = GetCdmCtoc(callsign);
                 // Annotation TSAT leads CDM_data_*.txt (file often has TOBT before TSAT is written)
                 std::string annTsat = GetCdmTsat(callsign);
                 if (!annTsat.empty()) tsat = annTsat;
@@ -1216,14 +1256,16 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
                 // Require at least TOBT or TSAT to accept the row (reject torn numeric junk)
                 if (tobt.empty() && tsat.empty()) continue;
 
-                std::string key = tobt + "|" + tsat + "|" + ttot + "|" + ctot + "|" + reason + "|" + setBy + "|" + asrt;
+                std::string key = tobt + "|" + tsat + "|" + ttot + "|" + ctot + "|" + reason + "|" + setBy + "|" + asrt + "|" + tsac + "|" + ctoc;
                 snapshot[callsign] = key;
                 auto prev = lastCdmFileSnapshot.find(callsign);
                 if (prev != lastCdmFileSnapshot.end() && prev->second == key) continue;
 
                 DebugMessage("cdmLocal " + callsign + " TOBT=" + tobt + " TSAT=" + (tsat.empty() ? "-" : tsat) +
                              " setBy=" + (setBy.empty() ? "-" : setBy) +
-                             " ASRT=" + (asrt.empty() ? "-" : asrt));
+                             " ASRT=" + (asrt.empty() ? "-" : asrt) +
+                             " TSAC=" + (tsac.empty() ? "-" : tsac) +
+                             " CTOC=" + (ctoc.empty() ? "-" : ctoc));
 
                 nlohmann::json f = nlohmann::json::object();
                 f["callsign"] = callsign;
@@ -1236,6 +1278,8 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
                 // Always include so backend can clear when CDM blank (TOBT==EOBT)
                 f["tobtSetBy"] = setBy;
                 f["asrt"] = asrt;
+                f["tsac"] = tsac;
+                f["ctoc"] = ctoc;
                 flights.push_back(f);
             }
         } while (FindNextFileA(hFind, &fd));
@@ -1493,6 +1537,10 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
 
 void VatEFSPlugin::Refresh()
 {
+    // Force a full CDM push — PollCdmDataFiles normally skips unchanged rows, so a
+    // mid-session .efs start would otherwise miss ASRT/TSAC/CTOC/TOBT.
+    lastCdmFileSnapshot.clear();
+
     for (EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid();
          FlightPlan = FlightPlanSelectNext(FlightPlan)) {
         OnFlightPlanFlightPlanDataUpdate(FlightPlan);
@@ -1550,6 +1598,9 @@ void VatEFSPlugin::Refresh()
          Controller = ControllerSelectNext(Controller)) {
         OnControllerPositionUpdate(Controller);
     }
+
+    // Push every CDM row + strip annotation (ASRT/TSAC/CTOC/setBy) now that FPs exist
+    PollCdmDataFiles(true);
 }
 
 void VatEFSPlugin::DebugMessage(const std::string &message, const std::string &sender)
@@ -2151,6 +2202,62 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             PostJson(echo, "setAsrt");
                         }
                     }
+                } else if (message["type"] == "setTsac") {
+                    // TSAC — annotation field 1 (HHMM or empty to clear)
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto tsac = message.contains("tsac") && message["tsac"].is_string()
+                                    ? message["tsac"].get<std::string>()
+                                    : "";
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    std::string digits = NormalizeCdmHhmm(tsac);
+                    if (!tsac.empty() && digits.empty()) {
+                        DisplayMessage("setTsac: Invalid tsac for " + callsign);
+                    } else {
+                        std::map<int, std::string> fields;
+                        fields[1] = digits;
+                        if (!SetCdmStripFields(callsign, fields)) {
+                            DisplayMessage("setTsac: Failed for " + callsign);
+                        } else {
+                            DebugMessage("setTsac: " + callsign + " -> " + (digits.empty() ? "(clear)" : digits));
+                            lastCdmFileSnapshot.erase(callsign);
+                            nlohmann::json f = nlohmann::json::object();
+                            f["callsign"] = callsign;
+                            f["tsac"] = digits;
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "cdmLocalUpdate";
+                            echo["flights"] = nlohmann::json::array({f});
+                            PostJson(echo, "setTsac");
+                        }
+                    }
+                } else if (message["type"] == "setCtoc") {
+                    // CTOC — annotation field 8 (HHMM or empty to clear)
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto ctoc = message.contains("ctoc") && message["ctoc"].is_string()
+                                    ? message["ctoc"].get<std::string>()
+                                    : "";
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    std::string digits = NormalizeCdmHhmm(ctoc);
+                    if (!ctoc.empty() && digits.empty()) {
+                        DisplayMessage("setCtoc: Invalid ctoc for " + callsign);
+                    } else {
+                        std::map<int, std::string> fields;
+                        fields[8] = digits;
+                        if (!SetCdmStripFields(callsign, fields)) {
+                            DisplayMessage("setCtoc: Failed for " + callsign);
+                        } else {
+                            DebugMessage("setCtoc: " + callsign + " -> " + (digits.empty() ? "(clear)" : digits));
+                            lastCdmFileSnapshot.erase(callsign);
+                            nlohmann::json f = nlohmann::json::object();
+                            f["callsign"] = callsign;
+                            f["ctoc"] = digits;
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "cdmLocalUpdate";
+                            echo["flights"] = nlohmann::json::array({f});
+                            PostJson(echo, "setCtoc");
+                        }
+                    }
                 } else if (message["type"] == "setTobt") {
                     // ES-first: write CDM annotation (TOBT/setBy), echo to EFS immediately.
                     // CDM master / backend then syncs vIFF — avoids ES↔EFS desync.
@@ -2742,6 +2849,11 @@ void VatEFSPlugin::StartBackend()
 
     CloseHandle(pi.hThread);
     backendProcess = pi.hProcess;
+
+    // Backend is empty; ES will not re-fire status changes for aircraft already online.
+    // Dump FPs + clearance + CDM shortly after bind (and after the 10s settle if needed).
+    pendingFullRefresh = true;
+    fullRefreshNotBefore = std::time(NULL) + 2;
 
     std::string startMsg = "Backend started, logging to " + logPath;
     std::string localIp = GetLocalIpAddress();

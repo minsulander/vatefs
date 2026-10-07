@@ -475,9 +475,15 @@ deleteRules:
     minAltitudeAboveField: 2500
     priority: 100
 
-  # Arrivals/local: Delete when parked
+  # Arrivals: Delete when parked (never departures — PARK at gate is invalid for dep)
   delete_parked:
-    direction: either
+    direction: arrival
+    groundstates: [PARK]
+    priority: 100
+
+  # Locals: Delete when parked after taxi-in
+  delete_parked_local:
+    direction: local
     groundstates: [PARK]
     priority: 100
 

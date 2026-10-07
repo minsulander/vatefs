@@ -58,7 +58,19 @@
     </v-list>
   </v-menu>
 
-  <!-- CTOT menu (reason + REA) -->
+  <!-- TSAC menu (within TSAT window) -->
+  <v-menu v-model="tsacMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+    <v-list density="compact" class="strip-context-menu ctot-menu">
+      <v-list-item @click="onEditTsacMenuClick">
+        <v-list-item-title>Edit TSAC</v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="canClearTsac" @click="onRemoveTsacMenuClick">
+        <v-list-item-title>Remove TSAC</v-list-item-title>
+      </v-list-item>
+    </v-list>
+  </v-menu>
+
+  <!-- CTOT menu (reason + CTOC + REA) -->
   <v-menu v-model="ctotMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu ctot-menu">
       <v-list-item class="ctot-reason-item" disabled>
@@ -66,7 +78,13 @@
           {{ strip.ctotReason || 'No regulation reason' }}
         </v-list-item-title>
       </v-list-item>
-      <v-divider v-if="canSendRea || canClearRea" />
+      <v-divider v-if="canEditCtoc || canClearCtoc || canSendRea || canClearRea" />
+      <v-list-item v-if="canEditCtoc" @click="onSetCtocMenuClick">
+        <v-list-item-title>Set CTOC</v-list-item-title>
+      </v-list-item>
+      <v-list-item v-if="canClearCtoc" @click="onClearCtocMenuClick">
+        <v-list-item-title>Remove CTOC</v-list-item-title>
+      </v-list-item>
       <v-list-item v-if="canSendRea" @click="onSendReaClick">
         <v-list-item-title>Set REA</v-list-item-title>
       </v-list-item>
@@ -203,7 +221,7 @@
           <template v-else-if="timeEditing">
             <div
               class="time-edit-panel"
-              :class="{ 'time-edit-tobt': timeEditMode === 'tobt' }"
+              :class="{ 'time-edit-tobt': timeEditMode === 'tobt' || timeEditMode === 'tsac' }"
             >
               <div class="time-edit-half time-edit-top">
                 <input
@@ -233,7 +251,7 @@
                 >READY TOBT</button>
               </div>
               <div v-else class="time-edit-half time-edit-bottom">
-                <div class="time-label">EOBT</div>
+                <div class="time-label">{{ timeEditMode === 'tsac' ? 'TSAC' : 'EOBT' }}</div>
               </div>
             </div>
           </template>
@@ -269,13 +287,23 @@
               <div
                 v-if="showCdm"
                 class="time-col tsat-col"
-                title="TSAT"
+                :class="{ 'cdm-comm-clickable': canEditTsac }"
+                :title="showTsacCtoc ? tsacTooltip : 'TSAT'"
+                @click.stop="onTsacClick($event)"
+                @contextmenu.prevent.stop="onTsacClear"
               >
                 <div
                   class="time-value"
                   :class="[tsatColorClass, { 'time-changed': tsatChanged }]"
                 >{{ displayTsat }}</div>
-                <div class="time-label">TSAT</div>
+                <div
+                  v-if="showTsacCtoc"
+                  class="time-label-row"
+                >
+                  <span class="time-label">TSAT</span>
+                  <span class="cdm-comm-box" :class="tsacBoxClass" aria-hidden="true" />
+                </div>
+                <div v-else class="time-label">TSAT</div>
               </div>
               <div
                 v-if="showCtot"
@@ -295,7 +323,20 @@
                   class="time-value time-ctot"
                   :class="{ 'time-changed': ctotChanged, 'time-ctot-cancelled': showCtotCancelled }"
                 >{{ showCtotCancelled ? 'SCL' : strip.ctot }}</div>
-                <div v-if="!showCtotCancelled" class="time-label time-label-ctot">CTOT</div>
+                <div
+                  v-if="!showCtotCancelled && showTsacCtoc"
+                  class="time-label-row"
+                  :title="ctocTooltip"
+                >
+                  <span class="time-label time-label-ctot">CTOT</span>
+                  <span
+                    v-if="ctocDeltaText != null"
+                    class="cdm-ctoc-delta"
+                    :class="{ 'cdm-ctoc-delta-nonzero': ctocDeltaMinutes !== 0 }"
+                  >{{ ctocDeltaText }}</span>
+                  <span v-else class="cdm-comm-box cdm-comm-empty" aria-hidden="true" />
+                </div>
+                <div v-else-if="!showCtotCancelled" class="time-label time-label-ctot">CTOT</div>
               </div>
             </div>
           </template>
@@ -448,6 +489,7 @@ const menuPosition = ref<[number, number]>([0, 0])
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
 const ctotMenuOpen = ref(false)
+const tsacMenuOpen = ref(false)
 const reaMenuOpen = ref(false)
 
 // Ground state options: code (shown in menu), label, action (sent to backend), groundstate (for highlighting current)
@@ -746,8 +788,19 @@ const stripStyle = computed(() => {
 const CDM_AIRPORTS = new Set(['ESSA'])
 /** Single-airport CDM ground sections */
 const CDM_SECTIONS_EXACT = new Set(['pending_dep', 'cleared', 'push_start'])
-/** Taxi and later — hide EOBT when a CTOT is present */
-const TAXI_ONWARD_SECTIONS = new Set(['taxi', 'runway', 'dep_runway', 'arr_runway', 'ctr_dep', 'rwy'])
+/** TSAC/CTOC clickspots: CD ALL + TSAT only (not PUSH&START) */
+const TSAC_CTOC_SECTIONS = new Set(['pending_dep', 'cleared'])
+/** Taxi and later — no EOBT/TOBT; CTOT only when regulated (incl. ESSA taxi_dep) */
+const TAXI_ONWARD_SECTIONS = new Set([
+  'taxi',
+  'taxi_dep',
+  'taxi_arr',
+  'runway',
+  'dep_runway',
+  'arr_runway',
+  'ctr_dep',
+  'rwy',
+])
 
 /** Ground clearance sections where TOBT/TSAT apply (not CTR DEP). */
 function isCdmGroundSection(sectionId: string): boolean {
@@ -776,20 +829,40 @@ const showCdm = computed(() =>
   !props.strip.clearedForTakeoff
 )
 
-/** CTOT (or SCL after slot cancel) for ground IFR departures */
+/** CTR DEP (and multi-airport * _ctr_dep): no CTOT on the strip */
+function isCtrDepSection(sectionId: string): boolean {
+  if (sectionId === 'ctr_dep') return true
+  return sectionId.endsWith('_ctr_dep') || sectionIdMatches(sectionId, new Set(['ctr_dep']))
+}
+
+/** CTOT (or SCL after slot cancel) for ground IFR departures — not CTR DEP */
 const showCtotCancelled = computed(() =>
-  isDepartingIfr.value && !!props.strip.ctotCancelled && !props.strip.ctot && !props.strip.clearedForTakeoff
+  isDepartingIfr.value &&
+  !isCtrDepSection(props.strip.sectionId) &&
+  !!props.strip.ctotCancelled &&
+  !props.strip.ctot &&
+  !props.strip.clearedForTakeoff
 )
 const showCtot = computed(() =>
   isDepartingIfr.value &&
+  !isCtrDepSection(props.strip.sectionId) &&
   !props.strip.clearedForTakeoff &&
   (!!props.strip.ctot || showCtotCancelled.value)
 )
 
-/** Hide EOBT on taxi+ when CTOT is shown (CDM primary times already gated by showCdm) */
-const showPrimaryTime = computed(() =>
-  !(showCtot.value && sectionIdMatches(props.strip.sectionId, TAXI_ONWARD_SECTIONS))
-)
+/**
+ * Taxi DEP / runway / CTR DEP onward: never show EOBT/TOBT (CTOT alone if regulated).
+ * Arrivals keep ETA on taxi_arr / inbound.
+ */
+const showPrimaryTime = computed(() => {
+  if (!sectionIdMatches(props.strip.sectionId, TAXI_ONWARD_SECTIONS)) return true
+  // Departures/local: no EOBT from taxi onward (CTOT shown separately)
+  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
+    return false
+  }
+  // Arrivals: keep ETA unless CTOT somehow applies (it shouldn't for arr)
+  return !(showCtot.value)
+})
 
 /**
  * Parse vIFF/CDM network status for strip UI.
@@ -989,6 +1062,162 @@ function normalizeHhmmDisplay(hhmm: string | undefined): string {
 
 const displayTsat = computed(() => normalizeHhmmDisplay(props.strip.tsat))
 
+/** Absolute minute delta between two HHmm values (0–720, circular UTC). */
+function hhmmAbsDeltaMinutes(a: string | undefined, b: string | undefined): number | null {
+  const am = hhmmToMinutes(a)
+  const bm = hhmmToMinutes(b)
+  if (am == null || bm == null) return null
+  let d = Math.abs(am - bm)
+  if (d > 12 * 60) d = 24 * 60 - d
+  return d
+}
+
+/** TSAC/CTOC UI only in CD ALL (pending_dep) and TSAT (cleared) — not push_start */
+const showTsacCtoc = computed(() =>
+  sectionIdMatches(props.strip.sectionId, TSAC_CTOC_SECTIONS)
+)
+
+const canEditTsac = computed(() =>
+  store.isController && showTsacCtoc.value && showCdm.value && !!displayTsat.value
+)
+
+const canClearTsac = computed(() =>
+  store.isController && showTsacCtoc.value && !!props.strip.tsac
+)
+
+/** TSAC set and within ±5 min of live TSAT — green box; menu on click */
+const isTsacGreen = computed(() => {
+  const tsac = normalizeHhmmDisplay(props.strip.tsac)
+  if (!tsac) return false
+  const delta = hhmmAbsDeltaMinutes(displayTsat.value, tsac)
+  return delta != null && delta <= 5
+})
+
+const canEditCtoc = computed(() =>
+  store.isController &&
+  showTsacCtoc.value &&
+  showCtot.value &&
+  !showCtotCancelled.value &&
+  !!props.strip.ctot
+)
+
+const canClearCtoc = computed(() =>
+  store.isController &&
+  showTsacCtoc.value &&
+  showCtot.value &&
+  !showCtotCancelled.value &&
+  !!props.strip.ctoc
+)
+
+/** empty | green (match) | yellow (diverged) */
+const tsacBoxClass = computed(() => {
+  const tsac = normalizeHhmmDisplay(props.strip.tsac)
+  if (!tsac) return { 'cdm-comm-empty': true }
+  const delta = hhmmAbsDeltaMinutes(displayTsat.value, tsac)
+  if (delta != null && delta <= 5) return { 'cdm-comm-green': true }
+  return { 'cdm-comm-yellow': true }
+})
+
+/** Signed CTOT − CTOC minutes (circular UTC), or null if no CTOC. */
+const ctocDeltaMinutes = computed((): number | null => {
+  const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
+  if (!ctoc) return null
+  const ctot = normalizeHhmmDisplay(props.strip.ctot)
+  if (!ctot) return null
+  const ctotM = hhmmToMinutes(ctot)
+  const ctocM = hhmmToMinutes(ctoc)
+  if (ctotM == null || ctocM == null) return null
+  let signed = ctotM - ctocM
+  if (signed > 12 * 60) signed -= 24 * 60
+  if (signed < -12 * 60) signed += 24 * 60
+  return signed
+})
+
+/** e.g. "+4", "-3", "0" when CTOC set; null → empty checkbox */
+const ctocDeltaText = computed((): string | null => {
+  const d = ctocDeltaMinutes.value
+  if (d == null) {
+    // CTOC set but no live CTOT (e.g. SCL) — still show that CTOC exists
+    const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
+    return ctoc ? 'X' : null
+  }
+  return d > 0 ? `+${d}` : `${d}`
+})
+
+const tsacTooltip = computed(() => {
+  const tsac = normalizeHhmmDisplay(props.strip.tsac)
+  if (isTsacGreen.value) return `TSAC ${tsac} — options`
+  if (tsac) return `TSAC ${tsac} — click to update`
+  if (canEditTsac.value) return 'Set TSAC (communicated TSAT)'
+  return 'TSAT'
+})
+
+const ctocTooltip = computed(() => {
+  const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
+  if (ctoc) {
+    const d = ctocDeltaMinutes.value
+    if (d != null) {
+      const sign = d > 0 ? '+' : ''
+      return `CTOC ${ctoc} (${sign}${d})`
+    }
+    return `CTOC ${ctoc}`
+  }
+  if (canEditCtoc.value) return 'Set CTOC (communicated CTOT)'
+  return props.strip.ctotReason || 'CTOT'
+})
+
+function onTsacClick(event?: MouseEvent) {
+  if (!canEditTsac.value) return
+  const tsat = displayTsat.value
+  if (!tsat) return
+  // Green TSAC box: Edit / Remove menu. Yellow or empty: set/update to live TSAT.
+  if (isTsacGreen.value) {
+    if (event) menuPosition.value = [event.clientX, event.clientY]
+    menuOpen.value = false
+    ctotMenuOpen.value = false
+    reaMenuOpen.value = false
+    transferMenuOpen.value = false
+    groundStateMenuOpen.value = false
+    tsacMenuOpen.value = true
+    return
+  }
+  store.setTsac(props.strip.id, tsat)
+}
+
+function onTsacClear() {
+  if (!canClearTsac.value) return
+  store.setTsac(props.strip.id, '')
+}
+
+function onEditTsacMenuClick() {
+  tsacMenuOpen.value = false
+  if (!canEditTsac.value) return
+  timeEditMode.value = 'tsac'
+  timeEditText.value = normalizeHhmmDisplay(props.strip.tsac) || displayTsat.value || ''
+  timeEditing.value = true
+  nextTick(() => timeEditInput.value?.focus())
+}
+
+function onRemoveTsacMenuClick() {
+  tsacMenuOpen.value = false
+  if (!canClearTsac.value) return
+  store.setTsac(props.strip.id, '')
+}
+
+function onSetCtocMenuClick() {
+  ctotMenuOpen.value = false
+  if (!canEditCtoc.value) return
+  const ctot = normalizeHhmmDisplay(props.strip.ctot)
+  if (!ctot) return
+  store.setCtoc(props.strip.id, ctot)
+}
+
+function onClearCtocMenuClick() {
+  ctotMenuOpen.value = false
+  if (!canClearCtoc.value) return
+  store.setCtoc(props.strip.id, '')
+}
+
 // Non-immediate: flash only on real HHMM→HHMM changes.
 // Ignore appear/clear during strip refresh (e.g. REA remove + vIFF poll).
 // ATC-set TOBT (setBy A) — no highlight; still flash for pilot (P).
@@ -1055,7 +1284,7 @@ const tsatColorClass = computed(() => {
 })
 
 const timeEditing = ref(false)
-const timeEditMode = ref<'eobt' | 'tobt'>('eobt')
+const timeEditMode = ref<'eobt' | 'tobt' | 'tsac'>('eobt')
 const timeEditText = ref('')
 const timeEditInput = ref<HTMLInputElement | null>(null)
 
@@ -1095,6 +1324,10 @@ function onTimeEditBlur() {
     if (value !== (props.strip.tobt || props.strip.eobt || '')) {
       store.viffUpdateTobt(props.strip.id, value)
     }
+  } else if (mode === 'tsac') {
+    if (value !== normalizeHhmmDisplay(props.strip.tsac)) {
+      store.setTsac(props.strip.id, value)
+    }
   } else if (value !== props.strip.eobt) {
     store.viffUpdateEobt(props.strip.id, value)
   }
@@ -1107,6 +1340,7 @@ function onCtotClick(event: MouseEvent) {
   transferMenuOpen.value = false
   groundStateMenuOpen.value = false
   reaMenuOpen.value = false
+  tsacMenuOpen.value = false
   ctotMenuOpen.value = true
 }
 
@@ -1552,6 +1786,7 @@ function onStripClick() {
 function onContextMenu(event: MouseEvent) {
   menuPosition.value = [event.clientX, event.clientY]
   ctotMenuOpen.value = false
+  tsacMenuOpen.value = false
   reaMenuOpen.value = false
   menuOpen.value = true
 }
@@ -1559,6 +1794,7 @@ function onContextMenu(event: MouseEvent) {
 function onCallsignClick(event: MouseEvent) {
   menuPosition.value = [event.clientX, event.clientY]
   ctotMenuOpen.value = false
+  tsacMenuOpen.value = false
   reaMenuOpen.value = false
   menuOpen.value = true
 }
@@ -1568,6 +1804,7 @@ function onCallsignTouch(event: TouchEvent) {
   if (touch) {
     menuPosition.value = [touch.clientX, touch.clientY]
     ctotMenuOpen.value = false
+    tsacMenuOpen.value = false
     reaMenuOpen.value = false
     menuOpen.value = true
   }
@@ -1930,24 +2167,25 @@ function onGroundStateClick(action: string) {
 }
 
 .strip-time.has-ctot {
-  width: 58px;
-  min-width: 58px;
+  width: 70px;
+  min-width: 70px;
 }
 
 .strip-time.has-cdm {
-  width: 58px;
-  min-width: 58px;
+  width: 70px;
+  min-width: 70px;
 }
 
 .strip-time.has-cdm.has-ctot {
-  width: 88px;
-  min-width: 88px;
+  width: 110px;
+  min-width: 110px;
 }
 
 .time-pair {
   display: flex;
   flex-direction: row;
   gap: 4px;
+  /* Bottom-align columns; REA above CTOT extends upward without stretching TOBT/TSAT */
   align-items: flex-end;
   justify-content: center;
 }
@@ -1970,6 +2208,57 @@ function onGroundStateClick(action: string) {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   white-space: nowrap;
+  line-height: 1;
+}
+
+/* Center the whole "TSAT □" / "CTOT +4" group under the HHMM (same height as plain label) */
+.time-label-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1;
+}
+
+.cdm-ctoc-delta {
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  color: #888;
+  white-space: nowrap;
+}
+
+.cdm-ctoc-delta.cdm-ctoc-delta-nonzero {
+  color: #d4a017;
+}
+
+.cdm-comm-clickable {
+  cursor: pointer;
+}
+
+.cdm-comm-box {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border: 1px solid #888;
+  background: transparent;
+}
+
+.cdm-comm-box.cdm-comm-empty {
+  border-color: #888;
+  background: transparent;
+}
+
+.cdm-comm-box.cdm-comm-green {
+  border-color: #00c000;
+  background: #00c000;
+}
+
+.cdm-comm-box.cdm-comm-yellow {
+  border-color: #d4a017;
+  background: #d4a017;
 }
 
 .tobt-setby {

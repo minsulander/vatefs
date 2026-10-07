@@ -3,7 +3,8 @@
 # Same dual-runway routing rules as dualrwy4bays.yml; titles follow SAAB EFS naming.
 # RUNWAY headers are physical strips (RUNWAY 01L/19R, RUNWAY 01R/19L, RUNWAY 08/26) —
 # no ARR/DEP text. One header per strip in use (active RWY and/or FPL-assigned). A
-# single strip sits under CTR DEP; additional strips get a header under CTR ARR.
+# single strip sits under CTR DEP; ARR-only strips sit in bay1 between CTR ARR and
+# TAXI ARR. Active RWY config owns column preference (FPL assignments do not flip it).
 
 name: ESSA
 layoutMode: essaRoles

@@ -137,6 +137,14 @@
               <span class="fpl-label">ASRT</span>
               <span class="fpl-val">{{ flight.asrt }}</span>
             </div>
+            <div v-if="flight.tsac" class="fpl-field">
+              <span class="fpl-label">TSAC</span>
+              <span class="fpl-val">{{ flight.tsac }}</span>
+            </div>
+            <div v-if="flight.ctoc" class="fpl-field">
+              <span class="fpl-label">CTOC</span>
+              <span class="fpl-val">{{ flight.ctoc }}</span>
+            </div>
             <div v-if="flight.cdmSts" class="fpl-field">
               <span class="fpl-label">STS</span>
               <span class="fpl-val">{{ flight.cdmSts }}</span>
@@ -191,7 +199,7 @@ const flightRulesLabel = computed(() => {
 const hasCdmTimes = computed(() => {
   const f = flight.value
   if (!f) return false
-  return !!(f.tobt || f.tsat || f.ctot || f.asrt || f.cdmSts)
+  return !!(f.tobt || f.tsat || f.ctot || f.asrt || f.tsac || f.ctoc || f.cdmSts)
 })
 
 function formatFL(feet: number | undefined | null): string {
