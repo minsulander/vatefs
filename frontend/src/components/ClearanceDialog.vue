@@ -198,9 +198,10 @@ function isSlowForClr(): boolean {
   return !!props.strip.isSlow || props.strip.remarks === 'SLOW'
 }
 
-function isEssaIfrDep(): boolean {
+function isPreferredSidIfrDep(): boolean {
+  const adep = props.strip.adep
   return (
-    props.strip.adep === 'ESSA' &&
+    (adep === 'ESSA' || adep === 'ESMS') &&
     props.strip.flightRules !== 'V' &&
     (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
   )
@@ -241,32 +242,31 @@ async function fetchSids() {
 }
 
 /**
- * ESSA config-aware preferred SID (or SLOW track/HAPZI).
- * Reassigns when uncleared (clearance flag not set), so RWY config changes
- * (e.g. 08-LT → 08-RT) update L/R letter groups. Leaves cleared strips alone.
+ * Preferred SID: ESSA (config + SLOW) or ESMS (K/L, or G/H when EKCH RWY 30 active in ES).
+ * Reassigns when uncleared so runway/config changes update the letter group.
  */
 async function applyPreferredSid() {
   preferredSidSortGroup.value = []
   preferredSidMatched.value = null
 
-  if (!isEssaIfrDep()) return
+  if (!isPreferredSidIfrDep()) return
 
   const airport = props.strip.adep
   const runway = props.strip.runway
-  const configId = store.essaRwyConfigIdResolved
-  if (!airport || !runway || !configId) return
+  if (!airport || !runway) return
+
+  if (airport === 'ESSA' && !store.essaRwyConfigIdResolved) return
 
   // Already cleared — keep assigned SID
   const mayReassign =
     !props.strip.clearance && !!props.strip.canEditClearance
 
   try {
-    const params = new URLSearchParams({
-      airport,
-      runway,
-      config: configId,
-      slow: isSlowForClr() ? '1' : '0',
-    })
+    const params = new URLSearchParams({ airport, runway })
+    if (airport === 'ESSA') {
+      params.set('config', store.essaRwyConfigIdResolved!)
+      params.set('slow', isSlowForClr() ? '1' : '0')
+    }
     if (props.strip.route) params.set('route', props.strip.route)
 
     const res = await fetch(`/api/preferred-sid?${params}`)

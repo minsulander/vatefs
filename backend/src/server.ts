@@ -69,6 +69,7 @@ import {
     setForceIdealAppDepFrequency,
 } from "./essa-next-si.js"
 import { loadEssaSidPrefs, resolvePreferredSid, resolveMapDelivery } from "./essa-sid-prefs.js"
+import { resolveEsmsPreferredSid, isEkchRwy30Active } from "./esms-sid.js"
 import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
 import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
@@ -2839,17 +2840,33 @@ app.get("/api/sidalt", (req, res) => {
 })
 
 /**
- * ESSA preferred SID for active runway config (+ SLOW track/HAPZI when slow=1).
- * Query: airport, runway, config, route?, slow=0|1
+ * Preferred SID:
+ * - ESSA: config-aware (+ SLOW track/HAPZI when slow=1). Query: airport, runway, config, route?, slow=
+ * - ESMS: LOA K/L (or G/H when EKCH RWY 30 active in ES). Query: airport, runway, route?
  */
 app.get("/api/preferred-sid", (req, res) => {
-    const airport = req.query.airport as string
+    const airport = ((req.query.airport as string) || "").toUpperCase()
     const runway = req.query.runway as string
     const configId = req.query.config as string
     const route = (req.query.route as string) || undefined
     const slow = req.query.slow === "1" || req.query.slow === "true"
 
-    if (!airport || !runway || !configId) {
+    if (!airport || !runway) {
+        res.status(400).json({
+            error: "Missing parameters",
+            usage: "/api/preferred-sid?airport=ESSA&runway=19L&config=9A&route=DCT%20RESNA&slow=0",
+        })
+        return
+    }
+
+    if (airport === "ESMS") {
+        const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
+        const result = resolveEsmsPreferredSid({ runway, route, ekch30 })
+        res.json({ ...result, ekch30 })
+        return
+    }
+
+    if (!configId) {
         res.status(400).json({
             error: "Missing parameters",
             usage: "/api/preferred-sid?airport=ESSA&runway=19L&config=9A&route=DCT%20RESNA&slow=0",

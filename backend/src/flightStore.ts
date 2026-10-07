@@ -13,12 +13,12 @@ import { flightHasRequiredData } from "./types.js"
 import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign, getControllerCallsign, parseControllerRole } from "./config.js"
 import {
     formatEsggAppSi,
-    formatEsggDisplaySi,
     resolveEsggDepApp,
     resolveEsggMisapApp,
 } from "./esgg-app.js"
+import { exclusiveCustomSiAirportFromConfig, formatCustomDisplaySi } from "./display-si.js"
 import type { EfsStaticConfig } from "./config.js"
-import { formatEssaDisplaySi, isEssaRolesConfig, ALL_GND_POSITIONS } from "./essa-roles.js"
+import { isEssaRolesConfig, ALL_GND_POSITIONS } from "./essa-roles.js"
 import {
     resolveEssaNextSi,
     recordFlightMovement,
@@ -1830,19 +1830,10 @@ class FlightStore {
         const rawTransferSi = hasHandoff
             ? (flight.handoffTargetControllerId || getControllerPositionId(handoffTarget) || undefined)
             : undefined
-        const isEsggAirport = this.config.myAirports.some((a) => a.toUpperCase() === "ESGG")
-        // ESSA: SAD→CD, AGE/AGN/AGW→GE/GN/GW
-        // ESGG: DEL/GND/TWR + APP→E|W
-        const ownerSi = isEssaRolesConfig(this.config)
-            ? formatEssaDisplaySi(rawOwnerSi)
-            : isEsggAirport
-              ? formatEsggDisplaySi(rawOwnerSi, flight.controller) ?? rawOwnerSi
-              : rawOwnerSi
-        const transferSi = isEssaRolesConfig(this.config)
-            ? formatEssaDisplaySi(rawTransferSi)
-            : isEsggAirport
-              ? formatEsggDisplaySi(rawTransferSi, handoffTarget) ?? rawTransferSi
-              : rawTransferSi
+        // Custom SI (ESSA / ESGG / ESMS) only when exactly one of those airports is active
+        const exclusiveSi = exclusiveCustomSiAirportFromConfig(this.config)
+        const ownerSi = formatCustomDisplaySi(exclusiveSi, rawOwnerSi, flight.controller)
+        const transferSi = formatCustomDisplaySi(exclusiveSi, rawTransferSi, handoffTarget)
         const formatFreq = (mhz: number | undefined) =>
             mhz != null && mhz > 0 && mhz < 199 ? mhz.toFixed(3) : undefined
         const ownerFrequency = !isUntracked ? formatFreq(getFrequencyForCallsign(flight.controller)) : undefined
@@ -1917,7 +1908,11 @@ class FlightStore {
 
         if (essaNext?.callsign) {
             nextSiCallsign = essaNext.callsign
-            nextSi = essaNext.displaySi || essaNext.si
+            // Custom ESSA SI labels (CD/GE…) only when ESSA is the sole custom-SI airport
+            nextSi =
+                exclusiveSi === "ESSA"
+                    ? essaNext.displaySi || essaNext.si
+                    : essaNext.si
             if (essaNext.frequency != null && essaNext.frequency > 0 && essaNext.frequency < 199) {
                 xferFrequency = essaNext.frequency.toFixed(3)
             }
@@ -2013,11 +2008,12 @@ class FlightStore {
                   : undefined
             if (app) {
                 nextSiCallsign = app.callsign
-                nextSi = formatEsggAppSi(
-                    app.callsign,
-                    app.side,
-                    getControllerPositionId(app.callsign)
-                )
+                const appPosId = getControllerPositionId(app.callsign)
+                // Custom APP letter (A/W) only when ESGG is the sole custom-SI airport
+                nextSi =
+                    exclusiveSi === "ESGG"
+                        ? formatEsggAppSi(app.callsign, app.side, appPosId)
+                        : appPosId || app.side
                 if (primaryAction === 'XFER') {
                     xferFrequency = app.frequency.toFixed(3)
                 }
@@ -2073,21 +2069,13 @@ class FlightStore {
         if (pendingRofFrom) {
             rofRequestCallsign = pendingRofFrom
             const rawRofSi = getControllerPositionId(pendingRofFrom)
-            rofRequestSi = isEssaRolesConfig(this.config)
-                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
-                : isEsggAirport
-                  ? formatEsggDisplaySi(rawRofSi, pendingRofFrom) || rawRofSi
-                  : rawRofSi
+            rofRequestSi = formatCustomDisplaySi(exclusiveSi, rawRofSi, pendingRofFrom)
             rofRequestFrequency = xferFrequency
             rofFlashUntil = flight.rofFlashUntil
         } else if (!isTrackedByMe && this.isRofCoolingDown(flight.callsign) && this.config.myCallsign) {
             rofRequestCallsign = this.config.myCallsign
             const rawRofSi = getControllerPositionId(this.config.myCallsign) || this.config.myPositionId
-            rofRequestSi = isEssaRolesConfig(this.config)
-                ? formatEssaDisplaySi(rawRofSi) || rawRofSi
-                : isEsggAirport
-                  ? formatEsggDisplaySi(rawRofSi, this.config.myCallsign) || rawRofSi
-                  : rawRofSi
+            rofRequestSi = formatCustomDisplaySi(exclusiveSi, rawRofSi, this.config.myCallsign)
             const myFreq = this.config.myFrequency
             if (myFreq != null && myFreq > 0 && myFreq < 199) {
                 rofRequestFrequency = myFreq.toFixed(3)
