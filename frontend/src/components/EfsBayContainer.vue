@@ -148,7 +148,7 @@ function onContainerClick() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: calc(4px * var(--efs-scale, 1));
   background: rgba(8, 10, 12, 0.35);
   opacity: 0;
   transition: opacity 0.12s ease;
@@ -161,7 +161,7 @@ function onContainerClick() {
 
 .swap-overlay-label {
   color: #fff;
-  font-size: 28px;
+  font-size: calc(28px * var(--efs-scale, 1));
   font-weight: 800;
   letter-spacing: 0.1em;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
@@ -169,7 +169,7 @@ function onContainerClick() {
 
 .swap-overlay-hint {
   color: #90caf9;
-  font-size: 12px;
+  font-size: calc(12px * var(--efs-scale, 1));
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -200,13 +200,13 @@ function onContainerClick() {
 .efs-notify {
   position: absolute;
   left: 50%;
-  bottom: 56px;
+  bottom: calc(56px * var(--efs-scale, 1));
   transform: translateX(-50%);
   z-index: 50;
-  max-width: min(90vw, 560px);
-  padding: 8px 14px;
-  border-radius: 4px;
-  font-size: 13px;
+  max-width: min(90vw, calc(560px * var(--efs-scale, 1)));
+  padding: calc(8px * var(--efs-scale, 1)) calc(14px * var(--efs-scale, 1));
+  border-radius: calc(4px * var(--efs-scale, 1));
+  font-size: calc(13px * var(--efs-scale, 1));
   font-weight: 600;
   line-height: 1.35;
   cursor: pointer;

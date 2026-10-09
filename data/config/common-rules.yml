@@ -119,16 +119,30 @@ sectionRules:
     controller: not_myself
     priority: 70
 
-  # CTR ARR: Arrivals assumed by me
+  # CTR ARR: pending inbound handoff to me (TWR covering ARRs)
+  # CTR boundary does not matter — outside CTR still goes to CTR ARR
+  ctr_arr_pending_inbound_transfer:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [TWR]
+    priority: 95
+
+  # CTR ARR: Arrivals assumed by me (final / outside CTR included)
+  # CTR boundary does not matter — withinCtr is only for unassumed pull-in below
   ctr_arr_assumed:
     sectionId: ctr_arr
     direction: arrival
     controller: myself
     airborne: true
     groundstates: ['', NSTS, ARR]
-    priority: 80
+    myRole: [TWR, APP, CTR]
+    priority: 90
 
-  # CTR ARR: Arrivals inside CTR boundary (real LFV data)
+  # CTR ARR: Arrivals inside CTR boundary (real LFV data) — unassumed pull-in
   ctr_arr_within_ctr:
     sectionId: ctr_arr
     direction: arrival
@@ -230,10 +244,21 @@ actionRules:
     myRole: [GND, TWR, APP, CTR]
     priority: 113
 
-  # GND: TXI for on-ground arrivals/local (after landing)
+  # GND: TXI for on-ground arrivals (after landing / vacated — ARR or unset)
+  # ''/NSTS: ESSA taxi_arr_assumed_gnd can place strips here before ARR is set
   txi_arr_gnd:
     action: TXI
-    direction: either
+    direction: arrival
+    controller: myself
+    groundstates: ['', NSTS, ARR]
+    airborne: false
+    myRole: [GND]
+    priority: 112
+
+  # GND: TXI for local flights after landing
+  txi_local_gnd:
+    action: TXI
+    direction: local
     controller: myself
     groundstates: [ARR]
     airborne: false
@@ -542,6 +567,36 @@ moveRules:
       type: setGroundstate
       value: PUSH
 
+  # PENDING DEP -> PUSH&START: skip CLR — set PUSH only (drag wins)
+  move_pending_to_push:
+    fromSectionId: pending_dep
+    toSectionId: push_start
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: PUSH
+
+  # PENDING DEP -> TAXI: TXO without CLR
+  move_pending_to_taxi:
+    fromSectionId: pending_dep
+    toSectionId: taxi
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  # CLEARED / TSAT -> TAXI: TXO without touching CLR
+  move_cleared_to_taxi:
+    fromSectionId: cleared
+    toSectionId: taxi
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: TAXI
+
   # PUSH&START -> TAXI: Set groundstate to TAXI (GND/TWR/APP/CTR)
   move_push_to_taxi:
     fromSectionId: push_start
@@ -580,3 +635,37 @@ moveRules:
     command:
       type: setGroundstate
       value: PUSH
+
+  # TAXI -> CLEARED / TSAT: revert TXO (keep CLR)
+  undo_taxi_to_cleared:
+    fromSectionId: taxi
+    toSectionId: cleared
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: ONFREQ
+
+  # TAXI -> PENDING / CD ALL: revert TXO + CLR
+  undo_taxi_to_pending:
+    fromSectionId: taxi
+    toSectionId: pending_dep
+    direction: either
+    priority: 20
+    commands:
+      - type: setGroundstate
+        value: ONFREQ
+      - type: setClearance
+        value: false
+
+  # PUSH&START -> PENDING / CD ALL: revert PUSH + CLR
+  undo_push_to_pending:
+    fromSectionId: push_start
+    toSectionId: pending_dep
+    direction: either
+    priority: 20
+    commands:
+      - type: setGroundstate
+        value: ONFREQ
+      - type: setClearance
+        value: false

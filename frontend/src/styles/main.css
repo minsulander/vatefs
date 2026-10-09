@@ -1,3 +1,9 @@
+html {
+    /* Chrome UI scales with viewport × Settings multiplier; strips use --strip-scale */
+    --efs-scale: 1;
+    font-size: calc(17px * var(--efs-scale, 1));
+}
+
 html,
 body {
     overflow-y: overlay;
@@ -5,6 +11,19 @@ body {
     min-height: 100%;
     scrollbar-color: grey #14181b;
     scrollbar-width: thin;
+    /* Prevent accidental selection / iOS callout while touch-scribbling */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+/* Allow typing in real fields */
+input,
+textarea,
+[contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+    -webkit-touch-callout: default;
 }
 
 ::-webkit-scrollbar {

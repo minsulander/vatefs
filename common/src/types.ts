@@ -29,6 +29,11 @@ export interface FlightStrip {
     adesName?: string
     route?: string             // Flight planned route
     sid?: string               // Standard Instrument Departure
+    /**
+     * TMA exit fix — first significant FPL route point (excludes ADEP/rwy, SID/rwy).
+     * Independent of SID procedure name (e.g. ROKNI4R/08 ARS … → ARS).
+     */
+    tmaExit?: string
     star?: string              // Standard Terminal Arrival Route
     rfl?: string               // Requested Flight Level e.g., "FL340", "A050"
 
@@ -41,12 +46,15 @@ export interface FlightStrip {
     // Times
     eobt?: string              // Estimated Off Block Time (HHmm)
     eta?: string               // Estimated Time of Arrival (HHmm)
-    atd?: string               // Actual Time of Departure
-    ata?: string               // Actual Time of Arrival
+    /** Actual Time of Departure (HHmm) — shown in dep triangle after airborne */
+    atd?: string
+    /** Actual Time of Arrival (HHmm) — shown in arr triangle after landing */
+    ata?: string
 
     // vIFF / CDM (departing IFR)
     tobt?: string              // Target Off Block Time (HHmm) — CDM airports (ESSA)
     tsat?: string              // Target Startup Approval Time (HHmm) — CDM airports (ESSA)
+    ttot?: string              // Target Take Off Time (HHmm) — CDM airports (ESSA)
     tobtSetBy?: 'P' | 'A'      // Who set TOBT: Pilot or ATC (blank if TOBT==EOBT)
     /** Actual Start-up Request Time (HHmm) — CDM annotation ASRT / Ready Startup */
     asrt?: string
@@ -54,6 +62,8 @@ export interface FlightStrip {
     tsac?: string
     /** CTOT communicated to pilot (HHmm) — CDM annotation CTOC */
     ctoc?: string
+    /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
+    qnhGiven?: number
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
     /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
     ctotCancelled?: boolean
@@ -63,7 +73,11 @@ export interface FlightStrip {
     // Additional info
     stand?: string             // Parking stand/gate
     runway?: string            // Assigned runway
-    remarks?: string           // Controller remarks/annotations
+    remarks?: string           // Controller remarks/annotations (scratchpad .TEXT)
+    /** Holding point — scratchpad /TEXT */
+    hp?: string
+    /** Hold short — VCH strip annotation 4 (H/S), max 5 chars */
+    hs?: string
 
     // Strip metadata
     stripType: StripType
@@ -95,11 +109,11 @@ export interface FlightStrip {
     /** XFER target callsign (ESSA sequence / ESGG APP-E|W) */
     nextSiCallsign?: string
 
-    // TopSky ROF (request on frequency): inbound LAM requester, or ourselves while outbound cooldown
+    // TopSky ROF (request on frequency): inbound LAM requester, or ourselves while outbound pink
     rofRequestSi?: string
     rofRequestCallsign?: string
     rofRequestFrequency?: string
-    /** Epoch ms; inbound ROF flash (SI/XFER alternate) until this time */
+    /** Epoch ms; inbound SI/XFER alternate, or outbound pink ROF key, until this time */
     rofFlashUntil?: number
 
     // Slow aircraft indicator (light WTC or specific medium turboprops)
@@ -112,6 +126,8 @@ export interface FlightStrip {
     clearedForTakeoff?: boolean  // Show green upward triangle (departure rolling)
     clearedToLand?: boolean      // Show green downward triangle (arrival cleared to land)
     missedApproach?: boolean     // Aircraft on missed approach (hides GOA button)
+    /** Explicit airborne state from radar (false = on ground after detection) */
+    airborne?: boolean
 
     // Special strip fields
     noteText?: string            // Text content for note strips

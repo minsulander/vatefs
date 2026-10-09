@@ -241,7 +241,16 @@ actionRules:
 
   txi_arr_gnd:
     action: TXI
-    direction: either
+    direction: arrival
+    controller: myself
+    groundstates: ['', NSTS, ARR]
+    airborne: false
+    myRole: [GND]
+    priority: 112
+
+  txi_local_gnd:
+    action: TXI
+    direction: local
     controller: myself
     groundstates: [ARR]
     airborne: false

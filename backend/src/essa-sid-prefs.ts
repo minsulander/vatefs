@@ -6,7 +6,12 @@
  */
 
 import fs from "fs"
-import { getEssaRwyCombination, normalizeEssaRwy } from "@vatefs/common"
+import {
+    getEssaRwyCombination,
+    isTrackSidName,
+    isVectorSidName,
+    normalizeEssaRwy,
+} from "@vatefs/common"
 import { getSidsForRunway } from "./sid-data.js"
 
 const TRACK_SEP = "\u00B7" // middle dot ·
@@ -113,11 +118,31 @@ function escapeRe(s: string): string {
 
 /**
  * Find ESE SID matching prefix+letter on runway. Skips names containing `?`.
+ * When `exit` is set, prefer radar-vector form `BASE·EXIT` (e.g. ARS6E·KOGAV).
  */
-export function findNamedSid(airport: string, runway: string, prefix: string, letter: string): string | undefined {
-    const matches = getSidsForRunway(airport, runway)
+export function findNamedSid(
+    airport: string,
+    runway: string,
+    prefix: string,
+    letter: string,
+    exit?: string,
+): string | undefined {
+    const names = getSidsForRunway(airport, runway)
         .map(s => s.name)
-        .filter(name => !name.includes("?") && namedSidRegex(prefix, letter).test(name))
+        .filter(name => !name.includes("?"))
+
+    if (exit) {
+        const exitU = exit.toUpperCase()
+        const vectorRe = new RegExp(
+            `^${escapeRe(prefix)}\\d+${escapeRe(letter)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
+            "i",
+        )
+        const vectorHits = names.filter(n => vectorRe.test(n))
+        if (vectorHits.length === 1) return vectorHits[0]
+        if (vectorHits.length > 1) return [...vectorHits].sort()[0]
+    }
+
+    const matches = names.filter(name => namedSidRegex(prefix, letter).test(name))
     if (matches.length === 1) return matches[0]
     if (matches.length > 1) {
         // Prefer shortest / most recent designator — take first sorted for stability
@@ -139,9 +164,12 @@ export function findTrackSid(
     const exitU = exit.toUpperCase()
     const names = getSidsForRunway(airport, runway)
         .map(s => s.name)
-        .filter(n => n.includes(TRACK_SEP) && !n.toUpperCase().startsWith("VFR"))
-
-    const candidates: string[] = []
+        .filter(n => {
+            if (!n.includes(TRACK_SEP) || n.toUpperCase().startsWith("VFR")) return false
+            // Exclude radar-vector SIDs (ARS6E·KOGAV) — not SLOW tracks
+            const left = n.split(TRACK_SEP)[0] || ""
+            return /^\d{3}$/.test(left)
+        })
 
     if (track && heading) {
         const exact = `${track}${TRACK_SEP}${heading}${TRACK_SEP}${exitU}`
@@ -150,14 +178,18 @@ export function findTrackSid(
     }
 
     if (track) {
+        // Prefer exact track·exit (matches typical ES selection); fall back to NNN·track·exit
         const simple = `${track}${TRACK_SEP}${exitU}`
         const hit = names.find(n => n.toUpperCase() === simple.toUpperCase())
         if (hit) return hit
-        // Optional leading segment: 010·240·PETEV
-        const leadRe = new RegExp(`^\\d{3}${escapeRe(TRACK_SEP)}${escapeRe(track)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`, "i")
+
+        const leadRe = new RegExp(
+            `^\\d{3}${escapeRe(TRACK_SEP)}${escapeRe(track)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
+            "i",
+        )
         const lead = names.filter(n => leadRe.test(n))
         if (lead.length === 1) return lead[0]
-        if (lead.length > 1) candidates.push(...lead)
+        if (lead.length > 1) return [...lead].sort()[0]
     }
 
     if (heading) {
@@ -166,13 +198,12 @@ export function findTrackSid(
         if (hit) return hit
     }
 
-    if (candidates.length > 0) return [...candidates].sort()[0]
     return undefined
 }
 
 function resolvePrefSid(airport: string, runway: string, pref: SidPref, exit: string): string | undefined {
     if (isNamedPref(pref)) {
-        return findNamedSid(airport, runway, pref.sid, pref.letter)
+        return findNamedSid(airport, runway, pref.sid, pref.letter, exit)
     }
     return findTrackSid(airport, runway, exit, pref.track, pref.heading)
 }
@@ -307,38 +338,128 @@ function collectSortGroup(airport: string, runway: string, prefs: SidPref[]): st
     const out = new Set<string>()
 
     for (const pref of prefs) {
-        if (isNamedPref(pref)) {
-            const re = namedSidRegex(pref.sid, pref.letter)
-            for (const name of names) {
-                if (!name.includes("?") && re.test(name)) out.add(name)
-            }
-        } else {
-            // Track prefs: same shapes as findTrackSid (not every SID that merely contains the digits)
-            const exits = new Set(pref.exits.map(e => e.toUpperCase()))
-            const trk = pref.track?.toUpperCase()
-            const hdg = pref.heading?.toUpperCase()
-            if (!trk && !hdg) continue
-            for (const name of names) {
-                if (!name.includes(TRACK_SEP) || name.toUpperCase().startsWith("VFR")) continue
-                const parts = name.toUpperCase().split(TRACK_SEP)
-                const exitPart = parts[parts.length - 1]
-                if (!exitPart || !exits.has(exitPart)) continue
-                if (trk && hdg) {
-                    // track·heading·exit
-                    if (parts.length === 3 && parts[0] === trk && parts[1] === hdg) out.add(name)
-                    continue
-                }
-                if (trk) {
-                    // track·exit or NNN·track·exit
-                    if (parts.length === 2 && parts[0] === trk) out.add(name)
-                    else if (parts.length === 3 && parts[1] === trk) out.add(name)
-                    continue
-                }
-                if (hdg && parts.length === 2 && parts[0] === hdg) out.add(name)
-            }
-        }
+        addPrefSidsToSet(names, pref, out)
     }
 
     // HAPZI is named — already covered. Also add HAPZI matches when named pref.
+    return [...out]
+}
+
+/** Add ESE SID names matching one pref (named letter-group or track pattern). */
+function addPrefSidsToSet(names: string[], pref: SidPref, out: Set<string>, exitFilter?: string): void {
+    if (isNamedPref(pref)) {
+        const re = namedSidRegex(pref.sid, pref.letter)
+        for (const name of names) {
+            if (!name.includes("?") && re.test(name)) out.add(name)
+        }
+        return
+    }
+    const exits = new Set(pref.exits.map(e => e.toUpperCase()))
+    const trk = pref.track?.toUpperCase()
+    const hdg = pref.heading?.toUpperCase()
+    if (!trk && !hdg) return
+    const wantExit = exitFilter?.toUpperCase()
+    for (const name of names) {
+        if (!name.includes(TRACK_SEP) || name.toUpperCase().startsWith("VFR")) continue
+        const parts = name.toUpperCase().split(TRACK_SEP)
+        const exitPart = parts[parts.length - 1]
+        if (!exitPart || !exits.has(exitPart)) continue
+        if (wantExit && exitPart !== wantExit) continue
+        if (trk && hdg) {
+            if (parts.length === 3 && parts[0] === trk && parts[1] === hdg) out.add(name)
+            continue
+        }
+        if (trk) {
+            if (parts.length === 2 && parts[0] === trk) out.add(name)
+            else if (parts.length === 3 && parts[1] === trk) out.add(name)
+            continue
+        }
+        if (hdg && parts.length === 2 && parts[0] === hdg) out.add(name)
+    }
+}
+
+/**
+ * Prefs to consult for exit→SID highlighting on a runway:
+ * active ES config + every config whose depRunway matches the strip RWY
+ * (manual RWY select may differ from the selected ESSA combination).
+ */
+function prefsForRunwayHighlight(configId: string, runway: string): SidPref[] {
+    const seen = new Set<SidPref>()
+    const out: SidPref[] = []
+    const add = (cfg: EssaSidConfigPrefs | undefined) => {
+        if (!cfg) return
+        for (const p of [...cfg.prefs, ...(cfg.slowPrefs ?? [])]) {
+            if (seen.has(p)) continue
+            seen.add(p)
+            out.push(p)
+        }
+    }
+    add(prefsByConfig.get(configId))
+    const rwy = normalizeEssaRwy(runway)
+    if (rwy) {
+        for (const cfg of prefsByConfig.values()) {
+            if (normalizeEssaRwy(cfg.depRunway) === rwy) add(cfg)
+        }
+    }
+    return out
+}
+
+/**
+ * Runway SIDs to highlight for a filled TMA exit:
+ * - named SIDs whose designator is the exit (ARS*)
+ * - single-exit alternatives (ROKNI when ARS is filled, ABENI when PETEV)
+ * - radar-vector SIDs ending with ·exit (KOGAV4L·ARS)
+ * - SLOW track SIDs ending with ·exit (240·ARS, 010·240·NOSLI)
+ *
+ * Does not highlight sibling exits from multi-exit prefs (e.g. RESNA/KOGAV when
+ * matching an ARS-named pref), catch-all SIDs (KOGAV for ARS+PETEV+…), or HAPZI.
+ */
+export function collectSidsForTmaExit(options: {
+    airport: string
+    runway: string
+    configId: string
+    tmaExit: string
+}): string[] {
+    const tmaExit = options.tmaExit.trim().toUpperCase()
+    if (!tmaExit) return []
+
+    const runway = options.runway
+    if (!runway) return []
+    const names = getSidsForRunway(options.airport, runway).map(s => s.name)
+    const allPrefs = prefsForRunwayHighlight(options.configId, runway)
+    if (allPrefs.length === 0) return []
+    const out = new Set<string>()
+
+    // 1. Named RNAV SIDs for the exit itself (ARS*, KOGAV*, …)
+    const exitSidRe = new RegExp(`^${escapeRe(tmaExit)}\\d+[A-Z]+$`, "i")
+    for (const name of names) {
+        if (!name.includes("?") && exitSidRe.test(name)) out.add(name)
+    }
+
+    // 2. Dedicated single-exit alternatives (exits:[ARS] → sid:ROKNI)
+    const altPrefixes = new Set<string>()
+    for (const pref of allPrefs) {
+        if (!isNamedPref(pref)) continue
+        const exits = pref.exits.map(e => e.toUpperCase())
+        if (exits.length !== 1 || exits[0] !== tmaExit) continue
+        const sid = pref.sid.toUpperCase()
+        if (sid === tmaExit) continue
+        altPrefixes.add(sid)
+    }
+    for (const prefix of altPrefixes) {
+        const altRe = new RegExp(`^${escapeRe(prefix)}\\d+[A-Z]+$`, "i")
+        for (const name of names) {
+            if (!name.includes("?") && altRe.test(name)) out.add(name)
+        }
+    }
+
+    // 3. ·exit SIDs: radar-vector (KOGAV·ARS) and SLOW tracks (240·ARS) — not HAPZI
+    for (const name of names) {
+        if (name.includes("?")) continue
+        if (!isVectorSidName(name) && !isTrackSidName(name)) continue
+        const last = name.toUpperCase().split(TRACK_SEP).filter(Boolean).pop()
+        if (last === tmaExit) out.add(name)
+    }
+
     return [...out]
 }

@@ -154,6 +154,12 @@ export interface SectionRule {
      * Used e.g. so GND keeps TWR-owned vacated arrivals in INBOUND until TWR transfers.
      */
     handoffInitiated?: boolean
+
+    /**
+     * Whether the handoff target is me (pending inbound transfer).
+     * Distinct from handoffInitiated, which is true for any non-empty handoff target.
+     */
+    handoffToMyself?: boolean
 }
 
 /**
@@ -252,6 +258,17 @@ export interface ActionRule {
      * If CTR data is not available, this condition fails (rule does not match).
      */
     withinCtr?: boolean
+
+    /**
+     * Aircraft must be within this many nm of withinRangeAirports (or myAirports).
+     * Fails if lat/lon missing. Used e.g. ESSA inbound ROF only inside 20 nm.
+     */
+    withinRangeNm?: number
+
+    /**
+     * Airports for withinRangeNm (ICAO). Default: config.myAirports.
+     */
+    withinRangeAirports?: string[]
 
     /**
      * When true: flight must be tracked by someone else who is NOT a parallel TWR
@@ -379,8 +396,14 @@ export interface MoveRule {
 
     // === Action to execute ===
 
-    /** Command to send to EuroScope plugin */
-    command: EuroscopeCommand
+    /** Single command to send to EuroScope plugin */
+    command?: EuroscopeCommand
+
+    /**
+     * Multiple commands (e.g. undo TXO → CD ALL: ONFREQ + clear CLR).
+     * If set, takes precedence over `command`.
+     */
+    commands?: EuroscopeCommand[]
 }
 
 /**

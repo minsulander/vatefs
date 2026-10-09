@@ -173,6 +173,11 @@ export function getFieldElevationForFlight(
     return DEFAULT_ELEVATION
 }
 
+function callsignsEqual(a: string | undefined, b: string | undefined): boolean {
+    if (!a || !b) return false
+    return a.toUpperCase() === b.toUpperCase()
+}
+
 /**
  * Check controller condition against flight
  */
@@ -183,11 +188,31 @@ function checkControllerCondition(
 ): boolean {
     if (condition === 'any') return true
 
-    const isMyself = flight.controller === config.myCallsign
+    const isMyself = callsignsEqual(flight.controller, config.myCallsign)
     if (condition === 'myself') return isMyself
     if (condition === 'not_myself') return !isMyself
 
     return true
+}
+
+/** True when handoff target is me (callsign or my position SI). */
+function isHandoffToMyself(flight: Flight, config: EfsStaticConfig): boolean {
+    if (callsignsEqual(flight.handoffTargetController, config.myCallsign)) return true
+    const mySi = config.myPositionId?.toUpperCase()
+    const hoSi = flight.handoffTargetControllerId?.toUpperCase()
+    return !!mySi && !!hoSi && mySi === hoSi
+}
+
+/**
+ * Effective roles for rule matching. In ESSA mode, selected TWR-* picker
+ * roles also count as covering TWR (same idea as strip XFER coveringTwr).
+ */
+function getRolesForRuleMatch(flight: Flight, config: EfsStaticConfig): Set<ControllerRole> {
+    const roles = getEffectiveRolesForFlight(flight, config)
+    if (isEssaRolesConfig(config) && (config.essaRoles ?? []).some((r) => r.startsWith('TWR-'))) {
+        roles.add('TWR')
+    }
+    return roles
 }
 
 function evaluateOnRunwayCondition(
@@ -348,7 +373,7 @@ function evaluateCommonConditions(
 
     // myRole: my effective roles for this flight's airport must include at least one of these
     if (rule.myRole) {
-        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        const effectiveRoles = getRolesForRuleMatch(flight, config)
         if (!rule.myRole.some(r => effectiveRoles.has(r))) {
             return false
         }
@@ -356,7 +381,7 @@ function evaluateCommonConditions(
 
     // notMyRole: my effective roles must NOT include any of these
     if (rule.notMyRole) {
-        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        const effectiveRoles = getRolesForRuleMatch(flight, config)
         if (rule.notMyRole.some(r => effectiveRoles.has(r))) {
             return false
         }
@@ -438,6 +463,13 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
     if (rule.handoffInitiated !== undefined) {
         const hasHandoff = !!flight.handoffTargetController && flight.handoffTargetController !== ''
         if (hasHandoff !== rule.handoffInitiated) {
+            return false
+        }
+    }
+
+    // Pending inbound transfer: handoff target is me
+    if (rule.handoffToMyself !== undefined) {
+        if (isHandoffToMyself(flight, config) !== rule.handoffToMyself) {
             return false
         }
     }
@@ -586,6 +618,27 @@ function evaluateActionRule(
         }
     }
 
+    // Optional nm ring (e.g. ESSA inbound ROF only within 20 nm of ESSA)
+    if (rule.withinRangeNm !== undefined) {
+        if (flight.latitude === undefined || flight.longitude === undefined) {
+            return false
+        }
+        const airports = rule.withinRangeAirports?.length
+            ? rule.withinRangeAirports
+            : config.myAirports
+        if (
+            !isWithinRangeOfAnyAirport(
+                flight.latitude,
+                flight.longitude,
+                airports,
+                rule.withinRangeNm,
+                getAirportCoords
+            )
+        ) {
+            return false
+        }
+    }
+
     // Tracked by someone else who is not a parallel TWR (e.g. other ESSA TWR)
     if (rule.notParallelTwrOwner === true) {
         if (!flight.controller) return false
@@ -612,7 +665,7 @@ export function determineActionForFlight(
 ): StripAction | undefined {
     const sortedRules = sortByPriorityDesc(config.actionRules)
 
-    const transferredToMe = !!config.myCallsign && flight.handoffTargetController === config.myCallsign
+    const transferredToMe = isHandoffToMyself(flight, config)
 
     // Find first matching rule (never ROF when the handoff is to us — ASSUME wins)
     for (const rule of sortedRules) {
@@ -765,7 +818,7 @@ function evaluateMoveRule(
 
     // Check myRole condition using effective roles
     if (rule.myRole) {
-        const effectiveRoles = getEffectiveRolesForFlight(flight, config)
+        const effectiveRoles = getRolesForRuleMatch(flight, config)
         if (!rule.myRole.some(r => effectiveRoles.has(r))) {
             return false
         }
@@ -775,21 +828,28 @@ function evaluateMoveRule(
 }
 
 /**
- * Determine what command to send to EuroScope when a strip is manually moved
- * Returns the command and rule ID if a move rule matches, undefined otherwise
+ * Determine what command(s) to send to EuroScope when a strip is manually moved.
+ * Returns commands and rule ID if a move rule matches, undefined otherwise.
  */
 export function determineMoveAction(
     flight: Flight,
     fromSectionId: string,
     toSectionId: string,
     config: EfsStaticConfig
-): { command: EuroscopeCommand; ruleId: string } | undefined {
+): { commands: EuroscopeCommand[]; ruleId: string } | undefined {
     const sortedRules = sortByPriorityDesc(config.moveRules)
 
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateMoveRule(flight, fromSectionId, toSectionId, rule, config)) {
-            return { command: rule.command, ruleId: rule.id }
+            const commands =
+                rule.commands && rule.commands.length > 0
+                    ? rule.commands
+                    : rule.command
+                      ? [rule.command]
+                      : []
+            if (commands.length === 0) continue
+            return { commands, ruleId: rule.id }
         }
     }
 

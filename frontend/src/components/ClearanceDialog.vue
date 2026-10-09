@@ -4,7 +4,7 @@
       <div class="clnc-header">
         <span>{{ strip.callsign }}</span>
         <span class="clnc-header-right">
-          <span v-if="strip.isSlow" class="clnc-slow-tag">SLOW</span>
+          <span v-if="strip.isSlow || hasSlowRemark(strip.remarks)" class="clnc-slow-tag">SLOW</span>
           <span class="clnc-header-info">{{ strip.flightRules }} {{ strip.aircraftType }}/{{ strip.wakeTurbulence }}</span>
           <span v-if="strip.stand" class="clnc-header-info">{{ strip.stand }}</span>
         </span>
@@ -20,10 +20,32 @@
       <div v-if="showRoute && strip.route" class="clnc-route">{{ strip.route }}</div>
       <div class="clnc-fields">
         <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value clnc-clickable" @click="openDropdown('rwy')">{{ strip.runway || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ store.displaySidForStrip(strip) || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">AHDG</span><span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">CFL</span><span class="clnc-value clnc-clickable" @click="openDropdown('cfl')">{{ strip.clearedAltitude || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">ASSR</span><span class="clnc-value clnc-clickable" @click="onResetSquawk">{{ strip.squawk || '----' }}</span></div>
+        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ clearanceSidName || '---' }}</span></div>
+        <div
+          v-if="showAhdgRow"
+          class="clnc-row"
+        >
+          <span class="clnc-label">AHDG</span>
+          <span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span>
+        </div>
+        <div class="clnc-row">
+          <span class="clnc-label">CFL</span>
+          <span
+            ref="cflValueEl"
+            class="clnc-value clnc-clickable"
+            @click="onCflClick"
+          >{{ strip.clearedAltitude || '---' }}</span>
+        </div>
+        <div class="clnc-row">
+          <span class="clnc-label">ASSR</span>
+          <span
+            class="clnc-value"
+            :class="{ 'clnc-clickable': strip.canResetSquawk }"
+            :title="assrTitle"
+            @click="onAssrClick"
+            @dblclick="onAssrDblClick"
+          >{{ strip.squawk || '----' }}</span>
+        </div>
         <div v-if="showCdmTimes && strip.tsat" class="clnc-row">
           <span class="clnc-label">TSAT</span>
           <span class="clnc-value">{{ strip.tsat }}</span>
@@ -48,24 +70,9 @@
         </div>
       </div>
 
-      <!-- Dropdown overlay -->
+      <!-- Dropdown overlay (RWY / SID / AHDG) -->
       <div v-if="activeDropdown" class="clnc-dropdown-overlay" @click="activeDropdown = null">
         <div class="clnc-dropdown" :style="dropdownStyle" @click.stop>
-          <div v-if="activeDropdown === 'cfl'" class="clnc-custom-cfl">
-            <input
-              ref="cflCustomInput"
-              v-model="cflCustomText"
-              class="clnc-custom-cfl-input"
-              :class="{ 'clnc-custom-cfl-invalid': cflCustomText.length > 0 && !cflCustomValid }"
-              maxlength="4"
-              placeholder="A012 / 070"
-              spellcheck="false"
-              autocomplete="off"
-              @input="onCflCustomInput"
-              @keydown.enter.prevent="submitCustomCfl"
-              @keydown.escape.prevent="activeDropdown = null"
-            />
-          </div>
           <div ref="dropdownScrollRef" class="clnc-dropdown-scroll">
             <div v-for="option in dropdownOptions" :key="option.value"
               class="clnc-dropdown-item"
@@ -79,6 +86,13 @@
           </div>
         </div>
       </div>
+
+      <CflMenu
+        v-model="cflMenuOpen"
+        :strip="strip"
+        :target="cflMenuTarget"
+        :z-index="2700"
+      />
 
       <div class="clnc-actions" v-if="strip.dclStatus === 'REQUEST'">
         <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
@@ -101,6 +115,16 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
+import {
+  formatSidForDisplay,
+  formatTrackSidDisplay,
+  hasForcedSidInRoute,
+  hasSlowRemark,
+  isIfrSidEligible,
+  isTrackSidName,
+  withSlowRemark,
+} from '@vatefs/common'
+import CflMenu from './CflMenu.vue'
 
 const props = defineProps<{
   strip: FlightStrip
@@ -183,26 +207,74 @@ async function fetchDepartureName() {
 
 // Dropdown scroll ref
 const dropdownScrollRef = ref<HTMLElement | null>(null)
-const cflCustomInput = ref<HTMLInputElement | null>(null)
-const cflCustomText = ref('')
+const cflValueEl = ref<HTMLElement | null>(null)
+const cflMenuOpen = ref(false)
+const cflMenuTarget = ref<[number, number]>([0, 0])
 
 // Dropdown state
-const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | 'cfl' | null>(null)
+const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | null>(null)
 const availableRunways = ref<string[]>([])
 const availableSids = ref<{ name: string }[]>([])
 /** Preferred SID sort group from /api/preferred-sid (letter-group or SLOW tracks) */
 const preferredSidSortGroup = ref<string[]>([])
 const preferredSidMatched = ref<string | null>(null)
 
-function isSlowForClr(): boolean {
-  return !!props.strip.isSlow || props.strip.remarks === 'SLOW'
+/** Normalize for matching list ↔ assigned (· / • / * / spaces). */
+function normSidKey(s: string): string {
+  return s.toUpperCase().replace(/\s+/g, '').replace(/[•*]/g, '·')
 }
+
+/**
+ * SID row: same preferred preview as the strip when FPL has no forced SID,
+ * shown as exact ESE technical name (not PETEV 3G / 120veBABAP display form).
+ */
+const clearanceSidName = computed(() => {
+  let raw = props.strip.sid || ''
+  if (
+    !props.strip.clearance &&
+    (props.strip.adep === 'ESSA' || props.strip.adep === 'ESMS') &&
+    isIfrSidEligible(props.strip.flightRules) &&
+    (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+  ) {
+    const preferred =
+      preferredSidMatched.value || store.getEssaPreferredSid(props.strip.id)
+    if (preferred) {
+      const forced = hasForcedSidInRoute(props.strip.route)
+      if (!forced || !raw) raw = preferred
+    }
+  }
+  if (!raw) return ''
+  const exact = availableSids.value.find((s) => s.name === raw)
+  if (exact) return exact.name
+  const key = normSidKey(raw)
+  const fuzzy = availableSids.value.find((s) => normSidKey(s.name) === key)
+  if (fuzzy) return fuzzy.name
+  return raw
+})
+
+function isSlowForClr(): boolean {
+  return !!props.strip.isSlow || hasSlowRemark(props.strip.remarks)
+}
+
+function sidIsTrack(sid: string | undefined | null): boolean {
+  return isTrackSidName(sid) || !!formatTrackSidDisplay(sid)
+}
+
+/** Hide AHDG when a slow/track SID is set or expected, unless a heading is already assigned. */
+const showAhdgRow = computed(() => {
+  if (props.strip.direct || props.strip.assignedHeading) return true
+  if (isSlowForClr()) return false
+  if (sidIsTrack(clearanceSidName.value) || sidIsTrack(props.strip.sid)) return false
+  if (sidIsTrack(preferredSidMatched.value)) return false
+  if (preferredSidSortGroup.value.some((n) => sidIsTrack(n))) return false
+  return true
+})
 
 function isPreferredSidIfrDep(): boolean {
   const adep = props.strip.adep
   return (
     (adep === 'ESSA' || adep === 'ESMS') &&
-    props.strip.flightRules !== 'V' &&
+    isIfrSidEligible(props.strip.flightRules) &&
     (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
   )
 }
@@ -276,9 +348,26 @@ async function applyPreferredSid(): Promise<string | undefined> {
     preferredSidSortGroup.value = data.sortGroup ?? []
     preferredSidMatched.value = data.sid
 
-    if (mayReassign && data.sid && data.sid !== props.strip.sid) {
+    if (mayReassign && data.sid) {
+      const forced = hasForcedSidInRoute(props.strip.route)
+      const stickyEs =
+        !!props.strip.sid &&
+        (forced || sidIsTrack(props.strip.sid) || /^VFR/i.test(props.strip.sid))
+      if (stickyEs) {
+        // Forced FPL / track / VFR — keep ES selection for display and CFL
+        preferredSidMatched.value = props.strip.sid!
+        return props.strip.sid
+      }
+      // Always enter preferred SID on CLR open (even when GetSid already matches)
+      preferredSidMatched.value = data.sid
       store.sendAssignment(props.strip.id, 'assignSid', data.sid)
-      // CFL is applied by applyDefaultCfl with this SID (strip may not have updated yet)
+      if (
+        isIfrSidEligible(props.strip.flightRules) &&
+        sidIsTrack(data.sid) &&
+        !hasSlowRemark(props.strip.remarks)
+      ) {
+        store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
+      }
       return data.sid
     }
     return data.sid ?? undefined
@@ -312,11 +401,8 @@ function defaultInitialClimbFt(airport: string): number | undefined {
  */
 async function applyDefaultCfl(sidOverride?: string) {
   const airport = props.strip.adep
-  const sid =
-    sidOverride ||
-    preferredSidMatched.value ||
-    store.displaySidForStrip(props.strip) ||
-    props.strip.sid
+  // Use raw ESE SID (not display form — e.g. 120veTOVRI / PETEV 3G break /api/sidalt)
+  const sid = sidOverride || preferredSidMatched.value || props.strip.sid
   if (!airport || airport === '????' || !sid || hasAssignedCfl()) return
   try {
     const params = new URLSearchParams({ airport, sid })
@@ -340,10 +426,10 @@ async function applyDefaultCfl(sidOverride?: string) {
   }
 }
 
-// Auto-assign squawk if empty
+// Ask TopSky for a code if empty (EFS does not generate squawks)
 function applyDefaultSquawk() {
   if (!props.strip.squawk && props.strip.canResetSquawk) {
-    store.sendStripAction(props.strip.id, 'resetSquawk')
+    requestTopskySquawk()
   }
 }
 
@@ -362,6 +448,7 @@ watch(dialogOpen, async (open) => {
     applyDefaultSquawk()
   } else {
     activeDropdown.value = null
+    cflMenuOpen.value = false
     destinationName.value = null
     departureName.value = null
     showRoute.value = false
@@ -394,52 +481,6 @@ const headingOptions = (() => {
   return opts
 })()
 
-/** Match strip CFL display (backend formatFlightLevel) */
-function formatCflLabel(feet: number): string {
-  if (feet >= 10000) return `FL${Math.round(feet / 100)}`
-  return `A${String(Math.round(feet / 100)).padStart(3, '0')}`
-}
-
-/**
- * Parse custom CFL entry (2–4 chars) to feet.
- * - A5 / A05 / A012 → altitude in hundreds of feet
- * - 70 / 070 / 350 → flight level × 100
- */
-function parseCustomCfl(raw: string): number | null {
-  const s = raw.trim().toUpperCase()
-  if (s.length < 2 || s.length > 4) return null
-
-  if (s.startsWith('A')) {
-    const digits = s.slice(1)
-    if (!/^\d{1,3}$/.test(digits)) return null
-    const hundreds = parseInt(digits, 10)
-    if (hundreds < 1 || hundreds > 200) return null
-    return hundreds * 100
-  }
-
-  if (/^\d{2,3}$/.test(s)) {
-    const fl = parseInt(s, 10)
-    if (fl < 1 || fl > 600) return null
-    return fl * 100
-  }
-
-  return null
-}
-
-const cflCustomValid = computed(() => parseCustomCfl(cflCustomText.value) != null)
-
-// Generate CFL options: A005–A050 (500ft), then A060–A090 / FL100–FL510 (1000ft)
-const cflOptions = (() => {
-  const opts: { label: string; value: string }[] = []
-  for (let alt = 500; alt <= 5000; alt += 500) {
-    opts.push({ label: formatCflLabel(alt), value: String(alt) })
-  }
-  for (let alt = 6000; alt <= 51000; alt += 1000) {
-    opts.push({ label: formatCflLabel(alt), value: String(alt) })
-  }
-  return opts
-})()
-
 const dropdownOptions = computed(() => {
   switch (activeDropdown.value) {
     case 'rwy':
@@ -468,10 +509,12 @@ const dropdownOptions = computed(() => {
           return 0
         })
       }
+      const currentKey = normSidKey(clearanceSidName.value || props.strip.sid || '')
+      const tmaExit = props.strip.tmaExit
       return sids.map(sid => ({
-        label: sid.name,
+        label: formatSidForDisplay(sid.name, tmaExit) || sid.name,
         value: sid.name,
-        selected: sid.name === props.strip.sid
+        selected: !!currentKey && normSidKey(sid.name) === currentKey
       }))
     }
     case 'hdg': {
@@ -479,13 +522,6 @@ const dropdownOptions = computed(() => {
       return headingOptions.map(opt => ({
         ...opt,
         selected: opt.value === current
-      }))
-    }
-    case 'cfl': {
-      const current = props.strip.clearedAltitude
-      return cflOptions.map(opt => ({
-        ...opt,
-        selected: opt.label === current || formatCflLabel(parseInt(opt.value, 10)) === current
       }))
     }
     default:
@@ -498,52 +534,35 @@ const dropdownStyle = computed(() => {
   return {}
 })
 
-async function openDropdown(field: 'rwy' | 'sid' | 'hdg' | 'cfl') {
+async function openDropdown(field: 'rwy' | 'sid' | 'hdg') {
   if (activeDropdown.value === field) {
     activeDropdown.value = null
     return
   }
+  cflMenuOpen.value = false
   // Always refresh RWY/SID lists when opening (runway may have just appeared from route)
   if (field === 'rwy') {
     await fetchRunways()
   } else if (field === 'sid') {
     await fetchSids()
   }
-  if (field === 'cfl') {
-    // Prefill editable form without FL/A padding (A012 / 070)
-    const cur = props.strip.clearedAltitude || ''
-    if (cur.startsWith('FL')) cflCustomText.value = cur.slice(2)
-    else if (cur.startsWith('A')) cflCustomText.value = cur
-    else cflCustomText.value = cur
-  } else {
-    cflCustomText.value = ''
-  }
   activeDropdown.value = field
-  if (field === 'cfl') {
-    nextTick(() => {
-      cflCustomInput.value?.focus()
-      cflCustomInput.value?.select()
-    })
-  }
 }
 
-function onCflCustomInput() {
-  // Keep only A + digits, uppercase, max 4
-  const cleaned = cflCustomText.value.toUpperCase().replace(/[^A0-9]/g, '').slice(0, 4)
-  // Only one leading A allowed
-  if (cleaned.includes('A')) {
-    const rest = cleaned.replace(/A/g, '')
-    cflCustomText.value = ('A' + rest).slice(0, 4)
-  } else {
-    cflCustomText.value = cleaned
-  }
-}
-
-function submitCustomCfl() {
-  const feet = parseCustomCfl(cflCustomText.value)
-  if (feet == null) return
+function onCflClick(event: MouseEvent) {
   activeDropdown.value = null
-  store.sendAssignment(props.strip.id, 'assignCfl', String(feet))
+  if (cflMenuOpen.value) {
+    cflMenuOpen.value = false
+    return
+  }
+  const el = cflValueEl.value
+  if (el) {
+    const r = el.getBoundingClientRect()
+    cflMenuTarget.value = [r.left + r.width / 2, r.top + r.height / 2]
+  } else {
+    cflMenuTarget.value = [event.clientX, event.clientY]
+  }
+  cflMenuOpen.value = true
 }
 
 function selectOption(value: string) {
@@ -561,13 +580,19 @@ function selectOption(value: string) {
       setTimeout(() => fetchSids(), 100)
       break
     case 'sid':
+      preferredSidMatched.value = value
       store.sendAssignment(props.strip.id, 'assignSid', value)
+      // Track / SLOW SID → set SLOW remarks flag (I/Y only — never V/Z)
+      if (
+        isIfrSidEligible(props.strip.flightRules) &&
+        sidIsTrack(value) &&
+        !hasSlowRemark(props.strip.remarks)
+      ) {
+        store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
+      }
       break
     case 'hdg':
       store.sendAssignment(props.strip.id, 'assignHeading', value)
-      break
-    case 'cfl':
-      store.sendAssignment(props.strip.id, 'assignCfl', value)
       break
   }
 }
@@ -596,8 +621,31 @@ function onSend() {
   dialogOpen.value = false
 }
 
-function onResetSquawk() {
+const assrTitle = computed(() => {
+  if (!props.strip.canResetSquawk) {
+    return props.strip.squawk ? `ASSR ${props.strip.squawk}` : 'ASSR'
+  }
+  if (!props.strip.squawk) return 'Click for new code'
+  return 'Double-click for new code'
+})
+
+/** Prevent double TopSky AllocateSSR (e.g. CLR auto + click, or empty dblclick) */
+let lastAssrResetAt = 0
+function requestTopskySquawk() {
+  if (!props.strip.canResetSquawk) return
+  const now = Date.now()
+  if (now - lastAssrResetAt < 1500) return
+  lastAssrResetAt = now
+  // Triggers TopSky SSR allocation via plugin — EFS does not invent codes
   store.sendStripAction(props.strip.id, 'resetSquawk')
+}
+
+function onAssrClick() {
+  if (!props.strip.squawk) requestTopskySquawk()
+}
+
+function onAssrDblClick() {
+  if (props.strip.squawk) requestTopskySquawk()
 }
 </script>
 
@@ -608,6 +656,7 @@ function onResetSquawk() {
 }
 
 .clnc-dialog {
+  --s: var(--efs-scale, 1);
   background: #2a2a2e;
   border: 2px solid #555;
   padding: 0;
@@ -617,10 +666,10 @@ function onResetSquawk() {
 .clnc-header {
   background: #3b7dd8;
   color: #fff;
-  font-size: 15px;
+  font-size: calc(15px * var(--s));
   font-weight: bold;
-  padding: 6px 12px;
-  letter-spacing: 0.5px;
+  padding: calc(6px * var(--s)) calc(12px * var(--s));
+  letter-spacing: calc(0.5px * var(--s));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -629,62 +678,62 @@ function onResetSquawk() {
 .clnc-header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--s));
 }
 
 .clnc-header-info {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   font-weight: normal;
   opacity: 0.8;
 }
 
 .clnc-slow-tag {
-  font-size: 9px;
+  font-size: calc(9px * var(--s));
   font-weight: bold;
-  padding: 1px 6px;
-  border-radius: 2px;
+  padding: calc(1px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(2px * var(--s));
   background: #f57c00;
   color: #fff;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
 }
 
 .clnc-destination {
   text-align: center;
-  padding: 6px 12px 2px;
+  padding: calc(6px * var(--s)) calc(12px * var(--s)) calc(2px * var(--s));
   border-bottom: 1px solid #444;
 }
 
 .clnc-dest-icao {
-  font-size: 13px;
+  font-size: calc(13px * var(--s));
   font-weight: bold;
   color: #e0e0e0;
   display: block;
 }
 
 .clnc-dest-name {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   color: #999;
   display: block;
-  margin-top: 1px;
+  margin-top: calc(1px * var(--s));
 }
 
 .clnc-route {
   color: #ccc;
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   word-break: break-all;
   line-height: 1.4;
-  padding: 4px 12px 6px;
+  padding: calc(4px * var(--s)) calc(12px * var(--s)) calc(6px * var(--s));
   border-bottom: 1px solid #444;
 }
 
 .clnc-fields {
-  padding: 8px 12px;
+  padding: calc(8px * var(--s)) calc(12px * var(--s));
 }
 
 .clnc-row {
   display: flex;
   justify-content: space-between;
-  padding: 4px 0;
+  padding: calc(4px * var(--s)) 0;
   border-bottom: 1px solid #444;
 }
 
@@ -694,14 +743,14 @@ function onResetSquawk() {
 
 .clnc-label {
   color: #aaa;
-  font-size: 11px;
+  font-size: calc(11px * var(--s));
   font-weight: 600;
-  min-width: 48px;
+  min-width: calc(48px * var(--s));
 }
 
 .clnc-value {
   color: #e0e0e0;
-  font-size: 13px;
+  font-size: calc(13px * var(--s));
   font-weight: bold;
   text-align: right;
 }
@@ -719,23 +768,24 @@ function onResetSquawk() {
 
 .clnc-actions {
   display: flex;
-  border-top: 1px solid #555;
+  border-top: calc(1px * var(--s)) solid #555;
 }
 
 .clnc-btn {
   flex: 1;
-  padding: 8px 0;
+  padding: calc(8px * var(--s)) 0;
   border: none;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
   font-weight: bold;
   cursor: pointer;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
+  min-height: max(32px, calc(32px * var(--s)));
 }
 
 .clnc-btn-cancel {
   background: #555;
   color: #ccc;
-  border-right: 1px solid #666;
+  border-right: calc(1px * var(--s)) solid #666;
 }
 
 .clnc-btn-cancel:hover {
@@ -759,8 +809,8 @@ function onResetSquawk() {
 
 /* DCL section */
 .clnc-dcl-section {
-  padding: 8px 12px;
-  border-top: 1px solid #555;
+  padding: calc(8px * var(--s)) calc(12px * var(--s));
+  border-top: calc(1px * var(--s)) solid #555;
   background: #1e1e22;
 }
 
@@ -768,20 +818,20 @@ function onResetSquawk() {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: calc(6px * var(--s));
 }
 
 .clnc-dcl-label {
   color: #aaa;
-  font-size: 11px;
+  font-size: calc(11px * var(--s));
   font-weight: 600;
 }
 
 .clnc-dcl-status {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   font-weight: bold;
-  padding: 1px 6px;
-  border-radius: 2px;
+  padding: calc(1px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(2px * var(--s));
 }
 
 .dcl-status-request {
@@ -806,28 +856,28 @@ function onResetSquawk() {
 
 .clnc-dcl-message {
   color: #999;
-  font-size: 9px;
-  margin-bottom: 6px;
+  font-size: calc(9px * var(--s));
+  margin-bottom: calc(6px * var(--s));
   word-break: break-all;
 }
 
 .clnc-dcl-preview {
   color: #e0e0e0;
-  font-size: 11px;
+  font-size: calc(11px * var(--s));
   font-weight: 500;
   line-height: 1.4;
-  margin-bottom: 6px;
-  padding: 4px 6px;
+  margin-bottom: calc(6px * var(--s));
+  padding: calc(4px * var(--s)) calc(6px * var(--s));
   background: #2a2a2e;
   border: 1px solid #444;
-  border-radius: 2px;
+  border-radius: calc(2px * var(--s));
 }
 
 .clnc-remarks-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+  gap: calc(8px * var(--s));
+  margin-top: calc(4px * var(--s));
 }
 
 .clnc-remarks-input {
@@ -835,9 +885,9 @@ function onResetSquawk() {
   background: #333;
   border: 1px solid #555;
   color: #e0e0e0;
-  font-size: 11px;
-  padding: 3px 6px;
-  border-radius: 2px;
+  font-size: calc(11px * var(--s));
+  padding: calc(3px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(2px * var(--s));
   outline: none;
 }
 
@@ -853,7 +903,7 @@ function onResetSquawk() {
 .clnc-btn-reject {
   background: #c62828;
   color: #fff;
-  border-right: 1px solid #666;
+  border-right: calc(1px * var(--s)) solid #666;
 }
 
 .clnc-btn-reject:hover {
@@ -887,59 +937,24 @@ function onResetSquawk() {
 
 .clnc-dropdown {
   position: absolute;
-  top: 30px;
-  left: 12px;
-  right: 12px;
+  top: calc(30px * var(--s));
+  left: calc(12px * var(--s));
+  right: calc(12px * var(--s));
   background: #1e1e22;
   border: 1px solid #666;
-  border-radius: 2px;
+  border-radius: calc(2px * var(--s));
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
-.clnc-custom-cfl {
-  padding: 6px 8px;
-  border-bottom: 1px solid #444;
-}
-
-.clnc-custom-cfl-input {
-  width: 100%;
-  box-sizing: border-box;
-  background: #2a2a2e;
-  border: 1px solid #555;
-  color: #e0e0e0;
-  font-size: 13px;
-  font-weight: bold;
-  letter-spacing: 1px;
-  padding: 4px 8px;
-  border-radius: 2px;
-  outline: none;
-  text-transform: uppercase;
-}
-
-.clnc-custom-cfl-input:focus {
-  border-color: #3b7dd8;
-}
-
-.clnc-custom-cfl-input.clnc-custom-cfl-invalid {
-  border-color: #c62828;
-}
-
-.clnc-custom-cfl-input::placeholder {
-  color: #666;
-  font-weight: normal;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
 .clnc-dropdown-scroll {
-  max-height: 200px;
+  max-height: calc(200px * var(--s));
   overflow-y: auto;
 }
 
 .clnc-dropdown-item {
-  padding: 5px 10px;
+  padding: calc(5px * var(--s)) calc(10px * var(--s));
   color: #ddd;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
   font-weight: 600;
   cursor: pointer;
   border-bottom: 1px solid #333;
@@ -950,9 +965,9 @@ function onResetSquawk() {
 }
 
 .clnc-dropdown-empty {
-  padding: 10px;
+  padding: calc(10px * var(--s));
   color: #888;
-  font-size: 11px;
+  font-size: calc(11px * var(--s));
   text-align: center;
 }
 
@@ -967,7 +982,7 @@ function onResetSquawk() {
 }
 
 .clnc-dropdown-scroll::-webkit-scrollbar {
-  width: 6px;
+  width: calc(6px * var(--s));
 }
 
 .clnc-dropdown-scroll::-webkit-scrollbar-track {
@@ -976,6 +991,6 @@ function onResetSquawk() {
 
 .clnc-dropdown-scroll::-webkit-scrollbar-thumb {
   background: #555;
-  border-radius: 3px;
+  border-radius: calc(3px * var(--s));
 }
 </style>

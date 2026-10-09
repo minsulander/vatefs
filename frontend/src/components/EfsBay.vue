@@ -20,7 +20,7 @@
         @click="onPickerClick"
       >
         <span class="airport-picker-icao">{{ selectedAirport ?? '—' }}</span>
-        <v-icon size="12" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
+        <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
       </button>
 
       <Teleport to="body">
@@ -115,9 +115,32 @@ const props = defineProps<{
   columnIndex?: number
 }>()
 
+const BAY_REF_WIDTH_PX = 400
+const BAY_SCALE_MIN = 0.55
+const BAY_SCALE_MAX = 2.2
+
 const store = useEfsStore()
 const bayEl = ref<HTMLElement | null>(null)
 const bayHeader = ref<HTMLElement | null>(null)
+let bayResizeObs: ResizeObserver | null = null
+let bayScaleRaf = 0
+
+function updateBayScale() {
+  const el = bayEl.value
+  if (!el) return
+  const w = el.clientWidth
+  if (w <= 0) return
+  const s = Math.max(BAY_SCALE_MIN, Math.min(BAY_SCALE_MAX, w / BAY_REF_WIDTH_PX))
+  el.style.setProperty('--bay-scale', String(s))
+}
+
+function scheduleBayScale() {
+  if (bayScaleRaf) cancelAnimationFrame(bayScaleRaf)
+  bayScaleRaf = requestAnimationFrame(() => {
+    bayScaleRaf = 0
+    updateBayScale()
+  })
+}
 const pickerOpen = ref(false)
 const searchQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -131,7 +154,7 @@ const selectedAirport = computed(() =>
 )
 const isEmpty = computed(() => !selectedAirport.value)
 const accent = computed(() =>
-  isEmpty.value ? '#616161' : store.columnColor(columnIndex.value)
+  isEmpty.value ? '#757575' : store.columnColor(columnIndex.value)
 )
 
 const pickerOptions = computed(() => {
@@ -277,11 +300,20 @@ watch(pickerOpen, (open) => {
 
 onBeforeUnmount(() => {
   unbindPickerListeners()
+  bayResizeObs?.disconnect()
+  bayResizeObs = null
+  if (bayScaleRaf) cancelAnimationFrame(bayScaleRaf)
 })
 
 // After first render, lock all non-last sections to their actual pixel heights
 // so they don't shift when strip content changes.
 onMounted(() => {
+  updateBayScale()
+  if (bayEl.value && typeof ResizeObserver !== 'undefined') {
+    bayResizeObs = new ResizeObserver(() => scheduleBayScale())
+    bayResizeObs.observe(bayEl.value)
+  }
+
   nextTick(() => {
     if (!bayEl.value) return
     const sections = props.bay.sections
@@ -300,6 +332,7 @@ onMounted(() => {
 
 <style scoped>
 .efs-bay {
+  --bay-scale: 1;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -313,9 +346,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 6px;
+  padding: 0 calc(4px * var(--bay-scale));
   flex-shrink: 0;
-  min-height: 28px;
+  min-height: 0;
+  /* Floor with --efs-scale so large UI % stays usable on narrow columns */
+  height: max(calc(18px * var(--bay-scale)), calc(20px * var(--efs-scale, 1)));
 }
 
 .airport-picker-btn {
@@ -323,7 +358,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: calc(2px * var(--bay-scale));
   min-width: 0;
   background: transparent;
   color: #fff;
@@ -344,36 +379,39 @@ onMounted(() => {
 }
 
 .airport-picker-icao {
-  font-size: 18px;
+  font-size: max(calc(13px * var(--bay-scale)), calc(14px * var(--efs-scale, 1)));
   font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.1;
+  letter-spacing: 0.06em;
+  line-height: 1;
 }
 
 .airport-picker-menu-icon {
   opacity: 0.55;
   flex-shrink: 0;
-  margin-top: 1px;
+  margin: 0;
+  width: max(calc(12px * var(--bay-scale)), calc(12px * var(--efs-scale, 1))) !important;
+  height: max(calc(12px * var(--bay-scale)), calc(12px * var(--efs-scale, 1))) !important;
+  font-size: max(calc(12px * var(--bay-scale)), calc(12px * var(--efs-scale, 1))) !important;
 }
 
 .traffic-dep {
   color: #4dd0e1;
-  font-size: 11px;
+  font-size: calc(12px * var(--efs-scale, 1));
   font-weight: 700;
 }
 
 .traffic-arr {
   color: #ffb74d;
-  font-size: 11px;
+  font-size: calc(12px * var(--efs-scale, 1));
   font-weight: 700;
 }
 
 .airport-picker-panel {
   background: #1e2126;
   border: 1px solid #3a3f46;
-  border-radius: 4px;
-  width: min(340px, calc(100vw - 16px));
-  max-height: 360px;
+  border-radius: calc(4px * var(--efs-scale, 1));
+  width: min(calc(340px * var(--efs-scale, 1)), calc(100vw - 16px));
+  max-height: calc(360px * var(--efs-scale, 1));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   overflow: hidden;
   display: flex;
@@ -383,8 +421,8 @@ onMounted(() => {
 .airport-picker-search {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: calc(6px * var(--efs-scale, 1));
+  padding: calc(6px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1));
   border-bottom: 1px solid #2f343b;
   background: #25292f;
 }
@@ -401,7 +439,7 @@ onMounted(() => {
   border: none;
   outline: none;
   color: #eee;
-  font-size: 12px;
+  font-size: calc(13px * var(--efs-scale, 1));
   font-family: inherit;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -419,8 +457,8 @@ onMounted(() => {
   border: 1px solid #555;
   color: #bbb;
   border-radius: 2px;
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: calc(11px * var(--efs-scale, 1));
+  padding: calc(1px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
   cursor: pointer;
   font-family: inherit;
 }
@@ -431,22 +469,22 @@ onMounted(() => {
 }
 
 .airport-picker-list {
-  max-height: 280px;
+  max-height: calc(280px * var(--efs-scale, 1));
   overflow-y: auto;
-  padding: 4px 0;
+  padding: calc(4px * var(--efs-scale, 1)) 0;
 }
 
 .airport-picker-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--efs-scale, 1));
   width: 100%;
-  padding: 5px 10px;
+  padding: calc(5px * var(--efs-scale, 1)) calc(10px * var(--efs-scale, 1));
   background: transparent;
   border: none;
   color: #ddd;
   font-family: inherit;
-  font-size: 12px;
+  font-size: calc(13px * var(--efs-scale, 1));
   cursor: pointer;
   text-align: left;
 }
@@ -483,7 +521,7 @@ onMounted(() => {
 .item-icao {
   font-weight: 600;
   letter-spacing: 0.05em;
-  min-width: 42px;
+  min-width: calc(42px * var(--efs-scale, 1));
   flex-shrink: 0;
 }
 
@@ -496,7 +534,7 @@ onMounted(() => {
 }
 
 .item-name {
-  font-size: 11px;
+  font-size: calc(12px * var(--efs-scale, 1));
   color: #bbb;
   white-space: nowrap;
   overflow: hidden;
@@ -504,7 +542,7 @@ onMounted(() => {
 }
 
 .item-country {
-  font-size: 10px;
+  font-size: calc(11px * var(--efs-scale, 1));
   color: #888;
   white-space: nowrap;
   overflow: hidden;
@@ -513,14 +551,14 @@ onMounted(() => {
 
 .item-traffic {
   display: flex;
-  gap: 6px;
+  gap: calc(6px * var(--efs-scale, 1));
   flex-shrink: 0;
   margin-left: auto;
 }
 
 .item-taken {
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(11px * var(--efs-scale, 1));
   color: #ffb74d;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -532,9 +570,9 @@ onMounted(() => {
 }
 
 .airport-picker-empty {
-  padding: 12px;
+  padding: calc(12px * var(--efs-scale, 1));
   text-align: center;
   color: #777;
-  font-size: 11px;
+  font-size: calc(12px * var(--efs-scale, 1));
 }
 </style>

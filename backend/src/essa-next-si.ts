@@ -958,7 +958,7 @@ function movingTowardGndFamily(callsign: string, family: EssaGndFamily): boolean
 
 /**
  * GND→GND XFER: only when aircraft has left our AoR, or is moving toward the next GND.
- * Sitting still inside our AoR → no XFER (keep PARK).
+ * Sitting still inside our AoR → no XFER (caller falls back to TXI/PARK by groundstate).
  */
 export function shouldOfferGndSequenceXfer(
     flight: Flight,

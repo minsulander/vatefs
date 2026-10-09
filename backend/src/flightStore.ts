@@ -31,9 +31,18 @@ import { findStandForPosition, hasStandData } from "./stand-data.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
+import {
+    extractTmaExitPoint,
+    hasForcedSidInRoute,
+    hasSlowRemark,
+    isIfrSidEligible,
+    isTrackSidName,
+    isVectorSidName,
+} from "@vatefs/common"
 import { getRtfCallsign } from "./icao-airlines.js"
 import { getIcaoAirportName } from "./icao-airports.js"
-import { hasSidInEse, getSidInfo } from "./sid-data.js"
+import { hasSidInEse, getSidInfo, getSidsForRunway } from "./sid-data.js"
+import { parseCombinedScratch, buildCombinedScratch, isProtocolScratch } from "./scratchpad.js"
 import {
     getRelevantActiveAirports,
     isMultiAirportConfig,
@@ -46,6 +55,23 @@ import {
     IDLE_BAY_ID
 } from "./multi-airport.js"
 import moment from "moment"
+
+/**
+ * Normalize controller-assigned SSR from EuroScope/TopSky.
+ * - valid octal → code
+ * - empty / 0000 / ---- → "" (clear)
+ * - non-octal junk (e.g. "9875") → undefined (ignore, do not display)
+ */
+export function normalizeAssignedSquawk(raw: string | undefined | null): string | undefined {
+    if (raw == null) return undefined
+    const s = String(raw).trim()
+    if (!s || s === "0000" || s === "----") return ""
+    if (!/^[0-7]{4}$/.test(s)) {
+        console.log(`[SQUAWK] ignoring invalid assigned code "${s}"`)
+        return undefined
+    }
+    return s
+}
 
 /**
  * Result of processing a plugin message
@@ -200,34 +226,77 @@ function extractDisplayDepRunway(
     return undefined
 }
 
+/** True when both names are SLOW track SIDs ending with the same exit fix. */
+function sameTrackSidExit(a: string, b: string): boolean {
+    if (!isTrackSidName(a) || !isTrackSidName(b)) return false
+    const sep = /[·•*]/
+    const exitA = a.toUpperCase().split(sep).filter(Boolean).pop()
+    const exitB = b.toUpperCase().split(sep).filter(Boolean).pop()
+    return !!exitA && exitA === exitB
+}
+
+/** True when both are radar-vector SIDs (ARS6E·KOGAV) with the same exit. */
+function sameVectorSidExit(a: string, b: string): boolean {
+    if (!isVectorSidName(a) || !isVectorSidName(b)) return false
+    const sep = /[·•*]/
+    const exitA = a.toUpperCase().split(sep).filter(Boolean).pop()
+    const exitB = b.toUpperCase().split(sep).filter(Boolean).pop()
+    return !!exitA && exitA === exitB
+}
+
+function normSidKey(s: string): string {
+    return s.toUpperCase().replace(/\s+/g, "").replace(/[•*]/g, "·")
+}
+
+/** SID/rwy prefix when FPL forces a SID (not bare ADEP/rwy). */
+function routeForcedSidPrefix(route: string | undefined): string | undefined {
+    if (!route || !hasForcedSidInRoute(route)) return undefined
+    const first = route.trim().split(/\s+/)[0] || ""
+    const slash = first.indexOf("/")
+    if (slash <= 0) return undefined
+    return first.slice(0, slash)
+}
+
+function sidMatchesRoutePrefix(sid: string, prefix: string): boolean {
+    if (normSidKey(sid) === normSidKey(prefix)) return true
+    return sameTrackSidExit(sid, prefix) || sameVectorSidExit(sid, prefix)
+}
+
 /**
  * Extract display SID from a flight.
- * - Controller SID override (manual pick in CLNC) wins
- * - Special SIDs in route (e.g. "040·330·RESNA/01L") take priority
- * - Else first significant FPL fix when it is not part of the ESE SID (e.g. DCT NTL)
- * - Else ESE-matched flight.sid (major airports: route often starts with SID first waypoint)
- * - Else first significant FPL fix / flight.sid
+ * - Controller SID override only while FPL still forces that SID (or optimistic pre-amend)
+ * - Forced SID/rwy in route wins
+ * - Track/SLOW GetSid is never sticky once FPL no longer forces a SID (ESE preferred fills strip)
+ * - Else first significant FPL fix / ESE-matched GetSid for RNAV
  */
 function extractDisplaySid(flight: Flight): string | undefined {
+    const forcedPrefix = routeForcedSidPrefix(flight.route)
+
     if (flight.sidDisplayOverride) {
-        return flight.sidDisplayOverride
+        if (forcedPrefix && sidMatchesRoutePrefix(flight.sidDisplayOverride, forcedPrefix)) {
+            return flight.sidDisplayOverride
+        }
+        // Optimistic: just assigned via EFS, AmendFlightPlan not reflected yet
+        if (!forcedPrefix && flight.sid && sidMatchesRoutePrefix(flight.sidDisplayOverride, flight.sid)) {
+            return flight.sidDisplayOverride
+        }
     }
 
-    if (flight.route) {
-        const firstTerm = flight.route.split(/\s+/)[0]!
-        const slashIdx = firstTerm.indexOf("/")
-        if (slashIdx >= 0) {
-            const prefix = firstTerm.substring(0, slashIdx)
-            // EuroScope special SIDs appear as PREFIX/rwy and are not GetSid()
-            if (
-                flight.origin &&
-                prefix !== flight.origin &&
-                prefix !== flight.sid &&
-                !/^[A-Z]{4}$/.test(prefix)
-            ) {
-                return prefix
-            }
+    if (forcedPrefix) {
+        // Track / vector SIDs: prefer GetSid()/assigned when same exit as route form
+        if (
+            flight.sid &&
+            (sameTrackSidExit(flight.sid, forcedPrefix) || sameVectorSidExit(flight.sid, forcedPrefix))
+        ) {
+            return flight.sid
         }
+        return forcedPrefix
+    }
+
+    // No SID/rwy in FPL — never keep a track/SLOW GetSid (cleared in ES or EFS).
+    // Radar-vector SIDs (ARS6E·KOGAV) are normal RNAV — keep them.
+    if (flight.sid && isTrackSidName(flight.sid)) {
+        return undefined
     }
 
     const firstFix = flight.route ? firstSignificantRouteFix(flight.route) : undefined
@@ -237,23 +306,29 @@ function extractDisplaySid(flight: Flight): string | undefined {
             : undefined
 
     if (firstFix) {
-        // Route names the SID itself
-        if (flight.origin && hasSidInEse(flight.origin, firstFix, flight.depRwy)) {
-            return firstFix
+        if (
+            flight.sid &&
+            flight.origin &&
+            hasSidInEse(flight.origin, firstFix, flight.depRwy) &&
+            (firstFix === flight.sid || flight.sid.startsWith(firstFix))
+        ) {
+            return flight.sid
         }
-        // Stale GetSid() after FPL edit to a DCT/fix (e.g. NTL) that is not on the SID
         if (sidInfo && !sidInfo.waypoints.includes(firstFix) && firstFix !== flight.sid) {
             return firstFix
         }
-        // No ESE SID — show first FPL point (regional DCT)
-        if (!sidInfo) {
-            return firstFix
+        if (!flight.sid && !sidInfo) {
+            const eseCount =
+                flight.origin && flight.depRwy
+                    ? getSidsForRunway(flight.origin, flight.depRwy).length
+                    : 0
+            if (eseCount === 0) return firstFix
+            return undefined
         }
-        // firstFix is the SID's initial waypoint (e.g. KAJAN for KAJAN1D) → keep SID name
     }
 
     if (sidInfo) return flight.sid
-    return firstFix ?? flight.sid
+    return flight.sid || undefined
 }
 
 /**
@@ -271,7 +346,8 @@ function formatCommunicationSuffix(communicationType: string | undefined): strin
 /**
  * Store for managing Flight objects built from EuroScope plugin messages
  */
-const ROF_COOLDOWN_MS = 60_000
+/** Outbound ROF: pink ROF key duration (re-press resets); button stays pressable */
+const ROF_COOLDOWN_MS = 120_000
 /** Inbound ROF SI/XFER flash duration; pending request stays until transfer */
 const ROF_FLASH_MS = 60_000
 /** Must stay stationary at a stand this long before Auto PARK fires */
@@ -287,7 +363,7 @@ class FlightStore {
     /** Counter for generating strip positions */
     private positionCounters: Map<string, number> = new Map() // key: bayId:sectionId
 
-    /** ROF button cooldown per callsign (hide for 1 minute after send) */
+    /** Outbound ROF pink window per callsign (2 min; re-press resets) */
     private rofCooldownUntil: Map<string, number> = new Map()
     private rofCooldownTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
@@ -326,8 +402,15 @@ class FlightStore {
         return until !== undefined && Date.now() < until
     }
 
+    /** Epoch ms when outbound ROF pink window ends (undefined if not active) */
+    getRofCooldownUntil(callsign: string): number | undefined {
+        const until = this.rofCooldownUntil.get(callsign.toUpperCase())
+        if (until === undefined || Date.now() >= until) return undefined
+        return until
+    }
+
     /**
-     * Start 1-minute ROF cooldown for a callsign. onExpire regenerates the strip when the button can show again.
+     * Start/reset 2-minute outbound ROF pink window. Button stays shown; onExpire clears pink.
      */
     startRofCooldown(callsign: string, onExpire?: () => void): void {
         const key = callsign.toUpperCase()
@@ -442,6 +525,24 @@ class FlightStore {
         if (flight) {
             flight.lastSectionRule = 'manual'
         }
+    }
+
+    /**
+     * Apply groundstate from EFS (button / drag) and hold against stale ES echoes
+     * (e.g. ARR while still on runway after TXI).
+     */
+    applyOptimisticGroundstate(callsign: string, state: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.groundstate = state
+        if (!state) {
+            flight.groundstateClearedUntil = Date.now() + 3000
+            flight.groundstateHoldUntil = undefined
+        } else {
+            flight.groundstateClearedUntil = undefined
+            flight.groundstateHoldUntil = Date.now() + 12000
+        }
+        flight.lastUpdate = Date.now()
     }
 
     /**
@@ -802,9 +903,11 @@ class FlightStore {
 
             // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
             if (!setScratchValue && this.tryClearAutoSlowRemark(flight)) {
-                setScratchValue = ''
+                setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                this.holdScratchFields(flight)
             } else if (!setScratchValue && this.tryAutoSlowRemark(flight)) {
-                setScratchValue = '.SLOW'
+                setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                this.holdScratchFields(flight)
             }
 
             const strip = this.createStrip(
@@ -1035,9 +1138,11 @@ class FlightStore {
 
         // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
         if (this.tryClearAutoSlowRemark(flight)) {
-            setScratchValue = ''
+            setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            this.holdScratchFields(flight)
         } else if (this.tryAutoSlowRemark(flight)) {
-            setScratchValue = '.SLOW'
+            setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            this.holdScratchFields(flight)
         }
 
         const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
@@ -1062,7 +1167,7 @@ class FlightStore {
         // ESSA IFR DEP only — not ARR, not ESSA–ESSA local
         if (flight.origin !== 'ESSA') return false
         if (!flight.destination || flight.destination === 'ESSA') return false
-        if (flight.flightRules !== 'I' && flight.flightRules !== 'Y') return false
+        if (!isIfrSidEligible(flight.flightRules)) return false
         if (flight.remarks) return false
         if (flight.autoSlowDismissed) return false
         if (!isEssaAutoSlowHours()) return false
@@ -1071,21 +1176,27 @@ class FlightStore {
         if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return false
 
         flight.remarks = 'SLOW'
+        flight.autoSlowApplied = true
         console.log(`[REMARKS] ${flight.callsign}: - -> SLOW (auto)`)
         return true
     }
 
     /**
-     * Remove auto-SLOW remark when ATYP/WTC is no longer a slow type.
-     * Only clears an exact "SLOW" remark (leaves other controller remarks alone).
+     * Remove auto-SLOW when ATYP/WTC is no longer a slow type.
+     * Never clears controller-set SLOW (chip / track SID / typed remarks).
      */
     private tryClearAutoSlowRemark(flight: Flight): boolean {
-        if (flight.remarks !== 'SLOW') return false
+        if (!flight.autoSlowApplied) return false
+        if (flight.remarks !== 'SLOW') {
+            flight.autoSlowApplied = false
+            return false
+        }
 
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
         if (isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return false
 
         flight.remarks = undefined
+        flight.autoSlowApplied = false
         console.log(`[REMARKS] ${flight.callsign}: SLOW -> - (auto, not slow)`)
         return true
     }
@@ -1093,15 +1204,39 @@ class FlightStore {
     /**
      * Remember that the controller cleared SLOW so we do not auto-add it again.
      * Skips dismissal when the aircraft is no longer slow (auto-removal from ATYP change).
+     * Only call from intentional controller edits (updateRemarks) — not from ES scratch CAD.
      */
     markAutoSlowDismissed(flight: Flight, previousRemarks: string | undefined, nextRemarks: string | undefined) {
-        if (previousRemarks !== 'SLOW' || nextRemarks === 'SLOW') return
+        // Controller-owned remarks — never treat as auto-SLOW
+        if (hasSlowRemark(nextRemarks)) {
+            flight.autoSlowApplied = false
+        }
+        if (!hasSlowRemark(previousRemarks) || hasSlowRemark(nextRemarks)) return
 
+        flight.autoSlowApplied = false
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
         if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) return
 
         flight.autoSlowDismissed = true
         console.log(`[REMARKS] ${flight.callsign}: auto-SLOW dismissed`)
+    }
+
+    /** Controller / track-SID set SLOW — must not be wiped by tryClearAutoSlowRemark */
+    markSlowRemarkManual(flight: Flight): void {
+        flight.autoSlowApplied = false
+        if (hasSlowRemark(flight.remarks)) {
+            flight.autoSlowDismissed = false
+        }
+    }
+
+    /**
+     * Ignore empty scratch CAD for remarks/HP for a short window (AmendFlightPlan / ROF wipe).
+     */
+    holdScratchFields(flight: Flight, ms = 2500): void {
+        const until = Date.now() + ms
+        if ((flight.scratchFieldsHoldUntil ?? 0) < until) {
+            flight.scratchFieldsHoldUntil = until
+        }
     }
 
     /**
@@ -1190,6 +1325,7 @@ class FlightStore {
         let changed = false
         if (flight.tobt !== undefined) { flight.tobt = undefined; changed = true }
         if (flight.tsat !== undefined) { flight.tsat = undefined; changed = true }
+        if (flight.ttot !== undefined) { flight.ttot = undefined; changed = true }
         if (flight.tobtSetBy !== undefined) { flight.tobtSetBy = undefined; changed = true }
         if (flight.tobtSetByAt !== undefined) { flight.tobtSetByAt = undefined; changed = true }
         if (flight.asrt !== undefined) { flight.asrt = undefined; changed = true }
@@ -1198,6 +1334,7 @@ class FlightStore {
         if (flight.cdmSts !== undefined) { flight.cdmSts = undefined; changed = true }
         if (flight.localCdmTobt !== undefined) { flight.localCdmTobt = undefined; changed = true }
         if (flight.localCdmTsat !== undefined) { flight.localCdmTsat = undefined; changed = true }
+        if (flight.localCdmTtot !== undefined) { flight.localCdmTtot = undefined; changed = true }
         if (flight.localCdmAt !== undefined) { flight.localCdmAt = undefined; changed = true }
         return changed
     }
@@ -1297,6 +1434,17 @@ class FlightStore {
                     flight.localCdmAt = now
                     if (tsat !== flight.tsat) {
                         flight.tsat = tsat
+                        changed = true
+                    }
+                }
+            }
+            if (entry.ttot !== undefined) {
+                const ttot = this.normalizeCdmHhmm(entry.ttot)
+                if (ttot) {
+                    flight.localCdmTtot = ttot
+                    flight.localCdmAt = now
+                    if (ttot !== flight.ttot) {
+                        flight.ttot = ttot
                         changed = true
                     }
                 }
@@ -1423,6 +1571,8 @@ class FlightStore {
         if (message.communicationType !== undefined) {
             flight.communicationType = message.communicationType || undefined
         }
+        const prevRoute = flight.route
+        const prevSid = flight.sid
         if (message.route !== undefined) flight.route = message.route
         if (message.eobt !== undefined) flight.eobt = message.eobt
         if (message.ete !== undefined) flight.ete = message.ete
@@ -1431,7 +1581,37 @@ class FlightStore {
         if (message.arrRwy !== undefined) flight.arrRwy = message.arrRwy
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
-        if (message.sid !== undefined) flight.sid = message.sid
+        if (message.sid !== undefined) flight.sid = message.sid || undefined
+        // FPL/SID edit in ES: drop sticky override when FPL no longer forces that SID
+        const routeChanged = message.route !== undefined && message.route !== prevRoute
+        const sidChanged =
+            message.sid !== undefined && (message.sid || undefined) !== prevSid
+        if (flight.sidDisplayOverride && (routeChanged || sidChanged)) {
+            const forcedPrefix = routeForcedSidPrefix(flight.route)
+            if (!forcedPrefix || !sidMatchesRoutePrefix(flight.sidDisplayOverride, forcedPrefix)) {
+                flight.sidDisplayOverride = undefined
+            }
+        }
+        // Route lost forced SID — drop stale track GetSid so strip can show ESE preferred
+        if (routeChanged && !hasForcedSidInRoute(flight.route)) {
+            if (flight.sid && isTrackSidName(flight.sid)) {
+                flight.sid = undefined
+            }
+            flight.sidDisplayOverride = undefined
+        }
+        // Route changed but plugin omitted sid (older builds): don't keep a stale GetSid()
+        if (routeChanged && message.sid === undefined && flight.sid && flight.sid === prevSid) {
+            const first = firstSignificantRouteFix(flight.route || "")
+            const special = flight.route?.split(/\s+/)[0] ?? ""
+            const specialPrefix = special.includes("/") ? special.split("/")[0] : ""
+            const stillInRoute =
+                (first && (first === flight.sid || flight.sid.startsWith(first))) ||
+                (specialPrefix && (specialPrefix === flight.sid || sameTrackSidExit(flight.sid, specialPrefix)))
+            if (!stillInRoute) {
+                flight.sid = undefined
+                flight.sidDisplayOverride = undefined
+            }
+        }
         this.applyOwnershipFromPlugin(flight, message, 'DATA')
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
@@ -1503,10 +1683,48 @@ class FlightStore {
 
         // Update flight data
         this.applyOwnershipFromPlugin(flight, message, 'ASSIGN')
-        if (message.squawk !== undefined) flight.squawk = message.squawk
+        if (message.squawk !== undefined) {
+            // ASSR must be ICAO octal (0–7). Ignore junk like "9875" from interim ES updates.
+            const next = normalizeAssignedSquawk(message.squawk)
+            if (next !== undefined) flight.squawk = next || undefined
+        }
         if (message.rfl !== undefined) flight.rfl = message.rfl
-        if (message.cfl !== undefined) flight.cfl = message.cfl
-        if (message.groundstate !== undefined) flight.groundstate = message.groundstate
+        if (message.cfl !== undefined) {
+            flight.cfl = message.cfl
+            // Real altitude clears approach-type label
+            if (message.cfl === 0 || message.cfl > 2) flight.approachType = undefined
+        }
+        // Ground state: NOSTATE / empty clears; hold briefly against stale ES GetGroundState
+        if (message.scratch === 'NOSTATE' || message.groundstate === '') {
+            // Don't let empty wipe an EFS-held TXIN/TAXI (runway ARR echo often clears first)
+            const holdingEfsGs =
+                flight.groundstateHoldUntil !== undefined &&
+                Date.now() < flight.groundstateHoldUntil &&
+                !!flight.groundstate
+            if (!holdingEfsGs) {
+                flight.groundstate = ''
+                flight.groundstateClearedUntil = Date.now() + 3000
+                flight.groundstateHoldUntil = undefined
+            }
+        } else if (message.groundstate !== undefined) {
+            const holdingClear =
+                flight.groundstateClearedUntil !== undefined &&
+                Date.now() < flight.groundstateClearedUntil
+            // EFS just set TXIN/TAXI/… — ignore ES still reporting ARR (common on runway)
+            const holdingEfsGs =
+                flight.groundstateHoldUntil !== undefined &&
+                Date.now() < flight.groundstateHoldUntil &&
+                message.groundstate !== flight.groundstate
+            if (holdingClear && message.groundstate) {
+                // keep cleared
+            } else if (holdingEfsGs) {
+                // keep EFS-set groundstate
+            } else {
+                flight.groundstate = message.groundstate
+                if (message.groundstate) flight.groundstateClearedUntil = undefined
+                flight.groundstateHoldUntil = undefined
+            }
+        }
         if (message.clearance !== undefined) flight.clearance = message.clearance
         if (message.clearedToLand !== undefined) flight.clearedToLand = message.clearedToLand
         if (message.communicationType !== undefined) {
@@ -1517,6 +1735,7 @@ class FlightStore {
         if (message.scratch === 'MISAP_') {
             flight.missedApproach = true
             flight.clearedToLand = false  // GOA also clears cleared-to-land
+            flight.ata = undefined // go-around: drop ATA + green landing frame
         } else if (message.scratch === '') {
             flight.missedApproach = false
         }
@@ -1535,35 +1754,54 @@ class FlightStore {
                 clearScratchpadCallsign = callsign
                 clearScratchpadDelayMs = 800
             }
+            // TopSky approach type: /APPTYPE/CAT3/ or shorthand /CAT3/
+            const appType =
+                scratch.match(/^\/APPTYPE\/([A-Z0-9]{1,4})\/?$/i)?.[1] ||
+                scratch.match(/^\/(CAT\d|OS)\/?$/i)?.[1]
+            if (appType) {
+                flight.approachType = appType.toUpperCase()
+                if (flight.approachType === 'OS') flight.cfl = 2
+                else if (flight.cfl !== 1 && flight.cfl !== 2) flight.cfl = 1
+            }
+            // Protocol scratch we will wipe — do not let the ensuing empty clear wipe remarks/HP
+            if (isProtocolScratch(scratch)) {
+                flight.scratchFieldsHoldUntil = Date.now() + 2500
+            }
         }
-        // Process scratchpad-based remarks:
-        // - ".TEXT" → remark TEXT (VatEFS convention)
-        // - "SLOW" (no leading ".") → keep as remark (ES/TopSky slow flag)
-        // - "MISAP_" / "/LAM/ROF/..." / "/ROF/..." and other specials → leave remarks unchanged
-        // - "" → remark cleared in EuroScope
+        // Scratchpad → remarks + HP (".URNAV /Y2"); HS is VCH ann 4 (message.hs)
+        // Empty scratch during hold (AmendFlightPlan / ROF clear) must not wipe SLOW/HP —
+        // restore scratch to ES instead. Do not markAutoSlowDismissed here (ES clears ≠ controller).
+        let restoreScratchValue: string | undefined
         if (message.scratch !== undefined) {
             const scratch = message.scratch
-            let nextRemarks: string | undefined | null = null
-            if (scratch.startsWith('.')) {
-                nextRemarks = scratch.substring(1).trim() || undefined
-            } else if (scratch.toUpperCase() === 'SLOW') {
-                nextRemarks = 'SLOW'
-            } else if (scratch === '') {
-                nextRemarks = undefined
-            } else if (
-                scratch === 'MISAP_' ||
-                /^\/LAM\/ROF\//i.test(scratch) ||
-                /^\/ROF\//i.test(scratch)
-            ) {
-                nextRemarks = null // special flag — do not hide strip remarks
+            const holdingScratchFields =
+                scratch === '' &&
+                flight.scratchFieldsHoldUntil !== undefined &&
+                Date.now() < flight.scratchFieldsHoldUntil
+            if (holdingScratchFields) {
+                if (flight.remarks || flight.hp) {
+                    restoreScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                    console.log(`[SCRATCH] ${callsign}: restore after empty (hold) "${restoreScratchValue}"`)
+                }
             } else {
-                // Other non-remark scratch values (TopSky ops, etc.) — clear remark
-                nextRemarks = undefined
+                const { remarks: nextRemarks, hp: nextHp } = parseCombinedScratch(scratch)
+                if (nextRemarks !== null && nextRemarks !== flight.remarks) {
+                    console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
+                    flight.remarks = nextRemarks
+                    // Scratch-sourced SLOW is controller/TopSky owned — never auto-clear
+                    if (hasSlowRemark(nextRemarks)) this.markSlowRemarkManual(flight)
+                }
+                if (nextHp !== null && nextHp !== flight.hp) {
+                    console.log(`[HP] ${callsign}: ${flight.hp ?? '-'} -> ${nextHp ?? '-'} (scratch /)`)
+                    flight.hp = nextHp
+                }
             }
-            if (nextRemarks !== null && nextRemarks !== flight.remarks) {
-                console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
-                this.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
-                flight.remarks = nextRemarks
+        }
+        if (message.hs !== undefined) {
+            const nextHs = message.hs.trim().toUpperCase().slice(0, 5) || undefined
+            if (nextHs !== flight.hs) {
+                console.log(`[HS] ${callsign}: ${flight.hs ?? '-'} -> ${nextHs ?? '-'} (VCH)`)
+                flight.hs = nextHs
             }
         }
         if (message.stand !== undefined) flight.stand = message.stand
@@ -1590,6 +1828,9 @@ class FlightStore {
         if (clearScratchpadCallsign) {
             result.clearScratchpadCallsign = clearScratchpadCallsign
             result.clearScratchpadDelayMs = clearScratchpadDelayMs
+        }
+        if (restoreScratchValue !== undefined) {
+            result.setScratchValue = restoreScratchValue
         }
         return result
     }
@@ -1696,12 +1937,27 @@ class FlightStore {
         const defNotAirborneThreshold = fieldElevation + 30
         const groundSpeedThreshold = 55
 
-        // Set airborne flag for both departures and arrivals
+        // Set airborne flag for both departures and arrivals; stamp ATD/ATA once
+        const myAirports = this.config.myAirports.map((a) => a.toUpperCase())
+        const originMine = !!flight.origin && myAirports.includes(flight.origin.toUpperCase())
+        const destMine = !!flight.destination && myAirports.includes(flight.destination.toUpperCase())
+        const utcHhmm = () => {
+            const d = new Date()
+            return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`
+        }
         if (!wasAirborne && message.altitude > airborneThreshold) {
             flight.airborne = true
+            // Airborne again after a landing stamp = go-around (or new dep) — clear ATA
+            if (flight.ata) flight.ata = undefined
+            if (!flight.atd && originMine) {
+                flight.atd = utcHhmm()
+            }
         } else if (wasAirborne && message.altitude <= airborneThreshold && (message.groundSpeed <= groundSpeedThreshold || message.altitude <= defNotAirborneThreshold)) {
             // Aircraft has landed
             flight.airborne = false
+            if (!flight.ata && destMine && !flight.missedApproach) {
+                flight.ata = utcHhmm()
+            }
         }
 
         return this.finalizeFlightStrips(
@@ -1826,9 +2082,21 @@ class FlightStore {
 
         // Format flight level
         const rfl = flight.rfl ? this.formatFlightLevel(flight.rfl) : undefined
-        const clearedAltitude = flight.cfl && flight.cfl > 2
-            ? this.formatFlightLevel(flight.cfl)
-            : undefined
+        const clearedAltitude = (() => {
+            if (flight.cfl === 1) {
+                const t = (flight.approachType || '').toUpperCase()
+                if (t && t !== 'CA' && t !== 'VA') return t
+                return 'CA'
+            }
+            if (flight.cfl === 2) {
+                const t = (flight.approachType || '').toUpperCase()
+                if (t === 'OS') return 'OS'
+                if (t && t !== 'CA' && t !== 'VA') return t
+                return 'VA'
+            }
+            if (flight.cfl && flight.cfl > 2) return this.formatFlightLevel(flight.cfl)
+            return undefined
+        })()
 
         // Cleared for takeoff: departure with DEPA groundstate, not yet airborne
         const clearedForTakeoff = stripType === 'departure' &&
@@ -1843,9 +2111,15 @@ class FlightStore {
         // Determine actions based on controller status
         let actions: string[] | undefined
         const myCallsign = actionConfig.myCallsign
-        const isTrackedByMe = flight.controller === myCallsign
+        const csEq = (a: string | undefined, b: string | undefined) =>
+            !!a && !!b && a.toUpperCase() === b.toUpperCase()
+        const isTrackedByMe = csEq(flight.controller, myCallsign)
         const isUntracked = !flight.controller || flight.controller === ''
-        const isHandoffToMe = flight.handoffTargetController === myCallsign
+        const isHandoffToMe =
+            csEq(flight.handoffTargetController, myCallsign) ||
+            (!!actionConfig.myPositionId &&
+                !!flight.handoffTargetControllerId &&
+                actionConfig.myPositionId.toUpperCase() === flight.handoffTargetControllerId.toUpperCase())
         const handoffTarget = flight.handoffTargetController
         const hasHandoff = !!handoffTarget && handoffTarget !== ''
 
@@ -1910,8 +2184,9 @@ class FlightStore {
                 }
             } else if (!isUntracked && !isTrackedByMe && actionConfig.isController) {
                 // Tracked by someone else — ROF only (ASSUME is for untracked / handoff-to-me above)
+                // Keep ROF visible while pink (cooldown); re-press resets the 2 min timer
                 const action = determineActionForFlight(flight, sectionId, actionConfig)
-                if (action === 'ROF' && !this.isRofCoolingDown(flight.callsign)) {
+                if (action === 'ROF') {
                     actions = ['ROF']
                 }
             }
@@ -1981,7 +2256,8 @@ class FlightStore {
             }
         }
 
-        // GND: suppress sequence XFER while still in our AoR and not moving toward next
+        // GND: suppress sequence XFER while still in our AoR and not moving toward next.
+        // Fall back by groundstate — never show PARK/TERM before TXIN is set.
         if (
             coveringGndOnly &&
             isTrackedByMe &&
@@ -1991,14 +2267,25 @@ class FlightStore {
             !shouldOfferGndSequenceXfer(flight, essaRoles, essaNext)
         ) {
             if (stripType === "arrival" || stripType === "local") {
-                actions = ["PARK"]
+                const withoutXfer = actions.filter((a) => a !== "XFER")
+                if (withoutXfer.length > 0) {
+                    actions = withoutXfer
+                } else {
+                    const gs = flight.groundstate ?? ""
+                    if (gs === "TXIN") {
+                        actions = ["PARK"]
+                    } else if (gs === "ARR" || gs === "" || gs === "NSTS") {
+                        actions = ["TXI"]
+                    } else {
+                        actions = undefined
+                    }
+                }
             }
         }
 
-        // Outbound handoff started — hide XFER/READY until accept/refuse
-        if (transferPending === "out" && actions?.length) {
-            actions = actions.filter((a) => a !== "XFER" && a !== "READY")
-            if (actions.length === 0) actions = undefined
+        // Outbound handoff started — TRANS/READY become ASSUME (reclaim / cancel handoff)
+        if (transferPending === "out") {
+            actions = ["ASSUME"]
         }
 
         if (pendingRofFrom) {
@@ -2088,9 +2375,9 @@ class FlightStore {
             }
         }
 
-        // ROF display fields (pink SI + tooltip):
+        // ROF display fields (pink SI / pink ROF key + tooltip):
         // - inbound: we track the strip and got /LAM/ROF/{requester}
-        // - outbound: we just sent ROF (cooldown) for other-owned traffic
+        // - outbound: we sent ROF — pink key for 2 min (rofFlashUntil); still pressable
         let rofRequestSi: string | undefined
         let rofRequestCallsign: string | undefined
         let rofRequestFrequency: string | undefined
@@ -2109,6 +2396,7 @@ class FlightStore {
             if (myFreq != null && myFreq > 0 && myFreq < 199) {
                 rofRequestFrequency = myFreq.toFixed(3)
             }
+            rofFlashUntil = this.getRofCooldownUntil(flight.callsign)
         }
 
         // Can reset squawk if we're a controller and we track the flight (or it's untracked)
@@ -2117,8 +2405,11 @@ class FlightStore {
         // Can edit clearance if we're a controller and the flight is tracked by me or untracked
         const canEditClearance = actionConfig.isController === true && (isTrackedByMe || isUntracked)
 
-        // Slow aircraft detection
-        const isSlow = isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '') || undefined
+        // Slow aircraft detection — V / Z never get auto-SLOW SID rules or SLOW flag
+        const isSlow =
+            (isIfrSidEligible(flightRules) &&
+                isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '')) ||
+            undefined
 
         // Highlight actions: determine which action buttons should be highlighted yellow
         const highlightActions: string[] = []
@@ -2179,6 +2470,16 @@ class FlightStore {
         const cdmEligible = this.isCdmEligibleFlight(flight)
         const ifrDeparture = stripType === 'departure' && (flightRules === 'I' || flightRules === 'Y')
 
+        // TEMP TEST: spoof CTOT for SAS1748 (remove after triangle UI check)
+        const spoofCtotSas1748 = flight.callsign.toUpperCase() === 'SAS1748'
+
+        const displaySid = extractDisplaySid(flight)
+        // First FPL point after ADEP/rwy or SID/rwy (not the SID procedure name)
+        const tmaExit =
+            stripType === 'departure' || stripType === 'local'
+                ? extractTmaExitPoint(undefined, flight.route)
+                : undefined
+
         return {
             id: airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign,
             callsign: flight.callsign,
@@ -2194,7 +2495,8 @@ class FlightStore {
             route: flight.route,
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
-            sid: extractDisplaySid(flight),
+            sid: displaySid,
+            tmaExit,
             star: flight.star,
             rfl,
             squawk: flight.squawk,
@@ -2222,6 +2524,7 @@ class FlightStore {
             clearance: flight.clearance ?? undefined,
             clearedForTakeoff,
             clearedToLand,
+            airborne: flight.airborne,
             missedApproach: flight.missedApproach || undefined,
             canEditClearance: canEditClearance || undefined,
             xferFrequency,
@@ -2237,15 +2540,25 @@ class FlightStore {
             // CDM times only on ESSA IFR departures (not VFR / local)
             tobt: cdmEligible ? flight.tobt : undefined,
             tsat: cdmEligible ? flight.tsat : undefined,
+            ttot: cdmEligible ? flight.ttot : undefined,
             tobtSetBy: cdmEligible ? flight.tobtSetBy : undefined,
             asrt: cdmEligible ? flight.asrt : undefined,
             tsac: cdmEligible ? flight.tsac : undefined,
             ctoc: cdmEligible ? flight.ctoc : undefined,
+            qnhGiven: flight.qnhGiven,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
-            ctot: ifrDeparture ? flight.ctot : undefined,
+            ctot: ifrDeparture
+                ? (spoofCtotSas1748 ? '0240' : flight.ctot)
+                : undefined,
             ctotCancelled: ifrDeparture && flight.ctotCancelled ? true : undefined,
-            ctotReason: ifrDeparture ? flight.ctotReason : undefined,
+            ctotReason: ifrDeparture
+                ? (spoofCtotSas1748 ? (flight.ctotReason || 'TEST SPOOF') : flight.ctotReason)
+                : undefined,
+            atd: flight.atd,
+            ata: flight.ata,
             remarks: flight.remarks || undefined,
+            hp: flight.hp || undefined,
+            hs: flight.hs || undefined,
             isSlow,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
             isAssumed: isTrackedByMe || undefined,
@@ -2465,7 +2778,16 @@ class FlightStore {
         // Update flags
         if (flags.clearedToLand !== undefined) flight.clearedToLand = flags.clearedToLand
         if (flags.airborne !== undefined) flight.airborne = flags.airborne
-        if (flags.groundstate !== undefined) flight.groundstate = flags.groundstate
+        if (flags.groundstate !== undefined) {
+            flight.groundstate = flags.groundstate
+            if (flags.groundstate === '') {
+                flight.groundstateClearedUntil = Date.now() + 3000
+                flight.groundstateHoldUntil = undefined
+            } else {
+                flight.groundstateClearedUntil = undefined
+                flight.groundstateHoldUntil = Date.now() + 12000
+            }
+        }
         flight.lastUpdate = Date.now()
 
         // Check if we should create/update a strip

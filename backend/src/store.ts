@@ -88,6 +88,8 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "stand",
     "runway",
     "remarks",
+    "hp",
+    "hs",
     "stripType",
     "bayId",
     "sectionId",
@@ -99,6 +101,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "clearance",
     "clearedForTakeoff",
     "clearedToLand",
+    "airborne",
     "dclStatus",
     "dclMessage",
     "dclClearance",
@@ -108,10 +111,12 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     // CDM / vIFF — must be compared or TOBT/TSAT/REA-only updates are dropped
     "tobt",
     "tsat",
+    "ttot",
     "tobtSetBy",
     "asrt",
     "tsac",
     "ctoc",
+    "qnhGiven",
     "cdmSts",
     "ctot",
     "ctotCancelled",
@@ -934,6 +939,7 @@ class EfsStore {
             // Restoring a PARK'd strip must clear PARK or delete_parked hides it immediately
             if (flight.groundstate === 'PARK') {
                 flight.groundstate = ''
+                flight.groundstateClearedUntil = Date.now() + 3000
                 clearedPark = true
             }
         }

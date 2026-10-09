@@ -316,6 +316,20 @@ actionRules:
     myRole: [TWR, APP, CTR]
     priority: 95
 
+  # Override common-rules: ROF only once inside 20 nm of ESSA
+  rof_inbound_arr:
+    action: ROF
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    controller: not_myself
+    ownerRole: [APP, CTR]
+    handoffInitiated: false
+    myRole: [TWR]
+    withinRangeNm: 20
+    withinRangeAirports: [ESSA]
+    priority: 120
+
   # Override common-rules: split taxi uses taxi_dep (not unified taxi)
   rof_taxi_dep_twr:
     action: ROF
@@ -330,7 +344,36 @@ actionRules:
     priority: 40
 
 moveRules:
-  # Override common-rules taxi moves for split sections
+  # Override common-rules taxi moves for split sections (taxi_dep)
+  # CD ALL / TSAT → TAXI DEP: TXO only — never set CLR
+  move_pending_to_taxi:
+    fromSectionId: pending_dep
+    toSectionId: taxi_dep
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_cleared_to_taxi:
+    fromSectionId: cleared
+    toSectionId: taxi_dep
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  # CD ALL → PUSH: PUSH only (no CLR)
+  move_pending_to_push:
+    fromSectionId: pending_dep
+    toSectionId: push_start
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: PUSH
+
   move_push_to_taxi:
     fromSectionId: push_start
     toSectionId: taxi_dep
@@ -347,6 +390,40 @@ moveRules:
     command:
       type: setGroundstate
       value: PUSH
+
+  # TAXI DEP → TSAT: revert TXO (keep CLR)
+  undo_taxi_to_cleared:
+    fromSectionId: taxi_dep
+    toSectionId: cleared
+    direction: either
+    priority: 20
+    command:
+      type: setGroundstate
+      value: ONFREQ
+
+  # TAXI DEP → CD ALL: revert TXO + CLR
+  undo_taxi_to_pending:
+    fromSectionId: taxi_dep
+    toSectionId: pending_dep
+    direction: either
+    priority: 20
+    commands:
+      - type: setGroundstate
+        value: ONFREQ
+      - type: setClearance
+        value: false
+
+  # PUSH → CD ALL: revert PUSH + CLR
+  undo_push_to_pending:
+    fromSectionId: push_start
+    toSectionId: pending_dep
+    direction: either
+    priority: 20
+    commands:
+      - type: setGroundstate
+        value: ONFREQ
+      - type: setClearance
+        value: false
 
   # TAXI / TAXI DEP → any RUNWAY pair: LU (LINEUP)
   # toSectionIdContains matches runway_01L_19R etc. and legacy arr/dep_runway

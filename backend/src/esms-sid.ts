@@ -140,6 +140,26 @@ export function resolveEsmsPreferredSid(options: {
     return resolveEsmsPreferredSidFromNames(names, options)
 }
 
+/** All ESMS SIDs on the runway that lead to a filled TMA exit (any active letter). */
+export function collectEsmsSidsForTmaExit(options: {
+    runway: string
+    tmaExit: string
+    ekch30?: boolean
+}): string[] {
+    const runway = normalizeEsmsDepRwy(options.runway)
+    if (!runway) return []
+    const tmaExit = options.tmaExit.trim().toUpperCase()
+    if (!tmaExit || !(ESMS_EXITS as readonly string[]).includes(tmaExit)) return []
+    const ekch30 = !!options.ekch30
+    const letters = sortLetters(runway, ekch30)
+    const names = getSidsForRunway("ESMS", runway).map((s) => s.name)
+    return names.filter(
+        (name) =>
+            !name.includes("?") &&
+            letters.some((L) => namedSidRegex(tmaExit, L).test(name)),
+    )
+}
+
 /**
  * Ownership / transfer SI labels for ESMS logins.
  * ESMS_TWR → TWR, ESMS_GND → AD2 (must win over ESGG *_GND→GND).

@@ -6,9 +6,10 @@
 
 <script lang="ts" setup>
 import { useEfsStore } from "./store/efs"
+import { useEfsUiScale } from "./composables/useEfsUiScale"
 
 const efs = useEfsStore()
-
+useEfsUiScale()
 </script>
 
 <style>
@@ -26,10 +27,10 @@ body.touch-dragging * {
     -webkit-touch-callout: none !important;
 }
 
-/* Drag clone styling */
+/* Drag clone styling — outline (not border) so layout width/height stay correct */
 .drag-clone {
-    border: 2px solid #0088aa !important;
-    background: #f0ebe0 !important;
+    outline: 2px solid #0088aa !important;
+    outline-offset: -2px;
     -webkit-touch-callout: none !important;
     user-select: none !important;
     -webkit-user-select: none !important;

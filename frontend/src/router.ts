@@ -43,7 +43,13 @@ router.beforeEach((to, from, next) => {
     } else if (from.query && from.query.federation && (!to.query || !to.query.federation)) {
         to.query = { ...to.query, federation: from.query.federation }
         next(to)
-    } else if ((!to.name || to.name == "home") && lastRoute && lastRoute != "home" && lastRoute != "Home" && first) {
+    } else if (
+        (!to.name || to.name == "home") &&
+        lastRoute &&
+        lastRoute != "home" &&
+        lastRoute != "Home" &&
+        first
+    ) {
         next({ name: lastRoute })
     } else next()
     first = false

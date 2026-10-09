@@ -102,6 +102,7 @@ function onRestore(stripId: string) {
 
 <style scoped>
 .trash-dialog {
+  --s: var(--efs-scale, 1);
   background: #2b2d31;
   border: 1px solid #4a4e54;
   color: #e8e8e8;
@@ -111,8 +112,8 @@ function onRestore(stripId: string) {
 .trash-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: calc(8px * var(--s));
+  padding: calc(10px * var(--s)) calc(12px * var(--s));
   border-bottom: 1px solid #3a3e42;
 }
 
@@ -121,9 +122,9 @@ function onRestore(stripId: string) {
 }
 
 .trash-title {
-  font-size: 13px;
+  font-size: calc(13px * var(--s));
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: calc(0.3px * var(--s));
   flex: 1;
 }
 
@@ -131,10 +132,10 @@ function onRestore(stripId: string) {
   background: none;
   border: none;
   color: #9ca3af;
-  font-size: 20px;
+  font-size: calc(20px * var(--s));
   line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 calc(4px * var(--s));
 }
 
 .trash-close:hover {
@@ -142,7 +143,7 @@ function onRestore(stripId: string) {
 }
 
 .trash-search {
-  padding: 10px 12px 8px;
+  padding: calc(10px * var(--s)) calc(12px * var(--s)) calc(8px * var(--s));
 }
 
 .trash-search-input {
@@ -151,10 +152,10 @@ function onRestore(stripId: string) {
   background: #1e1f22;
   border: 1px solid #4a4e54;
   color: #e8e8e8;
-  padding: 7px 10px;
-  font-size: 13px;
+  padding: calc(7px * var(--s)) calc(10px * var(--s));
+  font-size: calc(13px * var(--s));
   font-family: ui-monospace, monospace;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
   text-transform: uppercase;
 }
 
@@ -164,32 +165,33 @@ function onRestore(stripId: string) {
 }
 
 .trash-list {
-  max-height: 320px;
+  max-height: calc(320px * var(--s));
   overflow-y: auto;
-  padding: 0 8px 10px;
+  padding: 0 calc(8px * var(--s)) calc(10px * var(--s));
 }
 
 .trash-empty {
-  padding: 24px 12px;
+  padding: calc(24px * var(--s)) calc(12px * var(--s));
   text-align: center;
   color: #9ca3af;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
 }
 
 .trash-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: calc(10px * var(--s));
   width: 100%;
   text-align: left;
   background: #35373c;
   border: 1px solid #4a4e54;
   color: inherit;
-  padding: 8px 10px;
-  margin-bottom: 6px;
+  padding: calc(8px * var(--s)) calc(10px * var(--s));
+  margin-bottom: calc(6px * var(--s));
   cursor: pointer;
   font: inherit;
+  min-height: max(32px, calc(36px * var(--s)));
 }
 
 .trash-row:hover {
@@ -200,31 +202,31 @@ function onRestore(stripId: string) {
 .trash-row-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: calc(2px * var(--s));
   min-width: 0;
 }
 
 .trash-callsign {
   font-weight: 700;
-  font-size: 13px;
+  font-size: calc(13px * var(--s));
   font-family: ui-monospace, monospace;
-  letter-spacing: 0.4px;
+  letter-spacing: calc(0.4px * var(--s));
 }
 
 .trash-meta {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   color: #9ca3af;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 280px;
+  max-width: calc(280px * var(--s));
 }
 
 .trash-restore {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   font-weight: 700;
-  letter-spacing: 0.4px;
+  letter-spacing: calc(0.4px * var(--s));
   color: #86efac;
   text-transform: uppercase;
 }

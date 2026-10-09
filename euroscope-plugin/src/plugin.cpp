@@ -34,6 +34,16 @@ static std::string AnsiToUtf8(const char *ansi)
     return utf8;
 }
 
+/** ICAO SSR: exactly four digits 0–7 (reject interim junk like "9875"). */
+static bool IsValidOctalSquawk(const char *squawk)
+{
+    if (!squawk || strlen(squawk) != 4) return false;
+    for (int i = 0; i < 4; ++i) {
+        if (squawk[i] < '0' || squawk[i] > '7') return false;
+    }
+    return true;
+}
+
 namespace VatEFS
 {
 
@@ -178,8 +188,11 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (starName && *starName && strlen(starName) < 50)
             message["star"] = AnsiToUtf8(starName);
         if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
+        // Always send sid (empty when cleared) so the backend can drop a stale GetSid()
         if (sidName && *sidName && strlen(sidName) < 50)
             message["sid"] = AnsiToUtf8(sidName);
+        else
+            message["sid"] = "";
 
         const char *eobtRaw = fpData.GetEstimatedDepartureTime();
         if (eobtRaw && eobtRaw[0] != '\0') {
@@ -244,7 +257,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         switch (DataType) {
         case EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK: {
             const char *squawk = ctrData.GetSquawk();
-            if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
+            if (IsValidOctalSquawk(squawk)) {
                 out << " squawk " << squawk;
                 SetJsonIfValidUtf8(message, "squawk", squawk);
             }
@@ -295,10 +308,10 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             // Safe string comparisons
             if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
                 SetJsonIfValidUtf8(message, "groundstate", scratch.c_str());
-            } else if (scratch == "/EFS/CTL") {
-                message["clearedToLand"] = true;
-            } else if (scratch == "/EFS/CTL-") {
-                message["clearedToLand"] = false;
+            } else if (scratch == "NOSTATE") {
+                // Swedish clear-ground-state token — treat as empty GS for the backend
+                SetJsonIfValidUtf8(message, "groundstate", "");
+                SetJsonIfValidUtf8(message, "scratch", scratch.c_str());
             } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
                 // Ensure we have enough characters for substr(6)
                 SetJsonIfValidUtf8(message, "stand", scratch.substr(6).c_str());
@@ -415,7 +428,11 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
     out << "FlightPlanDisconnect " << FlightPlan.GetCallsign();
     DebugMessage(out.str());
     const char *cs = FlightPlan.GetCallsign();
-    if (cs && cs[0] != '\0') lastOwnershipSnapshot.erase(cs);
+    if (cs && cs[0] != '\0') {
+        lastOwnershipSnapshot.erase(cs);
+        lastHoldShortSnapshot.erase(cs);
+        lastCtlSnapshot.erase(cs);
+    }
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
     SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
@@ -498,7 +515,7 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         // message["headingMagnetic"] = position.GetReportedHeading();
         message["heading"] = position.GetReportedHeadingTrueNorth();
         const char *squawk = position.GetSquawk();
-        if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
+        if (IsValidOctalSquawk(squawk)) {
             SetJsonIfValidUtf8(message, "squawk", squawk);
         }
         // message["modec"] = position.GetTransponderC();
@@ -890,6 +907,8 @@ void VatEFSPlugin::OnTimer(int counter)
         if (counter % 5 == 0) UpdateMyself();
         // Ownership (assume / transfer / accept / refuse) often has no ES callback — poll every tick.
         PollOwnershipChanges();
+        // VCH H/S (ann 4) + CTL (ann 3) — no CAD DataType callback.
+        PollVchAnnotationChanges();
         // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.
         // Heartbeat every 5s refreshes backend local-prefer TTL without re-sending all times
         // (avoids locking in a corrupt mid-write read for untouched callsigns).
@@ -1550,7 +1569,7 @@ void VatEFSPlugin::Refresh()
         message["type"] = "controllerAssignedDataUpdate";
         SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
         const char *squawk = ctrData.GetSquawk();
-        if (squawk && strlen(squawk) == 4) { // Valid squawk is always 4 digits
+        if (IsValidOctalSquawk(squawk)) {
             SetJsonIfValidUtf8(message, "squawk", squawk);
         }
         int rfl = ctrData.GetFinalAltitude();
@@ -1564,6 +1583,20 @@ void VatEFSPlugin::Refresh()
             message["direct"] = "";
         }
         SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
+        // VCH hold short HS (ann 4) + CTL (ann 3)
+        {
+            const char *cs = FlightPlan.GetCallsign();
+            std::string hs;
+            bool ctl = false;
+            if (cs && cs[0] != '\0') {
+                hs = GetHoldShort(cs);
+                ctl = GetVchCtl(cs);
+                lastHoldShortSnapshot[cs] = hs;
+                lastCtlSnapshot[cs] = ctl ? "1" : "0";
+            }
+            message["hs"] = hs;
+            message["clearedToLand"] = ctl;
+        }
         SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
         int speed = ctrData.GetAssignedSpeed();
@@ -1783,29 +1816,73 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 if (message["type"] == "setGroundState") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto state = message["state"].get<std::string>();
-                    DebugMessage("setGroundState: " + callsign + " " + state);
-                    if (!callsign.empty() && !state.empty()) {
-                        UpdateScratchPad(callsign, state, true);
+                    // Empty / NOSTATE clears Swedish ground state via scratch (ES rejects empty GS)
+                    const bool clearGs = state.empty() || state == "NOSTATE";
+                    const std::string scratchState = clearGs ? "NOSTATE" : state;
+                    DebugMessage("setGroundState: " + callsign + " " + (clearGs ? "(clear)" : state));
+                    if (callsign.empty()) {
+                        DisplayMessage("setGroundState: Invalid callsign");
+                    } else if (UpdateScratchPad(callsign, scratchState, true)) {
+                        if (clearGs) {
+                            // Echo cleared GS immediately — CAD may still report stale GS until ES applies NOSTATE
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "controllerAssignedDataUpdate";
+                            echo["callsign"] = callsign;
+                            echo["groundstate"] = "";
+                            PostJson(echo, "setGroundState");
+                        }
                     } else {
-                        DisplayMessage("setGroundState: Invalid callsign or state");
+                        DisplayMessage("setGroundState: Failed for " + callsign);
                     }
                 } else if (message["type"] == "setClearedToLand") {
+                    // VCH CTL — strip annotation 3
                     auto callsign = message["callsign"].get<std::string>();
-                    if (!callsign.empty()) {
-                        UpdateScratchPad(callsign, "/EFS/CTL", true);
-                    } else {
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
                         DisplayMessage("setClearedToLand: Invalid callsign");
+                    } else if (!SetVchCtl(callsign, true)) {
+                        DisplayMessage("setClearedToLand: Failed for " + callsign);
+                    } else {
+                        lastCtlSnapshot[callsign] = "1";
+                        DebugMessage("setClearedToLand: " + callsign + " -> CTL (VCH)");
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["clearedToLand"] = true;
+                        PostJson(echo, "setClearedToLand");
                     }
                 } else if (message["type"] == "unsetClearedToLand") {
                     auto callsign = message["callsign"].get<std::string>();
-                    if (!callsign.empty()) {
-                        UpdateScratchPad(callsign, "/EFS/CTL-", true);
-                    } else {
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
                         DisplayMessage("unsetClearedToLand: Invalid callsign");
+                    } else if (!SetVchCtl(callsign, false)) {
+                        DisplayMessage("unsetClearedToLand: Failed for " + callsign);
+                    } else {
+                        lastCtlSnapshot[callsign] = "0";
+                        DebugMessage("unsetClearedToLand: " + callsign + " (VCH)");
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["clearedToLand"] = false;
+                        PostJson(echo, "unsetClearedToLand");
                     }
                 } else if (message["type"] == "goaround") {
                     auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
                     if (!callsign.empty()) {
+                        // Clear VCH CTL so list + EFS stay in sync on go-around
+                        if (SetVchCtl(callsign, false)) {
+                            lastCtlSnapshot[callsign] = "0";
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "controllerAssignedDataUpdate";
+                            echo["callsign"] = callsign;
+                            echo["clearedToLand"] = false;
+                            PostJson(echo, "goaround");
+                        }
                         UpdateScratchPad(callsign, "MISAP_", false);
                     } else {
                         DisplayMessage("goaround: Invalid callsign");
@@ -1829,6 +1906,41 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         UpdateScratchPad(callsign, value, false);
                     } else {
                         DisplayMessage("setScratch: Invalid callsign");
+                    }
+                } else if (message["type"] == "setScratchTmp") {
+                    // Transient TopSky token (e.g. /APPTYPE/CAT3/) — set then restore previous scratch
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto value = message["value"].get<std::string>();
+                    if (!callsign.empty()) {
+                        bool ok = UpdateScratchPad(callsign, value, true);
+                        if (!ok) DisplayMessage("setScratchTmp: Failed for " + callsign);
+                        else DebugMessage("setScratchTmp: " + callsign + " -> " + value);
+                    } else {
+                        DisplayMessage("setScratchTmp: Invalid callsign");
+                    }
+                } else if (message["type"] == "setHs") {
+                    // VCH hold short — strip annotation 4 (max 5 chars)
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto value = message.contains("value") && message["value"].is_string()
+                                     ? message["value"].get<std::string>()
+                                     : "";
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    for (auto &c : value)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (value.size() > 5) value.resize(5);
+                    if (callsign.empty()) {
+                        DisplayMessage("setHs: Invalid callsign");
+                    } else if (!SetHoldShort(callsign, value)) {
+                        DisplayMessage("setHs: Failed for " + callsign);
+                    } else {
+                        lastHoldShortSnapshot[callsign] = value;
+                        DebugMessage("setHs: " + callsign + " -> " + (value.empty() ? "(clear)" : value));
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["hs"] = value;
+                        PostJson(echo, "setHs");
                     }
                 } else if (message["type"] == "refresh") {
                     Refresh();
@@ -1965,7 +2077,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 } else if (message["type"] == "toggleClearanceFlag") {
                     auto callsign = message["callsign"].get<std::string>();
                     if (dummyRadarScreens.size() > 0) {
-                        dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
+                        // Honor desired when present — bare toggle flips even when already correct
+                        if (message.contains("desired") && !message["desired"].is_null()) {
+                            bool desired = message["desired"].get<bool>();
+                            dummyRadarScreens[0]->SetClearanceFlag(callsign.c_str(), desired);
+                        } else {
+                            dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
+                        }
                     } else {
                         DisplayMessage("To toggle clearance flag, the EFS plugin must be allowed "
                                        "to draw on radar screen.");
@@ -1974,7 +2092,7 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 } else if (message["type"] == "assignDepartureRunway") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto runway = message["runway"].get<std::string>();
-                    DebugMessage("assignDepartureRunway: " + callsign + " -> " + runway);
+                    DebugMessage("assignDepartureRunway: " + callsign + " -> " + (runway.empty() ? "(clear)" : runway));
                     for (auto &c : callsign)
                         c = (char)std::toupper((unsigned char)c);
                     auto fp = FlightPlanSelect(callsign.c_str());
@@ -1998,29 +2116,41 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         }
 
                         std::string newRoute;
+                        bool amend = false;
                         auto slashPos = firstTerm.find('/');
-                        if (slashPos != std::string::npos) {
-                            // Already has SID/rwy or airport/rwy prefix - keep prefix, change runway
-                            newRoute = firstTerm.substr(0, slashPos) + "/" + runway;
-                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
-                        } else if (IsSidPattern(firstTerm)) {
-                            // Pilot-filed SID - remove it, prepend airport/runway
-                            newRoute = departureAirport + "/" + runway;
-                            if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                        if (runway.empty()) {
+                            // Clear dep runway: drop SID/rwy or ADEP/rwy prefix
+                            if (slashPos != std::string::npos) {
+                                newRoute = restOfRoute;
+                                amend = true;
+                            } else {
+                                DebugMessage("assignDepartureRunway: clear skipped (no rwy prefix)");
+                            }
+                        } else if (departureAirport.empty()) {
+                            DisplayMessage("assignDepartureRunway: No origin airport");
                         } else {
-                            // No prefix - prepend airport/runway before the full original route
+                            // Always ADEP/rwy at start of FPL (replaces SID/rwy or prior ADEP/rwy)
+                            std::string body = route;
+                            if (slashPos != std::string::npos) {
+                                body = restOfRoute;
+                            } else if (IsSidPattern(firstTerm)) {
+                                body = restOfRoute;
+                            }
                             newRoute = departureAirport + "/" + runway;
-                            if (!route.empty()) newRoute += " " + route;
+                            if (!body.empty()) newRoute += " " + body;
+                            amend = true;
                         }
-                        std::string ansiRoute = Utf8ToAnsi(newRoute);
-                        DebugMessage("assignDepartureRunway: new route: " + ansiRoute);
-                        fpData.SetRoute(ansiRoute.c_str());
-                        fpData.AmendFlightPlan();
+                        if (amend) {
+                            std::string ansiRoute = Utf8ToAnsi(newRoute);
+                            DebugMessage("assignDepartureRunway: new route: " + ansiRoute);
+                            fpData.SetRoute(ansiRoute.c_str());
+                            fpData.AmendFlightPlan();
+                        }
                     }
                 } else if (message["type"] == "assignSid") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto sid = message["sid"].get<std::string>();
-                    DebugMessage("assignSid: " + callsign + " -> " + sid);
+                    DebugMessage("assignSid: " + callsign + " -> " + (sid.empty() ? "(clear)" : sid));
                     for (auto &c : callsign)
                         c = (char)std::toupper((unsigned char)c);
                     auto fp = FlightPlanSelect(callsign.c_str());
@@ -2032,6 +2162,8 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         std::string route = routeStr ? routeStr : "";
                         const char *depRwy = fpData.GetDepartureRwy();
                         std::string currentRwy = depRwy ? depRwy : "";
+                        const char *origin = fpData.GetOrigin();
+                        std::string adep = origin ? origin : "";
 
                         std::string firstTerm;
                         std::string restOfRoute;
@@ -2043,31 +2175,78 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             firstTerm = route;
                         }
 
+                        auto isAirportIcao = [](const std::string &s) {
+                            if (s.size() != 4) return false;
+                            for (char c : s)
+                                if (!std::isupper((unsigned char)c)) return false;
+                            return true;
+                        };
+
                         std::string newRoute;
+                        bool amend = false;
                         auto slashPos = firstTerm.find('/');
-                        if (slashPos != std::string::npos) {
+                        if (sid.empty()) {
+                            // Clear SID: SID/rwy → ADEP/rwy (leave ICAO/rwy alone)
+                            if (slashPos != std::string::npos) {
+                                std::string prefix = firstTerm.substr(0, slashPos);
+                                std::string existingRwy = firstTerm.substr(slashPos + 1);
+                                if (isAirportIcao(prefix)) {
+                                    DebugMessage("assignSid: clear skipped (already " + firstTerm + ")");
+                                } else if (!adep.empty() && !existingRwy.empty()) {
+                                    newRoute = adep + "/" + existingRwy;
+                                    if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                                    amend = true;
+                                } else if (!restOfRoute.empty()) {
+                                    newRoute = restOfRoute;
+                                    amend = true;
+                                }
+                            } else if (!firstTerm.empty() && !isAirportIcao(firstTerm)
+                                       && (IsSidPattern(firstTerm)
+                                           || firstTerm.find('*') != std::string::npos
+                                           || firstTerm.find('.') != std::string::npos
+                                           || std::any_of(firstTerm.begin(), firstTerm.end(), [](unsigned char c) {
+                                                  return !std::isalnum(c);
+                                              }))) {
+                                // Bare SID / track term — replace with ADEP/rwy
+                                if (!adep.empty() && !currentRwy.empty()) {
+                                    newRoute = adep + "/" + currentRwy;
+                                    if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                                    amend = true;
+                                } else if (!restOfRoute.empty()) {
+                                    newRoute = restOfRoute;
+                                    amend = true;
+                                }
+                            } else {
+                                DebugMessage("assignSid: clear skipped (no SID prefix)");
+                            }
+                        } else if (slashPos != std::string::npos) {
                             // Already has SID/rwy or airport/rwy prefix - keep runway, change SID
                             std::string existingRwy = firstTerm.substr(slashPos + 1);
                             newRoute = sid + "/" + existingRwy;
                             if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                            amend = true;
                         } else if (IsSidPattern(firstTerm)) {
                             // Pilot-filed SID - replace with new SID/runway
                             newRoute = sid + "/" + currentRwy;
                             if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                            amend = true;
                         } else {
                             // No prefix - prepend SID/runway before the full original route
                             newRoute = sid + "/" + currentRwy;
                             if (!route.empty()) newRoute += " " + route;
+                            amend = true;
                         }
-                        std::string ansiRoute = Utf8ToAnsi(newRoute);
-                        DebugMessage("assignSid: new route: " + ansiRoute);
-                        fpData.SetRoute(ansiRoute.c_str());
-                        fpData.AmendFlightPlan();
+                        if (amend) {
+                            std::string ansiRoute = Utf8ToAnsi(newRoute);
+                            DebugMessage("assignSid: new route: " + ansiRoute);
+                            fpData.SetRoute(ansiRoute.c_str());
+                            fpData.AmendFlightPlan();
+                        }
                     }
                 } else if (message["type"] == "assignArrivalRunway") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto runway = message["runway"].get<std::string>();
-                    DebugMessage("assignArrivalRunway: " + callsign + " -> " + runway);
+                    DebugMessage("assignArrivalRunway: " + callsign + " -> " + (runway.empty() ? "(clear)" : runway));
                     for (auto &c : callsign)
                         c = (char)std::toupper((unsigned char)c);
                     auto fp = FlightPlanSelect(callsign.c_str());
@@ -2079,8 +2258,6 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         std::string route = routeStr ? routeStr : "";
                         const char *dest = fpData.GetDestination();
                         std::string arrivalAirport = dest ? dest : "";
-                        const char *starName = fpData.GetStarName();
-                        std::string star = starName ? starName : "";
 
                         // Extract the last term and the rest of the route before it
                         std::string lastTerm;
@@ -2093,30 +2270,36 @@ void VatEFSPlugin::ReceiveUdpMessages()
                             lastTerm = route;
                         }
 
-                        std::string suffix;
-                        if (!star.empty()) {
-                            suffix = star + "/" + runway;
-                        } else {
-                            suffix = arrivalAirport + "/" + runway;
-                        }
-
                         std::string newRoute;
+                        bool amend = false;
                         auto slashPos = lastTerm.find('/');
-                        if (slashPos != std::string::npos) {
-                            // Last term already has STAR/rwy or airport/rwy - replace it
-                            newRoute = routeBeforeLast;
-                            if (!newRoute.empty()) newRoute += " ";
-                            newRoute += suffix;
+                        if (runway.empty()) {
+                            // Clear arr runway: drop STAR/rwy or ADES/rwy suffix
+                            if (slashPos != std::string::npos) {
+                                newRoute = routeBeforeLast;
+                                amend = true;
+                            } else {
+                                DebugMessage("assignArrivalRunway: clear skipped (no rwy suffix)");
+                            }
+                        } else if (arrivalAirport.empty()) {
+                            DisplayMessage("assignArrivalRunway: No destination airport");
                         } else {
-                            // No suffix - append after the full original route
-                            newRoute = route;
+                            // Always ADES/rwy at end of FPL (replaces STAR/rwy or prior ADES/rwy)
+                            std::string body = route;
+                            if (slashPos != std::string::npos) {
+                                body = routeBeforeLast;
+                            }
+                            newRoute = body;
                             if (!newRoute.empty()) newRoute += " ";
-                            newRoute += suffix;
+                            newRoute += arrivalAirport + "/" + runway;
+                            amend = true;
                         }
-                        std::string ansiRoute = Utf8ToAnsi(newRoute);
-                        DebugMessage("assignArrivalRunway: new route: " + ansiRoute);
-                        fpData.SetRoute(ansiRoute.c_str());
-                        fpData.AmendFlightPlan();
+                        if (amend) {
+                            std::string ansiRoute = Utf8ToAnsi(newRoute);
+                            DebugMessage("assignArrivalRunway: new route: " + ansiRoute);
+                            fpData.SetRoute(ansiRoute.c_str());
+                            fpData.AmendFlightPlan();
+                        }
                     }
                 } else if (message["type"] == "assignHeading") {
                     auto callsign = message["callsign"].get<std::string>();
@@ -2604,6 +2787,105 @@ void VatEFSPlugin::PollOwnershipChanges()
     }
 }
 
+/** VCH TAG_STRIP_ANNO_HOS — flight strip annotation index 4 */
+std::string VatEFSPlugin::GetHoldShort(const std::string &callsign)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(4);
+        if (!ann || ann[0] == '\0') return "";
+        std::string hp = ann;
+        if (hp.size() > 5) hp.resize(5);
+        for (auto &c : hp) c = (char)std::toupper((unsigned char)c);
+        return hp;
+    } catch (...) {
+        return "";
+    }
+}
+
+bool VatEFSPlugin::SetHoldShort(const std::string &callsign, const std::string &holdShort)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        std::string hp = holdShort;
+        if (hp.size() > 5) hp.resize(5);
+        for (auto &c : hp) c = (char)std::toupper((unsigned char)c);
+        return fp.GetControllerAssignedData().SetFlightStripAnnotation(4, hp.c_str());
+    } catch (...) {
+        return false;
+    }
+}
+
+/** VCH TAG_STRIP_ANNO_CTL — flight strip annotation index 3 */
+bool VatEFSPlugin::GetVchCtl(const std::string &callsign)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(3);
+        return ann && strcmp(ann, "CTL") == 0;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool VatEFSPlugin::SetVchCtl(const std::string &callsign, bool clearedToLand)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        return fp.GetControllerAssignedData().SetFlightStripAnnotation(
+            3, clearedToLand ? "CTL" : "");
+    } catch (...) {
+        return false;
+    }
+}
+
+void VatEFSPlugin::PollVchAnnotationChanges()
+{
+    for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
+         fp = FlightPlanSelectNext(fp)) {
+        if (!FilterFlightPlan(fp)) continue;
+        const char *csRaw = fp.GetCallsign();
+        if (!csRaw || csRaw[0] == '\0') continue;
+        std::string cs = csRaw;
+        std::string hs = GetHoldShort(cs);
+        bool ctl = GetVchCtl(cs);
+        std::string ctlSnap = ctl ? "1" : "0";
+
+        bool hsChanged = true;
+        auto hsIt = lastHoldShortSnapshot.find(cs);
+        if (hsIt != lastHoldShortSnapshot.end() && hsIt->second == hs) hsChanged = false;
+
+        bool ctlChanged = true;
+        auto ctlIt = lastCtlSnapshot.find(cs);
+        if (ctlIt != lastCtlSnapshot.end() && ctlIt->second == ctlSnap) ctlChanged = false;
+
+        if (!hsChanged && !ctlChanged) continue;
+
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        if (hsChanged) {
+            DebugMessage(std::string("HoldShort change ") + cs + ": " +
+                         (hsIt != lastHoldShortSnapshot.end() ? hsIt->second : "(none)") + " -> " +
+                         (hs.empty() ? "(clear)" : hs));
+            lastHoldShortSnapshot[cs] = hs;
+            message["hs"] = hs;
+        }
+        if (ctlChanged) {
+            DebugMessage(std::string("CTL change ") + cs + ": " +
+                         (ctlIt != lastCtlSnapshot.end() ? ctlIt->second : "(none)") + " -> " +
+                         ctlSnap + " (VCH)");
+            lastCtlSnapshot[cs] = ctlSnap;
+            message["clearedToLand"] = ctl;
+        }
+        PostJson(message, "PollVchAnnotationChanges");
+    }
+}
+
 void VatEFSPlugin::SetJsonIfValidUtf8(nlohmann::json &j, const char *key, const char *value)
 {
     if (value) {
@@ -2922,6 +3204,20 @@ void DummyRadarScreen::ToggleClearanceFlag(const char *inCallsign)
     plugin->SetASELAircraft(GetPlugIn()->FlightPlanSelect(callsign.c_str()));
     StartTagFunction(callsign.c_str(), NULL, EuroScopePlugIn::TAG_ITEM_TYPE_CLEARENCE, "1", NULL,
                      EuroScopePlugIn::TAG_ITEM_FUNCTION_SET_CLEARED_FLAG, POINT(), RECT());
+}
+
+void DummyRadarScreen::SetClearanceFlag(const char *inCallsign, bool desired)
+{
+    std::string callsign = inCallsign;
+    for (auto &c : callsign)
+        c = (char)std::toupper((unsigned char)c);
+    auto fp = GetPlugIn()->FlightPlanSelect(callsign.c_str());
+    if (!fp.IsValid())
+        return;
+    // ES has no absolute set — only toggle. Skip when already at desired.
+    if ((bool)fp.GetClearenceFlag() == desired)
+        return;
+    ToggleClearanceFlag(callsign.c_str());
 }
 
 } // namespace VatEFS

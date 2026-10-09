@@ -53,6 +53,13 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
     /** Poll tracking/handoff ownership and push UDP when ES state changes without a callback */
     void PollOwnershipChanges();
+    /** Poll VCH annotations (H/S=4, CTL=3) — ES has no CAD DataType for annotations */
+    void PollVchAnnotationChanges();
+    std::string GetHoldShort(const std::string &callsign);
+    bool SetHoldShort(const std::string &callsign, const std::string &holdShort);
+    /** VCH CTL flag — strip annotation 3 ("CTL" or empty) */
+    bool GetVchCtl(const std::string &callsign);
+    bool SetVchCtl(const std::string &callsign, bool clearedToLand);
 
     bool disabled;
     bool debug;
@@ -102,6 +109,11 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     // Last sent tracking|handoff ownership per callsign (detects ES-initiated assume/transfer/accept)
     std::map<std::string, std::string> lastOwnershipSnapshot;
 
+    // Last sent VCH hold-short (annotation 4) per callsign
+    std::map<std::string, std::string> lastHoldShortSnapshot;
+    // Last sent VCH CTL (annotation 3) per callsign — "1" / "0"
+    std::map<std::string, std::string> lastCtlSnapshot;
+
     static bool IsValidUtf8(const char* str);
     static std::string SanitizeUtf8(const char* str);
     void SetJsonIfValidUtf8(nlohmann::json& j, const char* key, const char* value);
@@ -119,6 +131,8 @@ class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen
     void OnAsrContentToBeClosed ( void );
     void AllocateSSR(const char *callsign);
     void ToggleClearanceFlag(const char *callsign);
+    /** Toggle only if current clearance ≠ desired (ES has no absolute set API). */
+    void SetClearanceFlag(const char *callsign, bool desired);
 
     private:
     VatEFSPlugin *plugin;

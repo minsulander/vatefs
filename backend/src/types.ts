@@ -47,7 +47,9 @@ export interface Flight {
     nextControllerFrequency?: number // Next controller frequency
     squawk?: string
     rfl?: number              // Requested/Final flight level (feet)
-    cfl?: number              // Cleared flight level (feet), 0=use RFL, 1=ILS, 2=visual
+    cfl?: number              // Cleared flight level (feet), 0=use RFL, 1=ILS/CA, 2=visual/VA
+    /** TopSky approach clearance type (CAT2/CAT3/OS/…) when cfl is 1 or 2 */
+    approachType?: string
     groundstate?: GroundState
     clearance?: boolean       // Clearance flag
     stand?: string            // Parking stand/gate
@@ -71,6 +73,7 @@ export interface Flight {
     // vIFF / CDM (departing IFR)
     tobt?: string                 // Target Off Block Time (HHmm) — CDM airports (ESSA)
     tsat?: string                 // Target Startup Approval Time (HHmm) — CDM airports (ESSA)
+    ttot?: string                 // Target Take Off Time (HHmm) — CDM airports (ESSA)
     tobtSetBy?: 'P' | 'A'         // Who set TOBT: Pilot or ATC
     /** Timestamp when EFS set tobtSetBy (keep optimistic A briefly across HTTP polls) */
     tobtSetByAt?: number
@@ -80,6 +83,8 @@ export interface Flight {
     tsac?: string
     /** CTOT communicated to pilot (HHmm) — CDM annotation CTOC */
     ctoc?: string
+    /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
+    qnhGiven?: number
     taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
     ctot?: string                 // Calculated Take Off Time (HHmm)
     /** Had CTOT, now cancelled (cdmSts SLC) — strip shows SCL in CTOT slot */
@@ -91,21 +96,33 @@ export interface Flight {
     /** Last TOBT from local CDM_data_*.txt (EuroScope) — preferred over lagging HTTP */
     localCdmTobt?: string
     localCdmTsat?: string
+    localCdmTtot?: string
     localCdmAt?: number
 
     // Controller remarks (from scratchpad values starting with ".")
     remarks?: string
+    /** Holding point — scratchpad /TEXT */
+    hp?: string
+    /** Hold short — VCH strip annotation 4 (TAG_STRIP_ANNO_HOS), max 5 chars */
+    hs?: string
     /** True after controller manually clears an auto-SLOW remark — do not re-add */
     autoSlowDismissed?: boolean
+    /** True when SLOW remarks were added by tryAutoSlowRemark (safe to auto-clear on ATYP change) */
+    autoSlowApplied?: boolean
 
     // Backend-managed state flags
-    clearedToLand?: boolean   // Aircraft cleared to land (managed by backend)
+    /** Cleared to land — VCH strip annotation 3 ("CTL") */
+    clearedToLand?: boolean
     missedApproach?: boolean  // Aircraft on missed approach (scratchpad MISAP_)
     /** TopSky ROF requester login callsign (from /LAM/ROF/{cs}; persisted until transfer) */
     rofRequestFrom?: string
     /** Epoch ms until inbound ROF SI/XFER flash ends (request itself stays until XFER) */
     rofFlashUntil?: number
     airborne?: boolean        // Aircraft is airborne after departure
+    /** Actual Time of Departure (HHmm UTC) — stamped when leaving ground at origin */
+    atd?: string
+    /** Actual Time of Arrival (HHmm UTC) — stamped when landing at destination */
+    ata?: string
     deleted?: boolean         // Strip is soft-deleted (hidden from user)
     manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)
     noSectionFound?: boolean  // No section rule matched this flight (logged once)
@@ -120,6 +137,18 @@ export interface Flight {
 
     /** Until this timestamp, ignore plugin clears of handoffTarget (EFS-initiated XFER optimistic) */
     handoffOptimisticUntil?: number
+    /** Until this timestamp, ignore stale non-empty groundstate from ES after NOSTATE clear */
+    groundstateClearedUntil?: number
+    /**
+     * Until this timestamp, ignore ES groundstate that differs from EFS-set value
+     * (e.g. TopSky still reports ARR while aircraft is on runway after TXI).
+     */
+    groundstateHoldUntil?: number
+    /**
+     * Until this timestamp, ignore empty scratch for remarks/HP.
+     * Set when TopSky protocol scratch (/ROF/…) is about to be cleared so wipe does not clear strip fields.
+     */
+    scratchFieldsHoldUntil?: number
 
     // Radar position data
     currentAltitude?: number  // Current altitude from radar in feet
@@ -188,10 +217,13 @@ export interface ControllerAssignedDataUpdateMessage {
     cfl?: number
     groundstate?: GroundState
     clearance?: boolean
+    /** VCH CTL — strip annotation 3 */
     clearedToLand?: boolean
     /** EuroScope communication type: V/R/T/0 */
     communicationType?: string
     scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")
+    /** VCH hold short — strip annotation 4 (empty string clears) */
+    hs?: string
     stand?: string
     asp?: number
     mach?: number

@@ -182,7 +182,14 @@ export interface StripActionMessage {
     action: string             // e.g., "ASSUME", "CTL", "CTO"
 }
 
-export type AssignmentType = 'assignDepartureRunway' | 'assignSid' | 'assignHeading' | 'assignCfl'
+export type AssignmentType =
+    | 'assignDepartureRunway'
+    | 'assignArrivalRunway'
+    | 'assignSid'
+    | 'assignHeading'
+    | 'assignCfl'
+    /** TopSky approach clearance type (CA/VA/CAT2/CAT3/OS/…) */
+    | 'assignAppClr'
 
 export interface StripAssignMessage {
     type: 'stripAssign'
@@ -255,6 +262,20 @@ export interface UpdateRemarksMessage {
     text: string
 }
 
+/** Set holding point — scratchpad /TEXT (empty clears) */
+export interface UpdateHpMessage {
+    type: 'updateHp'
+    stripId: string
+    text: string
+}
+
+/** Set hold short — VCH strip annotation 4 (empty clears; max 5 chars) */
+export interface UpdateHsMessage {
+    type: 'updateHs'
+    stripId: string
+    text: string
+}
+
 export interface ReleaseStripMessage {
     type: 'releaseStrip'
     stripId: string
@@ -312,6 +333,14 @@ export interface SetCtocMessage {
     ctoc: string
 }
 
+/** Record QNH given to pilot (hPa), or clear with null */
+export interface SetQnhGivenMessage {
+    type: 'setQnhGiven'
+    stripId: string
+    /** Current ATIS QNH in hPa, or null to clear */
+    qnh: number | null
+}
+
 export interface SetColumnAirportMessage {
     type: 'setColumnAirport'
     columnIndex: number
@@ -346,7 +375,7 @@ export interface SetEssaRolesMessage {
     manual: boolean
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage
+export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage
 
 // Type guards for message parsing
 
@@ -368,5 +397,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles'
+    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles'
 }

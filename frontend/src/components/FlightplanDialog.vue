@@ -239,6 +239,7 @@ watch(dialogOpen, (open) => {
 }
 
 .fpl-dialog {
+  --s: var(--efs-scale, 1);
   background: #2a2a2e;
   border: 2px solid #555;
   padding: 0;
@@ -247,46 +248,46 @@ watch(dialogOpen, (open) => {
 .fpl-header {
   background: #3b7dd8;
   color: #fff;
-  padding: 6px 12px;
+  padding: calc(6px * var(--s)) calc(12px * var(--s));
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: calc(10px * var(--s));
 }
 
 .fpl-callsign {
-  font-size: 15px;
+  font-size: calc(15px * var(--s));
   font-weight: bold;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
 }
 
 .fpl-type-badge,
 .fpl-rules-badge {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   background: rgba(255, 255, 255, 0.2);
-  padding: 1px 6px;
-  border-radius: 2px;
+  padding: calc(1px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(2px * var(--s));
 }
 
 .fpl-loading {
-  padding: 20px;
+  padding: calc(20px * var(--s));
   text-align: center;
   color: #888;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
 }
 
 .fpl-body {
-  padding: 8px 12px;
+  padding: calc(8px * var(--s)) calc(12px * var(--s));
 }
 
 .fpl-section-header {
   color: #7aa5d6;
-  font-size: 9px;
+  font-size: calc(9px * var(--s));
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 6px 0 2px;
+  letter-spacing: calc(1px * var(--s));
+  padding: calc(6px * var(--s)) 0 calc(2px * var(--s));
   border-bottom: 1px solid #3a3a3e;
-  margin-bottom: 4px;
+  margin-bottom: calc(4px * var(--s));
 }
 
 .fpl-section-header:first-child {
@@ -296,31 +297,31 @@ watch(dialogOpen, (open) => {
 .fpl-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 2px 8px;
-  margin-bottom: 2px;
+  gap: calc(2px * var(--s)) calc(8px * var(--s));
+  margin-bottom: calc(2px * var(--s));
 }
 
 .fpl-field {
   display: flex;
   flex-direction: column;
-  padding: 2px 0;
+  padding: calc(2px * var(--s)) 0;
 }
 
 .fpl-label {
   color: #777;
-  font-size: 8px;
+  font-size: calc(8px * var(--s));
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
 }
 
 .fpl-val {
   color: #e0e0e0;
-  font-size: 13px;
+  font-size: calc(13px * var(--s));
   font-weight: bold;
 }
 
 .fpl-val-small {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
 }
 
 .fpl-setby {
@@ -332,31 +333,32 @@ watch(dialogOpen, (open) => {
 .fpl-route-row {
   display: flex;
   flex-direction: column;
-  padding: 2px 0 4px;
+  padding: calc(2px * var(--s)) 0 calc(4px * var(--s));
 }
 
 .fpl-route-val {
   color: #ccc;
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   word-break: break-all;
   line-height: 1.4;
-  margin-top: 1px;
+  margin-top: calc(1px * var(--s));
 }
 
 .fpl-actions {
-  border-top: 1px solid #555;
+  border-top: calc(1px * var(--s)) solid #555;
 }
 
 .fpl-btn {
   width: 100%;
-  padding: 8px 0;
+  padding: calc(8px * var(--s)) 0;
   border: none;
   background: #555;
   color: #ccc;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
   font-weight: bold;
   cursor: pointer;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
+  min-height: max(32px, calc(32px * var(--s)));
 }
 
 .fpl-btn:hover {

@@ -239,6 +239,7 @@ function onCancel() {
 }
 
 .strip-create-dialog {
+  --s: var(--efs-scale, 1);
   background: #2a2a2e;
   border: 2px solid #555;
 }
@@ -246,58 +247,58 @@ function onCancel() {
 .dialog-header {
   display: flex;
   align-items: center;
-  padding: 10px 14px;
+  padding: calc(10px * var(--s)) calc(14px * var(--s));
   border-bottom: 1px solid #444;
-  gap: 10px;
+  gap: calc(10px * var(--s));
 }
 
 .dialog-header-indicator {
-  width: 8px;
-  height: 22px;
+  width: calc(8px * var(--s));
+  height: calc(22px * var(--s));
   flex-shrink: 0;
 }
 
 .indicator-dep { background: #3b7dd8; }
 .indicator-arr { background: #daa520; }
-.indicator-cross { background: #9b59b6; }
+.indicator-cross { background: #881fe0; }
 .indicator-note { background: #888; }
 
 .dialog-header-title {
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
   font-weight: 700;
   color: #ddd;
-  letter-spacing: 1px;
+  letter-spacing: calc(1px * var(--s));
 }
 
 .dialog-body {
-  padding: 12px 14px;
+  padding: calc(12px * var(--s)) calc(14px * var(--s));
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: calc(10px * var(--s));
 }
 
 .dialog-field {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: calc(3px * var(--s));
 }
 
 .dialog-label {
-  font-size: 10px;
+  font-size: calc(10px * var(--s));
   font-weight: 600;
   color: #999;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
 }
 
 .dialog-input {
   background: #1a1a1e;
   border: 1px solid #555;
   color: #eee;
-  padding: 6px 8px;
-  font-size: 14px;
+  padding: calc(6px * var(--s)) calc(8px * var(--s));
+  font-size: calc(14px * var(--s));
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
   outline: none;
   font-family: 'Segoe UI', 'Arial', sans-serif;
 }
@@ -316,9 +317,9 @@ function onCancel() {
 }
 
 .match-indicator {
-  font-size: 10px;
-  height: 14px;
-  line-height: 14px;
+  font-size: calc(10px * var(--s));
+  height: calc(14px * var(--s));
+  line-height: calc(14px * var(--s));
 }
 
 .match-searching {
@@ -335,23 +336,24 @@ function onCancel() {
 
 .dialog-actions {
   display: flex;
-  border-top: 1px solid #555;
+  border-top: calc(1px * var(--s)) solid #555;
 }
 
 .dialog-btn {
   flex: 1;
-  padding: 10px 0;
+  padding: calc(10px * var(--s)) 0;
   border: none;
-  font-size: 12px;
+  font-size: calc(12px * var(--s));
   font-weight: bold;
   cursor: pointer;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.5px * var(--s));
+  min-height: max(32px, calc(32px * var(--s)));
 }
 
 .dialog-cancel {
   background: #555;
   color: #ccc;
-  border-right: 1px solid #666;
+  border-right: calc(1px * var(--s)) solid #666;
 }
 
 .dialog-cancel:hover {

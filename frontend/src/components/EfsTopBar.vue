@@ -1,6 +1,6 @@
 <template>
-  <div style="height: 25px">
-    <v-app-bar color="#2b2d31" height="25" elevation="0" class="efs-top-bar text-body-2 text-grey">
+  <div class="efs-top-bar-host" :style="{ height: topBarHeight + 'px' }">
+    <v-app-bar color="#2b2d31" :height="topBarHeight" elevation="0" class="efs-top-bar text-body-2 text-grey">
       <!-- Refresh button -->
       <v-btn variant="text" icon="mdi-refresh" size="small" class="text-grey" @click="efs.refresh()" title="Refresh"></v-btn>
       <v-btn variant="text" icon="mdi-cog" size="small" class="text-grey" to="/settings" title="Settings"></v-btn>
@@ -36,36 +36,34 @@
           />
         </div>
       </Teleport>
-      <v-dialog v-model="essaRwyDialog" max-width="420" scrim>
-        <v-card bg-color="#2b2d31" class="essa-rwy-dialog text-grey">
-          <v-card-title class="text-body-1 py-2">RWY config</v-card-title>
-          <v-card-text class="pt-0">
-            <div class="essa-rwy-es-hint" v-if="essaRwyEsHint">
-              ES: {{ essaRwyEsHint }}
-            </div>
-            <div class="essa-rwy-list">
-              <label
-                v-for="row in essaRwyOptions"
-                :key="row.id"
-                class="essa-rwy-option"
-                :class="{
-                  'essa-rwy-option--match': row.matchesEs,
-                  'essa-rwy-option--selected': row.id === draftEssaRwyId,
-                }"
-              >
-                <input v-model="draftEssaRwyId" type="radio" name="essa-rwy" :value="row.id" />
-                <span class="essa-rwy-id">{{ row.id }}</span>
-                <span class="essa-rwy-detail">{{ row.pdfName }}</span>
-              </label>
-            </div>
-          </v-card-text>
-          <v-card-actions class="px-4 pb-3">
-            <v-btn size="small" variant="text" class="text-grey" @click="onEssaRwyAuto">Auto</v-btn>
-            <v-spacer />
-            <v-btn size="small" variant="text" class="text-grey" @click="essaRwyDialog = false">Cancel</v-btn>
-            <v-btn size="small" color="success" variant="flat" @click="onEssaRwyOk">OK</v-btn>
-          </v-card-actions>
-        </v-card>
+      <v-dialog v-model="essaRwyDialog" max-width="440" scrim content-class="essa-rwy-dialog-wrap">
+        <div class="essa-rwy-menu" @click.stop>
+          <div class="essa-rwy-header">RWY CONFIG</div>
+          <div v-if="essaRwyEsHint" class="essa-rwy-es">ES: {{ essaRwyEsHint }}</div>
+          <div class="essa-rwy-list essa-rwy-list-cols">
+            <button
+              v-for="row in essaRwyOptions"
+              :key="row.id"
+              type="button"
+              class="essa-rwy-item"
+              :class="{
+                selected: row.id === draftEssaRwyId,
+                'es-match': row.matchesEs,
+                'auto-pref': row.autoPreferred,
+              }"
+              @click="draftEssaRwyId = row.id"
+            >
+              <span class="essa-rwy-id">{{ row.id }}</span>
+              <span class="essa-rwy-detail">{{ row.pdfName }}</span>
+              <span v-if="row.autoPreferred" class="essa-rwy-auto-tag">AUTO</span>
+            </button>
+          </div>
+          <div class="essa-rwy-actions">
+            <button type="button" class="essa-rwy-action" @click="onEssaRwyAuto">AUTO</button>
+            <button type="button" class="essa-rwy-action" @click="essaRwyDialog = false">CANCEL</button>
+            <button type="button" class="essa-rwy-action essa-rwy-action-ok" @click="onEssaRwyOk">OK</button>
+          </div>
+        </div>
       </v-dialog>
       <!-- ESSA roles -->
       <button
@@ -186,6 +184,17 @@
         </v-list>
       </v-menu>
       <v-spacer />
+      <!-- ESSA mode: ATIS letters + QNH left of config selector -->
+      <span
+        v-if="efs.essaRolesMode && essaAtisBar"
+        class="essa-atis-bar mr-2"
+        :title="essaAtisBar.title"
+      >
+        <span v-if="essaAtisBar.arrAtis" class="text-amber">{{ essaAtisBar.arrAtis }}</span>
+        <span v-if="essaAtisBar.depAtis" class="text-cyan ml-1">{{ essaAtisBar.depAtis }}</span>
+        <span v-if="essaAtisBar.atis && !essaAtisBar.arrAtis && !essaAtisBar.depAtis" class="text-amber">{{ essaAtisBar.atis }}</span>
+        <span v-if="essaAtisBar.qnh" class="text-grey ml-1">{{ essaAtisBar.qnh }}</span>
+      </span>
       <!-- Config selector -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
@@ -255,8 +264,11 @@ import {
   resolveEssaRwyConfigId,
   essaRwyQuickrefImageUrl,
 } from "@vatefs/common"
+import { useEfsScaleValue } from "@/composables/useEfsUiScale"
 
 const efs = useEfsStore()
+const efsScale = useEfsScaleValue()
+const topBarHeight = computed(() => Math.max(28, Math.round(28 * efsScale.value)))
 const fullscreen = ref(window.innerHeight == screen.height)
 const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
 const configMenuOpen = ref(false)
@@ -310,16 +322,24 @@ const essaRwyEsHint = computed(() => {
   return `ARR ${arr.join('/') || '?'} / DEP ${dep.join('/') || '?'}`
 })
 
+/** Config Auto would pick from ES ARR/DEP (+ day/night) — independent of manual draft */
+const essaRwyAutoId = computed(() => {
+  void essaRwyNowTick.value
+  const { arr, dep } = essaEsRunways.value
+  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+})
+
 const essaRwyOptions = computed(() => {
   const { arr, dep } = essaEsRunways.value
   const matching = new Set(findMatchingEssaRwyConfigs(arr, dep).map(c => c.id))
-  const rows = ESSA_RWY_COMBINATIONS.map(c => ({
+  const autoId = essaRwyAutoId.value
+  // Document order — do not float selected/ES match to the top
+  return ESSA_RWY_COMBINATIONS.map(c => ({
     id: c.id,
     pdfName: formatEssaRwyPdfName(c),
     matchesEs: matching.has(c.id),
+    autoPreferred: autoId != null && c.id === autoId,
   }))
-  // ES matches first, then document order
-  return rows.sort((a, b) => Number(b.matchesEs) - Number(a.matchesEs))
 })
 
 /** Resolved ESSA config id (manual override or ES + night/day auto) */
@@ -501,6 +521,24 @@ const activeConfigName = computed(() => {
   return active?.name ?? efs.activeConfig
 })
 
+/** ESSA ATIS letters + QNH for the right-side bar (left of config selector) */
+const essaAtisBar = computed(() => {
+  if (!efs.essaRolesMode) return null
+  const info = efs.atisInfo.find(a => a.airport === 'ESSA')
+  if (!info) return null
+  const arrAtis = info.arrAtis
+  const depAtis = info.depAtis
+  const atis = info.atis
+  const qnh = info.qnh != null ? String(info.qnh) : undefined
+  if (!arrAtis && !depAtis && !atis && !qnh) return null
+  const parts: string[] = []
+  if (arrAtis) parts.push(`ARR ATIS ${arrAtis}`)
+  if (depAtis) parts.push(`DEP ATIS ${depAtis}`)
+  if (atis && !arrAtis && !depAtis) parts.push(`ATIS ${atis}`)
+  if (qnh) parts.push(`QNH ${qnh}`)
+  return { arrAtis, depAtis, atis, qnh, title: parts.join(' · ') }
+})
+
 function isRtcConfig(config: ConfigInfo): boolean {
   return config.name === 'RTC' || config.file.toLowerCase().includes('multiairport')
 }
@@ -602,18 +640,32 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.efs-top-bar-host {
+  flex-shrink: 0;
+}
+
+.efs-top-bar {
+  font-size: calc(13px * var(--efs-scale, 1));
+}
+.essa-atis-bar {
+  font-size: calc(13px * var(--efs-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  user-select: none;
+}
 .dcl-mode-btn {
   min-width: 0 !important;
-  padding: 0 4px !important;
-  margin-left: -4px !important;
-  font-size: 10px !important;
+  padding: 0 calc(4px * var(--efs-scale, 1)) !important;
+  margin-left: calc(-4px * var(--efs-scale, 1)) !important;
+  font-size: calc(11px * var(--efs-scale, 1)) !important;
   letter-spacing: 0.5px;
 }
 
 .airport-atis--idle,
 .airport-atis--open {
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 calc(4px * var(--efs-scale, 1));
   border-radius: 2px;
   border: 1px solid transparent;
 }
@@ -656,31 +708,31 @@ onUnmounted(() => {
 
 .idle-hint {
   color: #aaa;
-  font-size: 11px;
+  font-size: calc(12px * var(--efs-scale, 1));
 }
 
 .column-count-ctrl {
   display: inline-flex;
   align-items: center;
   gap: 0;
-  margin-left: 8px;
+  margin-left: calc(8px * var(--efs-scale, 1));
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 3px;
-  height: 22px;
-  padding: 0 2px;
+  height: max(28px, calc(22px * var(--efs-scale, 1)));
+  padding: 0 calc(2px * var(--efs-scale, 1));
 }
 
 .column-count-label {
-  min-width: 14px;
+  min-width: calc(14px * var(--efs-scale, 1));
   text-align: center;
-  font-size: 12px;
+  font-size: calc(13px * var(--efs-scale, 1));
   font-weight: 600;
   color: #ccc;
   letter-spacing: 0.04em;
 }
 
 .config-menu {
-  min-width: 160px;
+  min-width: calc(160px * var(--efs-scale, 1));
 }
 
 .essa-roles-btn {
@@ -689,7 +741,7 @@ onUnmounted(() => {
   color: #9e9e9e;
   cursor: pointer;
   font: inherit;
-  padding: 0 4px;
+  padding: 0 calc(4px * var(--efs-scale, 1));
 }
 
 .essa-roles-btn:hover {
@@ -703,7 +755,7 @@ onUnmounted(() => {
   cursor: pointer;
   font: inherit;
   letter-spacing: 0.02em;
-  padding: 0 4px;
+  padding: 0 calc(4px * var(--efs-scale, 1));
   white-space: nowrap;
 }
 
@@ -728,69 +780,222 @@ onUnmounted(() => {
   background: #1a1a1a;
 }
 
-.essa-rwy-es-hint {
-  font-size: 12px;
-  margin-bottom: 10px;
-  opacity: 0.75;
+/* RWY config — same visual language as DEP ROUTE */
+.essa-rwy-menu {
+  --rwy-strip-white: #ebebeb;
+  width: 100%;
+  background: #d8d8d8;
+  border: 1px solid #888;
+  border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: #000;
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+
+.essa-rwy-header {
+  padding: calc(6px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1)) calc(2px * var(--efs-scale, 1));
+  font-size: calc(9px * var(--efs-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #000;
+  text-transform: uppercase;
+  text-align: center;
+  background: #c0c0c0;
+}
+
+.essa-rwy-es {
+  padding: 0 calc(8px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
+  font-size: calc(11px * var(--efs-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #000;
+  text-align: center;
+  text-transform: uppercase;
+  background: #c0c0c0;
+  border-bottom: 2px solid #555;
 }
 
 .essa-rwy-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 360px;
-  overflow-y: auto;
+  background: #d8d8d8;
+  overflow: visible;
+  max-height: none;
 }
 
-.essa-rwy-option {
+.essa-rwy-list-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.essa-rwy-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: calc(6px * var(--efs-scale, 1));
+  width: 100%;
+  margin: 0;
+  padding: calc(5px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1));
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid #888;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #d8d8d8;
+  color: #000;
+  font-size: calc(10px * var(--efs-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  text-align: left;
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 2px;
-  user-select: none;
+  line-height: 1.15;
+  min-height: max(28px, calc(28px * var(--efs-scale, 1)));
 }
 
-.essa-rwy-option:hover {
-  background: rgba(255, 255, 255, 0.06);
+.essa-rwy-auto-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: calc(8px * var(--efs-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #1a3a6e;
+  background: rgba(26, 58, 110, 0.12);
+  border: 1px solid #1a3a6e;
+  padding: calc(1px * var(--efs-scale, 1)) calc(4px * var(--efs-scale, 1));
+  line-height: 1.2;
 }
 
-.essa-rwy-option--match {
-  background: rgba(144, 202, 249, 0.12);
+.essa-rwy-item:hover .essa-rwy-auto-tag {
+  color: var(--rwy-strip-white);
+  background: rgba(235, 235, 235, 0.15);
+  border-color: var(--rwy-strip-white);
 }
 
-.essa-rwy-option--selected {
-  background: rgba(76, 175, 80, 0.2);
+.essa-rwy-item.selected .essa-rwy-auto-tag {
+  color: #1a3a6e;
+  background: rgba(26, 58, 110, 0.1);
+  border-color: #1a3a6e;
+}
+
+.essa-rwy-list-cols .essa-rwy-item:nth-child(odd) {
+  border-right: 1px solid #888;
+}
+
+.essa-rwy-list-cols .essa-rwy-item:nth-last-child(-n + 2) {
+  border-bottom: none;
 }
 
 .essa-rwy-id {
-  font-weight: 600;
-  min-width: 2.5em;
+  font-weight: 800;
+  min-width: 2.2em;
+  flex-shrink: 0;
 }
 
 .essa-rwy-detail {
-  font-size: 12px;
-  opacity: 0.85;
+  font-weight: 600;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.essa-rwy-item.es-match {
+  background: #b8d4a8;
+  color: #000;
+  box-shadow: inset 0 0 0 1px #7a9a6a;
+}
+
+.essa-rwy-item.selected {
+  background: var(--rwy-strip-white);
+  color: #1a3a6e;
+  box-shadow: inset 0 0 0 2px #1a3a6e;
+}
+
+.essa-rwy-item.es-match.selected {
+  background: #b8d4a8;
+  color: #1a3a6e;
+  box-shadow: inset 0 0 0 2px #1a3a6e;
+}
+
+.essa-rwy-item:hover {
+  background: #1a3a6e;
+  color: var(--rwy-strip-white);
+  box-shadow: inset 0 0 0 2px #000;
+  position: relative;
+  z-index: 1;
+}
+
+.essa-rwy-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-top: 3px solid #333;
+  background: #a8a8a8;
+}
+
+.essa-rwy-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: calc(10px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
+  border: none;
+  border-right: 1px solid #777;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #a8a8a8;
+  color: #000;
+  font-size: calc(11px * var(--efs-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  line-height: 1.1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  min-height: max(32px, calc(32px * var(--efs-scale, 1)));
+}
+
+.essa-rwy-action:last-child {
+  border-right: none;
+}
+
+.essa-rwy-action:hover,
+.essa-rwy-action-ok:hover {
+  background: #1a3a6e;
+  color: var(--rwy-strip-white);
+  box-shadow: inset 0 0 0 2px #000;
 }
 
 .essa-role-rows {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: calc(10px * var(--efs-scale, 1));
 }
 
 .essa-role-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
+  gap: calc(8px * var(--efs-scale, 1)) calc(16px * var(--efs-scale, 1));
 }
 
 .essa-role-option {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--efs-scale, 1));
   cursor: pointer;
   user-select: none;
+  font-size: calc(13px * var(--efs-scale, 1));
+  min-height: max(28px, calc(28px * var(--efs-scale, 1)));
+}
+</style>
+
+<style>
+/* Teleported dialog chrome — content-class is outside scoped tree */
+.essa-rwy-dialog-wrap {
+  box-shadow: none !important;
+  background: transparent !important;
+  overflow: visible !important;
 }
 </style>
