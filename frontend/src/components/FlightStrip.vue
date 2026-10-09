@@ -1,6 +1,14 @@
 <template>
   <ClearanceDialog v-model="clncDialogOpen" :strip="strip" />
   <FlightplanDialog v-model="fplDialogOpen" :strip="strip" />
+  <StripZoomOverlay
+    v-if="!isLargeView"
+    v-model="largeViewOpen"
+    :strip="strip"
+    :bay-id="bayId"
+    :section-id="sectionId"
+    :anchor-rect="largeViewAnchor"
+  />
 
   <v-dialog v-model="deleteDialogOpen" max-width="300" content-class="delete-dialog-wrapper">
     <div class="delete-dialog">
@@ -12,9 +20,9 @@
     </div>
   </v-dialog>
 
-  <v-menu v-model="menuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+  <v-menu v-model="menuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu">
-      <v-list-item v-if="isDeparture" @click="onClncMenuClick">
+      <v-list-item v-if="isDeparture && canEditAssignedData" @click="onClncMenuClick">
         <v-list-item-title>Clearance</v-list-item-title>
       </v-list-item>
       <v-list-item v-if="!isNote" @click="onFplClick">
@@ -37,13 +45,13 @@
           </v-list-item-title>
         </v-list-item>
       </template>
-      <v-list-item v-if="!isNote && store.isController" @click.stop="groundStateMenuOpen = true">
+      <v-list-item v-if="!isNote && canEditAssignedData" @click.stop="groundStateMenuOpen = true">
         <v-list-item-title>
           State: {{ groundStateLabel }}
           <v-icon size="small" class="ml-1">mdi-chevron-right</v-icon>
         </v-list-item-title>
       </v-list-item>
-      <v-list-item v-if="!isNote && store.isController" @click="onRemarksMenuClick">
+      <v-list-item v-if="!isNote && canEditAssignedData" @click="onRemarksMenuClick">
         <v-list-item-title>Remarks</v-list-item-title>
       </v-list-item>
       <v-list-item v-if="canSendRea" @click="onSendReaClick">
@@ -59,7 +67,7 @@
   </v-menu>
 
   <!-- TSAC menu (within TSAT window) -->
-  <v-menu v-model="tsacMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+  <v-menu v-model="tsacMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu ctot-menu">
       <v-list-item @click="onEditTsacMenuClick">
         <v-list-item-title>Edit TSAC</v-list-item-title>
@@ -71,7 +79,7 @@
   </v-menu>
 
   <!-- CTOT menu (reason + CTOC + REA) -->
-  <v-menu v-model="ctotMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+  <v-menu v-model="ctotMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu ctot-menu">
       <v-list-item class="ctot-reason-item" disabled>
         <v-list-item-title class="ctot-reason-title">
@@ -95,7 +103,7 @@
   </v-menu>
 
   <!-- REA badge menu (above TOBT when no CTOT) -->
-  <v-menu v-model="reaMenuOpen" :target="menuPosition" location="end" :close-on-content-click="true">
+  <v-menu v-model="reaMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu ctot-menu">
       <v-list-item v-if="canClearRea" @click="onClearReaClick">
         <v-list-item-title>Remove REA</v-list-item-title>
@@ -104,7 +112,7 @@
   </v-menu>
 
   <!-- Ground state submenu -->
-  <v-menu v-model="groundStateMenuOpen" :target="menuPosition" location="end" offset="150" :close-on-content-click="true">
+  <v-menu v-model="groundStateMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu groundstate-submenu">
       <v-list-item
         v-for="gs in groundStateOptions"
@@ -118,7 +126,7 @@
   </v-menu>
 
   <!-- Transfer submenu -->
-  <v-menu v-model="transferMenuOpen" :target="menuPosition" location="end" offset="150" :close-on-content-click="true">
+  <v-menu v-model="transferMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
     <v-list density="compact" class="strip-context-menu transfer-submenu">
       <v-list-item
         v-for="ctrl in store.controllers"
@@ -130,299 +138,535 @@
     </v-list>
   </v-menu>
 
-  <div ref="stripElement" class="flight-strip"
-    :class="[stripTypeClass, { dragging: isDragging, 'is-bottom': strip.bottom, 'strip-note-layout': isNote, 'auto-move-hidden': isAutoMoving, 'owned-by-other': shouldDimStrip }]" :style="stripStyle"
-    :data-strip-id="strip.id" draggable="true" @dragstart="onDragStart" @dragend="onDragEnd"
-    @touchstart="onDragAreaTouchStart" @touchmove.prevent="onDragAreaTouchMove" @touchend="onDragAreaTouchEnd"
-    @touchcancel="onDragAreaTouchCancel" @contextmenu.prevent="onContextMenu" @click="onStripClick">
-    <!-- Color indicator bar on left -->
-    <div class="strip-indicator"></div>
+  <SidRouteMenu v-model="sidRouteMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <RwyMenu v-model="rwyMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <CflMenu v-model="cflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
 
-    <!-- NOTE STRIP: Editable text layout -->
+  <div ref="stripElement" class="flight-strip"
+    :class="[stripTypeClass, {
+      dragging: isDragging,
+      'is-bottom': strip.bottom,
+      'strip-note-layout': isNote,
+      'auto-move-hidden': isAutoMoving,
+      'layout-arr': isArrLayout,
+      'layout-dep': !isNote && !isArrLayout,
+      'top-expanded': topExpanded,
+      'bottom-expanded': bottomExpanded,
+      'is-large-view': isLargeView,
+      'dimmed-data': dimmedData,
+    }]"
+    :data-strip-id="strip.id"
+    :draggable="!isLargeView"
+    @dragstart="onDragStart"
+    @dragend="onDragEnd"
+    @touchstart="onDragAreaTouchStart"
+    @touchmove.prevent="onDragAreaTouchMove"
+    @touchend="onDragAreaTouchEnd"
+    @touchcancel="onDragAreaTouchCancel"
+    @contextmenu.prevent="onContextMenu"
+    @click="onStripClick">
+
+    <!-- NOTE STRIP (scribble-only — tap opens zoom pen) -->
     <template v-if="isNote">
       <div class="note-content" @click.stop="onNoteClick" @touchend="onNoteTouch">
-        <input
-          v-if="noteEditing"
-          ref="noteInput"
-          v-model="noteText"
-          class="note-input"
-          placeholder="Type a note..."
-          @input="onNoteInput"
-          @blur="onNoteBlur"
-          @keydown.enter="onNoteBlur"
-          @keydown.escape="onNoteBlur"
-        />
-        <span v-else class="note-display" :class="{ 'note-empty': !strip.noteText }">
-          {{ strip.noteText || 'Click to add note...' }}
-        </span>
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('body')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'n' + i"
+            class="strip-scribble-stroke"
+            :points="stroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
+        <span v-else class="note-display note-empty">Click to scribble...</span>
+      </div>
+      <div v-if="!isLargeView" class="note-actions">
+        <StripCloseButton @click="onNoteClose" />
       </div>
     </template>
 
-    <!-- NORMAL STRIP LAYOUT -->
+    <!-- SAAB-style strip -->
     <template v-else>
-    <!-- Left section: Callsign block (always visible) -->
-    <div class="strip-left">
-      <div
-        class="callsign"
-        :class="{ 'callsign-no-match': strip.hasMatchingFlight === false }"
-        :title="strip.rtfCallsign || undefined"
-        @click.stop="onCallsignClick"
-        @touchend.stop.prevent="onCallsignTouch"
-      >{{ strip.callsign }}<span v-if="strip.communicationSuffix" class="comm-suffix">{{ strip.communicationSuffix }}</span></div>
-      <div class="callsign-sub">
-        <span class="flight-rules">{{ strip.flightRules }}</span>
-        <span class="aircraft-type">
-          {{ strip.aircraftType }}
-          <span class="wtc" :class="{ 'wtc-highlight': strip.wakeTurbulence && strip.wakeTurbulence !== 'M' }">{{ strip.wakeTurbulence }}</span>
-        </span>
-        <span
-          v-if="showOwnerSi"
-          class="owner-si"
-          :class="ownerSiClass"
-          :title="ownerSiTitle"
-        >{{ ownerSiText }}</span>
+      <!-- Top menu: fully hidden until ▲ opens it; collapse arrow lives here when open -->
+      <div v-if="topExpanded" class="strip-expander strip-expander-top" @click.stop>
+        <button
+          type="button"
+          class="ctrl-arrow expander-arrow mirrored"
+          :class="topArrowClass"
+          :title="topArrowTitle"
+          @click.stop="topExpanded = false"
+        ><span class="arrow-glyph">▲</span></button>
+        <div class="exp-chips">
+          <button type="button" class="exp-chip" :class="{ 'exp-rea': isRea }" @click.stop="onExpRea">REA</button>
+          <button type="button" class="exp-chip inert" disabled>SIG</button>
+          <button
+            type="button"
+            class="exp-chip"
+            :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhStale }"
+            :disabled="!canSetQnh"
+            @click.stop="onExpQnh"
+          >QNH</button>
+          <button
+            type="button"
+            class="exp-chip"
+            :class="{ active: hasSlowFlag }"
+            @click.stop="onExpSlow"
+          >SLOW</button>
+          <button
+            type="button"
+            class="exp-chip"
+            :class="{ active: hasUrnavRemark }"
+            @click.stop="onExpUrnav"
+          >URNAV</button>
+          <button
+            type="button"
+            class="exp-chip"
+            :class="{ active: hasVectRemark }"
+            @click.stop="onExpVect"
+          >VECT</button>
+          <button type="button" class="exp-chip" :class="dclChipClass" @click.stop="onClncMenuClick">DCL</button>
+        </div>
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('top')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'t' + i"
+            class="strip-scribble-stroke"
+            :points="stroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
       </div>
-      <div class="squawk-stand-row">
-        <span class="squawk" v-if="strip.squawk">{{ strip.squawk }}</span>
-        <span class="squawk" :class="{ 'squawk-empty': strip.canResetSquawk }" v-else
-          @click.stop="strip.canResetSquawk && onResetSquawk()">----</span>
-        <span class="stand" v-if="strip.stand">{{ strip.stand }}</span>
-      </div>
-    </div>
 
-    <!-- Middle section (truncatable) -->
-    <div class="strip-middle">
-      <!-- Remarks / scratchpad row (only real remarks — auto-SLOW sets remarks via ES scratch) -->
-      <div v-if="remarksEditing || displayRemarks" class="remarks-row" @click.stop>
-        <input
-          v-if="remarksEditing"
-          ref="remarksInput"
-          v-model="remarksText"
-          class="remarks-input"
-          placeholder="Remarks..."
-          @input="onRemarksInput"
-          @blur="onRemarksBlur"
-          @keydown.enter="onRemarksBlur"
-          @keydown.escape="onRemarksCancel"
-        />
-        <span v-else class="remarks-display" @click.stop="store.isController && onRemarksClick()">{{ displayRemarks }}</span>
-      </div>
-      <div class="strip-middle-content">
-        <!-- Time section / clearance triangle -->
-        <div class="strip-section strip-time" :class="{ 'has-ctot': showCtot, 'has-cdm': showCdm, 'is-fls': isFls }">
-          <template v-if="strip.clearedForTakeoff || strip.clearedToLand">
-            <svg v-if="strip.clearedForTakeoff" viewBox="0 0 24 24" class="clearance-triangle takeoff">
-              <polygon points="12,4 22,20 2,20" />
-            </svg>
-            <svg v-else viewBox="0 0 24 24" class="clearance-triangle landing">
-              <polygon points="12,20 22,4 2,4" />
-            </svg>
-          </template>
-          <template v-else-if="timeEditing">
-            <div
-              class="time-edit-panel"
-              :class="{ 'time-edit-tobt': timeEditMode === 'tobt' || timeEditMode === 'tsac' }"
-            >
-              <div class="time-edit-half time-edit-top">
-                <input
-                  ref="timeEditInput"
-                  v-model="timeEditText"
-                  class="eobt-edit-input"
-                  :class="{ 'eobt-edit-fls': timeEditMode === 'eobt' && isFls }"
-                  type="text"
-                  inputmode="numeric"
-                  pattern="[0-9]*"
-                  enterkeyhint="done"
-                  autocomplete="off"
-                  maxlength="4"
-                  @click.stop
-                  @blur="onTimeEditBlur"
-                  @keydown.enter="onTimeEditBlur"
-                  @keydown.escape="onTimeEditCancel"
-                />
-              </div>
-              <div v-if="timeEditMode === 'tobt'" class="time-edit-half time-edit-bottom">
-                <button
-                  type="button"
-                  class="ready-tobt-btn"
-                  title="Ready TOBT"
-                  @mousedown.prevent
-                  @click.stop="onReadyTobtClick"
-                >READY TOBT</button>
-              </div>
-              <div v-else class="time-edit-half time-edit-bottom">
-                <div class="time-label">{{ timeEditMode === 'tsac' ? 'TSAC' : 'EOBT' }}</div>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <div class="time-pair">
-              <div
-                v-if="showPrimaryTime"
-                class="time-col"
+      <!-- ARR / DEP body: shared 3-row left + 2-row main + action -->
+      <div class="strip-grid" :class="isArrLayout ? 'strip-grid-arr' : 'strip-grid-dep'">
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('body')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'b' + i"
+            class="strip-scribble-stroke"
+            :points="stroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
+        <!-- Left 3×3: col1 ▲/FRUL/▼ · col2 ATYP · col3 WTC · times span col2–3 -->
+        <div class="strip-left" :class="{ 'wtc-hl': wtcHighlight }">
+          <button
+            v-if="!topExpanded"
+            type="button"
+            class="ctrl-arrow strip-left-up"
+            :class="topArrowClass"
+            :title="topArrowTitle"
+            @click.stop="topExpanded = true"
+          ><span class="arrow-glyph">▲</span></button>
+          <div
+            class="strip-time strip-time-top fit-font"
+            :class="{ ghost: !primaryTimeValue, 'time-fls': isFls, 'time-changed': tobtChanged }"
+            :title="primaryTimeLabelTitle"
+            @click.stop="onPrimaryTimeClick"
+          >
+            <template v-if="timeEditing">
+              <input
+                ref="timeEditInput"
+                v-model="timeEditText"
+                class="eobt-edit-input"
+                type="text"
+                inputmode="numeric"
+                maxlength="4"
+                @click.stop
+                @blur="onTimeEditBlur"
+                @keydown.enter="onTimeEditBlur"
+                @keydown.escape="onTimeEditCancel"
+              />
+            </template>
+            <template v-else>
+              <span v-if="networkStatusBadge && !showCtot" class="time-sts-label" :class="networkStatusClass" @click.stop="onReaBadgeClick">{{ networkStatusBadge }}</span>
+              <span v-if="primaryTimeLabel" class="strip-time-lbl">{{ primaryTimeLabel }}</span>
+              <span class="strip-time-val">{{ primaryTimeValue || '----' }}</span>
+            </template>
+          </div>
+
+          <span class="ctrl-ident fit-font">{{ strip.flightRules || 'I' }}</span>
+          <span class="atyp-box fit-font">{{ strip.aircraftType }}</span>
+          <span class="wtc-box fit-font" :class="{ boxed: wtcHighlight, plain: !wtcHighlight }">{{ strip.wakeTurbulence }}</span>
+
+          <button
+            v-if="!bottomExpanded"
+            type="button"
+            class="ctrl-arrow strip-left-dn"
+            :class="{ 'arrow-stale': tsacStale }"
+            :title="tsacStale ? 'TSAT changed — click TSAT to update TSAC' : 'Bottom menu'"
+            @click.stop="bottomExpanded = true"
+          ><span class="arrow-glyph">▼</span></button>
+          <div
+            class="strip-time strip-time-bot fit-font"
+            :class="[
+              {
+                ghost: !secondaryTimeValue,
+                'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
+                'squawk-empty': secondaryTimeKind === 'assr' && !strip.squawk && strip.canResetSquawk,
+                'squawk-resettable':
+                  secondaryTimeKind === 'assr' && !!strip.squawk && strip.canResetSquawk,
+              },
+              secondaryTimeKind === 'tsat' ? tsatColorClass : undefined,
+            ]"
+            :title="secondaryTimeTitle"
+            @click.stop="onSecondaryTimeClick"
+            @dblclick.stop="onSecondaryTimeDblClick"
+          >
+            <span v-if="secondaryTimeLabel" class="strip-time-lbl">{{ secondaryTimeLabel }}</span>
+            <span class="strip-time-val">{{ secondaryTimeValue || '----' }}</span>
+          </div>
+        </div>
+
+        <!-- Main: fixed columns; C/S font shrinks to fit cols 1–2 -->
+        <div class="strip-main">
+          <div
+            ref="callsignBoxEl"
+            class="callsign-box"
+            :title="callsignBoxTitle"
+            @click.stop="onCallsignClick"
+            @contextmenu.stop.prevent="onContextMenu"
+            @touchend="onCallsignTouch"
+          >
+            <span
+              ref="callsignTextEl"
+              class="callsign"
+              :class="{
+                'callsign-no-match': strip.hasMatchingFlight === false,
+                'callsign-transfer-pending': isTransferIn || isTransferOut,
+              }"
+              :style="{ fontSize: callsignFontPx + 'px' }"
+            >{{ strip.callsign }}<span v-if="strip.communicationSuffix" class="comm-suffix">{{ strip.communicationSuffix }}</span>
+              <span v-if="showOwnerSi" class="owner-si" :class="ownerSiClass" :title="ownerSiTitle">{{ ownerSiText }}</span>
+            </span>
+          </div>
+          <div v-if="!isArrLayout" class="cell cell-xfl ghost fit-font">XFL</div>
+          <div
+            class="cell cell-hs"
+            :class="{
+              ghost: !strip.hs && !hsEditing,
+              'fit-font': !hsEditing,
+              'hs-editing': hsEditing,
+              editable: canEditAssignedData,
+            }"
+            title="Hold short (VCH H/S)"
+            @click.stop="onHsClick"
+          >
+            <input
+              v-if="hsEditing"
+              ref="hsInput"
+              class="hs-edit-input"
+              type="text"
+              maxlength="5"
+              :value="hsEditText"
+              @click.stop
+              @input="onHsInput"
+              @blur="onHsEditBlur"
+              @keydown.enter="onHsEditBlur"
+              @keydown.escape="onHsEditCancel"
+            />
+            <template v-else>{{ strip.hs || 'HS' }}</template>
+          </div>
+          <div
+            class="cell cell-hp"
+            :class="{
+              ghost: !strip.hp && !hpEditing,
+              'fit-font': !hpEditing,
+              'hp-editing': hpEditing,
+              editable: canEditAssignedData,
+            }"
+            title="Holding point (scratchpad /)"
+            @click.stop="onHpClick"
+          >
+            <input
+              v-if="hpEditing"
+              ref="hpInput"
+              class="hp-edit-input"
+              type="text"
+              maxlength="8"
+              :value="hpEditText"
+              @click.stop
+              @input="onHpInput"
+              @blur="onHpEditBlur"
+              @keydown.enter="onHpEditBlur"
+              @keydown.escape="onHpEditCancel"
+            />
+            <template v-else>{{ strip.hp || 'HP' }}</template>
+          </div>
+          <div
+            class="cell cell-rwy fit-font"
+            :class="{ ghost: !strip.runway, 'rwy-nonstandard': rwyNonStandard, editable: canEditAssignedData }"
+            :title="rwyCellTitle"
+            @click.stop="onRwyClick"
+          >{{ strip.runway || 'RWY' }}</div>
+
+          <template v-if="isArrLayout">
+            <div class="cell cell-cto" :class="{ 'has-ctot': !!triangleTimeText }">
+              <svg
+                viewBox="0 0 24 24"
+                preserveAspectRatio="none"
+                class="clearance-triangle landing mini"
                 :class="{
-                  'eobt-fls': isFls,
-                  'eobt-clickable': canEditPrimaryTime,
+                  active: showArrCtlTriangle,
+                  'green-border': arrTriangleGreenOutline,
                 }"
-                :title="isFls ? primaryTimeLabelTitle : undefined"
-                @click.stop="onPrimaryTimeClick"
+                aria-hidden="true"
               >
-                <div
-                  v-if="networkStatusBadge && !showCtot"
-                  class="time-sts-label"
-                  :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
-                  :title="canClearRea ? 'Remove REA' : undefined"
-                  @click.stop="onReaBadgeClick"
-                >{{ networkStatusBadge }}</div>
-                <div
-                  class="time-value"
-                  :class="{ 'time-fls': isFls, 'time-changed': tobtChanged }"
-                >
-                  {{ primaryTimeValue }}
-                </div>
-                <div class="time-label" :class="{ 'label-fls': isFls }" :title="primaryTimeLabelTitle">
-                  {{ primaryTimeLabel }}<span v-if="showTobtSetBy" class="tobt-setby"> ({{ strip.tobtSetBy }})</span>
-                </div>
-              </div>
-              <div
-                v-if="showCdm"
-                class="time-col tsat-col"
-                :class="{ 'cdm-comm-clickable': canEditTsac }"
-                :title="showTsacCtoc ? tsacTooltip : 'TSAT'"
-                @click.stop="onTsacClick($event)"
-                @contextmenu.prevent.stop="onTsacClear"
-              >
-                <div
-                  class="time-value"
-                  :class="[tsatColorClass, { 'time-changed': tsatChanged }]"
-                >{{ displayTsat }}</div>
-                <div
-                  v-if="showTsacCtoc"
-                  class="time-label-row"
-                >
-                  <span class="time-label">TSAT</span>
-                  <span class="cdm-comm-box" :class="tsacBoxClass" aria-hidden="true" />
-                </div>
-                <div v-else class="time-label">TSAT</div>
-              </div>
-              <div
-                v-if="showCtot"
-                class="time-col ctot-col"
-                :class="{ 'ctot-clickable': store.isController && !showCtotCancelled }"
-                :title="showCtotCancelled ? 'Slot cancelled (SLC)' : (strip.ctotReason || 'CTOT')"
-                @click.stop="onCtotClick"
-              >
-                <div
-                  v-if="networkStatusBadge && !showCtotCancelled"
-                  class="time-sts-label"
-                  :class="[networkStatusClass, { 'sts-clickable': canClearRea }]"
-                  :title="canClearRea ? 'Remove REA' : undefined"
-                  @click.stop="onReaBadgeClick"
-                >{{ networkStatusBadge }}</div>
-                <div
-                  class="time-value time-ctot"
-                  :class="{ 'time-changed': ctotChanged, 'time-ctot-cancelled': showCtotCancelled }"
-                >{{ showCtotCancelled ? 'SCL' : strip.ctot }}</div>
-                <div
-                  v-if="!showCtotCancelled && showTsacCtoc"
-                  class="time-label-row"
-                  :title="ctocTooltip"
-                >
-                  <span class="time-label time-label-ctot">CTOT</span>
-                  <span
-                    v-if="ctocDeltaText != null"
-                    class="cdm-ctoc-delta"
-                    :class="{ 'cdm-ctoc-delta-nonzero': ctocDeltaMinutes !== 0 }"
-                  >{{ ctocDeltaText }}</span>
-                  <span v-else class="cdm-comm-box cdm-comm-empty" aria-hidden="true" />
-                </div>
-                <div v-else-if="!showCtotCancelled" class="time-label time-label-ctot">CTOT</div>
-              </div>
+                <!-- Landing △ with rounded corners — fills viewBox nearly edge-to-edge -->
+                <path d="M2.5 0.8 H21.5 Q23.6 0.8 22.2 3.2 L13.2 21.2 Q12 23.4 10.8 21.2 L1.8 3.2 Q0.4 0.8 2.5 0.8 Z" />
+              </svg>
+              <span v-if="triangleTimeText" class="cto-ctot">{{ triangleTimeText }}</span>
             </div>
-          </template>
-        </div>
-        <div class="strip-divider"></div>
-
-        <!-- SID section (departures); G/A arrivals show CFL/AHDG in the same slot -->
-        <template v-if="strip.stripType === 'departure'">
-          <div class="strip-section strip-sid">
-              <div class="sid-value">{{ store.displaySidForStrip(strip) }}</div>
-              <div class="cleared-data" v-if="strip.clearedAltitude || strip.assignedHeading">
-                <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
-                <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
-              </div>
-          </div>
-          <div class="strip-divider"></div>
-        </template>
-        <template v-else-if="strip.missedApproach && (strip.clearedAltitude || strip.assignedHeading)">
-          <div class="strip-section strip-sid strip-goa-cleared">
-              <div class="cleared-data">
-                <span v-if="strip.clearedAltitude" class="alt">{{ strip.clearedAltitude }}</span>
-                <span v-if="strip.assignedHeading" class="hdg">H{{ strip.assignedHeading }}</span>
-              </div>
-          </div>
-          <div class="strip-divider"></div>
-        </template>
-
-        <!-- Airports section -->
-        <div class="strip-section strip-airports">
-          <template v-if="store.myAirports.length > 1">
-            <div class="airport adep" :class="{ highlight: strip.stripType === 'departure' || strip.stripType === 'local' }">
-              <span class="icao" :title="strip.adepName || undefined">{{ strip.adep }}</span>
-            </div>
-            <div class="airport ades" :class="{ highlight: strip.stripType === 'arrival' || strip.stripType === 'local' }">
-              <span class="icao" :title="strip.adesName || undefined">{{ strip.ades }}</span>
-            </div>
+            <div class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
           </template>
           <template v-else>
-            <div class="airport highlight single-airport">
-              <span class="icao" :title="((strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adepName : strip.adesName) || undefined">{{ (strip.stripType === 'arrival' || strip.stripType === 'local') ? strip.adep : strip.ades }}</span>
+            <div class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
+            <div
+              class="cell cell-cto"
+              :class="{ 'has-ctot': !!triangleTimeText || !!depArrowCtot }"
+              @click.stop="onDepArrowCtotClick"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                preserveAspectRatio="none"
+                class="clearance-triangle takeoff mini"
+                :class="{
+                  active: strip.clearedForTakeoff && !strip.atd,
+                  'green-border': !!strip.atd,
+                  'ctot-border': !!depArrowCtot && !strip.atd,
+                }"
+                aria-hidden="true"
+              >
+                <!-- Takeoff △ with rounded corners — fills viewBox nearly edge-to-edge -->
+                <path d="M2.5 23.2 H21.5 Q23.6 23.2 22.2 20.8 L13.2 2.8 Q12 0.6 10.8 2.8 L1.8 20.8 Q0.4 23.2 2.5 23.2 Z" />
+              </svg>
+              <span
+                v-if="triangleTimeText"
+                class="cto-ctot"
+                :class="{ scl: !strip.atd && showCtotCancelled }"
+              >{{ triangleTimeText }}</span>
             </div>
           </template>
+          <div
+            class="cell cell-cfl fit-font"
+            :class="{ ghost: !displayCfl, 'cfl-preview': cflPreviewPending, editable: canEditAssignedData }"
+            title="Cleared flight level"
+            @click.stop="onCflClick"
+          >{{ displayCfl || 'CFL' }}</div>
+          <div class="cell cell-ahd fit-font" :class="{ ghost: !strip.assignedHeading }">{{ strip.assignedHeading || 'AHD' }}</div>
+          <div
+            v-if="!isArrLayout"
+            class="cell cell-sid fit-font"
+            :class="{
+              ghost: !store.displaySidForStrip(strip),
+              'sid-highlight': sidHighlight || sidPreviewPending,
+              editable: canEditAssignedData,
+            }"
+            title="Departure route / SID"
+            @click.stop="onSidClick"
+          >
+            {{ store.displaySidForStrip(strip) || 'SID' }}
+          </div>
         </div>
 
+        <div v-if="store.isController" class="strip-actions" :class="{ 'multi-action': effectiveActionCount > 1 }">
+          <button
+            v-for="action in (strip.actions || [])"
+            :key="action"
+            class="action-button"
+            :class="actionButtonClass(action)"
+            @click.stop="() => onActionClick(action)"
+            @touchend.stop="(e) => onActionTouch(e, action)"
+          >
+            <span class="action-text">{{ actionLabel(action) }}</span>
+            <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
+          </button>
+        </div>
       </div>
-    </div>
 
-    <!-- Runway section (always visible, right-aligned) -->
-    <div class="strip-runway-fixed" v-if="strip.runway">
-      <div class="runway-value" v-if="strip.runway">{{ strip.runway }}</div>
-    </div>
-
-    <!-- Right section: Action button(s) (hidden in observer mode) -->
-    <template v-if="store.isController">
-      <div v-if="strip.actions && strip.actions.length > 0" class="strip-right"
-        :class="{ 'multi-action': effectiveActionCount > 1 }">
-        <button v-for="action in strip.actions" :key="action" class="action-button"
-          :class="actionButtonClass(action)"
-          @click.stop="() => onActionClick(action)" @touchend.stop="(e) => onActionTouch(e, action)">
-          <span class="action-text">{{ action === 'GOA' ? 'G/A' : action }}</span>
-          <span v-if="(action === 'XFER' || action === 'READY') && strip.xferFrequency" class="action-freq">{{ strip.xferFrequency }}</span>
-        </button>
+      <!-- Bottom: [▼ RMK FPL][ASSR ADEP | remarks under CFL→][TMA] -->
+      <div v-if="bottomExpanded" class="strip-expander strip-expander-bottom" @click.stop>
+        <div class="exp-bottom-left">
+          <button
+            type="button"
+            class="ctrl-arrow expander-arrow mirrored"
+            :class="{ 'arrow-stale': tsacStale }"
+            :title="tsacStale ? 'TSAT changed — click TSAT to update TSAC' : 'Close bottom menu'"
+            @click.stop="bottomExpanded = false"
+          ><span class="arrow-glyph">▼</span></button>
+          <button type="button" class="exp-chip" @click.stop="onRemarksClick">RMK</button>
+          <button type="button" class="exp-chip" @click.stop="onFplClick">FPL</button>
+        </div>
+        <div class="exp-bottom-main" :class="isArrLayout ? 'exp-bottom-main-arr' : 'exp-bottom-main-dep'">
+          <div class="exp-pre-rmk">
+            <span
+              class="exp-assr"
+              :class="{
+                ghost: !strip.squawk,
+                'squawk-empty': !strip.squawk && strip.canResetSquawk,
+                'squawk-resettable': !!strip.squawk && strip.canResetSquawk,
+              }"
+              :title="assrTitle"
+              @click.stop="onAssrClick"
+              @dblclick.stop="onAssrDblClick"
+            >{{ strip.squawk || '----' }}</span>
+            <span
+              class="exp-ades"
+              :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
+              :title="strip.adesName ? `${strip.ades} — ${strip.adesName}` : 'ADES'"
+            >{{ strip.ades && strip.ades !== '????' ? strip.ades : '----' }}</span>
+          </div>
+          <div class="exp-rmk" :class="{ ghost: !strip.remarks?.trim() }" @click.stop="onRemarksClick">
+            <input
+              v-if="remarksEditing"
+              ref="remarksInput"
+              v-model="remarksText"
+              class="remarks-input"
+              placeholder="RMK"
+              @click.stop
+              @input="onRemarksInput"
+              @blur="onRemarksBlur"
+              @keydown.enter="onRemarksBlur"
+              @keydown.escape="onRemarksCancel"
+            />
+            <span v-else class="exp-rmk-text">{{ strip.remarks?.trim() || '' }}</span>
+          </div>
+        </div>
+        <span
+          class="exp-tma-exit"
+          :class="{ ghost: !tmaExitPoint }"
+          :title="tmaExitPoint ? `TMA exit ${tmaExitPoint}` : 'TMA exit'"
+        >{{ tmaExitPoint || '----' }}</span>
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('bottom')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'bot' + i"
+            class="strip-scribble-stroke"
+            :points="stroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
       </div>
-      <div v-else class="strip-right strip-right-empty"></div>
     </template>
-    </template><!-- end v-else (normal strip layout) -->
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } from 'vue'
+import {
+  extractTmaExitPoint,
+  formatTrackSidDisplay,
+  getEssaRwyCombination,
+  hasSlowRemark,
+  isIfrSidEligible,
+  isTrackSidName,
+  isVectorSidName,
+  normalizeEssaRwy,
+  withSlowRemark,
+} from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
+import {
+  scribbleBandViewBox,
+  scribbleStrokeWidthCss,
+  useStripScribbles,
+} from '@/composables/useStripScribbles'
+import { useStripExpanders } from '@/composables/useStripExpanders'
 import ClearanceDialog from './ClearanceDialog.vue'
 import FlightplanDialog from './FlightplanDialog.vue'
+import SidRouteMenu from './SidRouteMenu.vue'
+import RwyMenu from './RwyMenu.vue'
+import CflMenu from './CflMenu.vue'
+import StripZoomOverlay from './StripZoomOverlay.vue'
+import StripCloseButton from './StripCloseButton.vue'
 
-const props = defineProps<{
-  strip: FlightStrip
-  sectionId: string
-  bayId: string
+const props = withDefaults(
+  defineProps<{
+    strip: FlightStrip
+    sectionId: string
+    bayId: string
+    /** Rendered inside zoom overlay — no drag, callsign closes zoom */
+    isLargeView?: boolean
+    /** Live stroke while drawing in zoom overlay (canonical points) */
+    activeScribbleStroke?: string | null
+  }>(),
+  { isLargeView: false, activeScribbleStroke: null },
+)
+
+const emit = defineEmits<{
+  'close-large-view': []
 }>()
 
 const store = useEfsStore()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
+const stripIdRef = computed(() => props.strip.id)
+const { strokes: stripScribbles } = useStripScribbles(stripIdRef)
+const { topExpanded, bottomExpanded } = useStripExpanders(stripIdRef)
+const showStripScribbles = computed(
+  () => stripScribbles.value.length > 0 || !!props.activeScribbleStroke,
+)
 
 // Fly-across animation for auto-moved strips
 const AUTO_MOVE_DURATION = 500 // ms
@@ -486,6 +730,11 @@ onUpdated(tryAutoMoveAnimation)
 // Context menu state
 const menuOpen = ref(false)
 const menuPosition = ref<[number, number]>([0, 0])
+/** Above StripZoomOverlay (2400) when this strip is the zoomed instance */
+const overlayMenuZ = computed(() => (props.isLargeView ? 2600 : 2000))
+const sidRouteMenuOpen = ref(false)
+const rwyMenuOpen = ref(false)
+const cflMenuOpen = ref(false)
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
 const ctotMenuOpen = ref(false)
@@ -501,7 +750,8 @@ const groundStateOptions = [
   { code: 'TXO', label: 'Taxi Out', action: 'TXO', groundstate: 'TAXI' },
   { code: 'L/U', label: 'Lineup', action: 'LU', groundstate: 'LINEUP' },
   { code: 'CTO', label: 'Takeoff', action: 'CTO', groundstate: 'DEPA' },
-  { code: 'ARR', label: 'Arrived', action: 'ARR', groundstate: 'ARR' },
+  // ARR = ES native "Arriving" (ADC sector list), not "has landed"
+  { code: 'ARR', label: 'Arriving', action: 'ARR', groundstate: 'ARR' },
   { code: 'CTL', label: 'Cleared to Land', action: 'CTL_GS', groundstate: 'ARR', extra: true },
   { code: 'TXI', label: 'Taxi In', action: 'TXI', groundstate: 'TXIN' },
   { code: 'PRK', label: 'Parked', action: 'PARK', groundstate: 'PARK' },
@@ -518,25 +768,265 @@ const groundStateLabel = computed(() => {
 const clncDialogOpen = ref(false)
 const fplDialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
+const largeViewOpen = ref(false)
+const largeViewAnchor = ref<{ left: number; top: number; width: number; height: number } | null>(null)
+
+function openLargeView() {
+  menuOpen.value = false
+  ctotMenuOpen.value = false
+  tsacMenuOpen.value = false
+  reaMenuOpen.value = false
+  sidRouteMenuOpen.value = false
+  rwyMenuOpen.value = false
+  cflMenuOpen.value = false
+  groundStateMenuOpen.value = false
+  transferMenuOpen.value = false
+  const el = stripElement.value
+  if (el) {
+    const r = el.getBoundingClientRect()
+    largeViewAnchor.value = { left: r.left, top: r.top, width: r.width, height: r.height }
+  } else {
+    largeViewAnchor.value = null
+  }
+  largeViewOpen.value = true
+}
+
+/**
+ * Design reference: 400px wide → 50px body (ratio locked via --strip-scale).
+ * Fonts use calc(Npx * var(--strip-scale)); .fit-font / C/S shrink further to fit boxes.
+ */
+const STRIP_REF_WIDTH_PX = 400
+const CALLSIGN_FONT_MAX = 26
+const CALLSIGN_FONT_MIN = 11
+const FIT_FONT_MIN = 7
+const stripScale = ref(1)
+const bayScribbleStrokeWidth = computed(() => scribbleStrokeWidthCss(stripScale.value))
+const callsignBoxEl = ref<HTMLElement | null>(null)
+const callsignTextEl = ref<HTMLElement | null>(null)
+const callsignFontPx = ref(CALLSIGN_FONT_MAX)
+let stripScaleRaf = 0
+let stripResizeObs: ResizeObserver | null = null
+/** Last width used for --strip-scale (ignore height-only RO chatter). */
+let lastStripScaleWidth = 0
+/** Overflow slack — subpixel / DPR noise otherwise toggles fit every frame. */
+const FIT_OVERFLOW_PX = 1.25
+
+/** True when painted content is wider/taller than the box (flex-safe). */
+function contentOverflowsBox(el: HTMLElement): boolean {
+  if (el.clientWidth <= 0) return false
+  if (
+    el.scrollWidth > el.clientWidth + FIT_OVERFLOW_PX ||
+    el.scrollHeight > el.clientHeight + FIT_OVERFLOW_PX
+  ) {
+    return true
+  }
+  // Flex/grid cells: scrollWidth often equals clientWidth while text still clips.
+  try {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const rects = range.getClientRects()
+    if (!rects.length) return false
+    let left = Infinity
+    let right = -Infinity
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i]!
+      left = Math.min(left, r.left)
+      right = Math.max(right, r.right)
+    }
+    const style = getComputedStyle(el)
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+    const box = el.getBoundingClientRect()
+    return right - left > box.width - padX + FIT_OVERFLOW_PX
+  } catch {
+    return false
+  }
+}
+
+/** Shrink an element's font from its CSS size until content fits the box. */
+function fitFontToBox(el: HTMLElement, minPx: number) {
+  el.style.fontSize = ''
+  const maxPx = parseFloat(getComputedStyle(el).fontSize)
+  if (!Number.isFinite(maxPx) || maxPx <= 0) return
+  // Integer px avoids 0.5px dithering on some displays / touch browsers
+  let size = Math.round(maxPx)
+  el.style.fontSize = `${size}px`
+  const min = Math.min(Math.ceil(minPx * stripScale.value), size)
+  for (let i = 0; i < 40 && size > min && contentOverflowsBox(el); i++) {
+    size -= 1
+    el.style.fontSize = `${size}px`
+  }
+}
+
+/** Short C/S look oversized at full 26; long ones (EUW9792) keep the headroom. */
+function callsignFontMaxFor(callsign: string, suffix?: string): number {
+  const n = callsign.length + (suffix?.length ?? 0)
+  if (n <= 5) return 20 // e.g. OYBUJ
+  if (n <= 6) return 22
+  if (n <= 7) return 25
+  return CALLSIGN_FONT_MAX
+}
+
+function fitCallsignFont() {
+  const box = callsignBoxEl.value
+  const text = callsignTextEl.value
+  if (!box || !text) return
+  const maxPx = callsignFontMaxFor(props.strip.callsign, props.strip.communicationSuffix)
+  const max = Math.round(maxPx * stripScale.value)
+  const min = Math.ceil(CALLSIGN_FONT_MIN * stripScale.value)
+  const style = getComputedStyle(box)
+  const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+  // Use nearly the full content box — light slack so long C/S stay larger
+  const avail = Math.max(0, box.clientWidth - padX)
+  const slack = Math.max(FIT_OVERFLOW_PX, 2.5 * stripScale.value)
+  let size = max
+  text.style.fontSize = `${size}px`
+  while (size > min && text.scrollWidth > avail + slack) {
+    size -= 1
+    text.style.fontSize = `${size}px`
+  }
+  callsignFontPx.value = size
+}
+
+function fitAllBoxFonts() {
+  const root = stripElement.value
+  if (!root) return
+  fitCallsignFont()
+  root.querySelectorAll<HTMLElement>('.fit-font').forEach((el) => {
+    fitFontToBox(el, FIT_FONT_MIN)
+  })
+}
+
+function quantizeStripScale(raw: number, max: number): number {
+  const clamped = Math.max(0.55, Math.min(max, raw))
+  // 0.02 steps — enough for Size %, kills subpixel width flicker
+  return Math.round(clamped * 50) / 50
+}
+
+/**
+ * Section overflow scrollbars typically steal 6–17px of strip width.
+ * Ignore those deltas so scale/callsign size stay tied to the real strip box
+ * without scrollbar appear/disappear twitching.
+ */
+const SCROLLBAR_WIDTH_DEADBAND_PX = 18
+
+function updateStripScale(force = false) {
+  const el = stripElement.value
+  if (!el) return
+  const w = el.clientWidth
+  if (w <= 0) return
+  // Height-only resize (font fit / expanders) must not re-run scale+fit loop
+  if (!force && Math.abs(w - lastStripScaleWidth) < 1) return
+
+  // Scrollbar toggle: keep prior design width (do not retune --strip-scale)
+  if (
+    !force &&
+    !props.isLargeView &&
+    lastStripScaleWidth > 0 &&
+    Math.abs(w - lastStripScaleWidth) <= SCROLLBAR_WIDTH_DEADBAND_PX
+  ) {
+    return
+  }
+
+  const raw = w / STRIP_REF_WIDTH_PX
+  // Bay: keep modest. Zoomed view: let scale track width so height grows with Size %.
+  const max = props.isLargeView ? 5 : 2.2
+  const s = quantizeStripScale(raw, max)
+  // Width moved but quantized scale unchanged — update baseline only (skip font-fit churn)
+  if (!force && s === stripScale.value) {
+    lastStripScaleWidth = w
+    return
+  }
+
+  lastStripScaleWidth = w
+  stripScale.value = s
+  el.style.setProperty('--strip-scale', String(s))
+  fitAllBoxFonts()
+}
+
+function scheduleStripScale(force = false) {
+  if (stripScaleRaf) cancelAnimationFrame(stripScaleRaf)
+  stripScaleRaf = requestAnimationFrame(() => {
+    stripScaleRaf = 0
+    updateStripScale(force)
+  })
+}
+
+function attachStripScaleObserver() {
+  stripResizeObs?.disconnect()
+  stripResizeObs = null
+  const el = stripElement.value
+  if (!el || typeof ResizeObserver === 'undefined') return
+  stripResizeObs = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    const w =
+      entry?.contentBoxSize?.[0]?.inlineSize ??
+      entry?.contentRect?.width ??
+      stripElement.value?.clientWidth ??
+      0
+    // Only react to real width changes — height chatter from font-fit caused flicker
+    if (Math.abs(w - lastStripScaleWidth) < 1) return
+    if (
+      !props.isLargeView &&
+      lastStripScaleWidth > 0 &&
+      Math.abs(w - lastStripScaleWidth) <= SCROLLBAR_WIDTH_DEADBAND_PX
+    ) {
+      return
+    }
+    scheduleStripScale()
+  })
+  stripResizeObs.observe(el)
+}
 
 // Note strip state
 const isNote = computed(() => props.strip.stripType === 'note')
 const isTransferIn = computed(() => !isNote.value && props.strip.transferPending === 'in')
 const isTransferOut = computed(() => !isNote.value && props.strip.transferPending === 'out')
+
+/** INBOUND (and backend `dimmed`): data fields use placeholder grey; C/S + highlighted RWY stay full. */
+const dimmedData = computed(() => {
+  // Pending transfer in → full brightness (assume/handoff focus)
+  if (props.strip.transferPending === 'in') return false
+  if (props.strip.dimmed) return true
+  const id = (props.sectionId || props.strip.sectionId || '').toLowerCase()
+  return id === 'inbound' || id.endsWith('_inbound')
+})
+/** Assigned data (CFL/SID/RWY/scratch/…) — only when untracked or assumed by me */
+const canEditAssignedData = computed(
+  () => store.isController && !props.strip.ownedByOther,
+)
+
+/** Preferred SID preview not yet assigned via CLR — amber until dialog opens */
+const sidPreviewPending = computed(() => store.isPreferredSidPending(props.strip))
+
+/** Preferred CFL preview not yet assigned via CLR */
+const cflPreviewPending = computed(() => store.isPreferredCflPending(props.strip))
+
+/** Amber (same as pending transfer) for VFR / track·SLOW / radar-vector ve SIDs */
+const sidHighlight = computed(() => {
+  const raw = (props.strip.sid || '').trim()
+  const shown = store.displaySidForStrip(props.strip)
+  if (!shown) return false
+  if (props.strip.flightRules === 'V' || /^VFR/i.test(raw)) return true
+  // Radar-vector (ARS6E·KOGAV / "ARS 6E veKOGAV") — same orange as SLOW, still not SLOW altitude
+  if (isVectorSidName(raw) || /[A-Z]{2,}\s+\d+[A-Z]+\s+ve[A-Z]{2,}/i.test(shown)) return true
+  if (isTrackSidName(raw) || formatTrackSidDisplay(raw)) return true
+  // Formatted SLOW display: 120veBABAP / 010·240veNOSLI
+  if (/\d{3}(·\d{3})?ve[A-Z]{2,}/i.test(shown)) return true
+  return false
+})
 const hasRofRequest = computed(() => !!props.strip.rofRequestCallsign || !!props.strip.rofRequestSi)
-/** Inbound: ROF sent to us (we track). Outbound: we sent ROF (cooldown). */
+/** Inbound: ROF sent to us (we track). Outbound: we sent ROF (pink window). */
 const isRofInbound = computed(() => hasRofRequest.value && !!props.strip.isAssumed)
 const isRofOutbound = computed(() => hasRofRequest.value && !props.strip.isAssumed)
 const isRofActive = computed(() => hasRofRequest.value)
 const rofNowMs = ref(Date.now())
-/** Inbound flash window (1 min); outbound flashes for whole cooldown */
+/** Inbound alternate window / outbound pink ROF key — until rofFlashUntil */
 const isRofFlashing = computed(() => {
-  if (isRofOutbound.value) return true
-  if (!isRofInbound.value) return false
+  if (!isRofInbound.value && !isRofOutbound.value) return false
   const until = props.strip.rofFlashUntil
   return until != null && rofNowMs.value < until
 })
-/** true = pink phase (ROF text / pink XFER); false = other half */
+/** true = pink phase for SI/XFER alternate (inbound); outbound ROF key stays solid pink */
 const rofFlashPink = ref(true)
 let rofAlternateTimer: ReturnType<typeof setInterval> | null = null
 let rofClockTimer: ReturnType<typeof setInterval> | null = null
@@ -547,22 +1037,25 @@ watch(isRofFlashing, (flashing) => {
     clearInterval(rofAlternateTimer)
     rofAlternateTimer = null
   }
-  if (flashing) {
+  if (flashing && isRofInbound.value) {
+    // Inbound only: alternate SI/XFER pink ↔ amber
     rofFlashPink.value = true
     rofAlternateTimer = setInterval(() => {
       rofFlashPink.value = !rofFlashPink.value
     }, ROF_ALTERNATE_MS)
+  } else if (flashing && isRofOutbound.value) {
+    rofFlashPink.value = true
   } else {
     rofFlashPink.value = false
   }
 }, { immediate: true })
 
-watch(isRofInbound, (inbound) => {
+watch([isRofInbound, isRofOutbound], ([inbound, outbound]) => {
   if (rofClockTimer) {
     clearInterval(rofClockTimer)
     rofClockTimer = null
   }
-  if (inbound) {
+  if (inbound || outbound) {
     rofNowMs.value = Date.now()
     rofClockTimer = setInterval(() => {
       rofNowMs.value = Date.now()
@@ -570,31 +1063,8 @@ watch(isRofInbound, (inbound) => {
   }
 }, { immediate: true })
 
-const showOwnerSi = computed(() => {
-  if (isNote.value) return false
-  // Pending transfer always shows who from / who to (overrides ROF alternate)
-  if (isTransferIn.value) return !!props.strip.ownerSi
-  if (isTransferOut.value) return !!props.strip.transferSi
-  // ROF pending: keep SI visible for alternate / requester indication
-  if (isRofActive.value) return true
-  if (!store.showStripOwnership) return false
-  return !!props.strip.ownerSi
-})
-/** Dim other-owned strips only when ownership display (and dimming) are enabled */
-const shouldDimOwnership = computed(() =>
-  store.showStripOwnership &&
-  store.dimOtherOwnedStrips &&
-  !!props.strip.ownedByOther &&
-  !isTransferIn.value &&
-  !isNote.value
-)
-/** Ownership dim, or backend dimmed (INBOUND / TWR pending). Pending transfers stay bright. */
-const shouldDimStrip = computed(() =>
-  !isNote.value &&
-  !isTransferIn.value &&
-  !isTransferOut.value &&
-  (shouldDimOwnership.value || !!props.strip.dimmed)
-)
+/** Sector ownership / ROF / transfer SI next to callsign — hidden (ROF uses action key) */
+const showOwnerSi = computed(() => false)
 /**
  * SI label:
  * - transfer in → owner SI (from whom); overrides any ROF alternate
@@ -656,12 +1126,177 @@ const ownerSiTitle = computed(() => {
   return owner ? `Tracked by ${owner}` : undefined
 })
 const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+const isArrLayout = computed(() => props.strip.stripType === 'arrival')
+
+/** RWY differs from ES active selection and/or selected ESSA config → yellow fill */
+const rwyNonStandard = computed(() => {
+  const rwy = props.strip.runway
+  if (!rwy) return false
+  const norm = normalizeEssaRwy(rwy)
+  if (!norm) return false
+
+  const airport = (isArrLayout.value ? props.strip.ades : props.strip.adep)?.toUpperCase()
+  if (!airport) return false
+
+  const info = store.atisInfo.find((a) => a.airport === airport)
+  const esList = (isArrLayout.value ? info?.arrRunways : info?.depRunways) ?? []
+  const esNorm = esList.map(normalizeEssaRwy).filter(Boolean)
+  const matchesEs = esNorm.length === 0 || esNorm.includes(norm)
+
+  let matchesConfig = true
+  if (airport === 'ESSA' && store.essaRwyConfigIdResolved) {
+    const combo = getEssaRwyCombination(store.essaRwyConfigIdResolved)
+    if (combo) {
+      const configList = (isArrLayout.value ? combo.arr : combo.dep).map(normalizeEssaRwy)
+      matchesConfig = configList.includes(norm)
+      if (!matchesConfig && isArrLayout.value && combo.arrAliases) {
+        matchesConfig = combo.arrAliases.some((alias) =>
+          alias.map(normalizeEssaRwy).includes(norm),
+        )
+      }
+    }
+  }
+
+  return !matchesEs || !matchesConfig
+})
+
+const rwyCellTitle = computed(() => {
+  const base = isArrLayout.value ? 'Arrival runway' : 'Departure runway'
+  return rwyNonStandard.value ? `${base} (non-standard)` : base
+})
+
+const wtcHighlight = computed(() => {
+  const w = props.strip.wakeTurbulence
+  return !!w && w !== 'M'
+})
+const displayCfl = computed(() => store.displayCflForStrip(props.strip))
+const dclChipClass = computed(() => {
+  const s = props.strip.dclStatus
+  if (s === 'REQUEST') return 'dcl-request'
+  if (s === 'SENT' || s === 'DONE' || s === 'WILCO') return 'dcl-ok'
+  if (s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED') return 'dcl-err'
+  return ''
+})
+
+function onExpRea() {
+  if (!canEditAssignedData.value) return
+  if (canClearRea.value) onClearReaClick()
+  else if (canSendRea.value) onSendReaClick()
+}
+
+/** Airport used for ATIS QNH on this strip */
+const qnhAirport = computed(() =>
+  isArrLayout.value ? props.strip.ades : props.strip.adep
+)
+
+const currentQnh = computed(() => {
+  const apt = qnhAirport.value
+  if (!apt) return undefined
+  return store.atisInfo.find((a) => a.airport === apt)?.qnh
+})
+
+const qnhStale = computed(() => {
+  const given = props.strip.qnhGiven
+  const cur = currentQnh.value
+  return given != null && cur != null && given !== cur
+})
+
+const qnhGivenMatches = computed(() => {
+  const given = props.strip.qnhGiven
+  const cur = currentQnh.value
+  return given != null && cur != null && given === cur
+})
+
+const canSetQnh = computed(() =>
+  canEditAssignedData.value && currentQnh.value != null
+)
+
+/** Top ▲: QNH stale (orange) overrides REA (green) */
+const topArrowClass = computed(() => {
+  if (qnhStale.value) return { 'arrow-stale': true }
+  if (isRea.value) return { 'arrow-rea': true }
+  return {}
+})
+
+const topArrowTitle = computed(() => {
+  if (qnhStale.value) {
+    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) — open menu & press QNH`
+  }
+  if (isRea.value) return 'REA set'
+  return topExpanded.value ? 'Close top menu' : 'Top menu'
+})
+
+const callsignBoxTitle = computed(() => {
+  const rtf = props.strip.rtfCallsign
+  const mode = props.isLargeView
+    ? 'Close zoomed strip (right-click for menu)'
+    : 'Zoom strip (right-click for menu)'
+  return rtf ? `${rtf} — ${mode}` : mode
+})
+
+function onExpQnh() {
+  if (!canSetQnh.value || currentQnh.value == null) return
+  store.setQnhGiven(props.strip.id, currentQnh.value)
+}
+
+/** SLOW flag: aircraft type and/or SLOW remarks token */
+const hasSlowFlag = computed(
+  () => !!props.strip.isSlow || hasSlowRemark(props.strip.remarks),
+)
+
+async function onExpSlow() {
+  if (!canEditAssignedData.value) return
+  // V / Z: no SLOW SID rules / auto flag
+  if (!isIfrSidEligible(props.strip.flightRules)) return
+  // Toggle remarks token; button also lights for isSlow type
+  const enable = !hasSlowRemark(props.strip.remarks)
+  if (enable) {
+    // Assign track SID first — AmendFlightPlan often clears scratch, so set SLOW after
+    await store.preferSidForStrip(props.strip.id, true)
+    store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
+  } else {
+    store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, false))
+    // Remove SLOW/track SID from the flight plan
+    store.clearTrackSidForStrip(props.strip.id)
+  }
+}
+
+/** Highlight when URNAV appears anywhere in remarks/scratchpad (e.g. .URNAV, FOO URNAV BAR) */
+const hasUrnavRemark = computed(() => /URNAV/i.test(props.strip.remarks || ''))
+
+function onExpUrnav() {
+  if (!canEditAssignedData.value) return
+  const current = props.strip.remarks?.trim() || ''
+  if (hasUrnavRemark.value) {
+    const next = current
+      .replace(/\.?URNAV/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    store.updateRemarks(props.strip.id, next)
+  } else {
+    const next = current ? `${current} URNAV` : 'URNAV'
+    store.updateRemarks(props.strip.id, next)
+  }
+}
+
+/** Highlight when VECT appears in remarks/scratchpad */
+const hasVectRemark = computed(() => /VECT/i.test(props.strip.remarks || ''))
+
+function onExpVect() {
+  if (!canEditAssignedData.value) return
+  const current = props.strip.remarks?.trim() || ''
+  if (hasVectRemark.value) {
+    const next = current
+      .replace(/\.?VECT/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    store.updateRemarks(props.strip.id, next)
+  } else {
+    const next = current ? `${current} VECT` : 'VECT'
+    store.updateRemarks(props.strip.id, next)
+  }
+}
 const effectiveActionCount = computed(() => props.strip.actions?.length ?? 0)
-const noteEditing = ref(false)
-const noteText = ref('')
-const noteInitialText = ref('')
-const noteDirty = ref(false)
-const noteInput = ref<HTMLInputElement | null>(null)
 
 // Remarks state
 const remarksEditing = ref(false)
@@ -670,29 +1305,112 @@ const remarksInitialText = ref('')
 const remarksDirty = ref(false)
 const remarksInput = ref<HTMLInputElement | null>(null)
 
-/** Scratchpad / remarks text only — do not invent SLOW from isSlow (ATYP flag). */
-const displayRemarks = computed(() => props.strip.remarks?.trim() || '')
+// Hold short — VCH annotation 4 (max 5)
+const hsEditing = ref(false)
+const hsEditText = ref('')
+const hsInput = ref<HTMLInputElement | null>(null)
 
-function onNoteClick() {
-  // Keep in-progress text if already editing; avoid resetting from stale strip.noteText.
-  // Still re-focus the input (important for touch interactions).
-  if (noteEditing.value) {
-    nextTick(() => {
-      noteInput.value?.focus()
-    })
+function onHsClick() {
+  if (!canEditAssignedData.value) return
+  if (hsEditing.value) {
+    nextTick(() => hsInput.value?.focus())
     return
   }
-  noteText.value = props.strip.noteText ?? ''
-  noteInitialText.value = noteText.value
-  noteDirty.value = false
-  noteEditing.value = true
+  hsEditText.value = props.strip.hs?.trim() || ''
+  hsEditing.value = true
   nextTick(() => {
-    noteInput.value?.focus()
+    hsInput.value?.focus()
+    hsInput.value?.select()
   })
 }
 
-function onNoteInput() {
-  noteDirty.value = true
+function onHsInput(event: Event) {
+  const el = event.target as HTMLInputElement
+  const cleaned = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)
+  hsEditText.value = cleaned
+  const pos = Math.min(el.selectionStart ?? cleaned.length, cleaned.length)
+  nextTick(() => {
+    if (hsInput.value && hsInput.value.value !== cleaned) {
+      hsInput.value.value = cleaned
+      hsInput.value.setSelectionRange(pos, pos)
+    }
+  })
+}
+
+function onHsEditCancel() {
+  hsEditing.value = false
+}
+
+function onHsEditBlur() {
+  if (!hsEditing.value) return
+  const value = hsEditText.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)
+  hsEditing.value = false
+  if (value !== (props.strip.hs || '')) {
+    store.updateHs(props.strip.id, value)
+  }
+}
+
+// Holding point — scratchpad /TEXT
+const hpEditing = ref(false)
+const hpEditText = ref('')
+const hpInput = ref<HTMLInputElement | null>(null)
+
+function onHpClick() {
+  if (!canEditAssignedData.value) return
+  if (hpEditing.value) {
+    nextTick(() => hpInput.value?.focus())
+    return
+  }
+  hpEditText.value = props.strip.hp?.trim() || ''
+  hpEditing.value = true
+  nextTick(() => {
+    hpInput.value?.focus()
+    hpInput.value?.select()
+  })
+}
+
+function onHpInput(event: Event) {
+  const el = event.target as HTMLInputElement
+  const cleaned = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '')
+  hpEditText.value = cleaned
+  const pos = Math.min(el.selectionStart ?? cleaned.length, cleaned.length)
+  nextTick(() => {
+    if (hpInput.value && hpInput.value.value !== cleaned) {
+      hpInput.value.value = cleaned
+      hpInput.value.setSelectionRange(pos, pos)
+    }
+  })
+}
+
+function onHpEditCancel() {
+  hpEditing.value = false
+}
+
+function onHpEditBlur() {
+  if (!hpEditing.value) return
+  const value = hpEditText.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  hpEditing.value = false
+  if (value !== (props.strip.hp || '')) {
+    store.updateHp(props.strip.id, value)
+  }
+}
+
+/** TMA exit — first FPL point after ADEP/rwy or SID/rwy */
+const tmaExitPoint = computed(
+  () => props.strip.tmaExit || extractTmaExitPoint(undefined, props.strip.route),
+)
+
+function onNoteClick() {
+  if (props.isLargeView) {
+    emit('close-large-view')
+    return
+  }
+  openLargeView()
+}
+
+function onNoteClose() {
+  largeViewOpen.value = false
+  store.deleteStrip(props.strip.id)
 }
 
 function onNoteTouch(event: TouchEvent) {
@@ -708,21 +1426,19 @@ function onNoteTouch(event: TouchEvent) {
   onNoteClick()
 }
 
-function onNoteBlur() {
-  noteEditing.value = false
-  if (!noteDirty.value) return
-  const text = noteText.value.trim()
-  if (text !== noteInitialText.value) {
-    store.updateNote(props.strip.id, text)
-  }
+/** Newly created notes open zoom scribble once the bay strip mounts. */
+function tryOpenPendingNoteScribble() {
+  if (!isNote.value || props.isLargeView) return
+  if (!store.consumePendingNoteScribbleOpen(props.strip.id)) return
+  nextTick(() => openLargeView())
 }
-
-// Auto-focus note strips that are newly created (empty text)
-onMounted(() => {
-  if (isNote.value && !props.strip.noteText) {
-    onNoteClick()
-  }
-})
+onMounted(tryOpenPendingNoteScribble)
+watch(
+  () => store.pendingNoteScribbleId,
+  (id) => {
+    if (id === props.strip.id) tryOpenPendingNoteScribble()
+  },
+)
 
 // Remarks handlers
 function startRemarksEditing() {
@@ -736,6 +1452,7 @@ function startRemarksEditing() {
 }
 
 function onRemarksClick() {
+  if (!canEditAssignedData.value) return
   if (remarksEditing.value) {
     nextTick(() => remarksInput.value?.focus())
     return
@@ -744,6 +1461,7 @@ function onRemarksClick() {
 }
 
 function onRemarksMenuClick() {
+  if (!canEditAssignedData.value) return
   menuOpen.value = false
   startRemarksEditing()
 }
@@ -776,21 +1494,25 @@ const touchDrag = getTouchDragInstance()
 
 const stripTypeClass = computed(() => `strip-${props.strip.stripType}`)
 
-const stripStyle = computed(() => {
-  const style: Record<string, string> = {}
-  if (!store.isController) {
-    style['grid-template-columns'] = '10px auto minmax(0, 1fr) auto'
-  }
-  return style
-})
-
-/** CDM (TOBT/TSAT) is only available at ESSA */
+/** CDM (TOBT/TSAT/TTOT) is only available at ESSA */
 const CDM_AIRPORTS = new Set(['ESSA'])
 /** Single-airport CDM ground sections */
 const CDM_SECTIONS_EXACT = new Set(['pending_dep', 'cleared', 'push_start'])
 /** TSAC/CTOC clickspots: CD ALL + TSAT only (not PUSH&START) */
 const TSAC_CTOC_SECTIONS = new Set(['pending_dep', 'cleared'])
-/** Taxi and later — no EOBT/TOBT; CTOT only when regulated (incl. ESSA taxi_dep) */
+/** PUSH&START bay and later — ESSA top switches TOBT→TTOT; bottom drops TSAT */
+const PUSH_START_ONWARD_SECTIONS = new Set([
+  'push_start',
+  'taxi',
+  'taxi_dep',
+  'taxi_arr',
+  'runway',
+  'dep_runway',
+  'arr_runway',
+  'ctr_dep',
+  'rwy',
+])
+/** Taxi and later — used for non-ESSA primary-time hide (legacy) */
 const TAXI_ONWARD_SECTIONS = new Set([
   'taxi',
   'taxi_dep',
@@ -816,6 +1538,17 @@ function sectionIdMatches(sectionId: string, allowed: Set<string>): boolean {
   const logical = sectionId.includes('_') ? sectionId.slice(sectionId.lastIndexOf('_') + 1) : sectionId
   return allowed.has(logical)
 }
+
+/** In PUSH&START section or later (taxi / runway / CTR DEP). */
+const isPushStartOrLater = computed(() =>
+  sectionIdMatches(props.strip.sectionId, PUSH_START_ONWARD_SECTIONS) ||
+  /^(bay\d+|idle)_twy$/.test(props.strip.sectionId)
+)
+
+const isEssaDep = computed(() =>
+  CDM_AIRPORTS.has(props.strip.adep) &&
+  (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+)
 
 const isDepartingIfr = computed(() =>
   props.strip.stripType === 'departure' &&
@@ -935,31 +1668,65 @@ const networkStatusClass = computed(() => {
 })
 
 const canSendRea = computed(() =>
-  store.isController && showCtot.value && !showCtotCancelled.value && !isRea.value
+  canEditAssignedData.value && showCtot.value && !showCtotCancelled.value && !isRea.value
 )
 
 /** REA can appear above TOBT (no CTOT) or CTOT — allow clear in both cases */
 const canClearRea = computed(() =>
-  store.isController && isRea.value
+  canEditAssignedData.value && isRea.value
 )
 
 /** UTC clock tick for TSAT window / FLS label blink */
 const nowUtcMs = ref(Date.now())
 let tsatWindowTimer: ReturnType<typeof setInterval> | undefined
 
-const primaryTimeValue = computed(() => {
-  if (showCdm.value) {
-    return props.strip.tobt || props.strip.eobt || ''
+/** Format HHmm → HH:MM for strip time windows */
+function formatHhmmColon(hhmm: string | undefined): string {
+  if (!hhmm) return ''
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return ''
+  const n = digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+  return `${n.slice(0, 2)}:${n.slice(2, 4)}`
+}
+
+type PrimaryTimeKind = 'tobt' | 'ttot' | 'eobt' | 'eta' | 'none'
+type SecondaryTimeKind = 'tsat' | 'ctot' | 'scl' | 'assr' | 'none'
+
+/**
+ * Top time window:
+ * - ESSA DEP: TOBT (TB) until PUSH&START, then TTOT (TT)
+ * - ARR: ETA
+ * - Other DEP: EOBT (EB), or TOBT (TB) if present
+ */
+const primaryTimeKind = computed((): PrimaryTimeKind => {
+  if (isArrLayout.value) return 'eta'
+  if (isEssaDep.value) {
+    return isPushStartOrLater.value ? 'ttot' : 'tobt'
   }
   if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
-    return props.strip.eobt || ''
+    return props.strip.tobt ? 'tobt' : 'eobt'
   }
-  return props.strip.eta || ''
+  return 'eta'
 })
 
-/** CDM plugin: alternate FLS ↔ subtype (CDM/NRA/MR/GS) every 2s */
+const primaryTimeValue = computed(() => {
+  switch (primaryTimeKind.value) {
+    case 'tobt':
+      return formatHhmmColon(props.strip.tobt || props.strip.eobt)
+    case 'ttot':
+      return formatHhmmColon(props.strip.ttot)
+    case 'eobt':
+      return formatHhmmColon(props.strip.eobt)
+    case 'eta':
+      return formatHhmmColon(props.strip.eta)
+    default:
+      return ''
+  }
+})
+
+/** Short label: TB / TT / EB / ETA; FLS blinks when applicable */
 const primaryTimeLabel = computed(() => {
-  if (isFls.value) {
+  if (isFls.value && isEssaDep.value && primaryTimeKind.value === 'tobt') {
     const type = cdmStatus.value?.flsType
     if (type) {
       const phase = Math.floor(nowUtcMs.value / 2000) % 2
@@ -967,13 +1734,154 @@ const primaryTimeLabel = computed(() => {
     }
     return 'FLS'
   }
-  if (showCdm.value) return 'TOBT'
-  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') return 'EOBT'
-  return 'ETA'
+  switch (primaryTimeKind.value) {
+    case 'tobt': return 'TB'
+    case 'ttot': return 'TT'
+    case 'eobt': return 'EB'
+    case 'eta': return '' // ARR: time only, no "ETA" prefix
+    default: return ''
+  }
 })
 
+/**
+ * Bottom time window:
+ * - ESSA DEP: TSAT until PUSH&START; then ASSR (CTOT/SCL live in dep arrow)
+ * - ARR / other airports: ASSR (squawk)
+ */
+const secondaryTimeKind = computed((): SecondaryTimeKind => {
+  if (isArrLayout.value) return 'assr'
+  if (isEssaDep.value) {
+    if (!isPushStartOrLater.value) return 'tsat'
+    return 'assr'
+  }
+  return 'assr'
+})
+
+/** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled) */
+const depArrowCtot = computed(() => {
+  if (isArrLayout.value || props.strip.atd || !showCtot.value || props.strip.clearedForTakeoff) return ''
+  if (showCtotCancelled.value) return 'SCL'
+  return formatHhmmColon(props.strip.ctot)
+})
+
+/** Time shown in triangle: ATD (dep) / ATA (arr) / else CTOT on dep */
+const triangleTimeText = computed(() => {
+  if (isArrLayout.value) {
+    return props.strip.ata ? formatHhmmColon(props.strip.ata) : ''
+  }
+  if (props.strip.atd) return formatHhmmColon(props.strip.atd)
+  return depArrowCtot.value
+})
+
+/** Arrival strip is in a runway section (geo hold / CTL). */
+const onRunwaySection = computed(() => {
+  const id = (props.sectionId || props.strip.sectionId || '').toLowerCase()
+  return id.includes('runway')
+})
+
+/**
+ * Filled green CTL △: cleared-to-land, or on-runway before ATA.
+ * Once ATA is set → framed outline only (not filled).
+ */
+const showArrCtlTriangle = computed(() => {
+  if (!isArrLayout.value || props.strip.missedApproach) return false
+  if (props.strip.ata) return false
+  if (onRunwaySection.value) return true
+  return !!props.strip.clearedToLand && !arrTriangleGreenOutline.value
+})
+
+/**
+ * Green landing outline when on the ground (ATA / airborne===false).
+ * ATA always wins over filled CTL (including still on the runway section).
+ * Groundstate ARR means ES "Arriving" (ADC sector list) — valid while still airborne.
+ */
+const arrTriangleGreenOutline = computed(() => {
+  if (!isArrLayout.value) return false
+  if (props.strip.missedApproach) return false
+  if (props.strip.ata) return true
+  if (onRunwaySection.value) return false
+  if (props.strip.clearedToLand) return false
+  // Still airborne or unknown — ARR alone is not landed
+  if (props.strip.airborne !== false) return false
+  const gs = props.strip.groundstate ?? ''
+  return gs === 'ARR' || gs === 'TXIN' || gs === 'PARK' || !gs
+})
+
+function onDepArrowCtotClick(event: MouseEvent) {
+  if (props.strip.atd || !depArrowCtot.value) return
+  onCtotClick(event)
+}
+
+const secondaryTimeValue = computed(() => {
+  switch (secondaryTimeKind.value) {
+    case 'tsat':
+      return formatHhmmColon(props.strip.tsat)
+    case 'ctot':
+      return formatHhmmColon(props.strip.ctot)
+    case 'scl':
+      return 'SCL'
+    case 'assr':
+      return props.strip.squawk || ''
+    default:
+      return ''
+  }
+})
+
+const secondaryTimeLabel = computed(() => {
+  switch (secondaryTimeKind.value) {
+    case 'tsat': return secondaryTimeValue.value ? 'TS' : ''
+    case 'ctot': return 'CTOT'
+    case 'scl': return 'CTOT'
+    case 'assr': return '' // squawk only, no "ASSR" prefix
+    default: return ''
+  }
+})
+
+const secondaryTimeTitle = computed(() => {
+  if (secondaryTimeKind.value === 'tsat') return tsacTooltip.value
+  if (secondaryTimeKind.value === 'assr') return assrTitle.value
+  return undefined
+})
+
+const assrTitle = computed(() => {
+  if (!props.strip.canResetSquawk) {
+    return props.strip.squawk ? `ASSR ${props.strip.squawk}` : 'ASSR'
+  }
+  if (!props.strip.squawk) return 'ASSR — click for new code'
+  return `ASSR ${props.strip.squawk} — double-click for new code`
+})
+
+function onAssrClick() {
+  if (!props.strip.canResetSquawk) return
+  if (!props.strip.squawk) onResetSquawk()
+}
+
+function onAssrDblClick() {
+  if (!props.strip.canResetSquawk) return
+  if (props.strip.squawk) onResetSquawk()
+}
+
+function onSecondaryTimeClick(event: MouseEvent) {
+  switch (secondaryTimeKind.value) {
+    case 'assr':
+      onAssrClick()
+      break
+    case 'tsat':
+      onTsacClick(event)
+      break
+    case 'ctot':
+    case 'scl':
+      onCtotClick(event)
+      break
+  }
+}
+
+function onSecondaryTimeDblClick() {
+  if (secondaryTimeKind.value === 'assr') onAssrDblClick()
+}
+
 const canEditPrimaryTime = computed(() =>
-  store.isController && (isFls.value || showCdm.value)
+  canEditAssignedData.value && (isFls.value || primaryTimeKind.value === 'tobt')
 )
 
 const showTobtSetBy = computed(() =>
@@ -1031,7 +1939,53 @@ onMounted(() => {
   tsatWindowTimer = setInterval(() => {
     nowUtcMs.value = Date.now()
   }, 1000)
+  nextTick(() => {
+    scheduleStripScale(true)
+    attachStripScaleObserver()
+  })
 })
+watch(
+  () => [
+    props.strip.callsign,
+    props.strip.communicationSuffix,
+    props.strip.aircraftType,
+    props.strip.wakeTurbulence,
+    props.strip.stand,
+    props.strip.runway,
+    props.strip.assignedHeading,
+    displayCfl.value,
+    store.displaySidForStrip(props.strip),
+    ownerSiText.value,
+    showOwnerSi.value,
+    primaryTimeValue.value,
+    secondaryTimeValue.value,
+    secondaryTimeKind.value,
+  ],
+  () => nextTick(() => fitAllBoxFonts()),
+)
+watch(
+  () => props.isLargeView,
+  () => {
+    lastStripScaleWidth = 0
+    nextTick(() => {
+      attachStripScaleObserver()
+      scheduleStripScale(true)
+    })
+  },
+)
+
+/** Owned by another controller — close any open assigned-data editors */
+watch(
+  () => props.strip.ownedByOther,
+  (ownedByOther) => {
+    if (!ownedByOther) return
+    closeAssignmentMenus()
+    clncDialogOpen.value = false
+    remarksEditing.value = false
+    hsEditing.value = false
+    hpEditing.value = false
+  },
+)
 onUnmounted(() => {
   if (tsatWindowTimer) clearInterval(tsatWindowTimer)
   if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
@@ -1039,6 +1993,10 @@ onUnmounted(() => {
   if (ctotChangedTimer) clearTimeout(ctotChangedTimer)
   if (rofAlternateTimer) clearInterval(rofAlternateTimer)
   if (rofClockTimer) clearInterval(rofClockTimer)
+  if (stripScaleRaf) cancelAnimationFrame(stripScaleRaf)
+  stripResizeObs?.disconnect()
+  stripResizeObs = null
+  lastStripScaleWidth = 0
 })
 
 /** Normalize CDM times (HHMM or HHMMSS) to minutes since midnight */
@@ -1078,11 +2036,11 @@ const showTsacCtoc = computed(() =>
 )
 
 const canEditTsac = computed(() =>
-  store.isController && showTsacCtoc.value && showCdm.value && !!displayTsat.value
+  canEditAssignedData.value && showTsacCtoc.value && showCdm.value && !!displayTsat.value
 )
 
 const canClearTsac = computed(() =>
-  store.isController && showTsacCtoc.value && !!props.strip.tsac
+  canEditAssignedData.value && showTsacCtoc.value && !!props.strip.tsac
 )
 
 /** TSAC set and within ±5 min of live TSAT — green box; menu on click */
@@ -1093,8 +2051,15 @@ const isTsacGreen = computed(() => {
   return delta != null && delta <= 5
 })
 
+/** TSAC was set, then live TSAT moved — highlight bottom ▼ until TSAT is clicked again */
+const tsacStale = computed(() => {
+  const tsac = normalizeHhmmDisplay(props.strip.tsac)
+  const tsat = displayTsat.value
+  return !!tsac && !!tsat && tsac !== tsat
+})
+
 const canEditCtoc = computed(() =>
-  store.isController &&
+  canEditAssignedData.value &&
   showTsacCtoc.value &&
   showCtot.value &&
   !showCtotCancelled.value &&
@@ -1102,7 +2067,7 @@ const canEditCtoc = computed(() =>
 )
 
 const canClearCtoc = computed(() =>
-  store.isController &&
+  canEditAssignedData.value &&
   showTsacCtoc.value &&
   showCtot.value &&
   !showCtotCancelled.value &&
@@ -1146,9 +2111,10 @@ const ctocDeltaText = computed((): string | null => {
 
 const tsacTooltip = computed(() => {
   const tsac = normalizeHhmmDisplay(props.strip.tsac)
-  if (isTsacGreen.value) return `TSAC ${tsac} — options`
-  if (tsac) return `TSAC ${tsac} — click to update`
-  if (canEditTsac.value) return 'Set TSAC (communicated TSAT)'
+  const tsat = displayTsat.value
+  if (tsac && tsat && tsac === tsat) return `TSAC ${tsac} — options`
+  if (tsacStale.value) return `TSAC ${tsac} — TSAT now ${tsat}; click to update`
+  if (canEditTsac.value) return 'Click to set TSAC (communicated TSAT)'
   return 'TSAT'
 })
 
@@ -1170,8 +2136,9 @@ function onTsacClick(event?: MouseEvent) {
   if (!canEditTsac.value) return
   const tsat = displayTsat.value
   if (!tsat) return
-  // Green TSAC box: Edit / Remove menu. Yellow or empty: set/update to live TSAT.
-  if (isTsacGreen.value) {
+  const tsac = normalizeHhmmDisplay(props.strip.tsac)
+  // Already in sync with live TSAT → Edit / Remove menu
+  if (tsac && tsac === tsat) {
     if (event) menuPosition.value = [event.clientX, event.clientY]
     menuOpen.value = false
     ctotMenuOpen.value = false
@@ -1181,6 +2148,7 @@ function onTsacClick(event?: MouseEvent) {
     tsacMenuOpen.value = true
     return
   }
+  // Empty or stale: set / refresh TSAC from current TSAT
   store.setTsac(props.strip.id, tsat)
 }
 
@@ -1293,7 +2261,7 @@ function onPrimaryTimeClick() {
   if (isFls.value) {
     timeEditMode.value = 'eobt'
     timeEditText.value = props.strip.eobt || ''
-  } else if (showCdm.value) {
+  } else if (primaryTimeKind.value === 'tobt') {
     timeEditMode.value = 'tobt'
     timeEditText.value = props.strip.tobt || props.strip.eobt || ''
   } else {
@@ -1304,7 +2272,7 @@ function onPrimaryTimeClick() {
 }
 
 function onReadyTobtClick() {
-  if (!store.isController || !showCdm.value || isFls.value) return
+  if (!canEditAssignedData.value || !showCdm.value || isFls.value) return
   timeEditing.value = false
   // Server sets TOBT=now then REA sequentially (avoids REA-only races)
   store.viffReadyTobt(props.strip.id)
@@ -1334,7 +2302,7 @@ function onTimeEditBlur() {
 }
 
 function onCtotClick(event: MouseEvent) {
-  if (!store.isController || !showCtot.value || showCtotCancelled.value) return
+  if (!canEditAssignedData.value || !showCtot.value || showCtotCancelled.value) return
   menuPosition.value = [event.clientX, event.clientY]
   menuOpen.value = false
   transferMenuOpen.value = false
@@ -1376,24 +2344,48 @@ function onReaBadgeClick(event: MouseEvent) {
   }
 }
 
+/** Strip label for action codes (internal codes unchanged for rules/handlers). */
+function actionLabel(action: string): string {
+  switch (action) {
+    case 'CLNC': return 'CLR'
+    case 'TXO':
+    case 'TXI':
+    case 'TAXI': return 'TAXI'
+    case 'LU': return 'LINE UP'
+    case 'CTO': return 'CFTO'
+    case 'XFER': return 'TRANS'
+    case 'PARK': return 'TERM'
+    case 'GOA': return 'G/A'
+    default: return action
+  }
+}
+
 // DCL button coloring + action highlight
 function actionButtonClass(action: string): Record<string, boolean> {
   const classes: Record<string, boolean> = {}
 
-  // Inbound ROF: XFER alternates yellow/orange ↔ ROF pink for 1 minute only
+  // Inbound ROF: XFER alternates amber text ↔ ROF pink for flash window
   if (action === 'XFER' && isRofInbound.value && isRofFlashing.value) {
     if (rofFlashPink.value) classes['action-rof-pink'] = true
-    else classes['action-highlight'] = true
+    else classes['action-key-amber'] = true
   } else if (props.strip.highlightActions?.includes(action)) {
-    // Highlight actions (TXI, PARK, XFER) — yellow attention
-    classes['action-highlight'] = true
+    // Amber text on grey key (TRANS / TXI / PARK / etc.) — not filled background
+    classes['action-key-amber'] = true
   }
 
-  // ASSUME/ROF: condensed text, fill strip-right; solid green on inbound transfer (ASSUME)
+  // ASSUME/ROF: condensed text; pending transfer (in or out) → amber ASSUME text
   if (action === 'ASSUME' || action === 'ROF') {
     classes['action-assume'] = true
-    if (action === 'ASSUME' && props.strip.transferPending === 'in') {
-      classes['action-assume-incoming'] = true
+    if (
+      action === 'ASSUME' &&
+      (props.strip.transferPending === 'in' || props.strip.transferPending === 'out')
+    ) {
+      classes['action-key-amber'] = true
+      classes['action-highlight'] = false
+    }
+    // Outbound ROF: solid pink key for 2 min (re-press resets); still pressable
+    if (action === 'ROF' && isRofOutbound.value && isRofFlashing.value) {
+      classes['action-rof-pink'] = true
     }
   }
 
@@ -1415,6 +2407,15 @@ function actionButtonClass(action: string): Record<string, boolean> {
 
 // Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
+  if (props.isLargeView) {
+    event.preventDefault()
+    return
+  }
+  const dragTarget = event.target as HTMLElement | null
+  if (dragTarget?.closest('.strip-close-btn') || dragTarget?.closest('.note-actions')) {
+    event.preventDefault()
+    return
+  }
   isDragging.value = true
   if (event.dataTransfer && stripElement.value) {
     const rect = stripElement.value.getBoundingClientRect()
@@ -1438,11 +2439,28 @@ function onDragEnd() {
 
 // Touch drag handlers for drag areas (strip-left)
 function onDragAreaTouchStart(event: TouchEvent) {
+  if (props.isLargeView) return
   if (event.touches.length !== 1) return
 
-  // Don't start drag when touching interactive elements
+  // Don't start drag when touching interactive editors/menus (callsign is OK — same as desktop)
   const target = event.target as HTMLElement
-  if (target.closest('.action-button') || target.closest('.squawk-empty') || target.closest('.callsign') || target.closest('.note-input')) return
+  if (
+    target.closest('.action-button') ||
+    target.closest('.squawk-empty') ||
+    target.closest('.strip-close-btn') ||
+    target.closest('.note-actions') ||
+    target.closest('.exp-chip') ||
+    target.closest('.ctrl-arrow') ||
+    target.closest('.remarks-input') ||
+    target.closest('.eobt-edit-input') ||
+    target.closest('.hp-edit-input') ||
+    target.closest('.hs-edit-input') ||
+    target.closest('.cell-hp') ||
+    target.closest('.cell-hs') ||
+    target.closest('.cell-sid') ||
+    target.closest('.cell-rwy') ||
+    target.closest('.cell-cfl')
+  ) return
 
   touchStarted = true
 
@@ -1759,6 +2777,7 @@ function onDragAreaTouchCancel() {
 // Action button handlers
 function onActionClick(action: string) {
   if (action === 'CLNC') {
+    if (!canEditAssignedData.value) return
     clncDialogOpen.value = true
     return
   }
@@ -1768,6 +2787,7 @@ function onActionClick(action: string) {
 function onActionTouch(event: TouchEvent, action: string) {
   event.preventDefault()
   if (action === 'CLNC') {
+    if (!canEditAssignedData.value) return
     clncDialogOpen.value = true
     return
   }
@@ -1775,7 +2795,14 @@ function onActionTouch(event: TouchEvent, action: string) {
 }
 
 
+/** Prevent double TopSky AllocateSSR from click+click on empty ASSR */
+let lastAssrResetAt = 0
 function onResetSquawk() {
+  if (!props.strip.canResetSquawk) return
+  const now = Date.now()
+  if (now - lastAssrResetAt < 1500) return
+  lastAssrResetAt = now
+  // Triggers TopSky SSR allocation via plugin — EFS does not invent codes
   store.sendStripAction(props.strip.id, 'resetSquawk')
 }
 
@@ -1788,26 +2815,86 @@ function onContextMenu(event: MouseEvent) {
   ctotMenuOpen.value = false
   tsacMenuOpen.value = false
   reaMenuOpen.value = false
+  sidRouteMenuOpen.value = false
+  rwyMenuOpen.value = false
+  cflMenuOpen.value = false
   menuOpen.value = true
 }
 
 function onCallsignClick(event: MouseEvent) {
-  menuPosition.value = [event.clientX, event.clientY]
+  // Left click only — right click uses contextmenu → classic menu
+  if (event.button !== 0) return
+  if (props.isLargeView) {
+    emit('close-large-view')
+    return
+  }
+  openLargeView()
+}
+
+function menuCoordsFromEvent(event: MouseEvent): [number, number] {
+  let x = event.clientX
+  let y = event.clientY
+  // Synthetic / broken events often report 0,0 — anchor to the clicked cell instead
+  if ((x === 0 && y === 0) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    const el = (event.currentTarget || event.target) as HTMLElement | null
+    if (el?.getBoundingClientRect) {
+      const r = el.getBoundingClientRect()
+      x = r.left + r.width / 2
+      y = r.bottom
+    }
+  }
+  return [x, y]
+}
+
+function closeAssignmentMenus() {
+  menuOpen.value = false
   ctotMenuOpen.value = false
   tsacMenuOpen.value = false
   reaMenuOpen.value = false
-  menuOpen.value = true
+  groundStateMenuOpen.value = false
+  transferMenuOpen.value = false
+  sidRouteMenuOpen.value = false
+  rwyMenuOpen.value = false
+  cflMenuOpen.value = false
+}
+
+function onSidClick(event: MouseEvent) {
+  if (!canEditAssignedData.value || isArrLayout.value) return
+  menuPosition.value = menuCoordsFromEvent(event)
+  closeAssignmentMenus()
+  sidRouteMenuOpen.value = true
+}
+
+function onRwyClick(event: MouseEvent) {
+  if (!canEditAssignedData.value || isNote.value) return
+  menuPosition.value = menuCoordsFromEvent(event)
+  closeAssignmentMenus()
+  rwyMenuOpen.value = true
+}
+
+function onCflClick(event: MouseEvent) {
+  if (!canEditAssignedData.value || isNote.value) return
+  menuPosition.value = menuCoordsFromEvent(event)
+  closeAssignmentMenus()
+  cflMenuOpen.value = true
 }
 
 function onCallsignTouch(event: TouchEvent) {
-  const touch = event.changedTouches[0]
-  if (touch) {
-    menuPosition.value = [touch.clientX, touch.clientY]
-    ctotMenuOpen.value = false
-    tsacMenuOpen.value = false
-    reaMenuOpen.value = false
-    menuOpen.value = true
+  // Drag in progress — let strip touchend handle drop (do not stopPropagation)
+  if (isDragging.value) return
+  // Cancel pending long-press drag; this was a tap → zoom
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
   }
+  touchStarted = false
+  event.stopPropagation()
+  event.preventDefault()
+  if (props.isLargeView) {
+    emit('close-large-view')
+    return
+  }
+  openLargeView()
 }
 
 function onFplClick() {
@@ -1816,6 +2903,7 @@ function onFplClick() {
 }
 
 function onClncMenuClick() {
+  if (!canEditAssignedData.value) return
   clncDialogOpen.value = true
   menuOpen.value = false
 }
@@ -1866,927 +2954,1121 @@ function onGroundStateClick(action: string) {
 
 <style scoped>
 .flight-strip {
-  display: grid;
-  grid-template-columns: 10px auto minmax(0, 1fr) auto auto;
-  background: #f0ebe0;
-  border: 1px solid #888;
-  margin: 2px 4px;
-  min-height: 44px;
-  cursor: move;
-  transition: all 0.12s ease;
-  font-size: 11px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  /* Type frame: sides wider, top/bottom = 1/4 of side width */
+  --strip-type: #888;
+  /* Amber highlight (transfer C/S, ASSUME text, action keys) — darker for readability */
+  --strip-amber: #e08900;
+  /* Scale from strip width (JS sets --strip-scale; design ref 400px → body 50px) */
+  --strip-scale: 1;
+  --frame-side: calc(8px * var(--strip-scale));
+  --frame-tb: calc(var(--frame-side) / 4);
+  /* Body height at design width; two rows fill strip, no gap between rows */
+  --strip-body-h: calc(50px * var(--strip-scale));
+  --strip-main-pad-y: 0px;
+  /* Layout margins (cell size/placement) */
+  --frame-inset-x: calc(3px * var(--strip-scale));
+  --frame-inset-y-outer: calc(1px * var(--strip-scale));
+  /* Drawn frame only — TB inset inside the cell (lower = taller frame) */
+  --frame-visual-pad-y: calc(1.5px * var(--strip-scale));
+  --frame-inset: calc(-3px * var(--strip-scale)); /* legacy measure fallback */
+  --fs-base: calc(11px * var(--strip-scale));
+  --fs-cs: calc(26px * var(--strip-scale));
+  --fs-data: calc(16px * var(--strip-scale));
+  --fs-data-lg: calc(17px * var(--strip-scale));
+  /* STD / XFL / CFL / AHD — slightly smaller than SID/RWY */
+  --fs-mid: calc(13px * var(--strip-scale));
+  --fs-mid-ghost: calc(11px * var(--strip-scale));
+  --fs-ghost: calc(13.5px * var(--strip-scale));
+  --fs-left: calc(11px * var(--strip-scale));
+  --fs-left-sm: calc(10px * var(--strip-scale));
+  --fs-time: calc(10px * var(--strip-scale));
+  --fs-action: calc(10px * var(--strip-scale));
+  --fs-action-sm: calc(8px * var(--strip-scale));
+  --actions-w: calc(48px * var(--strip-scale));
+  --left-arrow-w: calc(14px * var(--strip-scale));
+  /* Fixed left columns — width = arrow + ATYP + WTC */
+  --left-atyp-w: calc(26px * var(--strip-scale));
+  --left-wtc-w: calc(14px * var(--strip-scale));
+  --strip-left-w: calc(var(--left-arrow-w) + var(--left-atyp-w) + var(--left-wtc-w));
+  --ctrl-arrow-h: calc(12px * var(--strip-scale));
+  /* HP column ≈ square, slightly wider than one body row */
+  /* HS / HP ≈ square; RWY just a bit wider */
+  --hp-col: calc(var(--strip-body-h) / 2 + 4px * var(--strip-scale));
+  --rwy-col: calc(var(--hp-col) + 12px * var(--strip-scale));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #ebebeb;
+  border-style: solid;
+  border-color: var(--strip-type);
+  border-width: var(--frame-tb) var(--frame-side);
+  margin: 1px 4px;
+  cursor: grab;
+  font-size: var(--fs-base);
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  box-sizing: border-box;
 }
 
-.flight-strip:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-  transform: translateY(-1px);
-  z-index: 10;
+.strip-departure { --strip-type: #3b7dd8; }
+.strip-arrival { --strip-type: #daa520; }
+.strip-local { --strip-type: #881fe0; }
+.strip-vfr { --strip-type: #3d9e3d; }
+.strip-cross { --strip-type: #881fe0; }
+/* Note strips: thin neutral edge like info strips (no type-coloured frame) */
+.strip-note {
+  --strip-type: #9a9a9a;
+  border-width: 1px;
+  border-color: #9a9a9a;
 }
 
 .flight-strip.dragging {
   opacity: 0.4;
-  transform: scale(0.98);
+  cursor: grabbing;
+}
+
+.flight-strip.is-large-view {
+  width: 100%;
+  margin: 0;
+  cursor: default;
+}
+
+.strip-scribble-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+
+.strip-scribble-stroke {
+  stroke: #1a1a1a;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* Thickness in CSS px — avoids X/Y stretch from non-square strip viewBox */
+  vector-effect: non-scaling-stroke;
 }
 
 .flight-strip.auto-move-hidden {
   opacity: 0;
 }
 
-/* Strip type color indicators */
-.strip-indicator {
-  transition: filter 0.15s ease;
+.strip-note-layout {
+  flex-direction: row;
+  align-items: stretch;
+  height: var(--strip-body-h);
+  min-height: var(--strip-body-h);
+  max-height: var(--strip-body-h);
 }
-
-/* Departure - Blue */
-.strip-departure .strip-indicator {
-  background: #3b7dd8;
+.note-content {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
 }
-
-/* Arrival - Yellow/Amber */
-.strip-arrival .strip-indicator {
-  background: #daa520;
-}
-
-/* Local - Red */
-.strip-local .strip-indicator {
-  background: #cc4444;
-}
-
-/* VFR - Green */
-.strip-vfr .strip-indicator {
-  background: #3d9e3d;
-}
-
-/* Cross - Purple */
-.strip-cross .strip-indicator {
-  background: #9b59b6;
-}
-
-/* Note - Grey */
-.strip-note .strip-indicator {
-  background: #888;
-}
-
-/* Left section - Callsign block (always visible; wide enough for 4-letter SI + →) */
-.strip-left {
-  width: 85px;
-  min-width: 85px;
+.note-actions {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 2px 4px;
-  background: #fff;
-  border-right: 1px solid #999;
-  touch-action: none;
-  cursor: move;
-}
-
-.callsign {
-  font-weight: bold;
-  font-size: 13px;
-  color: #000;
-  letter-spacing: 0.3px;
-  line-height: 1.2;
-  cursor: pointer;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: calc(1px * var(--strip-scale)) calc(1px * var(--strip-scale)) calc(1px * var(--strip-scale)) 0;
+  cursor: default;
   touch-action: manipulation;
 }
-
-.callsign .comm-suffix {
-  font-weight: 700;
-  font-size: 11px;
-  color: #b45309;
-  letter-spacing: 0;
-  margin-left: 1px;
-}
-
-.callsign-sub {
-  display: flex;
-  gap: 4px;
-  font-size: 9px;
-  color: #555;
-  margin-top: 1px;
-  align-items: baseline;
-  position: relative;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  padding-right: 3.2em; /* reserved for 4-letter SI + → arrow */
-}
-
-.owner-si {
-  position: absolute;
-  right: 0;
-  top: 0;
-  font-weight: 700;
-  font-size: 10px;
-  color: #003399;
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-  flex-shrink: 0;
-}
-
-/* Outgoing: arrow before destination SI (→ DEST) */
-.owner-si.si-transfer-out::before {
-  content: '→';
-  position: absolute;
-  right: 100%;
-  top: 0;
-}
-
-/* Incoming: arrow after initiator SI (FROM→); keep glyph inside the padded edge */
-.owner-si.si-transfer-in::after {
-  content: '→';
-  margin-left: 1px;
-}
-
-.owner-si.si-transfer-in {
-  color: #0a7a28;
-  right: 0;
-  padding-right: 0; /* arrow is part of the label width via ::after */
-}
-
-.owner-si.si-transfer-out {
-  color: #b05a00;
-}
-
-.owner-si.si-rof-request {
-  color: #dc7cae;
-}
-
-/* Inbound ROF: arrow pointing to requester SI (→ SI) */
-.owner-si.si-rof-target::before {
-  content: '→';
-  position: absolute;
-  right: 100%;
-  top: 0;
-}
-
-.owner-si.si-rof-target {
-  color: #dc7cae;
-}
-
-.flight-strip.owned-by-other {
-  opacity: 0.55;
-}
-
-.flight-strip.owned-by-other:hover {
-  opacity: 0.75;
-}
-
-.flight-rules {
-  font-weight: 600;
-  color: #333;
-}
-
-.aircraft-type {
-  color: #666;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.aircraft-type .wtc-highlight {
-  font-weight: 700;
-  color: #000;
-}
-
-.squawk-stand-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 1px;
-}
-
-.squawk-stand-row .squawk {
-  font-size: 10px;
-  color: #444;
-  font-weight: 500;
-}
-
-.squawk-stand-row .squawk-empty {
-  cursor: pointer;
-  color: #444;
-}
-
-.squawk-stand-row .squawk-empty:hover {
-  color: #0055aa;
-}
-
-.squawk-stand-row .stand {
-  font-size: 10px;
-  color: #333;
-  font-weight: bold;
-}
-
-/* Middle section - truncatable */
-.strip-middle {
-  overflow: hidden;
-  background: #f5f2ea;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  /* Allow shrinking below content size */
-}
-
-/* Remarks row - sits above the strip content fields */
-.remarks-row {
-  display: flex;
-  align-items: center;
-  padding: 0 4px;
-  min-height: 14px;
-  border-bottom: 1px solid #ddd;
-}
-
-.remarks-display {
-  font-style: italic;
-  font-size: 10px;
-  color: #2244aa;
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 14px;
-}
-
-.remarks-input {
+.note-display {
   width: 100%;
+  border: none;
+  background: transparent;
+  font-size: calc(12px * var(--strip-scale));
+  outline: none;
+  pointer-events: none;
+}
+.note-empty { color: #999; font-style: italic; }
+
+/* Expanders — only mounted when open; same bg as strip body, no row border */
+.strip-expander {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--strip-scale));
+  min-height: var(--ctrl-arrow-h);
   background: transparent;
   border: none;
-  font-style: italic;
+  /* Left pad matches strip-left arrow inset so collapse ▲/▼ lines up with body arrows */
+  padding: calc(2px * var(--strip-scale)) calc(6px * var(--strip-scale)) calc(2px * var(--strip-scale)) 1px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.strip-expander-top,
+.strip-expander-bottom { border: none; }
+.exp-chips {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--strip-scale));
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Bottom: [▼ RMK FPL | …][ASSR ADEP | remarks under CFL→][TMA] */
+.strip-expander-bottom {
+  display: grid;
+  grid-template-columns: auto 1fr var(--actions-w);
+  align-items: center;
+  gap: 0;
+  padding: calc(2px * var(--strip-scale)) 0 calc(2px * var(--strip-scale)) 1px;
+}
+.exp-bottom-left {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(4px * var(--strip-scale));
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: 0;
+}
+.exp-bottom-left .expander-arrow {
+  width: calc(var(--left-arrow-w) - 2px);
+  margin-left: 0;
+  flex-shrink: 0;
+}
+.exp-bottom-left .exp-chip {
+  flex-shrink: 0;
+}
+.exp-bottom-main {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+/* Match strip-main column tracks so RMK starts under CFL */
+.exp-bottom-main-dep {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+}
+.exp-bottom-main-arr {
+  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+}
+/* Under STD+CTO (cols 1–2): FPL · ASSR · ADEP — RMK sits to the right of ADEP */
+.exp-pre-rmk {
+  grid-column: 1 / 3;
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--strip-scale));
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 calc(2px * var(--strip-scale));
+  box-sizing: border-box;
+}
+/* CFL is 3rd column — span through end of main (up to TMA exit column) */
+.exp-rmk {
+  grid-column: 3 / -1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0 calc(2px * var(--strip-scale));
+  box-sizing: border-box;
+  cursor: pointer;
+  overflow: hidden;
+}
+.exp-rmk-text {
+  font-size: var(--fs-time);
+  font-weight: 500;
+  color: #000;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  width: 100%;
+}
+.exp-rmk.ghost .exp-rmk-text {
+  color: #c5c5c5 !important;
+}
+.exp-rmk .remarks-input {
+  width: 100%;
+  font-size: var(--fs-time);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+/* Match left 3-row column text (times / FRUL·ATYP·WTC) */
+.exp-assr,
+.exp-ades,
+.exp-tma-exit {
+  font-size: var(--fs-time);
+  font-weight: 500;
+  color: #000;
+  letter-spacing: 0;
+  white-space: nowrap;
+  line-height: 1.1;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.exp-assr.squawk-empty {
+  cursor: pointer;
+  text-decoration: underline;
+}
+.exp-ades {
+  margin-left: calc(10px * var(--strip-scale));
+}
+/* Same width as .strip-actions; text centered in the box */
+.exp-tma-exit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--actions-w);
+  min-width: var(--actions-w);
+  max-width: var(--actions-w);
+  height: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0;
+  margin: 0;
+  justify-self: stretch;
+}
+.exp-assr.ghost,
+.exp-ades.ghost,
+.exp-tma-exit.ghost {
+  color: #c5c5c5 !important;
+}
+/* Collapse arrow in expander — same size/look as strip-left arrows */
+.strip-expander .expander-arrow {
+  width: calc(var(--left-arrow-w) - 2px);
+  height: var(--ctrl-arrow-h);
+  max-height: var(--ctrl-arrow-h);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 1px solid #888;
+  background: #d8d8d8;
+  color: #000;
+  font-size: var(--fs-action-sm);
+  font-weight: 700;
+  line-height: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.strip-expander .expander-arrow .arrow-glyph {
+  display: block;
+  line-height: 1;
+  font-size: 0.85em;
+  transform: scaleX(1.45);
+}
+.strip-expander .expander-arrow:hover { background: #e8e8e8; }
+.strip-expander .expander-arrow.mirrored .arrow-glyph {
+  transform: scaleX(1.45) scaleY(-1);
+}
+/* Extender action chips — match arrow / right-side action key look */
+.exp-chip {
+  height: var(--ctrl-arrow-h);
+  max-height: var(--ctrl-arrow-h);
+  padding: 0 calc(6px * var(--strip-scale));
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 1px solid #888;
+  border-radius: 0;
+  background: #d8d8d8;
+  color: #000;
+  font-size: var(--fs-action-sm);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  line-height: 1;
+  cursor: pointer;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+/* Hover only for plain chips — do not wash out green/orange/DCL highlights */
+.exp-chip:hover:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.active):not(.dcl-request):not(.dcl-ok):not(.dcl-err) {
+  background: #e8e8e8;
+}
+.exp-chip:disabled { opacity: 0.55; cursor: default; }
+.exp-chip.active { background: var(--strip-amber); }
+.exp-chip.exp-rea { background: #12b33a; color: #fff; border-color: #0a8a2a; }
+.exp-chip.exp-qnh-ok { background: #12b33a; color: #fff; border-color: #0a8a2a; }
+.exp-chip.exp-qnh-stale { background: var(--strip-amber); color: #fff; border-color: #b06a00; }
+.exp-chip.inert { opacity: 0.55; cursor: default; }
+.exp-chip.dcl-request { background: #fdd835; }
+.exp-chip.dcl-ok { background: #66bb6a; color: #000; }
+.exp-chip.dcl-err { background: #e53935; color: #000; }
+.exp-remarks {
+  font-size: calc(9px * var(--strip-scale));
+  color: #2244aa;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remarks-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
   font-size: 10px;
   color: #2244aa;
-  letter-spacing: 0.2px;
   text-transform: uppercase;
   outline: none;
-  padding: 0 2px;
-  line-height: 14px;
 }
 
-.remarks-input::placeholder {
-  color: #999;
-  font-style: italic;
-  text-transform: none;
-}
-
-.strip-middle-content {
+/* Left ▲ / I / ▼ control column (opens top/bottom menus) */
+.strip-ctrl {
+  grid-area: ctrl;
   display: flex;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-right: 1px solid #b0b0b0;
 }
-
-/* Vertical dividers */
-.strip-divider {
-  width: 1px;
+.ctrl-arrow {
+  width: 16px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid #b0b0b0;
   background: #ddd;
-  margin: 2px 0;
-  flex-shrink: 0;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  color: #111;
+}
+.ctrl-arrow:hover { background: #eee; }
+.ctrl-ident { font-size: 10px; font-weight: 700; line-height: 1; }
+
+/* Shared cells */
+/* Empty slots: dim placeholder text only — frames stay full strength */
+.ghost {
+  color: #c5c5c5 !important;
+  font-weight: 500 !important;
+}
+.strip-main .cell-sid.ghost {
+  color: #d2b4b4 !important; /* muted red placeholder */
+  font-weight: 500 !important;
+}
+.strip-time.ghost,
+.strip-time.ghost .strip-time-lbl,
+.strip-time.ghost .strip-time-val {
+  color: #c5c5c5 !important;
+  font-weight: 500 !important;
+}
+.exp-rmk.ghost .exp-rmk-text,
+.exp-assr.ghost,
+.exp-ades.ghost,
+.exp-tma-exit.ghost {
+  font-weight: 500 !important;
 }
 
-.strip-section {
-  flex-shrink: 0;
+/*
+ * INBOUND / dimmed strips: all data → placeholder grey.
+ * Exceptions: callsign (and suffix/SI), highlighted (non-standard) RWY.
+ */
+.flight-strip.dimmed-data .strip-left .ctrl-ident,
+.flight-strip.dimmed-data .strip-left .atyp-box,
+.flight-strip.dimmed-data .strip-left .wtc-box,
+.flight-strip.dimmed-data .strip-time,
+.flight-strip.dimmed-data .strip-time .strip-time-lbl,
+.flight-strip.dimmed-data .strip-time .strip-time-val,
+.flight-strip.dimmed-data .strip-time .time-sts-label,
+.flight-strip.dimmed-data .strip-main .cell,
+.flight-strip.dimmed-data .strip-main .cell .cto-ctot,
+.flight-strip.dimmed-data .strip-expand-top,
+.flight-strip.dimmed-data .strip-expand-bottom,
+.flight-strip.dimmed-data .exp-rmk,
+.flight-strip.dimmed-data .exp-rmk-text,
+.flight-strip.dimmed-data .exp-assr,
+.flight-strip.dimmed-data .exp-ades,
+.flight-strip.dimmed-data .exp-tma-exit {
+  color: #c5c5c5 !important;
 }
-
-/* Time section - fixed width, important info */
-.strip-time {
-  width: 32px;
-  min-width: 32px;
-  flex-shrink: 0;
+.flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard {
+  color: #000 !important;
+}
+.callsign {
+  font-size: var(--fs-cs);
+  font-weight: 700;
+  color: #000;
+  letter-spacing: 0.3px;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.callsign-no-match { color: #999; font-style: italic; }
+.comm-suffix { font-size: 0.7em; color: #b45309; margin-left: 1px; }
+.owner-si { font-size: 0.62em; font-weight: 700; color: #003399; margin-left: 0.25em; }
+/* Callsign: JS sets px to fit box; max tracks --strip-scale */
+.strip-main .callsign-box {
+  grid-area: cs;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
   align-items: center;
-  padding: 2px;
-}
-
-.strip-time.has-ctot {
-  width: 70px;
-  min-width: 70px;
-}
-
-.strip-time.has-cdm {
-  width: 70px;
-  min-width: 70px;
-}
-
-.strip-time.has-cdm.has-ctot {
-  width: 110px;
-  min-width: 110px;
-}
-
-.time-pair {
-  display: flex;
-  flex-direction: row;
-  gap: 4px;
-  /* Bottom-align columns; REA above CTOT extends upward without stretching TOBT/TSAT */
-  align-items: flex-end;
   justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  border: none;
+  box-sizing: border-box;
+  /* Tight pad so longer callsigns (EUW9792) can use more of the C/S box */
+  padding: 0 calc(3px * var(--strip-scale));
+  cursor: pointer;
 }
-
-.time-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.time-value {
-  font-weight: 600;
-  font-size: 11px;
-  color: #222;
-}
-
-.time-label {
-  font-size: 7px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.strip-main .callsign {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
   white-space: nowrap;
+  display: inline-block;
+  max-width: none;
+}
+.strip-main .callsign .comm-suffix { font-size: 0.7em; }
+.strip-main .callsign .owner-si { font-size: 0.62em; }
+/* Pending transfer (in or out): callsign amber — not used for “should TRANS” */
+.strip-main .callsign.callsign-transfer-pending {
+  color: var(--strip-amber);
+}
+.owner-si.si-transfer-in { color: #0a7a28; }
+.owner-si.si-transfer-out { color: #b05a00; }
+.owner-si.si-rof-request, .owner-si.si-rof-target { color: #dc7cae; }
+
+.atyp-box, .wtc-box {
+  display: inline-block;
+  padding: 0 3px;
+  line-height: 1.2;
+  font-size: 9px;
+  font-weight: 700;
+}
+.wtc-box.boxed {
+  border: 2px solid #111;
+}
+.wtc-box.plain { border: none; padding-left: 4px; }
+
+.clearance-triangle.mini {
+  width: 16px;
+  height: 16px;
+  fill: #008001;
+}
+
+/* Shared ARR/DEP body — fixed height; content must not grow strip */
+.strip-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  height: var(--strip-body-h);
+  min-height: var(--strip-body-h);
+  max-height: var(--strip-body-h);
+  overflow: hidden;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+/* Left: 3 cols × 3 rows — fixed width so ATYP/times never shrink the block */
+.strip-left {
+  --strip-left-arrow: var(--left-arrow-w);
+  display: grid;
+  grid-template-columns: var(--strip-left-arrow) var(--left-atyp-w) var(--left-wtc-w);
+  grid-template-rows: 1fr 1fr 1fr;
+  grid-template-areas:
+    'up   timeT timeT'
+    'frul atyp  wtc'
+    'dn   timeB timeB';
+  width: var(--strip-left-w);
+  min-width: var(--strip-left-w);
+  max-width: var(--strip-left-w);
+  box-sizing: border-box;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.strip-left-up { grid-area: up; place-self: center; }
+.strip-left-dn { grid-area: dn; place-self: center; }
+/* Middle row only: framed FRUL / ATYP / WTC (dim frames, same as data boxes) */
+.strip-left .ctrl-ident,
+.strip-left .atyp-box,
+.strip-left .wtc-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8d8d8;
+  outline: none;
+  margin: 1px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  color: #000;
+  font-weight: 700;
+}
+.strip-left .ctrl-ident {
+  grid-area: frul;
+  justify-content: flex-end;
+  padding: 0 calc(2px * var(--strip-scale));
+  font-size: var(--fs-left);
   line-height: 1;
 }
-
-/* Center the whole "TSAT □" / "CTOT +4" group under the HHMM (same height as plain label) */
-.time-label-row {
-  display: inline-flex;
+.strip-left .atyp-box {
+  grid-area: atyp;
+  padding: 0 calc(2px * var(--strip-scale));
+  font-size: var(--fs-left-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strip-left .wtc-box {
+  grid-area: wtc;
+  padding: 0 calc(2px * var(--strip-scale));
+  font-size: var(--fs-left-sm);
+  overflow: hidden;
+}
+/* Keep middle-row frame even when WTC is plain (M); thick black highlight only on WTC */
+.strip-left .wtc-box.plain {
+  border: 1px solid #d8d8d8;
+  padding: 0 2px;
+}
+.strip-left .wtc-box.boxed {
+  border: 2px solid #111;
+  margin: 0;
+}
+/* Expander arrows: compact key; glyph centered + slightly wider */
+.strip-left .ctrl-arrow {
+  width: calc(100% - 2px);
+  height: var(--ctrl-arrow-h);
+  max-height: var(--ctrl-arrow-h);
+  min-height: 0;
+  place-self: center;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 1px solid #888;
+  background: #d8d8d8;
+  color: #000;
+  font-size: var(--fs-action-sm);
+  font-weight: 700;
+  line-height: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.strip-left .ctrl-arrow .arrow-glyph {
+  display: block;
+  line-height: 1;
+  font-size: 0.85em;
+  transform: scaleX(1.45);
+}
+.strip-left .ctrl-arrow:hover { background: #e8e8e8; }
+.strip-left .ctrl-arrow.mirrored .arrow-glyph { transform: scaleX(1.45) scaleY(-1); }
+/* REA set — green key, white glyph (top ▲) */
+.ctrl-arrow.arrow-rea,
+.strip-left .ctrl-arrow.arrow-rea,
+.strip-expander .expander-arrow.arrow-rea {
+  background: #12b33a !important;
+  border-color: #0a8a2a;
+  color: #fff;
+}
+.ctrl-arrow.arrow-rea .arrow-glyph,
+.strip-left .ctrl-arrow.arrow-rea .arrow-glyph,
+.strip-expander .expander-arrow.arrow-rea .arrow-glyph {
+  color: #fff;
+}
+.ctrl-arrow.arrow-rea:hover,
+.strip-left .ctrl-arrow.arrow-rea:hover,
+.strip-expander .expander-arrow.arrow-rea:hover {
+  background: #1fc44a !important;
+}
+/* Stale TSAC / QNH — amber key, white glyph (overrides REA on top ▲) */
+.ctrl-arrow.arrow-stale,
+.strip-left .ctrl-arrow.arrow-stale,
+.strip-expander .expander-arrow.arrow-stale {
+  background: var(--strip-amber) !important;
+  border-color: #b06a00;
+  color: #fff;
+}
+.ctrl-arrow.arrow-stale .arrow-glyph,
+.strip-left .ctrl-arrow.arrow-stale .arrow-glyph,
+.strip-expander .expander-arrow.arrow-stale .arrow-glyph {
+  color: #fff;
+}
+.ctrl-arrow.arrow-stale:hover,
+.strip-left .ctrl-arrow.arrow-stale:hover,
+.strip-expander .expander-arrow.arrow-stale:hover {
+  background: #f0a020 !important;
+}
+.strip-time-top { grid-area: timeT; }
+.strip-time-bot { grid-area: timeB; }
+.strip-time {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: center;
   gap: 2px;
-  line-height: 1;
-}
-
-.cdm-ctoc-delta {
-  font-size: 7px;
-  font-weight: 700;
-  line-height: 1;
-  color: #888;
-  white-space: nowrap;
-}
-
-.cdm-ctoc-delta.cdm-ctoc-delta-nonzero {
-  color: #d4a017;
-}
-
-.cdm-comm-clickable {
-  cursor: pointer;
-}
-
-.cdm-comm-box {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  box-sizing: border-box;
-  border: 1px solid #888;
-  background: transparent;
-}
-
-.cdm-comm-box.cdm-comm-empty {
-  border-color: #888;
-  background: transparent;
-}
-
-.cdm-comm-box.cdm-comm-green {
-  border-color: #00c000;
-  background: #00c000;
-}
-
-.cdm-comm-box.cdm-comm-yellow {
-  border-color: #d4a017;
-  background: #d4a017;
-}
-
-.tobt-setby {
-  font-size: 6px;
-  letter-spacing: 0;
-}
-
-.time-ctot {
-  color: #d97706;
-}
-
-.time-ctot.time-ctot-cancelled {
-  color: #9ca3af;
-  letter-spacing: 0.5px;
-}
-
-.time-label-ctot {
-  color: #d97706;
-}
-
-.time-sts-label {
-  font-size: 7px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  line-height: 1;
-  margin-bottom: 1px;
-}
-
-.time-sts-label.sts-rea {
-  color: #d97706;
-}
-
-.time-sts-label.sts-clickable {
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.time-fls,
-.label-fls {
-  color: #c00000;
-}
-
-/* GNG-style TSAT colours — time value only */
-.time-value.tsat-window {
-  color: #00a000; /* TSAT±5 startup window — bright green vs black */
-}
-
-.time-value.tsat-flash {
-  animation: tsat-flash 0.8s step-end infinite;
-}
-
-@keyframes tsat-flash {
-  0%, 49% { color: #00a000; } /* green — same as TSAT±5 window */
-  50%, 100% { color: #d4a017; } /* yellow */
-}
-
-.time-value.tsat-expired {
-  color: #d4a017;
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-}
-
-/* Brief highlight when TSAT/CTOT value changes */
-.time-value.time-changed {
-  color: #b45309 !important;
-  animation: time-changed-flash 0.8s ease-in-out infinite;
-}
-
-@keyframes time-changed-flash {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.eobt-clickable {
-  cursor: pointer;
-}
-
-.eobt-clickable:hover:not(:has(.time-sts-label:hover)) .time-value {
-  text-decoration: underline;
-}
-
-.ctot-clickable {
-  cursor: pointer;
-}
-
-.ctot-clickable:hover:not(:has(.time-sts-label:hover)) .time-ctot {
-  text-decoration: underline;
-}
-
-.time-edit-panel {
-  display: flex;
-  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
+  padding: 0 2px;
+  border: none;
+  line-height: 1.1;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: var(--fs-time);
+  font-weight: 500; /* normal — except CTOT / SLC */
+  text-align: center;
+  box-sizing: border-box;
+}
+.strip-time-lbl {
+  font-size: 1em;
+  font-weight: inherit;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  color: #000;
+}
+.strip-time-val {
+  font-size: 1em;
+  font-weight: inherit;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #000;
+}
+/* CTOT and cancelled CTOT (SLC/SCL) — bold + amber */
+.strip-time.time-ctot,
+.strip-time.time-ctot .strip-time-lbl,
+.strip-time.time-ctot .strip-time-val {
+  font-weight: 700;
+  color: #d97706;
+}
+.time-fls, .label-fls { color: #c00000; }
+.tsat-mini { color: #00a000; }
+.time-sts-label { font-size: 0.7em; font-weight: 700; color: #d97706; }
+
+/* Fixed columns; two equal rows fill strip (tiny TB pad), no gap between rows */
+.strip-main {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  align-content: stretch;
   height: 100%;
-  min-height: 40px;
-  align-self: stretch;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--strip-main-pad-y) 0;
+  row-gap: 0;
+  box-sizing: border-box;
+}
+.strip-grid-dep .strip-main {
+  /* empty col left of HS; RWY slightly wider than HS/HP; XFL/CFL a bit wider */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-areas:
+    'cs  cs  xfl .   .   hs  hp  rwy'
+    'std cto cfl ahd sid sid sid sid';
+}
+.strip-grid-arr .strip-main {
+  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-areas:
+    'cs  cs  .   .   .   hs  hp  rwy'
+    'cto std cfl ahd .   .   .   .';
+}
+/*
+ * Framed data boxes: layout margins keep cell size/placement.
+ * ::after draws the visible frame with extra vertical padding inside the cell.
+ */
+.strip-main .cell-xfl,
+.strip-main .cell-hs,
+.strip-main .cell-hp,
+.strip-main .cell-rwy {
+  position: relative;
+  margin: var(--frame-inset-y-outer) var(--frame-inset-x) 0;
+  outline: none !important;
+}
+.strip-main .cell-std,
+.strip-main .cell-cfl,
+.strip-main .cell-ahd {
+  position: relative;
+  margin: 0 var(--frame-inset-x) var(--frame-inset-y-outer);
+  outline: none !important;
+}
+.strip-main .cell-xfl::after,
+.strip-main .cell-hs::after,
+.strip-main .cell-hp::after,
+.strip-main .cell-rwy::after,
+.strip-main .cell-std::after,
+.strip-main .cell-cfl::after,
+.strip-main .cell-ahd::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--frame-visual-pad-y);
+  bottom: var(--frame-visual-pad-y);
+  border: 1px solid #d8d8d8;
+  box-sizing: border-box;
+  pointer-events: none;
 }
 
-.time-edit-half {
-  flex: 1 1 50%;
+/* Main data fields — bold; sizes track --strip-scale, then .fit-font */
+.cell-xfl {
+  grid-area: xfl;
+  font-size: var(--fs-mid-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-xfl:not(.ghost) {
+  font-size: var(--fs-mid);
+}
+.cell-hs {
+  grid-area: hs;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-hs.editable {
+  cursor: pointer;
+}
+.cell-hs:not(.ghost) {
+  font-size: var(--fs-data);
+}
+.cell-hp {
+  grid-area: hp;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-hp.editable {
+  cursor: pointer;
+}
+.cell-hp:not(.ghost) {
+  font-size: var(--fs-data);
+}
+.cell-rwy {
+  grid-area: rwy;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-rwy.editable {
+  cursor: pointer;
+}
+.cell-rwy:not(.ghost) {
+  font-size: var(--fs-data-lg);
+}
+/* Non-standard RWY — not ES-active and/or outside selected ESSA config */
+.strip-main .cell-rwy.rwy-nonstandard {
+  color: #000;
+  isolation: isolate;
+}
+.strip-main .cell-rwy.rwy-nonstandard::after {
+  background: #e8e84a;
+  border-color: #b0b020;
+  z-index: -1;
+}
+.cell-std {
+  grid-area: std;
+  font-size: var(--fs-mid-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-std:not(.ghost) {
+  font-size: var(--fs-mid);
+}
+.cell-cto {
+  grid-area: cto;
+  position: relative;
+  display: block !important;
+  border: none !important;
+  background: transparent;
+  padding: 0 !important;
+  /* Bleed into neighbours so the contour meets STD/CFL frames */
+  margin: 0 -1px !important;
+  overflow: hidden;
+  align-self: stretch;
+  justify-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  z-index: 1;
+}
+.cell-cto.has-ctot { cursor: pointer; }
+.cell-cto .cto-ctot {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
+  box-sizing: border-box;
+  font-size: calc(11px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #000;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+  /* Below geometric center (takeoff △ mass is lower) */
+  transform: translateY(18%);
+}
+.cell-cto .cto-ctot.scl { color: #000; }
+.cell-cto .clearance-triangle,
+.cell-cto .clearance-triangle.mini {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  display: block;
+  width: 100% !important;
+  /* Shorter so the 3px upward nudge does not clip the tip */
+  height: calc(100% - 3px) !important;
+  margin: 0;
+  padding: 0;
+  border: none;
+  /* Inactive: dim frame (same as all data boxes); round joins */
+  fill: none;
+  stroke: #d8d8d8;
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  overflow: visible;
+  /* Nudge up so base/tip stroke stays inside the strip */
+  transform: translateY(-3px);
+}
+.cell-cto .clearance-triangle:not(.active) path {
+  /* Keep outline hairline thin despite preserveAspectRatio=none stretch */
+  vector-effect: non-scaling-stroke;
+}
+/* CTOT present: mid-grey outline (less dim than empty; thinner than ATD/ATA) */
+.cell-cto .clearance-triangle.ctot-border:not(.active) {
+  stroke: #888;
+  stroke-width: 1.75;
+}
+/* ATD / ATA: thicker green outline (departed / arrived) */
+.cell-cto .clearance-triangle.green-border:not(.active) {
+  stroke: #008001;
+  stroke-width: 2.75;
+}
+/* ATA sits in landing △ (point down) — slightly above mid, stay inside the outline */
+.cell-cto .clearance-triangle.landing ~ .cto-ctot {
+  transform: translateY(-27%);
+}
+.cell-cto .clearance-triangle.active {
+  fill: #008001;
+  stroke: #008001;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.cell-cto .clearance-triangle.active path {
+  vector-effect: non-scaling-stroke;
+}
+.cell-cfl {
+  grid-area: cfl;
+  font-size: var(--fs-mid-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-cfl.editable {
+  cursor: pointer;
+}
+/* Preferred CFL preview (not yet assigned via CLR) */
+.cell-cfl.cfl-preview:not(.ghost) {
+  color: var(--strip-amber);
+}
+.cell-cfl:not(.ghost) {
+  font-size: var(--fs-mid);
+}
+.cell-ahd {
+  grid-area: ahd;
+  font-size: var(--fs-mid-ghost);
+  font-weight: 700;
+  border: none !important;
+}
+.cell-ahd:not(.ghost) {
+  font-size: var(--fs-mid);
+}
+.cell-sid {
+  grid-area: sid;
+  justify-content: center;
+  text-align: center;
+  padding-left: 0;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  color: #b00000;
+  border: none !important;
+}
+.cell-sid.editable {
+  cursor: pointer;
+}
+.cell-sid:not(.ghost) {
+  font-size: var(--fs-data-lg);
+}
+/* VFR / SLOW track / radar-vector ve SID — same amber as pending transfer callsign */
+.cell-sid.sid-highlight:not(.ghost) {
+  color: var(--strip-amber);
 }
 
-.time-edit-tobt .time-edit-top {
-  border-bottom: 1px solid #bbb;
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid #b0b0b0;
+  padding: 0 2px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+  font: inherit;
+  font-weight: 700;
+  background: transparent;
+  color: #000;
+  margin: 0;
 }
-
-.time-edit-tobt .time-edit-bottom {
-  background: #e8e4dc;
-}
-
 .eobt-edit-input {
   width: 100%;
-  max-width: 48px;
-  height: 100%;
-  min-height: 18px;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: center;
   border: 1px solid #666;
-  background: #fff;
-  color: #222;
-  padding: 0;
-  outline: none;
-  box-sizing: border-box;
+  font-size: var(--fs-base);
+  padding: 0 calc(2px * var(--strip-scale));
 }
-
-.eobt-edit-input.eobt-edit-fls {
-  border-color: #c00000;
-  color: #c00000;
+.cell-hs.hs-editing,
+.cell-hp.hp-editing {
+  overflow: visible;
 }
-
-.ready-tobt-btn {
-  width: 100%;
-  max-width: 48px;
-  height: 100%;
-  min-height: 18px;
-  font-size: 7px;
-  font-weight: 700;
-  letter-spacing: 0.1px;
-  line-height: 1.05;
-  padding: 0 1px;
-  border: none;
-  background: transparent;
-  color: #222;
-  cursor: pointer;
-  white-space: normal;
-}
-
-.ready-tobt-btn:hover {
-  background: #ddd8ce;
-}
-
-.strip-time:has(.time-edit-panel) {
-  padding: 0;
-  justify-content: stretch;
-}
-
-/* SID/Clearance section */
-.strip-sid {
-  width: 70px;
-  min-width: 55px;
-  flex-shrink: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 2px 2px;
-  overflow: hidden;
-}
-
-.sid-value {
-  font-weight: 600;
-  font-size: 10px;
-  color: #0055aa;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cleared-data {
-  display: flex;
-  gap: 4px;
-  font-size: 9px;
-  margin-top: 2px;
-}
-
-/* G/A arrival: CFL/AHDG without SID */
-.strip-goa-cleared .cleared-data {
-  margin-top: 0;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.alt {
-  color: #0066cc;
-  font-weight: 500;
-}
-
-.hdg {
-  color: #666;
-}
-
-/* Airports section - important, try to keep visible */
-.strip-airports {
-  width: 80px;
-  min-width: 35px;
-  flex-shrink: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 2px 2px;
-}
-
-.airport {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  line-height: 1.3;
-}
-
-.airport.highlight .icao {
-  font-weight: bold;
-  color: #000;
-}
-
-.icao {
-  font-weight: 500;
-  color: #444;
-  letter-spacing: 0.3px;
-}
-
-/* Runway section - fixed on right, always visible */
-.strip-runway-fixed {
-  min-width: 32px;
-  display: flex;
-  flex-direction: row;
-  justify-content: center;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  background: #e8e4d8;
-  border-left: 1px solid #aaa;
-}
-
-.strip-runway-fixed .runway-value {
-  font-weight: bold;
-  font-size: 12px;
-  color: #333;
-}
-
-/* Clearance triangles (takeoff/landing) - shown in time section */
-.clearance-triangle {
-  width: 24px;
-  height: 24px;
-}
-
-.clearance-triangle.takeoff polygon {
-  fill: #31bb31;
-  stroke: #2e8b2e;
-  stroke-width: 1;
-}
-
-.clearance-triangle.landing polygon {
-  fill: #31bb31;
-  stroke: #2e8b2e;
-  stroke-width: 1;
-}
-
-.single-airport {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-}
-
-/* Right section - Action button(s) */
-.strip-right {
-  width: 40px;
-  display: flex;
-  align-items: stretch;
-  border-left: 1px solid #999;
-}
-
-.strip-right-empty {
-  background: #e8e4d8;
-}
-
-/* Multiple actions: stack vertically */
-.strip-right.multi-action {
-  flex-direction: column;
-}
-
-.strip-right.multi-action .action-button {
-  flex: 1;
-  border-bottom: 1px solid #999;
-}
-
-.strip-right.multi-action .action-button:last-child {
-  border-bottom: none;
-}
-
-.action-button {
-  flex: 1;
+.hs-edit-input,
+.hp-edit-input {
+  position: relative;
+  z-index: 2;
+  display: block;
   width: 100%;
   min-width: 0;
-  padding: 0 4px;
-  border: none;
-  background: linear-gradient(to bottom, #e8e8e8, #c8c8c8);
-  cursor: pointer;
+  min-height: calc(14px * var(--strip-scale));
+  margin: 0;
+  border: 1px solid #666;
+  background: #fff;
+  color: #000;
+  caret-color: #000;
+  font-family: inherit;
+  font-size: var(--fs-mid);
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 0 calc(1px * var(--strip-scale));
+  box-sizing: border-box;
+  outline: none;
+  -webkit-text-fill-color: #000;
+}
+
+/* Actions — fill right column; label centered in the cell */
+.strip-actions {
   display: flex;
+  flex-direction: column;
+  justify-content: stretch;
+  align-items: stretch;
+  gap: 0;
+  background: #d8d8d8;
+  /* Full key frame (same as arrow / extender chips) — was left-only */
+  border: 1px solid #888;
+  min-width: var(--actions-w);
+  width: var(--actions-w);
+  height: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+}
+.action-button {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #d8d8d8;
+  color: #000;
+  font-size: var(--fs-action);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease;
-  touch-action: manipulation;
+  line-height: 1.1;
 }
-
-.action-button:hover {
-  background: linear-gradient(to bottom, #f0f0f0, #d8d8d8);
+/* Two (or more) actions: hairline separator, no gap */
+.strip-actions.multi-action .action-button:not(:last-child) {
+  border-bottom: 1px solid #666;
 }
-
-.action-button:active {
-  background: linear-gradient(to bottom, #c0c0c0, #a8a8a8);
-}
-
+.action-button:hover { background: #e8e8e8; }
 .action-text {
-  font-size: 10px;
-  font-weight: bold;
-  color: #333;
-  letter-spacing: 0.3px;
-}
-
-.action-assume .action-text {
-  font-size: 10px;
-  letter-spacing: -0.8px;
-  font-stretch: condensed;
-}
-
-.action-freq {
-  font-size: 10px;
-  font-weight: 600;
-  color: #555;
-  line-height: 1;
-  font-stretch: condensed;
-}
-
-.action-button:has(.action-freq) {
-  flex-direction: column;
-  gap: 0px;
-  padding: 1px 2px;
-}
-
-/* Highlight action buttons (TXI, PARK, XFER) */
-.action-highlight {
-  background: linear-gradient(to bottom, #fdd835, #f9a825) !important;
-}
-
-.action-highlight:hover {
-  background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
-}
-
-/* Inbound ROF: pink half of XFER yellow ↔ pink alternate */
-.action-rof-pink {
-  background: linear-gradient(to bottom, #e8a8c8, #dc7cae) !important;
-}
-
-.action-rof-pink:hover {
-  background: linear-gradient(to bottom, #f0bcd4, #e08bb8) !important;
-}
-
-.action-rof-pink .action-text,
-.action-rof-pink .action-freq {
-  color: #3a1028;
-}
-
-/* Incoming transfer: solid green ASSUME */
-.action-assume-incoming {
-  background: linear-gradient(to bottom, #66bb6a, #2e7d32) !important;
-}
-
-.action-assume-incoming:hover {
-  background: linear-gradient(to bottom, #81c784, #388e3c) !important;
-}
-
-.action-assume-incoming .action-text {
-  color: #fff;
-}
-
-/* DCL status coloring for CLNC button */
-.action-dcl-request {
-  background: linear-gradient(to bottom, #fdd835, #f9a825) !important;
-  animation: dcl-flash 0.8s ease-in-out infinite;
-}
-
-.action-dcl-request:hover {
-  background: linear-gradient(to bottom, #ffee58, #fbc02d) !important;
-  animation: none;
-}
-
-@keyframes dcl-flash {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.action-dcl-error {
-  background: linear-gradient(to bottom, #ef5350, #c62828) !important;
-}
-
-.action-dcl-error:hover {
-  background: linear-gradient(to bottom, #e57373, #d32f2f) !important;
-}
-
-.action-dcl-error .action-text {
-  color: #fff;
-}
-
-.action-dcl-sent {
-  background: linear-gradient(to bottom, #66bb6a, #2e7d32) !important;
-}
-
-.action-dcl-sent:hover {
-  background: linear-gradient(to bottom, #81c784, #388e3c) !important;
-}
-
-.action-dcl-sent .action-text {
-  color: #fff;
-}
-
-/* Greyed-out callsign (no matching flight) */
-.callsign-no-match {
-  color: #999 !important;
-  font-style: italic;
-}
-
-/* Note strip layout */
-.strip-note-layout {
-  grid-template-columns: 10px 1fr !important;
-}
-
-.note-content {
-  display: flex;
-  align-items: center;
-  padding: 2px 8px;
-  min-height: 40px;
-  cursor: text;
-}
-
-.note-input {
+  display: block;
   width: 100%;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid #aaa;
-  color: #333;
-  font-size: 12px;
-  font-weight: 500;
-  outline: none;
-  padding: 2px 0;
-  font-family: 'Segoe UI', 'Arial', sans-serif;
+  text-align: center;
 }
-
-.note-display {
-  font-size: 12px;
-  font-weight: 500;
-  color: #333;
-  word-break: break-word;
-}
-
-.note-empty {
-  color: #999;
-  font-style: italic;
-}
-
-/* Context menu styling */
-.strip-context-menu {
-  min-width: 100px;
-  font-size: 12px;
-}
-
-.strip-context-menu .v-list-item {
-  min-height: 32px;
-}
-
-.ctot-menu {
-  min-width: 160px;
-  max-width: 280px;
-}
-
-.ctot-reason-item {
-  opacity: 1 !important;
-}
-
-.ctot-reason-title {
-  font-size: 11px;
+.action-freq {
+  font-size: var(--fs-action-sm);
   font-weight: 600;
-  color: #d97706;
-  white-space: normal;
-  line-height: 1.3;
+  text-align: center;
+}
+.action-button.action-highlight,
+.action-button.action-clnc-highlight {
+  background: var(--strip-amber) !important;
+}
+/* Amber action-key text (inbound ASSUME / highlighted TRANS) — grey fill, amber label */
+.action-button.action-key-amber {
+  background: #d8d8d8 !important;
+  color: var(--strip-amber) !important;
+}
+.action-button.action-key-amber .action-text,
+.action-button.action-key-amber .action-freq {
+  color: var(--strip-amber) !important;
+}
+.action-button.action-dcl-sent {
+  background: #66bb6a !important;
+  color: #000 !important;
+}
+.action-button.action-dcl-request {
+  background: #fdd835 !important;
+  color: #000 !important;
+}
+.action-button.action-dcl-error {
+  background: #e53935 !important;
+  color: #000 !important;
+}
+/* Pink ROF label on grey key — not filled pink background */
+.action-button.action-rof-pink {
+  background: #d8d8d8 !important;
+  color: #dc7cae !important;
+}
+.action-button.action-rof-pink .action-text,
+.action-button.action-rof-pink .action-freq {
+  color: #dc7cae !important;
 }
 
-.transfer-submenu {
-  min-width: 150px;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.transfer-freq {
-  color: #666;
-  font-size: 11px;
-  margin-left: 8px;
-}
-
-.groundstate-submenu {
-  min-width: 160px;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
+/* Context menus (unchanged look) */
+.strip-context-menu { font-size: 12px; }
+.transfer-freq { color: #888; font-size: 11px; margin-left: 4px; }
 .gs-code {
   display: inline-block;
   width: 28px;
   font-weight: bold;
   font-size: 11px;
 }
-
-
+.ctot-reason-title { font-size: 11px; white-space: normal; }
+.squawk-empty { cursor: pointer; text-decoration: underline; }
+.squawk-resettable { cursor: pointer; }
 </style>
 
 <style>

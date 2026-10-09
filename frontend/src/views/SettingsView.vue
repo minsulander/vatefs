@@ -7,6 +7,47 @@
     <v-main>
         <v-container>
             <h1>Options</h1>
+
+            <div class="ui-scale-option mb-4">
+                <div class="ui-scale-label">
+                    <span>UI scale</span>
+                    <span class="ui-scale-value">{{ uiScalePercent }}%</span>
+                </div>
+                <v-slider
+                    :model-value="uiScalePercent"
+                    :min="UI_SCALE_PERCENT_MIN"
+                    :max="UI_SCALE_PERCENT_MAX"
+                    :step="UI_SCALE_PERCENT_STEP"
+                    color="amber-darken-2"
+                    track-color="grey-darken-2"
+                    thumb-label
+                    hide-details
+                    class="ui-scale-slider"
+                    @update:model-value="onUiScale"
+                />
+                <p class="text-caption text-grey mt-1">
+                    Scales bars, menus, and dialogs. Flight strips still follow bay column width.
+                </p>
+            </div>
+
+            <div class="scribble-mode-option mb-4">
+                <div class="ui-scale-label">Zoomed strip scribble</div>
+                <v-btn-toggle
+                    :model-value="scribbleMode"
+                    mandatory
+                    density="comfortable"
+                    color="amber-darken-2"
+                    class="scribble-mode-toggle"
+                    @update:model-value="onScribbleMode"
+                >
+                    <v-btn value="always" class="text-none" size="small">Always on</v-btn>
+                    <v-btn value="toggle" class="text-none" size="small">Pen button</v-btn>
+                </v-btn-toggle>
+                <p class="text-caption text-grey mt-1">
+                    Always on: draw immediately in zoomed mode. Pen button: tap Pen first, then scribble.
+                </p>
+            </div>
+
             <v-switch
                 color="white"
                 base-color="grey-darken-1"
@@ -132,8 +173,34 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useEfsStore } from "@/store/efs"
+import {
+    useUiScalePercent,
+    setUiScalePercent,
+    UI_SCALE_PERCENT_MIN,
+    UI_SCALE_PERCENT_MAX,
+    UI_SCALE_PERCENT_STEP,
+} from "@/composables/useEfsUiScale"
+import {
+    useStripScribbleMode,
+    setStripScribbleMode,
+    type StripScribbleMode,
+} from "@/composables/useStripScribbleMode"
 
 const efs = useEfsStore()
+const uiScalePercent = useUiScalePercent()
+const scribbleMode = useStripScribbleMode()
+
+function onUiScale(value: number | number[]) {
+    const n = Array.isArray(value) ? value[0] : value
+    if (typeof n !== "number" || !Number.isFinite(n)) return
+    setUiScalePercent(n)
+}
+
+function onScribbleMode(value: unknown) {
+    if (value === "always" || value === "toggle") {
+        setStripScribbleMode(value as StripScribbleMode)
+    }
+}
 
 const showAppDepXcOption = computed(() =>
     efs.myAirports.some((a) => {
@@ -184,6 +251,35 @@ function onAutoParkEnabled(value: boolean | null) {
 </script>
 
 <style scoped>
+.ui-scale-option {
+    max-width: 28rem;
+}
+
+.ui-scale-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.ui-scale-value {
+    color: #b0b4ba;
+    font-variant-numeric: tabular-nums;
+}
+
+.ui-scale-slider {
+    margin-inline: 4px;
+}
+
+.scribble-mode-option {
+    max-width: 28rem;
+}
+
+.scribble-mode-toggle {
+    margin-top: 0.25rem;
+}
+
 .ownership-suboption {
     margin-left: 2rem;
 }

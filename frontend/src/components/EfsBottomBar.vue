@@ -8,24 +8,82 @@
   <TrashDialog v-model="trashOpen" />
 
   <div class="efs-bottom-bar">
-    <button
-      type="button"
-      class="trash-btn efs-trash-drop"
-      :class="{ 'drag-over': trashDragOver }"
-      title="Recover deleted strip · drop strip to delete"
-      @click="onTrashClick"
-      @dragover.prevent="onTrashDragOver"
-      @dragenter.prevent="onTrashDragEnter"
-      @dragleave="onTrashDragLeave"
-      @drop.prevent="onTrashDrop"
-    >
-      <v-icon size="22">mdi-delete-outline</v-icon>
-    </button>
+    <div class="bottom-left-cluster">
+      <button
+        type="button"
+        class="bar-icon-btn trash-btn efs-trash-drop"
+        :class="{ 'drag-over': trashDragOver }"
+        title="Recover deleted strip · drop strip to delete"
+        @click="onTrashClick"
+        @dragover.prevent="onTrashDragOver"
+        @dragenter.prevent="onTrashDragEnter"
+        @dragleave="onTrashDragLeave"
+        @drop.prevent="onTrashDrop"
+      >
+        <v-icon :size="barIconSize">mdi-trash-can-outline</v-icon>
+      </button>
+
+      <v-menu
+        v-model="infoMenuOpen"
+        location="top"
+        :offset="8"
+        :close-on-content-click="false"
+      >
+        <template #activator="{ props: menuProps }">
+          <button
+            type="button"
+            class="bar-icon-btn info-strips-btn"
+            :class="{ 'has-restore': hasDismissedAvailable }"
+            title="Info strips"
+            v-bind="menuProps"
+          >
+            <v-icon :size="barIconSize">mdi-information-outline</v-icon>
+            <span v-if="hasDismissedAvailable" class="info-dot" aria-hidden="true" />
+          </button>
+        </template>
+
+        <div class="info-strips-menu" @click.stop>
+          <div class="info-strips-menu-header">Info strips</div>
+          <div
+            v-for="entry in infoEntries"
+            :key="entry.id"
+            class="info-strips-row"
+            :class="{ unavailable: !entry.available }"
+          >
+            <div class="info-strips-row-main">
+              <span class="info-strips-label">{{ entry.label }}</span>
+              <span v-if="!entry.available" class="info-strips-status">Not available</span>
+              <span v-else-if="entry.dismissed" class="info-strips-status hidden">Hidden</span>
+              <span v-else class="info-strips-status shown">Shown</span>
+            </div>
+            <div v-if="entry.available" class="info-strips-row-actions">
+              <button
+                v-if="entry.dismissed"
+                type="button"
+                class="info-strips-action primary"
+                @click="onShowInfoStrip(entry)"
+              >
+                Show
+              </button>
+              <button
+                v-else-if="entry.hasCustomPlacement"
+                type="button"
+                class="info-strips-action"
+                @click="onResetInfoPlacement(entry)"
+              >
+                Reset position
+              </button>
+              <span v-else class="info-strips-action-spacer" />
+            </div>
+          </div>
+        </div>
+      </v-menu>
+    </div>
 
     <div class="tiny-strips">
       <template v-if="store.myAirports.length > 0">
         <div
-          class="tiny-strip tiny-strip-vfrdep"
+          class="tiny-strip tiny-strip-dep"
           draggable="true"
           @dragstart="(e) => onTinyDragStart(e, 'vfrDep')"
           @dragend="onTinyDragEnd"
@@ -35,12 +93,13 @@
           @touchend="(e) => onTinyTouchEnd(e, 'vfrDep')"
           @touchcancel="onTinyTouchCancel"
         >
-          <div class="tiny-indicator tiny-dep"></div>
-          <span class="tiny-label">VFR DEP</span>
+          <div class="tiny-body">
+            <span class="tiny-label">VFR DEP</span>
+          </div>
         </div>
 
         <div
-          class="tiny-strip tiny-strip-vfrarr"
+          class="tiny-strip tiny-strip-arr"
           draggable="true"
           @dragstart="(e) => onTinyDragStart(e, 'vfrArr')"
           @dragend="onTinyDragEnd"
@@ -50,8 +109,9 @@
           @touchend="(e) => onTinyTouchEnd(e, 'vfrArr')"
           @touchcancel="onTinyTouchCancel"
         >
-          <div class="tiny-indicator tiny-arr"></div>
-          <span class="tiny-label">VFR ARR</span>
+          <div class="tiny-body">
+            <span class="tiny-label">VFR ARR</span>
+          </div>
         </div>
 
         <div
@@ -65,8 +125,9 @@
           @touchend="(e) => onTinyTouchEnd(e, 'cross')"
           @touchcancel="onTinyTouchCancel"
         >
-          <div class="tiny-indicator tiny-cross"></div>
-          <span class="tiny-label">CROSS</span>
+          <div class="tiny-body">
+            <span class="tiny-label">VFR CRS</span>
+          </div>
         </div>
       </template>
 
@@ -81,25 +142,41 @@
         @touchend="(e) => onTinyTouchEnd(e, 'note')"
         @touchcancel="onTinyTouchCancel"
       >
-        <div class="tiny-indicator tiny-note"></div>
-        <span class="tiny-label">NOTE</span>
+        <div class="tiny-body">
+          <span class="tiny-label">NOTE</span>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import { useEfsScaleValue } from '@/composables/useEfsUiScale'
+import {
+  useInfoStripMenu,
+  type InfoStripMenuEntry,
+} from '@/composables/useInfoStrips'
 import StripCreationDialog from './StripCreationDialog.vue'
 import TrashDialog from './TrashDialog.vue'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
 
 const store = useEfsStore()
+const efsScale = useEfsScaleValue()
+const barIconSize = computed(() => Math.max(22, Math.round(22 * efsScale.value)))
+
+const {
+  entries: infoEntries,
+  hasDismissedAvailable,
+  showEntry,
+  resetPlacement,
+} = useInfoStripMenu()
 
 const trashOpen = ref(false)
 const trashDragOver = ref(false)
+const infoMenuOpen = ref(false)
 const dialogOpen = ref(false)
 /** Suppress click-open after a strip was dropped on the trash */
 let suppressTrashClick = false
@@ -110,6 +187,15 @@ function onTrashClick() {
     return
   }
   trashOpen.value = true
+}
+
+function onShowInfoStrip(entry: InfoStripMenuEntry) {
+  showEntry(entry)
+  infoMenuOpen.value = false
+}
+
+function onResetInfoPlacement(entry: InfoStripMenuEntry) {
+  resetPlacement(entry)
 }
 
 function onTrashDragOver(event: DragEvent) {
@@ -430,26 +516,34 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 
 <style scoped>
 .efs-bottom-bar {
-  height: 46px;
+  height: max(52px, calc(52px * var(--efs-scale, 1)));
   background: #2b2d31;
   display: flex;
   align-items: center;
   justify-content: center;
   border-top: 1px solid #3a3e42;
   flex-shrink: 0;
-  padding-bottom: 10px;
+  padding: 0;
   position: relative;
 }
 
-.trash-btn {
+.bottom-left-cluster {
   position: absolute;
-  left: 10px;
-  bottom: 12px;
+  left: calc(10px * var(--efs-scale, 1));
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--efs-scale, 1));
+}
+
+.bar-icon-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: max(32px, calc(32px * var(--efs-scale, 1)));
+  height: max(32px, calc(32px * var(--efs-scale, 1)));
   padding: 0;
   border: 1px solid #4a4e54;
   background: #35373c;
@@ -458,7 +552,7 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   border-radius: 2px;
 }
 
-.trash-btn:hover {
+.bar-icon-btn:hover {
   color: #e8e8e8;
   border-color: #6b7280;
   background: #3f4248;
@@ -471,25 +565,64 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
 }
 
+.info-strips-btn.has-restore {
+  color: #93c5fd;
+  border-color: #5b7a9e;
+}
+
+.info-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #60a5fa;
+  box-shadow: 0 0 0 1px #35373c;
+}
+
 .tiny-strips {
   display: flex;
-  gap: 12px;
+  gap: calc(14px * var(--efs-scale, 1));
   align-items: center;
 }
 
+/* Mini flight strips — thicker L/R frame, thinner T/B */
 .tiny-strip {
+  --tiny-type: #888;
+  --tiny-side: calc(14px * var(--efs-scale, 1));
+  --tiny-tb: calc(3px * var(--efs-scale, 1));
   display: flex;
-  align-items: center;
-  background: #f0ebe0;
-  border: 1px solid #888;
-  height: 24px;
-  padding: 0 8px 0 0;
+  flex-direction: column;
+  box-sizing: border-box;
+  background: #ebebeb;
+  border-style: solid;
+  border-color: var(--tiny-type);
+  border-width: var(--tiny-tb) var(--tiny-side);
+  height: max(36px, calc(34px * var(--efs-scale, 1)));
+  min-width: calc(148px * var(--efs-scale, 1));
+  margin: 0;
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  transition: all 0.12s ease;
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.tiny-strip-dep { --tiny-type: #3b7dd8; }
+.tiny-strip-arr { --tiny-type: #daa520; }
+.tiny-strip-cross { --tiny-type: #881fe0; }
+.tiny-strip-note { --tiny-type: #888; }
+
+.tiny-body {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 calc(10px * var(--efs-scale, 1));
+  min-height: 0;
 }
 
 .tiny-strip:hover {
@@ -502,24 +635,13 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-.tiny-indicator {
-  width: 6px;
-  height: 100%;
-  margin-right: 6px;
-  flex-shrink: 0;
-}
-
-.tiny-dep { background: #3b7dd8; }
-.tiny-arr { background: #daa520; }
-.tiny-cross { background: #9b59b6; }
-.tiny-note { background: #888; }
-
 .tiny-label {
-  font-size: 10px;
+  font-size: calc(17px * var(--efs-scale, 1));
   font-weight: 700;
-  color: #333;
-  letter-spacing: 0.5px;
+  color: #222;
+  letter-spacing: 0.3px;
   white-space: nowrap;
+  line-height: 1;
 }
 </style>
 
@@ -532,5 +654,100 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   opacity: 0.85;
   transform: scale(1.1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Teleported v-menu content */
+.info-strips-menu {
+  min-width: 240px;
+  background: #2b2d31;
+  border: 1px solid #4a4e54;
+  border-radius: 4px;
+  padding: 6px 0;
+  color: #d1d5db;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.info-strips-menu-header {
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+
+.info-strips-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+}
+
+.info-strips-row.unavailable {
+  opacity: 0.45;
+}
+
+.info-strips-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.info-strips-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.info-strips-status {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.info-strips-status.hidden {
+  color: #fbbf24;
+}
+
+.info-strips-status.shown {
+  color: #86efac;
+}
+
+.info-strips-row-actions {
+  flex-shrink: 0;
+}
+
+.info-strips-action {
+  border: 1px solid #4a4e54;
+  background: #35373c;
+  color: #d1d5db;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.info-strips-action:hover {
+  background: #3f4248;
+  border-color: #6b7280;
+  color: #fff;
+}
+
+.info-strips-action.primary {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+
+.info-strips-action.primary:hover {
+  background: #254a75;
+  color: #fff;
+}
+
+.info-strips-action-spacer {
+  display: inline-block;
+  min-width: 48px;
 }
 </style>

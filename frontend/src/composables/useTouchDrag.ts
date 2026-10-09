@@ -39,22 +39,22 @@ export function useTouchDrag() {
     offsetX = touch.clientX - rect.left
     offsetY = touch.clientY - rect.top
 
-    // Create visual clone for dragging
+    // Create visual clone for dragging — set position props only so inline
+    // --strip-scale / fitted fonts from the live strip are preserved (cssText would wipe them).
     const clone = element.cloneNode(true) as HTMLElement
     clone.classList.add('drag-clone')
-    clone.style.cssText = `
-      position: fixed;
-      left: ${rect.left}px;
-      top: ${rect.top}px;
-      width: ${rect.width}px;
-      height: ${rect.height}px;
-      z-index: 9999;
-      pointer-events: none;
-      opacity: 0.9;
-      transform: scale(1.02);
-      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-      transition: transform 0.1s ease;
-    `
+    clone.style.position = 'fixed'
+    clone.style.left = `${rect.left}px`
+    clone.style.top = `${rect.top}px`
+    clone.style.width = `${rect.width}px`
+    clone.style.height = `${rect.height}px`
+    clone.style.zIndex = '9999'
+    clone.style.pointerEvents = 'none'
+    clone.style.opacity = '0.9'
+    clone.style.margin = '0'
+    clone.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'
+    const stripScale = element.style.getPropertyValue('--strip-scale')
+    if (stripScale) clone.style.setProperty('--strip-scale', stripScale)
     document.body.appendChild(clone)
     dragClone.value = clone
 
@@ -264,7 +264,7 @@ export function useTouchDrag() {
     document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => el.classList.remove('drop-active'))
 
     // Reset dragging elements opacity
-    document.querySelectorAll('.flight-strip').forEach(el => {
+    document.querySelectorAll('.flight-strip, .info-strip').forEach(el => {
       (el as HTMLElement).style.opacity = ''
     })
 

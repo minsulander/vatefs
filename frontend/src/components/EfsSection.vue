@@ -12,7 +12,10 @@
   >
     <div
       class="section-header"
-      :class="{ 'no-resize': isFirstSection }"
+      :class="[
+        { 'no-resize': isFirstSection },
+        essaHeaderClass,
+      ]"
       @mousedown="onResizeStart"
       @touchstart="onResizeStart"
     >
@@ -55,6 +58,8 @@
         @drop="onTopDrop"
       >
         <template v-for="(strip, index) in topStrips" :key="strip.id">
+          <BreakoutInfoStrip v-if="showBreakoutBeforeTopIndex(index)" />
+          <MapInfoStrip v-if="showMapBeforeTopIndex(index)" />
           <!-- Gap before this strip (if any); skipped while auto time-sorted -->
           <div
             v-if="showGaps && sectionGaps[index]"
@@ -69,7 +74,12 @@
             :bay-id="bayId"
           />
         </template>
-        <div v-if="topStrips.length === 0 && bottomStrips.length === 0" class="empty-section">
+        <BreakoutInfoStrip v-if="showBreakoutAtEndOfTop" />
+        <MapInfoStrip v-if="showMapAtEndOfTop" />
+        <div
+          v-if="topStrips.length === 0 && bottomStrips.length === 0 && !showBreakoutHere && !showMapHere"
+          class="empty-section"
+        >
           Empty
         </div>
       </div>
@@ -77,7 +87,7 @@
       <!-- Bottom drop zone -->
       <div
         class="bottom-drop-zone"
-        :class="{ 'drop-active': isBottomDragOver, 'has-bottom': bottomStrips.length > 0 }"
+        :class="{ 'drop-active': isBottomDragOver, 'has-bottom': bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom }"
         @dragover.prevent="onBottomDragOver"
         @dragenter="onBottomDragEnter"
         @dragleave="onBottomDragLeave"
@@ -86,18 +96,23 @@
 
       <!-- Bottom strips container (pinned) -->
       <div
-        v-if="bottomStrips.length > 0"
+        v-if="bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom"
         class="bottom-strips-container"
         @dragover.prevent="onBottomStripsDragOver"
         @drop="onBottomStripsDrop"
       >
-        <FlightStrip
-          v-for="strip in bottomStrips"
-          :key="strip.id"
-          :strip="strip"
-          :section-id="section.id"
-          :bay-id="bayId"
-        />
+        <template v-for="(strip, index) in bottomStrips" :key="strip.id">
+          <BreakoutInfoStrip v-if="showBreakoutBeforeBottomIndex(index)" />
+          <MapInfoStrip v-if="showMapBeforeBottomIndex(index)" />
+          <FlightStrip
+            :strip="strip"
+            :section-id="section.id"
+            :bay-id="bayId"
+          />
+        </template>
+        <!-- Default: bottom of bay above RUNWAY 01R/19L; also end of bottom list -->
+        <BreakoutInfoStrip v-if="showBreakoutAtEndOfBottom" />
+        <MapInfoStrip v-if="showMapAtEndOfBottom" />
       </div>
     </div>
   </div>
@@ -109,7 +124,15 @@ import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import FlightStrip from './FlightStrip.vue'
+import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
+import MapInfoStrip from './MapInfoStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
+import {
+  INFO_STRIP_KINDS,
+  setInfoStripPlacement,
+  useBreakoutInfoStrip,
+  useMapInfoStrip,
+} from '@/composables/useInfoStrips'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
 type TimeSortField = 'etobt' | 'tsat'
@@ -147,6 +170,187 @@ const pendingCreateGapSize = ref<number>(0)
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
+
+const { visible: breakoutVisible, placement: breakoutPlacement } = useBreakoutInfoStrip()
+const {
+  visible: mapVisible,
+  placement: mapPlacement,
+  defaultSectionId: mapDefaultSectionId,
+} = useMapInfoStrip()
+
+/** Default host: section immediately above RUNWAY 01R/19L. */
+const isDefaultBreakoutHost = computed(() => {
+  if (!store.essaRolesMode) return false
+  const bay = store.layout.bays.find((b) => b.id === props.bayId)
+  if (!bay) return false
+  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
+  if (idx < 0 || idx >= bay.sections.length - 1) return false
+  const nextId = bay.sections[idx + 1]?.id ?? ''
+  return nextId === 'runway_01R_19L' || /runway_01R_19L/i.test(nextId)
+})
+
+/** Default host: physical runway pair for the active ARR runway (or legacy arr_runway). */
+const isDefaultMapHost = computed(() => {
+  if (!store.essaRolesMode || !mapVisible.value) return false
+  const def = mapDefaultSectionId.value
+  if (def && props.section.id === def) return true
+  // Fallback when physical pair sections are not in layout
+  if (!def) return false
+  const bay = store.layout.bays.find((b) => b.id === props.bayId)
+  const hasPhysical = bay?.sections.some((s) => s.id === def)
+  if (hasPhysical) return false
+  return props.section.id === 'arr_runway' || props.section.id.endsWith('_arr_runway')
+})
+
+const showBreakoutHere = computed(() => {
+  if (!breakoutVisible.value) return false
+  const p = breakoutPlacement.value
+  if (!p) return isDefaultBreakoutHost.value
+  return p.bayId === props.bayId && p.sectionId === props.section.id
+})
+
+const showMapHere = computed(() => {
+  if (!mapVisible.value) return false
+  const p = mapPlacement.value
+  if (!p) return isDefaultMapHost.value
+  return p.bayId === props.bayId && p.sectionId === props.section.id
+})
+
+const showBreakoutAtBottom = computed(() => {
+  if (!showBreakoutHere.value) return false
+  const p = breakoutPlacement.value
+  return !p || p.bottom
+})
+
+const showMapAtBottom = computed(() => {
+  if (!showMapHere.value) return false
+  const p = mapPlacement.value
+  return !!p && p.bottom
+})
+
+const showBreakoutInTop = computed(() => showBreakoutHere.value && !!breakoutPlacement.value && !breakoutPlacement.value.bottom)
+/** Default MAP placement: top of the ARR runway bay (index 0). */
+const showMapInTop = computed(() => {
+  if (!showMapHere.value) return false
+  const p = mapPlacement.value
+  return !p || !p.bottom
+})
+
+function showBreakoutBeforeTopIndex(index: number): boolean {
+  if (!showBreakoutInTop.value || !breakoutPlacement.value) return false
+  return breakoutPlacement.value.index === index
+}
+
+function showMapBeforeTopIndex(index: number): boolean {
+  if (!showMapInTop.value) return false
+  const p = mapPlacement.value
+  if (!p) return index === 0 // default → first slot in top
+  return p.index === index
+}
+
+const showBreakoutAtEndOfTop = computed(() => {
+  if (!showBreakoutInTop.value || !breakoutPlacement.value) return false
+  return breakoutPlacement.value.index >= topStrips.value.length
+})
+
+const showMapAtEndOfTop = computed(() => {
+  if (!showMapInTop.value) return false
+  const p = mapPlacement.value
+  if (!p) return topStrips.value.length === 0 // default in empty top zone
+  return p.index >= topStrips.value.length
+})
+
+function showBreakoutBeforeBottomIndex(index: number): boolean {
+  if (!showBreakoutAtBottom.value) return false
+  const p = breakoutPlacement.value
+  if (!p) return false // default → end of bottom list
+  return p.index === index
+}
+
+function showMapBeforeBottomIndex(index: number): boolean {
+  if (!showMapAtBottom.value) return false
+  const p = mapPlacement.value
+  if (!p) return false
+  return p.index === index
+}
+
+const showBreakoutAtEndOfBottom = computed(() => {
+  if (!showBreakoutAtBottom.value) return false
+  const p = breakoutPlacement.value
+  if (!p) return true // default placement
+  return p.index >= bottomStrips.value.length
+})
+
+const showMapAtEndOfBottom = computed(() => {
+  if (!showMapAtBottom.value) return false
+  const p = mapPlacement.value
+  if (!p) return false
+  return p.index >= bottomStrips.value.length
+})
+
+function placeInfoStrip(kind: string, bottom: boolean, index: number) {
+  setInfoStripPlacement(kind, {
+    bayId: props.bayId,
+    sectionId: props.section.id,
+    bottom,
+    index,
+  })
+}
+
+/** Drop index among flight strips by Y midpoint (info strip ignored). */
+function computeFlightStripDropIndex(event: DragEvent, container: HTMLElement | null): number {
+  if (!container) return 0
+  const nodes = Array.from(container.querySelectorAll('.flight-strip')) as HTMLElement[]
+  const y = event.clientY
+  for (let i = 0; i < nodes.length; i++) {
+    const rect = nodes[i]!.getBoundingClientRect()
+    if (y < rect.top + rect.height / 2) return i
+  }
+  return nodes.length
+}
+
+function tryHandleInfoStripDrop(event: DragEvent, bottom: boolean): boolean {
+  if (!event.dataTransfer) return false
+  const kind =
+    event.dataTransfer.getData('application/efs-info-strip') ||
+    (() => {
+      try {
+        const data = JSON.parse(event.dataTransfer!.getData('application/json') || '{}') as {
+          type?: string
+          infoStripId?: string
+        }
+        return data.type === 'infoStrip' ? data.infoStripId : ''
+      } catch {
+        return ''
+      }
+    })()
+  if (!kind || !(INFO_STRIP_KINDS as readonly string[]).includes(kind)) return false
+  const sectionContent = (event.currentTarget as HTMLElement)?.closest('.section-content')
+  const container = bottom
+    ? (sectionContent?.querySelector('.bottom-strips-container') as HTMLElement | null)
+    : topContainer.value
+  const index = computeFlightStripDropIndex(event, container)
+  placeInfoStrip(kind, bottom, index)
+  return true
+}
+
+/** ESSA SAAB header tint: runway / inbound-from-other / other */
+const essaHeaderClass = computed(() => {
+  if (!store.essaRolesMode) return undefined
+  const id = props.section.id.toLowerCase()
+  const title = (props.section.title || '').toUpperCase()
+  if (
+    id.includes('runway') ||
+    title === 'RUNWAY' ||
+    title.startsWith('RUNWAY ')
+  ) {
+    return 'section-header--essa-runway'
+  }
+  if (id === 'inbound' || id.endsWith('_inbound') || title.startsWith('INBOUND')) {
+    return 'section-header--essa-inbound'
+  }
+  return 'section-header--essa-other'
+})
 
 const bayAirport = computed(() => {
   const bay = store.layout.bays.find(b => b.id === props.bayId)
@@ -591,8 +795,11 @@ function onTopDrop(event: DragEvent) {
     return
   }
 
+  if (tryHandleInfoStripDrop(event, false)) return
+
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data?.type === 'infoStrip') return
     const { stripId, bayId: sourceBayId, sectionId: sourceSectionId, isBottom: sourceIsBottom, originalTop, originalBottom, stripHeight, dragOffsetY } = data
 
     const container = topContainer.value
@@ -844,8 +1051,11 @@ function onBottomDrop(event: DragEvent) {
     return
   }
 
+  if (tryHandleInfoStripDrop(event, true)) return
+
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data?.type === 'infoStrip') return
     const { stripId } = data
 
     // Move to bottom strips at the beginning
@@ -878,8 +1088,11 @@ function onBottomStripsDrop(event: DragEvent) {
     return
   }
 
+  if (tryHandleInfoStripDrop(event, true)) return
+
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data?.type === 'infoStrip') return
     const { stripId } = data
 
     // Find position within bottom strips
@@ -908,63 +1121,96 @@ function onBottomStripsDrop(event: DragEvent) {
 }
 
 .section-header {
-  background: #1a1d20;
-  padding: 4px 8px;
-  border-bottom: 1px solid #3a3e42;
+  position: relative;
+  background: #2c3138;
+  padding: 0 calc(6px * var(--bay-scale, 1));
+  border-bottom: 1px solid #4a5058;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: center;
+  gap: calc(6px * var(--bay-scale, 1));
   cursor: ns-resize;
   user-select: none;
+  /* Floor with --efs-scale so large UI % stays readable on narrow bays */
+  min-height: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
 }
 
 .section-header.no-resize {
   cursor: default;
 }
 
+/* ESSA mode — SAAB EFS section header colours */
+.section-header--essa-runway {
+  background: #4e0910;
+  border-bottom-color: #6a1420;
+}
+.section-header--essa-runway .section-title {
+  color: #e8d0d0;
+}
+.section-header--essa-inbound {
+  background: #8aa09d;
+  border-bottom-color: #6f8784;
+}
+.section-header--essa-inbound .section-title {
+  color: #ebebeb; /* same as strip body */
+}
+.section-header--essa-other {
+  background: #848386;
+  border-bottom-color: #6a696b;
+}
+.section-header--essa-other .section-title {
+  color: #000;
+}
+
 .section-title {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  color: #8a9199;
+  font-size: max(calc(14px * var(--bay-scale, 1)), calc(15px * var(--efs-scale, 1)));
+  font-weight: 700;
+  letter-spacing: calc(0.8px * var(--bay-scale, 1));
+  line-height: 1;
+  color: #a8afb6;
   text-transform: uppercase;
+  text-align: center;
   font-family: 'Segoe UI', 'Arial', sans-serif;
 }
 
 .section-header-right {
+  position: absolute;
+  right: calc(8px * var(--bay-scale, 1));
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-left: auto;
+  gap: calc(8px * var(--bay-scale, 1));
+  margin-left: 0;
 }
 
 .section-sort-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: calc(2px * var(--bay-scale, 1));
 }
 
 .section-sort-btn {
-  font-size: 0.6rem;
+  font-size: max(calc(10px * var(--bay-scale, 1)), calc(11px * var(--efs-scale, 1)));
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: calc(0.4px * var(--bay-scale, 1));
   text-transform: uppercase;
   color: #c5ccd3;
   background: #2a2e33;
   border: 1px solid #4a5058;
   border-radius: 2px;
-  padding: 1px 6px;
+  padding: 0 calc(4px * var(--bay-scale, 1));
   cursor: pointer;
-  line-height: 1.3;
+  line-height: 1;
   font-family: 'Segoe UI', 'Arial', sans-serif;
+  min-height: max(calc(15px * var(--bay-scale, 1)), calc(16px * var(--efs-scale, 1)));
 }
 
 .section-sort-dir-btn {
-  min-width: 1.4rem;
-  padding-left: 4px;
-  padding-right: 4px;
-  font-size: 0.65rem;
+  min-width: max(calc(16px * var(--bay-scale, 1)), calc(16px * var(--efs-scale, 1)));
+  padding-left: calc(2px * var(--bay-scale, 1));
+  padding-right: calc(2px * var(--bay-scale, 1));
+  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
 }
 
 .section-sort-btn:hover:not(:disabled) {
@@ -978,8 +1224,8 @@ function onBottomStripsDrop(event: DragEvent) {
 }
 
 .resize-handle {
-  width: 20px;
-  height: 4px;
+  width: calc(20px * var(--bay-scale, 1));
+  height: calc(4px * var(--bay-scale, 1));
   background: linear-gradient(
     to bottom,
     transparent 0px,
@@ -1070,12 +1316,12 @@ function onBottomStripsDrop(event: DragEvent) {
 
 .empty-section {
   text-align: center;
-  padding: 15px;
+  padding: calc(15px * var(--bay-scale, 1));
   color: #3a3e42;
-  font-size: 0.75rem;
+  font-size: calc(14px * var(--bay-scale, 1));
   font-style: normal;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: calc(1px * var(--bay-scale, 1));
 }
 
 /* Strip gap - clickable area between strips */

@@ -1,7 +1,20 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
 import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo } from "@vatefs/common"
-import { isServerMessage, GAP_BUFFER, gapKey, DEFAULT_UI_SETTINGS, resolveEssaRwyConfigId } from "@vatefs/common"
+import {
+    isServerMessage,
+    GAP_BUFFER,
+    gapKey,
+    DEFAULT_UI_SETTINGS,
+    resolveEssaRwyConfigId,
+    formatSidForDisplay,
+    formatStripAltitude,
+    DEFAULT_TRANSITION_ALTITUDE_FT,
+    hasForcedSidInRoute,
+    isIfrSidEligible,
+    isTrackSidName,
+    hasSlowRemark,
+} from "@vatefs/common"
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -314,6 +327,16 @@ export const useEfsStore = defineStore("efs", () => {
     // Auto-move animation: maps strip ID -> old rect + cloned DOM node (non-reactive, consumed once)
     const autoMoveData = new Map<string, { rect: DOMRect; clone: HTMLElement }>()
 
+    /** Awaiting server id, then that strip id — bay note opens zoom scribble once. */
+    const PENDING_NOTE_SCRIBBLE_AWAIT = '__awaiting__'
+    const pendingNoteScribbleId = ref<string | null>(null)
+
+    function consumePendingNoteScribbleOpen(stripId: string): boolean {
+        if (pendingNoteScribbleId.value !== stripId) return false
+        pendingNoteScribbleId.value = null
+        return true
+    }
+
     // Handle strip message from server
     function handleStripMessage(strip: FlightStrip, autoMoved?: boolean) {
         console.log("received strip:", strip.callsign)
@@ -328,8 +351,18 @@ export const useEfsStore = defineStore("efs", () => {
             }
         }
 
+        const isNew = !strips.value.has(strip.id)
         strips.value.set(strip.id, strip)
         stripsVersion.value++
+
+        // Bind pending “open scribble” to the newly created note strip id
+        if (
+            isNew &&
+            strip.stripType === 'note' &&
+            pendingNoteScribbleId.value === PENDING_NOTE_SCRIBBLE_AWAIT
+        ) {
+            pendingNoteScribbleId.value = strip.id
+        }
     }
 
     // Handle strip delete message from server
@@ -1032,6 +1065,19 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'setCtoc', stripId, ctoc })
     }
 
+    /** Record QNH given to pilot (hPa), or clear with null. */
+    function setQnhGiven(stripId: string, qnh: number | null) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                qnhGiven: qnh ?? undefined,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'setQnhGiven', stripId, qnh })
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -1075,74 +1121,227 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     /**
-     * Display-only preferred SIDs for uncleared ESSA IFR deps (not assigned to EuroScope).
-     * Actual assignSid happens only when opening the clearance dialog.
+     * Display-only preferred SIDs/CFLs for uncleared ESSA IFR deps (not assigned to EuroScope).
+     * Actual assignSid/assignCfl happens when opening the clearance dialog.
      */
     const essaPreferredSids = ref<Map<string, string>>(new Map())
+    const essaPreferredCfls = ref<Map<string, number>>(new Map())
 
     function getEssaPreferredSid(stripId: string): string | undefined {
         return essaPreferredSids.value.get(stripId)
     }
 
-    /** SID shown on strip: preferred preview when uncleared, else assigned/route SID */
-    function displaySidForStrip(strip: FlightStrip): string {
-        if (
+    function getEssaPreferredCfl(stripId: string): number | undefined {
+        return essaPreferredCfls.value.get(stripId)
+    }
+
+    function isEssaPreferredIfrDep(strip: FlightStrip): boolean {
+        return (
             !strip.clearance &&
-            strip.adep === 'ESSA' &&
-            strip.flightRules !== 'V' &&
+            (strip.adep === 'ESSA' || strip.adep === 'ESMS') &&
+            isIfrSidEligible(strip.flightRules) &&
             (strip.stripType === 'departure' || strip.stripType === 'local')
-        ) {
-            const preferred = essaPreferredSids.value.get(strip.id)
-            if (preferred) return preferred
-        }
-        return strip.sid || ''
+        )
+    }
+
+    /** True when strip CFL is a real controller/SID assignment (not blank / RFL echo). */
+    function hasRealAssignedCfl(strip: FlightStrip): boolean {
+        const cfl = strip.clearedAltitude
+        if (!cfl) return false
+        if (!strip.clearance && strip.rfl && cfl === strip.rfl) return false
+        return true
     }
 
     /**
-     * Refresh display-only preferred SIDs (no EuroScope assign).
+     * Preferred SID preview not yet entered via CLR (amber until SID/rwy is forced in FPL).
+     * GetSid may already show the same name — still amber until CLR assigns it.
+     */
+    function isPreferredSidPending(strip: FlightStrip): boolean {
+        if (!isEssaPreferredIfrDep(strip)) return false
+        if (hasForcedSidInRoute(strip.route)) return false
+        return !!essaPreferredSids.value.get(strip.id)
+    }
+
+    /**
+     * Preferred CFL shown but not yet assigned (amber on strip until CLR opens).
+     */
+    function isPreferredCflPending(strip: FlightStrip): boolean {
+        if (!isEssaPreferredIfrDep(strip)) return false
+        if (hasRealAssignedCfl(strip)) return false
+        return essaPreferredCfls.value.has(strip.id)
+    }
+
+    /**
+     * SID shown on strip.
+     * - ESE preferred preview when FPL has no forced SID/rwy (after clear in ES/EFS)
+     * - Forced SID in FPL (RNAV / track / VFR) always wins when present
+     */
+    function displaySidForStrip(strip: FlightStrip): string {
+        let raw = strip.sid || ''
+        if (isEssaPreferredIfrDep(strip)) {
+            const preferred = essaPreferredSids.value.get(strip.id)
+            if (preferred) {
+                const forced = hasForcedSidInRoute(strip.route)
+                if (!forced) {
+                    // No SID in FPL — ESE priority (not sticky GetSid / cleared track)
+                    raw = preferred
+                } else if (!raw) {
+                    raw = preferred
+                }
+            }
+        }
+        return formatSidForDisplay(raw, strip.tmaExit)
+    }
+
+    /** CFL shown on strip — preferred preview when uncleared and no real CFL yet. */
+    function displayCflForStrip(strip: FlightStrip): string {
+        if (!hasRealAssignedCfl(strip) && isEssaPreferredIfrDep(strip)) {
+            const preferred = essaPreferredCfls.value.get(strip.id)
+            if (preferred) {
+                return formatStripAltitude(preferred, DEFAULT_TRANSITION_ALTITUDE_FT)
+            }
+        }
+        return formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT)
+    }
+
+    function defaultInitialClimbFt(airport: string, slow: boolean): number | undefined {
+        const apt = airport.toUpperCase()
+        if (apt !== 'ESSA' && apt !== 'ESGG' && apt !== 'ESMS') return undefined
+        if (slow) return 3000
+        if (apt === 'ESMS') return 4000
+        return 5000
+    }
+
+    /**
+     * Refresh display-only preferred SIDs + CFLs (no EuroScope assign).
      * Cleared strips are left alone / dropped from the preview map.
      */
     async function refreshEssaPreferredSids() {
         if (!essaRolesMode.value) {
             if (essaPreferredSids.value.size > 0) essaPreferredSids.value = new Map()
+            if (essaPreferredCfls.value.size > 0) essaPreferredCfls.value = new Map()
             return
         }
         const configId = essaRwyConfigIdResolved.value
         if (!configId) {
             if (essaPreferredSids.value.size > 0) essaPreferredSids.value = new Map()
+            if (essaPreferredCfls.value.size > 0) essaPreferredCfls.value = new Map()
             return
         }
 
         const candidates = [...strips.value.values()].filter(
             s =>
                 s.adep === 'ESSA' &&
-                s.flightRules !== 'V' &&
+                isIfrSidEligible(s.flightRules) &&
                 (s.stripType === 'departure' || s.stripType === 'local') &&
                 !s.clearance &&
                 !!s.runway
         )
 
-        const next = new Map<string, string>()
+        const nextSids = new Map<string, string>()
+        const nextCfls = new Map<string, number>()
         await Promise.all(
             candidates.map(async strip => {
                 try {
+                    const slow = !!(strip.isSlow || hasSlowRemark(strip.remarks))
                     const params = new URLSearchParams({
                         airport: strip.adep,
                         runway: strip.runway!,
                         config: configId,
-                        slow: strip.isSlow || strip.remarks === 'SLOW' ? '1' : '0',
+                        slow: slow ? '1' : '0',
                     })
                     if (strip.route) params.set('route', strip.route)
                     const res = await fetch(`/api/preferred-sid?${params}`)
                     if (!res.ok) return
                     const data = (await res.json()) as { sid: string | null }
-                    if (data.sid) next.set(strip.id, data.sid)
+                    if (!data.sid) return
+                    nextSids.set(strip.id, data.sid)
+
+                    const altParams = new URLSearchParams({
+                        airport: strip.adep,
+                        sid: data.sid,
+                    })
+                    if (slow) altParams.set('slow', '1')
+                    const altRes = await fetch(`/api/sidalt?${altParams}`)
+                    if (altRes.ok) {
+                        const altData = (await altRes.json()) as { altitude: number | null }
+                        const altitude =
+                            altData.altitude ?? defaultInitialClimbFt(strip.adep, slow)
+                        if (altitude) nextCfls.set(strip.id, altitude)
+                    } else {
+                        const fallback = defaultInitialClimbFt(strip.adep, slow)
+                        if (fallback) nextCfls.set(strip.id, fallback)
+                    }
                 } catch {
                     // ignore per-strip failures
                 }
             })
         )
-        essaPreferredSids.value = next
+        essaPreferredSids.value = nextSids
+        essaPreferredCfls.value = nextCfls
+    }
+
+    /**
+     * Assign preferred SID for uncleared ESSA/ESMS IFR deps (slow track vs letter group).
+     * Used by the SLOW chip and after manual DEP RWY changes.
+     */
+    async function preferSidForStrip(
+        stripId: string,
+        slow: boolean,
+        opts?: { runway?: string; ignoreForcedRoute?: boolean },
+    ): Promise<void> {
+        const strip = strips.value.get(stripId)
+        if (!strip || strip.clearance || !strip.canEditClearance) return
+        // V / Z: never auto-assign preferred / SLOW SID
+        if (!isIfrSidEligible(strip.flightRules)) return
+        if (strip.stripType !== 'departure' && strip.stripType !== 'local') return
+        const airport = strip.adep
+        const runway = opts?.runway || strip.runway
+        if (!airport || !runway) return
+        if (airport !== 'ESSA' && airport !== 'ESMS') return
+        if (airport === 'ESSA' && !essaRwyConfigIdResolved.value) return
+        if (!opts?.ignoreForcedRoute && hasForcedSidInRoute(strip.route)) return
+
+        try {
+            const params = new URLSearchParams({ airport, runway })
+            if (airport === 'ESSA') {
+                params.set('config', essaRwyConfigIdResolved.value!)
+                params.set('slow', slow ? '1' : '0')
+            }
+            // After RWY change, drop stale SID/rwy prefix so exit matching uses the route body
+            let route = strip.route || ''
+            if (opts?.ignoreForcedRoute && route) {
+                const tokens = route.trim().split(/\s+/).filter(Boolean)
+                if (tokens[0]?.includes('/')) tokens.shift()
+                route = tokens.join(' ')
+            }
+            if (route) params.set('route', route)
+            const res = await fetch(`/api/preferred-sid?${params}`)
+            if (!res.ok) return
+            const data = (await res.json()) as { sid: string | null }
+            if (!data.sid || data.sid === strip.sid) {
+                void refreshEssaPreferredSids()
+                return
+            }
+            // Already on a track SID while enabling slow — keep it (not after RWY change)
+            if (slow && !opts?.ignoreForcedRoute && isTrackSidName(strip.sid)) {
+                void refreshEssaPreferredSids()
+                return
+            }
+            sendAssignment(stripId, 'assignSid', data.sid)
+            void refreshEssaPreferredSids()
+        } catch {
+            // ignore
+        }
+    }
+
+    /** Clear a track/SLOW SID from the FPL (used when removing the SLOW flag). */
+    function clearTrackSidForStrip(stripId: string): void {
+        const strip = strips.value.get(stripId)
+        if (!strip || strip.clearance || !strip.canEditClearance) return
+        if (!isTrackSidName(strip.sid)) return
+        sendAssignment(stripId, 'assignSid', '')
+        void refreshEssaPreferredSids()
     }
 
     // Config change or strip set change → refresh preferred SID previews (display only)
@@ -1190,6 +1389,9 @@ export const useEfsStore = defineStore("efs", () => {
         position?: number,
         isBottom?: boolean
     ) {
+        if (stripType === 'note') {
+            pendingNoteScribbleId.value = PENDING_NOTE_SCRIBBLE_AWAIT
+        }
         sendMessage({
             type: 'createStrip',
             stripType,
@@ -1219,10 +1421,13 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function updateRemarks(stripId: string, text: string) {
-        // Optimistic update
+        // Optimistic — HP kept (backend rebuilds ".REMARKS /HP")
         const strip = strips.value.get(stripId)
         if (strip) {
-            strips.value.set(stripId, { ...strip, remarks: text || undefined })
+            strips.value.set(stripId, {
+                ...strip,
+                remarks: text || undefined,
+            })
             stripsVersion.value++
         }
 
@@ -1230,6 +1435,42 @@ export const useEfsStore = defineStore("efs", () => {
             type: 'updateRemarks',
             stripId,
             text
+        })
+    }
+
+    /** Holding point → scratchpad /TEXT (keeps remarks) */
+    function updateHp(stripId: string, text: string) {
+        const strip = strips.value.get(stripId)
+        const normalized = text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                hp: normalized || undefined,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({
+            type: 'updateHp',
+            stripId,
+            text: normalized,
+        })
+    }
+
+    /** Hold short → VCH annotation 4, max 5 chars */
+    function updateHs(stripId: string, text: string) {
+        const strip = strips.value.get(stripId)
+        const normalized = text.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                hs: normalized || undefined,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({
+            type: 'updateHs',
+            stripId,
+            text: normalized,
         })
     }
 
@@ -1294,9 +1535,16 @@ export const useEfsStore = defineStore("efs", () => {
         essaRwyConfigManual,
         essaRwyConfigIdResolved,
         essaPreferredSids,
+        essaPreferredCfls,
         getEssaPreferredSid,
+        getEssaPreferredCfl,
+        isPreferredSidPending,
+        isPreferredCflPending,
         displaySidForStrip,
+        displayCflForStrip,
         refreshEssaPreferredSids,
+        preferSidForStrip,
+        clearTrackSidForStrip,
         setEssaRwyConfig,
         syncEssaRwyConfigFromEs,
         activeAirports,
@@ -1359,6 +1607,7 @@ export const useEfsStore = defineStore("efs", () => {
         viffReadyTobt,
         setTsac,
         setCtoc,
+        setQnhGiven,
         availableConfigs,
         activeConfig,
         switchConfig,
@@ -1366,8 +1615,12 @@ export const useEfsStore = defineStore("efs", () => {
         connect,
         refresh,
         createStrip,
+        pendingNoteScribbleId,
+        consumePendingNoteScribbleOpen,
         updateNote,
         updateRemarks,
+        updateHp,
+        updateHs,
         autoMoveData,
         controllers,
         releaseStrip,
