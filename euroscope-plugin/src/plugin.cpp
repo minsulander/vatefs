@@ -151,6 +151,12 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             SetJsonIfValidUtf8(message, "aircraftType", aircraftType);
         }
         SetJsonIfValidUtf8(message, "wakeTurbulence", (std::string("") + fpData.GetAircraftWtc()).c_str());
+        // Engine type for SLOW/low-speed: P/T = propeller, J = jet, E = electric, ? = unknown
+        {
+            char eng = fpData.GetEngineType();
+            char engStr[2] = {eng == 0 ? '?' : eng, '\0'};
+            SetJsonIfValidUtf8(message, "engineType", engStr);
+        }
 
         const char *origin = fpData.GetOrigin();
         if (origin && strlen(origin) < 10) SetJsonIfValidUtf8(message, "origin", origin);
@@ -216,6 +222,9 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             message["ete"] = ete;
         }
 
+        // SID/route changes can recalculate COPX / XFL without a CAD callback
+        AppendXfl(message, FlightPlan, &out);
+
         DebugMessage(out.str());
         PostJson(message, "OnFlightPlanFlightPlanDataUpdate");
     } catch (const std::exception &e) {
@@ -253,6 +262,10 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 
         const EuroScopePlugIn::CFlightPlanControllerAssignedData ctrData =
         FlightPlan.GetControllerAssignedData();
+
+        // Always attach XFL — COPX exit level has no dedicated CTR_DATA_TYPE
+        AppendXfl(message, FlightPlan, &out);
+        lastXflSnapshot[callsign] = message.value("xfl", 0);
 
         switch (DataType) {
         case EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK: {
@@ -895,6 +908,11 @@ void VatEFSPlugin::OnTimer(int counter)
             return;
         }
 
+        // Retry bind if a prior attempt failed (e.g. second EuroScope held 17772)
+        if (udpReceiveSocket == nullptr) {
+            InitializeUdpReceiveSocket();
+        }
+
         // Receive UDP messages (non-blocking)
         ReceiveUdpMessages();
 
@@ -909,6 +927,8 @@ void VatEFSPlugin::OnTimer(int counter)
         PollOwnershipChanges();
         // VCH H/S (ann 4) + CTL (ann 3) — no CAD DataType callback.
         PollVchAnnotationChanges();
+        // ES XFL (exit coordination altitude) — no CAD DataType callback.
+        PollXflChanges();
         // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.
         // Heartbeat every 5s refreshes backend local-prefer TTL without re-sending all times
         // (avoids locking in a corrupt mid-write read for untouched callsigns).
@@ -1077,6 +1097,21 @@ std::string VatEFSPlugin::GetCdmTsac(const std::string &callsign)
     return "";
 }
 
+std::string VatEFSPlugin::GetCdmTobt(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        // ASRT/TSAC/TOBT/TSAT/... — field 2 = TOBT
+        if (parts.size() <= 2) return "";
+        return NormalizeCdmHhmm(parts[2]);
+    } catch (...) {
+    }
+    return "";
+}
+
 std::string VatEFSPlugin::GetCdmTsat(const std::string &callsign)
 {
     try {
@@ -1087,6 +1122,21 @@ std::string VatEFSPlugin::GetCdmTsat(const std::string &callsign)
         // ASRT/TSAC/TOBT/TSAT/... — field 3 is what EuroScope CDM displays
         if (parts.size() <= 3) return "";
         return NormalizeCdmHhmm(parts[3]);
+    } catch (...) {
+    }
+    return "";
+}
+
+std::string VatEFSPlugin::GetCdmTtot(const std::string &callsign)
+{
+    try {
+        EuroScopePlugIn::CFlightPlan fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(0);
+        auto parts = SplitCdmAnnotation(ann);
+        // ASRT/TSAC/TOBT/TSAT/TTOT/... — field 4 = TTOT
+        if (parts.size() <= 4) return "";
+        return NormalizeCdmHhmm(parts[4]);
     } catch (...) {
     }
     return "";
@@ -1185,24 +1235,22 @@ static bool ResolveCdmDataDirectory(char *dir, size_t dirSize)
 void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
 {
     try {
-        char dir[_MAX_PATH];
-        if (!ResolveCdmDataDirectory(dir, sizeof(dir))) return;
-
-        static std::string lastCdmDirLogged;
-        if (lastCdmDirLogged != dir) {
-            lastCdmDirLogged = dir;
-            DebugMessage(std::string("CDM_data dir: ") + dir);
-        }
-
-        std::string pattern = std::string(dir) + "\\CDM_data_*.txt";
-        WIN32_FIND_DATAA fd{};
-        HANDLE hFind = FindFirstFileA(pattern.c_str(), &fd);
-        if (hFind == INVALID_HANDLE_VALUE) return;
-
         std::map<std::string, std::string> snapshot;
         nlohmann::json flights = nlohmann::json::array();
         bool readOk = true;
 
+        char dir[_MAX_PATH];
+        if (ResolveCdmDataDirectory(dir, sizeof(dir))) {
+            static std::string lastCdmDirLogged;
+            if (lastCdmDirLogged != dir) {
+                lastCdmDirLogged = dir;
+                DebugMessage(std::string("CDM_data dir: ") + dir);
+            }
+
+            std::string pattern = std::string(dir) + "\\CDM_data_*.txt";
+            WIN32_FIND_DATAA fd{};
+            HANDLE hFind = FindFirstFileA(pattern.c_str(), &fd);
+            if (hFind != INVALID_HANDLE_VALUE) {
         do {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             std::string path = std::string(dir) + "\\" + fd.cFileName;
@@ -1268,12 +1316,23 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
                 std::string asrt = GetCdmAsrt(callsign);
                 std::string tsac = GetCdmTsac(callsign);
                 std::string ctoc = GetCdmCtoc(callsign);
-                // Annotation TSAT leads CDM_data_*.txt (file often has TOBT before TSAT is written)
+                // Annotation fills gaps / leads file (CDM_data often lags strip times)
+                if (tobt.empty()) {
+                    std::string annTobt = GetCdmTobt(callsign);
+                    if (!annTobt.empty()) tobt = annTobt;
+                }
                 std::string annTsat = GetCdmTsat(callsign);
                 if (!annTsat.empty()) tsat = annTsat;
+                if (ttot.empty()) {
+                    std::string annTtot = GetCdmTtot(callsign);
+                    if (!annTtot.empty()) ttot = annTtot;
+                }
 
-                // Require at least TOBT or TSAT to accept the row (reject torn numeric junk)
-                if (tobt.empty() && tsat.empty()) continue;
+                // Accept row with times or annotation-only CDM (TSAC/ASRT/CTOC)
+                if (tobt.empty() && tsat.empty() && tsac.empty() && asrt.empty() &&
+                    ctoc.empty() && setBy.empty()) {
+                    continue;
+                }
 
                 std::string key = tobt + "|" + tsat + "|" + ttot + "|" + ctot + "|" + reason + "|" + setBy + "|" + asrt + "|" + tsac + "|" + ctoc;
                 snapshot[callsign] = key;
@@ -1303,10 +1362,64 @@ void VatEFSPlugin::PollCdmDataFiles(bool sendHeartbeat)
             }
         } while (FindNextFileA(hFind, &fd));
         FindClose(hFind);
+            }
+        }
 
         if (!readOk) {
             // Do not swap snapshot or apply partial/torn data
             return;
+        }
+
+        // CDM_data_*.txt often omits flights that still have strip annotation times
+        // (TSAT/TSAC/ASRT/CTOC). Scan ESSA deps so EFS sees what EuroScope shows.
+        for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
+             fp = FlightPlanSelectNext(fp)) {
+            if (!FilterFlightPlan(fp)) continue;
+            const char *csRaw = fp.GetCallsign();
+            if (!csRaw || !csRaw[0]) continue;
+            std::string callsign = csRaw;
+            for (auto &c : callsign) c = (char)std::toupper((unsigned char)c);
+            if (!IsValidCdmCallsign(callsign)) continue;
+            if (snapshot.find(callsign) != snapshot.end()) continue; // already from file
+
+            const char *origin = fp.GetFlightPlanData().GetOrigin();
+            if (!origin || _stricmp(origin, "ESSA") != 0) continue;
+
+            std::string tobt = GetCdmTobt(callsign);
+            std::string tsat = GetCdmTsat(callsign);
+            std::string ttot = GetCdmTtot(callsign);
+            std::string setBy = GetCdmTobtSetBy(callsign);
+            std::string asrt = GetCdmAsrt(callsign);
+            std::string tsac = GetCdmTsac(callsign);
+            std::string ctoc = GetCdmCtoc(callsign);
+            if (tobt.empty() && tsat.empty() && tsac.empty() && asrt.empty() &&
+                ctoc.empty() && setBy.empty()) {
+                continue;
+            }
+
+            std::string key = tobt + "|" + tsat + "|" + ttot + "|||" + setBy + "|" + asrt + "|" + tsac + "|" + ctoc;
+            snapshot[callsign] = key;
+            auto prev = lastCdmFileSnapshot.find(callsign);
+            if (prev != lastCdmFileSnapshot.end() && prev->second == key) continue;
+
+            DebugMessage("cdmAnn " + callsign + " TOBT=" + (tobt.empty() ? "-" : tobt) +
+                         " TSAT=" + (tsat.empty() ? "-" : tsat) +
+                         " setBy=" + (setBy.empty() ? "-" : setBy) +
+                         " ASRT=" + (asrt.empty() ? "-" : asrt) +
+                         " TSAC=" + (tsac.empty() ? "-" : tsac) +
+                         " CTOC=" + (ctoc.empty() ? "-" : ctoc));
+
+            nlohmann::json f = nlohmann::json::object();
+            f["callsign"] = callsign;
+            f["airport"] = "ESSA";
+            if (!tobt.empty()) f["tobt"] = tobt;
+            if (!tsat.empty()) f["tsat"] = tsat;
+            if (!ttot.empty()) f["ttot"] = ttot;
+            f["tobtSetBy"] = setBy;
+            f["asrt"] = asrt;
+            f["tsac"] = tsac;
+            f["ctoc"] = ctoc;
+            flights.push_back(f);
         }
 
         lastCdmFileSnapshot.swap(snapshot);
@@ -1582,6 +1695,12 @@ void VatEFSPlugin::Refresh()
             message["ahdg"] = 0;
             message["direct"] = "";
         }
+        AppendXfl(message, FlightPlan);
+        {
+            const char *cs = FlightPlan.GetCallsign();
+            if (cs && cs[0] != '\0')
+                lastXflSnapshot[cs] = message.value("xfl", 0);
+        }
         SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
         // VCH hold short HS (ann 4) + CTL (ann 3)
         {
@@ -1728,9 +1847,15 @@ void VatEFSPlugin::InitializeUdpReceiveSocket()
         localAddr.sin_port = htons(17772);
         localAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-        // Bind socket
+        // Bind socket (17772 = receive from backend). 10048 = another ES/VatEFS already bound.
         if (bind(sock, (sockaddr *)&localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
-            DisplayMessage("UDP bind failed: " + std::to_string(WSAGetLastError()));
+            const int err = WSAGetLastError();
+            if (err == 10048) {
+                DisplayMessage(
+                    "UDP 17772 in use (another EuroScope/VatEFS?) - EFS commands half-duplex until free");
+            } else {
+                DisplayMessage("UDP bind failed: " + std::to_string(err));
+            }
             closesocket(sock);
             return;
         }
@@ -2186,14 +2311,27 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         bool amend = false;
                         auto slashPos = firstTerm.find('/');
                         if (sid.empty()) {
-                            // Clear SID: SID/rwy → ADEP/rwy (leave ICAO/rwy alone)
+                            // Clear SID: SID/rwy → ADEP/rwy (leave ICAO/rwy alone).
+                            // If SID's rwy differs from assigned dep rwy, use assigned (used) rwy.
                             if (slashPos != std::string::npos) {
                                 std::string prefix = firstTerm.substr(0, slashPos);
                                 std::string existingRwy = firstTerm.substr(slashPos + 1);
                                 if (isAirportIcao(prefix)) {
-                                    DebugMessage("assignSid: clear skipped (already " + firstTerm + ")");
+                                    // Already ADEP/rwy — update rwy if assigned dep differs
+                                    if (!adep.empty() && !currentRwy.empty()
+                                        && existingRwy != currentRwy) {
+                                        newRoute = adep + "/" + currentRwy;
+                                        if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
+                                        amend = true;
+                                    } else {
+                                        DebugMessage("assignSid: clear skipped (already " + firstTerm + ")");
+                                    }
                                 } else if (!adep.empty() && !existingRwy.empty()) {
-                                    newRoute = adep + "/" + existingRwy;
+                                    std::string rwy = existingRwy;
+                                    if (!currentRwy.empty() && existingRwy != currentRwy) {
+                                        rwy = currentRwy;
+                                    }
+                                    newRoute = adep + "/" + rwy;
                                     if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
                                     amend = true;
                                 } else if (!restOfRoute.empty()) {
@@ -2883,6 +3021,50 @@ void VatEFSPlugin::PollVchAnnotationChanges()
             message["clearedToLand"] = ctl;
         }
         PostJson(message, "PollVchAnnotationChanges");
+    }
+}
+
+void VatEFSPlugin::AppendXfl(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan,
+                             std::stringstream *out)
+{
+    int xfl = 0;
+    try {
+        if (FlightPlan.IsValid())
+            xfl = FlightPlan.GetExitCoordinationAltitude();
+    } catch (...) {
+        xfl = 0;
+    }
+    if (xfl < 0 || xfl > 100000) xfl = 0;
+    message["xfl"] = xfl;
+    if (out) *out << " xfl " << xfl;
+}
+
+void VatEFSPlugin::PollXflChanges()
+{
+    for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
+         fp = FlightPlanSelectNext(fp)) {
+        if (!FilterFlightPlan(fp)) continue;
+        const char *csRaw = fp.GetCallsign();
+        if (!csRaw || csRaw[0] == '\0') continue;
+        std::string cs = csRaw;
+
+        nlohmann::json probe = nlohmann::json::object();
+        AppendXfl(probe, fp);
+        const int xfl = probe.value("xfl", 0);
+
+        auto it = lastXflSnapshot.find(cs);
+        if (it != lastXflSnapshot.end() && it->second == xfl) continue;
+
+        DebugMessage(std::string("XFL change ") + cs + ": " +
+                     (it != lastXflSnapshot.end() ? std::to_string(it->second) : "(none)") +
+                     " -> " + std::to_string(xfl));
+        lastXflSnapshot[cs] = xfl;
+
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        message["xfl"] = xfl;
+        PostJson(message, "PollXflChanges");
     }
 }
 

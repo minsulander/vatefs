@@ -67,10 +67,19 @@ function findEseFile(euroscopeDir: string, packageFilter?: string): string | und
  * Load SID and COPX data from the latest .ese file in the EuroScope directory.
  * Returns counts of loaded SIDs and COPX entries.
  */
+let lastSidLoad = { ok: false, sidCount: 0, copxCount: 0 }
+
+/** Health for Parsing status popup */
+export function getSidDataHealth(): { ok: boolean; detail: string } {
+    if (!lastSidLoad.ok) return { ok: false, detail: "Not loaded" }
+    return { ok: true, detail: `Loaded (${lastSidLoad.sidCount} SID, ${lastSidLoad.copxCount} COPX)` }
+}
+
 export function loadSidData(euroscopeDir: string, packageFilter?: string): { sidCount: number; copxCount: number } {
     const eseFile = findEseFile(euroscopeDir, packageFilter)
     if (!eseFile) {
         console.warn('No .ese sector file found')
+        lastSidLoad = { ok: false, sidCount: 0, copxCount: 0 }
         return { sidCount: 0, copxCount: 0 }
     }
 
@@ -130,6 +139,7 @@ export function loadSidData(euroscopeDir: string, packageFilter?: string): { sid
     }
 
     console.log(`Loaded ${sidCount} SIDs and ${copxCount} COPX entries from ${eseFile}`)
+    lastSidLoad = { ok: sidCount > 0 || copxCount > 0, sidCount, copxCount }
     return { sidCount, copxCount }
 }
 

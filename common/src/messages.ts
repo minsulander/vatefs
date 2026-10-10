@@ -43,11 +43,55 @@ export interface RefreshMessage {
     reason?: string  // Optional reason for logging/debugging
 }
 
+/** One row in Connection / Parsing status (OK uses normal colour; !ok is error red). */
+export interface FeedStatusItem {
+    ok: boolean
+    /** Short status text, e.g. "Connected", "Not found", "Loaded (42)" */
+    detail: string
+}
+
+/**
+ * Live + startup data-feed health for the Connection popup.
+ * Network feeds refresh while running; local/parsing feeds are mostly startup.
+ */
+export interface FeedsStatus {
+    // Network
+    plugin: FeedStatusItem
+    hoppie: FeedStatusItem
+    viff: FeedStatusItem
+    atis: FeedStatusItem
+    afv: FeedStatusItem
+    ctr: FeedStatusItem
+    // Local / parsing
+    euroscopeDir: FeedStatusItem
+    hoppieConfig: FeedStatusItem
+    cdmLocal: FeedStatusItem
+    stands: FeedStatusItem
+    eseSid: FeedStatusItem
+    eseAirspace: FeedStatusItem
+    topskyAirspace: FeedStatusItem
+}
+
 export interface StatusMessage {
     type: 'status'
     callsign: string      // Controller callsign (e.g., 'ESGG_TWR')
     airports: string[]    // Configured / active airports (e.g., ['ESGG', 'ESGT'])
     role?: string         // Controller role (e.g., 'DEL', 'GND', 'TWR')
+    /** EuroScope position / SI (e.g. OS, TW) */
+    positionId?: string
+    /**
+     * True while the EuroScope plugin is sending UDP (myselfUpdate ~5s).
+     * False when plugin unloaded / ES logged off / UDP stale. Mock mode always true.
+     */
+    pluginConnected?: boolean
+    /** Connection + parsing feed health for status popup */
+    feeds?: FeedsStatus
+    /** Backend / installed VatEFS version (from @vatefs/common) */
+    backendVersion?: string
+    /** EuroScope plugin version from loaded plugin myselfUpdate (not from disk) */
+    pluginVersion?: string
+    /** Primary frequency from myselfUpdate (MHz) */
+    frequency?: number
     isController?: boolean // Whether connected as a controller (false = observer)
     /** Multi-airport: all airports being processed */
     activeAirports?: string[]
@@ -65,6 +109,11 @@ export interface StatusMessage {
     essaRoles?: string[]
     /** True when roles were chosen manually */
     essaRolesManual?: boolean
+    /**
+     * ESSA TWR AOR split: runway ends we cover (e.g. 01L,19R).
+     * Undefined = all runways (solo / no split). Used to hide MAP/breakout for uncovered ARR.
+     */
+    essaCoveredRunways?: string[]
 }
 
 export interface DclStatusMessage {
@@ -84,6 +133,37 @@ export interface HoppieMessage {
 export interface AtisUpdateMessage {
     type: 'atisUpdate'
     airports: AirportAtisInfo[]
+}
+
+/** AUP R16 ("R16 utökad") status — see backend/src/aup. */
+export interface AupR16Status {
+    /** R16/ESR16 active now and upper limit > 1600 ft */
+    active: boolean
+    /** Highest upper limit among active R16 rows (ft) */
+    topAltitudeFt: number | null
+    /** Active window start / end (ISO UTC) */
+    from: string | null
+    to: string | null
+    /** ESSA RWY config the client MAY apply in AUTO mode (never in manual lock) */
+    suggestConfigId: '9C' | '15C' | null
+    /**
+     * AUP fetch/parse outcome for UI messaging:
+     * - ok: plan loaded (active may still be false if not utökad / outside window)
+     * - error: fetch/parse failed
+     * - pending: not yet attempted
+     */
+    fetchStatus?: 'ok' | 'error' | 'pending'
+}
+
+export interface AupR16Message extends AupR16Status {
+    type: 'aupR16'
+}
+
+/** Active RWY occupied/closed flags — synced across EFS clients (not localStorage). */
+export interface RwyFlagsMessage {
+    type: 'rwyFlags'
+    /** Flag ids: `rwyOccupied:runway_08_26`, `rwyClosed:runway_01L_19R`, … */
+    active: string[]
 }
 
 export interface ConfigInfo {
@@ -143,13 +223,18 @@ export interface DeletedStripsMessage {
     strips: DeletedStripInfo[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | AupR16Message | RwyFlagsMessage
 
 // Client -> Server messages
 
 export interface RequestMessage {
     type: 'request'
     request: 'layout' | 'strips' | 'refresh'
+}
+
+/** Re-parse local EuroScope/data files and refresh network feeds */
+export interface ReloadFeedsMessage {
+    type: 'reloadFeeds'
 }
 
 export interface MoveStripMessage {
@@ -159,6 +244,14 @@ export interface MoveStripMessage {
     targetSectionId: string
     position?: number
     isBottom: boolean
+}
+
+/** Freeze top-zone strip order (e.g. enter MAN sort) — ids top→bottom */
+export interface ReorderStripsMessage {
+    type: 'reorderStrips'
+    bayId: string
+    sectionId: string
+    stripIds: string[]
 }
 
 export interface SetGapMessage {
@@ -226,6 +319,11 @@ export interface DclSendMessage {
     type: 'dclSend'
     stripId: string
     remarks: string
+    /**
+     * Controller-initiated clearance (no prior pilot REQUEST).
+     * Same CLD CPDLC as request-flow send; must not send RCD/STANDBY ack.
+     */
+    proactive?: boolean
 }
 
 export interface DclSetModeMessage {
@@ -240,10 +338,10 @@ export interface SwitchConfigMessage {
 
 export interface CreateStripMessage {
     type: 'createStrip'
-    stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+    stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
     callsign?: string           // For VFR DEP/ARR/CROSS
     aircraftType?: string       // For VFR DEP/ARR
-    airport?: string            // Airport for VFR origin/dest, CROSS/NOTE column placement
+    airport?: string            // Airport for VFR origin/dest, CROSS/NOTE/VEHICLE column placement
     targetBayId?: string        // If dragged to a specific section
     targetSectionId?: string
     position?: number
@@ -253,6 +351,14 @@ export interface CreateStripMessage {
 export interface UpdateNoteMessage {
     type: 'updateNote'
     stripId: string
+    text: string
+}
+
+/** Update a field on a local vehicle strip (C/S, HP, STD) — no EuroScope sync */
+export interface UpdateVehicleStripMessage {
+    type: 'updateVehicleStrip'
+    stripId: string
+    field: 'callsign' | 'hp' | 'std'
     text: string
 }
 
@@ -305,10 +411,15 @@ export interface ViffUpdateTobtMessage {
     tobt: string  // HHMM
 }
 
-/** Set TOBT=now then REA (sequential on server) */
+/**
+ * Set TOBT to now (UTC HHMM) then REA (sequential on server).
+ * Optional `tobt` is ignored — Ready always uses current UTC time.
+ */
 export interface ViffReadyTobtMessage {
     type: 'viffReadyTobt'
     stripId: string
+    /** @deprecated Ignored; server always sets TOBT to now UTC */
+    tobt?: string
 }
 
 /** Toggle Ready Startup: ASRT + REA (CDM TAG_FUNC_TOGGLEASRTREA) */
@@ -375,7 +486,15 @@ export interface SetEssaRolesMessage {
     manual: boolean
 }
 
-export type ClientMessage = RequestMessage | MoveStripMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage
+/** Toggle or set a RWY occupied/closed flag (broadcast to all clients). */
+export interface SetRwyFlagMessage {
+    type: 'setRwyFlag'
+    /** Full flag id: `rwyOccupied:runway_08_26` or `rwyClosed:…` */
+    flagId: string
+    active: boolean
+}
+
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetRwyFlagMessage
 
 // Type guards for message parsing
 
@@ -389,7 +508,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
            type === 'controllers' || type === 'userSettings' || type === 'notify' ||
-           type === 'deletedStrips'
+           type === 'deletedStrips' || type === 'aupR16' || type === 'rwyFlags'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -397,5 +516,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'moveStrip' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setRwyFlag'
 }

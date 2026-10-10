@@ -1,130 +1,173 @@
 <template>
-  <v-dialog v-model="dialogOpen" max-width="280" content-class="clnc-dialog-wrapper">
-    <div class="clnc-dialog">
-      <div class="clnc-header">
-        <span>{{ strip.callsign }}</span>
-        <span class="clnc-header-right">
-          <span v-if="strip.isSlow || hasSlowRemark(strip.remarks)" class="clnc-slow-tag">SLOW</span>
-          <span class="clnc-header-info">{{ strip.flightRules }} {{ strip.aircraftType }}/{{ strip.wakeTurbulence }}</span>
-          <span v-if="strip.stand" class="clnc-header-info">{{ strip.stand }}</span>
+  <v-dialog v-model="dialogOpen" max-width="320" content-class="clnc-dialog-wrapper">
+    <div class="efs-popup-menu efs-popup-menu--wide clnc-dialog" @click.stop>
+      <div class="efs-popup-header">Clearance</div>
+      <div class="efs-popup-subheader clnc-subheader">
+        <span class="clnc-callsign">{{ strip.callsign }}</span>
+        <span class="clnc-header-meta">
+          <span v-if="strip.isSlow || hasSlowRemark(strip.remarks)" class="efs-popup-chip active clnc-slow-tag">SLOW</span>
+          <span>{{ strip.flightRules }} {{ strip.aircraftType }}/{{ strip.wakeTurbulence }}</span>
+          <span v-if="strip.stand">{{ strip.stand }}</span>
         </span>
       </div>
-      <div v-if="departureName && store.myAirports.length > 1" class="clnc-destination">
-        <span class="clnc-dest-icao">{{ strip.adep }}</span>
-        <span class="clnc-dest-name">{{ departureName }}</span>
-      </div>
-      <div v-if="destinationName" class="clnc-destination clnc-clickable" @click="showRoute = !showRoute">
-        <span class="clnc-dest-icao">{{ strip.ades }}</span>
-        <span class="clnc-dest-name">{{ destinationName }}</span>
-      </div>
-      <div v-if="showRoute && strip.route" class="clnc-route">{{ strip.route }}</div>
-      <div class="clnc-fields">
-        <div class="clnc-row"><span class="clnc-label">RWY</span><span class="clnc-value clnc-clickable" @click="openDropdown('rwy')">{{ strip.runway || '---' }}</span></div>
-        <div class="clnc-row"><span class="clnc-label">SID</span><span class="clnc-value clnc-clickable" @click="openDropdown('sid')">{{ clearanceSidName || '---' }}</span></div>
-        <div
+
+      <button
+        v-if="departureName && store.myAirports.length > 1"
+        type="button"
+        class="efs-popup-item efs-popup-item--stack clnc-airport"
+        disabled
+      >
+        <span class="efs-popup-item-title">{{ strip.adep }}</span>
+        <span class="efs-popup-item-sub">{{ departureName }}</span>
+      </button>
+      <button
+        v-if="destinationName"
+        type="button"
+        class="efs-popup-item efs-popup-item--stack clnc-airport"
+        @click="showRoute = !showRoute"
+      >
+        <span class="efs-popup-item-title">{{ strip.ades }}</span>
+        <span class="efs-popup-item-sub">{{ destinationName }}</span>
+      </button>
+      <div
+        v-if="showRoute && strip.route"
+        class="efs-popup-meta clnc-route"
+        @mousedown.stop
+        @click.stop
+      >{{ strip.route }}</div>
+
+      <div class="efs-popup-list clnc-fields">
+        <button type="button" class="efs-popup-item clnc-field-row" @click="onRwyClick">
+          <span class="clnc-field-label">RWY</span>
+          <span class="clnc-field-value">{{ strip.runway || '---' }}</span>
+        </button>
+        <button type="button" class="efs-popup-item clnc-field-row" @click="onSidClick">
+          <span class="clnc-field-label">SID</span>
+          <span class="clnc-field-value">{{ clearanceSidName || '---' }}</span>
+        </button>
+        <button
           v-if="showAhdgRow"
-          class="clnc-row"
+          type="button"
+          class="efs-popup-item clnc-field-row"
+          @click="onAhdClick"
         >
-          <span class="clnc-label">AHDG</span>
-          <span class="clnc-value clnc-clickable" @click="openDropdown('hdg')">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span>
+          <span class="clnc-field-label">AHDG</span>
+          <span class="clnc-field-value">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span>
+        </button>
+        <button
+          type="button"
+          class="efs-popup-item clnc-field-row"
+          @click="onCflClick"
+        >
+          <span class="clnc-field-label">CFL</span>
+          <span class="clnc-field-value">{{ strip.clearedAltitude || '---' }}</span>
+        </button>
+        <button
+          type="button"
+          class="efs-popup-item clnc-field-row"
+          :class="{ 'is-disabled': !strip.canResetSquawk }"
+          :title="assrTitle"
+          @click="onAssrClick"
+        >
+          <span class="clnc-field-label">ASSR</span>
+          <span class="clnc-field-value">{{ strip.squawk || '----' }}</span>
+        </button>
+        <div v-if="showCdmTimes && strip.tsat" class="efs-popup-item clnc-field-row is-disabled">
+          <span class="clnc-field-label">TSAT</span>
+          <span class="clnc-field-value">{{ strip.tsat }}</span>
         </div>
-        <div class="clnc-row">
-          <span class="clnc-label">CFL</span>
-          <span
-            ref="cflValueEl"
-            class="clnc-value clnc-clickable"
-            @click="onCflClick"
-          >{{ strip.clearedAltitude || '---' }}</span>
-        </div>
-        <div class="clnc-row">
-          <span class="clnc-label">ASSR</span>
-          <span
-            class="clnc-value"
-            :class="{ 'clnc-clickable': strip.canResetSquawk }"
-            :title="assrTitle"
-            @click="onAssrClick"
-            @dblclick="onAssrDblClick"
-          >{{ strip.squawk || '----' }}</span>
-        </div>
-        <div v-if="showCdmTimes && strip.tsat" class="clnc-row">
-          <span class="clnc-label">TSAT</span>
-          <span class="clnc-value">{{ strip.tsat }}</span>
-        </div>
-        <div v-if="showCdmTimes && strip.ctot" class="clnc-row">
-          <span class="clnc-label">CTOT</span>
-          <span class="clnc-value">{{ strip.ctot }}</span>
+        <div v-if="showCdmTimes && strip.ctot" class="efs-popup-item clnc-field-row is-disabled">
+          <span class="clnc-field-label">CTOT</span>
+          <span class="clnc-field-value">{{ strip.ctot }}</span>
         </div>
       </div>
 
-      <!-- DCL section (shown when there's a DCL request) -->
-      <div v-if="strip.dclStatus" class="clnc-dcl-section">
-        <div class="clnc-dcl-header">
-          <span class="clnc-dcl-label">DCL</span>
+      <!-- Active REQUEST / SENT flow (pilot-initiated) -->
+      <template v-if="strip.dclStatus === 'REQUEST' || strip.dclStatus === 'SENT'">
+        <div class="efs-popup-section">
+          DCL
           <span class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
         </div>
-        <div v-if="strip.dclMessage" class="clnc-dcl-message">{{ strip.dclMessage }}</div>
-        <div v-if="strip.dclClearance" class="clnc-dcl-preview">{{ strip.dclClearance }}</div>
-        <div v-if="strip.dclStatus === 'REQUEST'" class="clnc-remarks-row">
-          <span class="clnc-label">RMK</span>
-          <input v-model="remarks" class="clnc-remarks-input" placeholder="Remarks..." />
+        <div v-if="strip.dclMessage" class="efs-popup-meta clnc-dcl-message">{{ strip.dclMessage }}</div>
+        <div v-if="strip.dclClearance" class="efs-popup-meta clnc-dcl-preview">{{ strip.dclClearance }}</div>
+        <div v-if="strip.dclStatus === 'REQUEST'" class="efs-popup-search">
+          <span class="clnc-field-label">RMK</span>
+          <input v-model="remarks" class="efs-popup-search-input" placeholder="Remarks…" />
         </div>
-      </div>
-
-      <!-- Dropdown overlay (RWY / SID / AHDG) -->
-      <div v-if="activeDropdown" class="clnc-dropdown-overlay" @click="activeDropdown = null">
-        <div class="clnc-dropdown" :style="dropdownStyle" @click.stop>
-          <div ref="dropdownScrollRef" class="clnc-dropdown-scroll">
-            <div v-for="option in dropdownOptions" :key="option.value"
-              class="clnc-dropdown-item"
-              :class="{ 'clnc-dropdown-selected': option.selected }"
-              @click="selectOption(option.value)">
-              {{ option.label }}
-            </div>
-            <div v-if="dropdownOptions.length === 0" class="clnc-dropdown-empty">
-              {{ activeDropdown === 'sid' ? 'No SIDs for this runway' : 'No options' }}
-            </div>
-          </div>
+      </template>
+      <!-- Controller-initiated DCL when pilot is on Hoppie -->
+      <template v-else-if="showProactiveDcl">
+        <div class="efs-popup-section">
+          DCL
+          <span v-if="strip.dclStatus" class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
+          <span class="clnc-dcl-status dcl-status-online">ONLINE</span>
         </div>
-      </div>
+        <div v-if="proactivePreview || strip.dclClearance" class="efs-popup-meta clnc-dcl-preview">{{ proactivePreview || strip.dclClearance }}</div>
+        <div class="efs-popup-search">
+          <span class="clnc-field-label">RMK</span>
+          <input v-model="remarks" class="efs-popup-search-input" placeholder="Remarks…" />
+        </div>
+      </template>
+      <template v-else-if="strip.dclStatus">
+        <div class="efs-popup-section">
+          DCL
+          <span class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
+        </div>
+        <div v-if="strip.dclMessage" class="efs-popup-meta clnc-dcl-message">{{ strip.dclMessage }}</div>
+        <div v-if="strip.dclClearance" class="efs-popup-meta clnc-dcl-preview">{{ strip.dclClearance }}</div>
+      </template>
 
-      <CflMenu
-        v-model="cflMenuOpen"
-        :strip="strip"
-        :target="cflMenuTarget"
-        :z-index="2700"
-      />
+      <!-- Same menus as strip data boxes (above dialog) -->
+      <RwyMenu v-model="rwyMenuOpen" :strip="strip" :target="menuTarget" :z-index="menuZ" />
+      <SidRouteMenu v-model="sidMenuOpen" :strip="strip" :target="menuTarget" :z-index="menuZ" />
+      <AhdMenu v-model="ahdMenuOpen" :strip="strip" :target="menuTarget" :z-index="menuZ" />
+      <CflMenu v-model="cflMenuOpen" :strip="strip" :target="menuTarget" :z-index="menuZ" />
 
-      <div class="clnc-actions" v-if="strip.dclStatus === 'REQUEST'">
-        <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
-        <button class="clnc-btn clnc-btn-reject" @click="onReject">Reject</button>
-        <button class="clnc-btn clnc-btn-send" :disabled="!canSendDcl" @click="onSend">Send</button>
+      <div v-if="strip.dclStatus === 'REQUEST'" class="clnc-actions">
+        <button type="button" class="efs-popup-footer clnc-action" @click="onCancel">Cancel</button>
+        <button type="button" class="efs-popup-footer clnc-action clnc-action-reject" @click="onReject">Reject</button>
+        <button type="button" class="efs-popup-footer clnc-action" :disabled="!canSendDcl" @click="onSend">Send</button>
       </div>
-      <div class="clnc-actions" v-else-if="strip.dclStatus === 'SENT'">
-        <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
-        <button class="clnc-btn clnc-btn-reject" @click="onReject">Reject</button>
+      <div v-else-if="strip.dclStatus === 'SENT'" class="clnc-actions clnc-actions-2">
+        <button type="button" class="efs-popup-footer clnc-action" @click="onCancel">Cancel</button>
+        <button type="button" class="efs-popup-footer clnc-action clnc-action-reject" @click="onReject">Reject</button>
       </div>
-      <div class="clnc-actions" v-else>
-        <button class="clnc-btn clnc-btn-cancel" @click="onCancel">Cancel</button>
-        <button class="clnc-btn clnc-btn-ok" :disabled="okDisabled" @click="onOk">OK</button>
+      <div v-else-if="showProactiveDcl" class="clnc-actions">
+        <button type="button" class="efs-popup-footer clnc-action" @click="onCancel">Cancel</button>
+        <button type="button" class="efs-popup-footer clnc-action" :disabled="okDisabled" @click="onOk">OK</button>
+        <button
+          type="button"
+          class="efs-popup-footer clnc-action clnc-action-dcl"
+          :disabled="!canSendDcl"
+          title="Send data-link clearance (no prior pilot request)"
+          @click="onProactiveDcl"
+        >DCL</button>
+      </div>
+      <div v-else class="clnc-actions clnc-actions-2">
+        <button type="button" class="efs-popup-footer clnc-action" @click="onCancel">Cancel</button>
+        <button type="button" class="efs-popup-footer clnc-action" :disabled="okDisabled" @click="onOk">OK</button>
       </div>
     </div>
   </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import {
-  formatSidForDisplay,
   formatTrackSidDisplay,
   hasForcedSidInRoute,
   hasSlowRemark,
   isIfrSidEligible,
   isTrackSidName,
+  sidsMatch,
   withSlowRemark,
 } from '@vatefs/common'
+import SidRouteMenu from './SidRouteMenu.vue'
+import RwyMenu from './RwyMenu.vue'
 import CflMenu from './CflMenu.vue'
+import AhdMenu from './AhdMenu.vue'
 
 const props = defineProps<{
   strip: FlightStrip
@@ -146,6 +189,10 @@ const okDisabled = computed(() => !props.strip.canEditClearance)
 
 // DCL state
 const remarks = ref('')
+/** Pilot is online on Hoppie — enables proactive DCL when no REQUEST/SENT flow. */
+const hoppieOnline = ref(false)
+const proactivePreview = ref<string | null>(null)
+let hoppieCheckSeq = 0
 
 const canSendDcl = computed(() => {
   const s = props.strip
@@ -154,6 +201,14 @@ const canSendDcl = computed(() => {
   const cflValid = !!s.clearedAltitude
   const squawkValid = !!s.squawk && s.squawk !== '----'
   return sidValid && cflValid && squawkValid
+})
+
+/** Show proactive DCL only when Hoppie connected, pilot online, and no active request/send. */
+const showProactiveDcl = computed(() => {
+  if (store.dclStatus !== 'connected') return false
+  if (!hoppieOnline.value) return false
+  const s = props.strip.dclStatus
+  return !s || s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED' || s === 'DONE'
 })
 
 const dclStatusClass = computed(() => {
@@ -167,6 +222,28 @@ const dclStatusClass = computed(() => {
     default: return ''
   }
 })
+
+async function checkHoppieOnline() {
+  const seq = ++hoppieCheckSeq
+  hoppieOnline.value = false
+  proactivePreview.value = null
+  if (store.dclStatus !== 'connected') return
+  const status = props.strip.dclStatus
+  if (status === 'REQUEST' || status === 'SENT') return
+  try {
+    const res = await fetch(`/api/hoppie/online/${encodeURIComponent(props.strip.callsign)}`)
+    if (!res.ok || seq !== hoppieCheckSeq) return
+    const data = (await res.json()) as { online?: boolean; clearancePreview?: string }
+    if (seq !== hoppieCheckSeq) return
+    hoppieOnline.value = !!data.online
+    proactivePreview.value = data.clearancePreview ?? null
+  } catch {
+    if (seq === hoppieCheckSeq) {
+      hoppieOnline.value = false
+      proactivePreview.value = null
+    }
+  }
+}
 
 /** TOBT/TSAT/CTOT only for IFR (I/Y) departures */
 const showCdmTimes = computed(() =>
@@ -205,15 +282,14 @@ async function fetchDepartureName() {
   }
 }
 
-// Dropdown scroll ref
-const dropdownScrollRef = ref<HTMLElement | null>(null)
-const cflValueEl = ref<HTMLElement | null>(null)
+/** Above v-dialog (default ~2400) — same menus as strip boxes */
+const menuZ = 2700
+const menuTarget = ref<[number, number]>([0, 0])
+const rwyMenuOpen = ref(false)
+const sidMenuOpen = ref(false)
+const ahdMenuOpen = ref(false)
 const cflMenuOpen = ref(false)
-const cflMenuTarget = ref<[number, number]>([0, 0])
 
-// Dropdown state
-const activeDropdown = ref<'rwy' | 'sid' | 'hdg' | null>(null)
-const availableRunways = ref<string[]>([])
 const availableSids = ref<{ name: string }[]>([])
 /** Preferred SID sort group from /api/preferred-sid (letter-group or SLOW tracks) */
 const preferredSidSortGroup = ref<string[]>([])
@@ -227,10 +303,16 @@ function normSidKey(s: string): string {
 /**
  * SID row: same preferred preview as the strip when FPL has no forced SID,
  * shown as exact ESE technical name (not PETEV 3G / 120veBABAP display form).
+ * With AHD set: show ve{TMA exit} (preferred/SID cleared).
  */
 const clearanceSidName = computed(() => {
+  // Vector mode — same as strip (ignore GetSid until SID/rwy forced)
+  if (props.strip.assignedHeading && !hasForcedSidInRoute(props.strip.route)) {
+    return store.displaySidForStrip(props.strip) || ''
+  }
   let raw = props.strip.sid || ''
   if (
+    !props.strip.assignedHeading &&
     !props.strip.clearance &&
     (props.strip.adep === 'ESSA' || props.strip.adep === 'ESMS') &&
     isIfrSidEligible(props.strip.flightRules) &&
@@ -252,8 +334,9 @@ const clearanceSidName = computed(() => {
   return raw
 })
 
+/** SLOW remarks flag drives preferred SID / CFL (not isSlow ATYP alone). */
 function isSlowForClr(): boolean {
-  return !!props.strip.isSlow || hasSlowRemark(props.strip.remarks)
+  return hasSlowRemark(props.strip.remarks)
 }
 
 function sidIsTrack(sid: string | undefined | null): boolean {
@@ -279,22 +362,7 @@ function isPreferredSidIfrDep(): boolean {
   )
 }
 
-// Fetch runways for the departure airport
-async function fetchRunways() {
-  const airport = props.strip.adep
-  if (!airport || airport === '????') return
-  try {
-    const res = await fetch(`/api/runways?airport=${airport}`)
-    if (res.ok) {
-      const data = await res.json()
-      availableRunways.value = data
-    }
-  } catch {
-    availableRunways.value = []
-  }
-}
-
-// Fetch SIDs for the current runway
+// Fetch SIDs for SID row label matching (menus fetch their own lists)
 async function fetchSids() {
   const airport = props.strip.adep
   const runway = props.strip.runway
@@ -349,6 +417,11 @@ async function applyPreferredSid(): Promise<string | undefined> {
     preferredSidMatched.value = data.sid
 
     if (mayReassign && data.sid) {
+      // Vector departure — keep ve{exit}; never force preferred SID into FPL
+      if (props.strip.assignedHeading) {
+        preferredSidMatched.value = null
+        return undefined
+      }
       const forced = hasForcedSidInRoute(props.strip.route)
       const stickyEs =
         !!props.strip.sid &&
@@ -358,8 +431,12 @@ async function applyPreferredSid(): Promise<string | undefined> {
         preferredSidMatched.value = props.strip.sid!
         return props.strip.sid
       }
-      // Always enter preferred SID on CLR open (even when GetSid already matches)
       preferredSidMatched.value = data.sid
+      // ES GetSid already matches preferred (ESE prio) — do not force into FPL
+      if (sidsMatch(props.strip.sid, data.sid)) {
+        return data.sid
+      }
+      // Wrong / missing ES SID — force preferred SID into the flight plan
       store.sendAssignment(props.strip.id, 'assignSid', data.sid)
       if (
         isIfrSidEligible(props.strip.flightRules) &&
@@ -433,169 +510,96 @@ function applyDefaultSquawk() {
   }
 }
 
-// When dialog opens, fetch data and reset remarks
+function closeFieldMenus() {
+  rwyMenuOpen.value = false
+  sidMenuOpen.value = false
+  ahdMenuOpen.value = false
+  cflMenuOpen.value = false
+}
+
+function menuCoordsFromEvent(event: MouseEvent): [number, number] {
+  let x = event.clientX
+  let y = event.clientY
+  if ((x === 0 && y === 0) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    const el = (event.currentTarget || event.target) as HTMLElement | null
+    if (el?.getBoundingClientRect) {
+      const r = el.getBoundingClientRect()
+      x = r.left + r.width / 2
+      y = r.bottom
+    }
+  }
+  return [x, y]
+}
+
+function openFieldMenu(
+  event: MouseEvent,
+  which: 'rwy' | 'sid' | 'ahd' | 'cfl',
+) {
+  menuTarget.value = menuCoordsFromEvent(event)
+  const already =
+    (which === 'rwy' && rwyMenuOpen.value) ||
+    (which === 'sid' && sidMenuOpen.value) ||
+    (which === 'ahd' && ahdMenuOpen.value) ||
+    (which === 'cfl' && cflMenuOpen.value)
+  closeFieldMenus()
+  if (already) return
+  if (which === 'rwy') rwyMenuOpen.value = true
+  else if (which === 'sid') sidMenuOpen.value = true
+  else if (which === 'ahd') ahdMenuOpen.value = true
+  else cflMenuOpen.value = true
+}
+
+function onRwyClick(event: MouseEvent) {
+  openFieldMenu(event, 'rwy')
+}
+function onSidClick(event: MouseEvent) {
+  openFieldMenu(event, 'sid')
+}
+function onAhdClick(event: MouseEvent) {
+  openFieldMenu(event, 'ahd')
+}
+function onCflClick(event: MouseEvent) {
+  openFieldMenu(event, 'cfl')
+}
+
+async function runClearancePrep() {
+  preferredSidSortGroup.value = []
+  preferredSidMatched.value = null
+  fetchDestinationName()
+  fetchDepartureName()
+  await fetchSids()
+  const preferredSid = await applyPreferredSid()
+  await applyDefaultCfl(preferredSid)
+  applyDefaultSquawk()
+}
+
+// When dialog opens, fetch data — keep existing strip remarks (do not wipe)
 watch(dialogOpen, async (open) => {
   if (open) {
-    remarks.value = ''
+    remarks.value = props.strip.remarks || ''
     preferredSidSortGroup.value = []
     preferredSidMatched.value = null
-    fetchRunways()
-    fetchDestinationName()
-    fetchDepartureName()
-    await fetchSids()
-    const preferredSid = await applyPreferredSid()
-    await applyDefaultCfl(preferredSid)
-    applyDefaultSquawk()
+    void checkHoppieOnline()
+    await runClearancePrep()
   } else {
-    activeDropdown.value = null
-    cflMenuOpen.value = false
+    closeFieldMenus()
     destinationName.value = null
     departureName.value = null
     showRoute.value = false
     preferredSidSortGroup.value = []
     preferredSidMatched.value = null
+    hoppieOnline.value = false
+    proactivePreview.value = null
   }
 })
 
-// Auto-scroll dropdown to selected item when dropdown opens
-watch(activeDropdown, (val) => {
-  if (val) {
-    nextTick(() => {
-      const container = dropdownScrollRef.value
-      if (!container) return
-      const selected = container.querySelector('.clnc-dropdown-selected') as HTMLElement | null
-      if (selected) {
-        selected.scrollIntoView({ block: 'center' })
-      }
-    })
-  }
-})
-
-// Generate heading options: 005, 010, ..., 360
-const headingOptions = (() => {
-  const opts: { label: string; value: string }[] = []
-  for (let h = 5; h <= 360; h += 5) {
-    const padded = String(h).padStart(3, '0')
-    opts.push({ label: padded, value: padded })
-  }
-  return opts
-})()
-
-const dropdownOptions = computed(() => {
-  switch (activeDropdown.value) {
-    case 'rwy':
-      return availableRunways.value.map(rwy => ({
-        label: rwy,
-        value: rwy,
-        selected: rwy === props.strip.runway
-      }))
-    case 'sid': {
-      const isVfr = props.strip.flightRules === 'V'
-      let sids = isVfr
-        ? availableSids.value.filter(sid => sid.name.startsWith('VFR'))
-        : [...availableSids.value]
-      if (!isVfr && preferredSidSortGroup.value.length > 0) {
-        const groupSet = new Set(preferredSidSortGroup.value)
-        const matched = preferredSidMatched.value
-        sids.sort((a, b) => {
-          const aIn = groupSet.has(a.name)
-          const bIn = groupSet.has(b.name)
-          if (aIn && !bIn) return -1
-          if (!aIn && bIn) return 1
-          if (aIn && bIn && matched) {
-            if (a.name === matched && b.name !== matched) return -1
-            if (b.name === matched && a.name !== matched) return 1
-          }
-          return 0
-        })
-      }
-      const currentKey = normSidKey(clearanceSidName.value || props.strip.sid || '')
-      const tmaExit = props.strip.tmaExit
-      return sids.map(sid => ({
-        label: formatSidForDisplay(sid.name, tmaExit) || sid.name,
-        value: sid.name,
-        selected: !!currentKey && normSidKey(sid.name) === currentKey
-      }))
-    }
-    case 'hdg': {
-      const current = props.strip.assignedHeading
-      return headingOptions.map(opt => ({
-        ...opt,
-        selected: opt.value === current
-      }))
-    }
-    default:
-      return []
-  }
-})
-
-const dropdownStyle = computed(() => {
-  // Position dropdown in the dialog area
-  return {}
-})
-
-async function openDropdown(field: 'rwy' | 'sid' | 'hdg') {
-  if (activeDropdown.value === field) {
-    activeDropdown.value = null
-    return
-  }
-  cflMenuOpen.value = false
-  // Always refresh RWY/SID lists when opening (runway may have just appeared from route)
-  if (field === 'rwy') {
-    await fetchRunways()
-  } else if (field === 'sid') {
-    await fetchSids()
-  }
-  activeDropdown.value = field
-}
-
-function onCflClick(event: MouseEvent) {
-  activeDropdown.value = null
-  if (cflMenuOpen.value) {
-    cflMenuOpen.value = false
-    return
-  }
-  const el = cflValueEl.value
-  if (el) {
-    const r = el.getBoundingClientRect()
-    cflMenuTarget.value = [r.left + r.width / 2, r.top + r.height / 2]
-  } else {
-    cflMenuTarget.value = [event.clientX, event.clientY]
-  }
-  cflMenuOpen.value = true
-}
-
-function selectOption(value: string) {
-  const field = activeDropdown.value
-  activeDropdown.value = null
-
-  if (!field) return
-
-  switch (field) {
-    case 'rwy':
-      store.sendAssignment(props.strip.id, 'assignDepartureRunway', value)
-      // Changing runway clears the SID
-      store.sendAssignment(props.strip.id, 'assignSid', '')
-      // Refresh SID list for the new runway
-      setTimeout(() => fetchSids(), 100)
-      break
-    case 'sid':
-      preferredSidMatched.value = value
-      store.sendAssignment(props.strip.id, 'assignSid', value)
-      // Track / SLOW SID → set SLOW remarks flag (I/Y only — never V/Z)
-      if (
-        isIfrSidEligible(props.strip.flightRules) &&
-        sidIsTrack(value) &&
-        !hasSlowRemark(props.strip.remarks)
-      ) {
-        store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
-      }
-      break
-    case 'hdg':
-      store.sendAssignment(props.strip.id, 'assignHeading', value)
-      break
-  }
-}
+// Keep SID label list in sync when runway changes via RwyMenu
+watch(
+  () => props.strip.runway,
+  () => {
+    if (dialogOpen.value) void fetchSids()
+  },
+)
 
 function onOk() {
   if (!props.strip.clearance) {
@@ -621,15 +625,21 @@ function onSend() {
   dialogOpen.value = false
 }
 
+function onProactiveDcl() {
+  store.dclSend(props.strip.id, remarks.value, true)
+  dialogOpen.value = false
+}
+
 const assrTitle = computed(() => {
   if (!props.strip.canResetSquawk) {
     return props.strip.squawk ? `ASSR ${props.strip.squawk}` : 'ASSR'
   }
-  if (!props.strip.squawk) return 'Click for new code'
-  return 'Double-click for new code'
+  return props.strip.squawk
+    ? `ASSR ${props.strip.squawk} - click for new code`
+    : 'Click for new code'
 })
 
-/** Prevent double TopSky AllocateSSR (e.g. CLR auto + click, or empty dblclick) */
+/** Prevent double TopSky AllocateSSR (e.g. CLR auto + rapid clicks) */
 let lastAssrResetAt = 0
 function requestTopskySquawk() {
   if (!props.strip.canResetSquawk) return
@@ -641,356 +651,218 @@ function requestTopskySquawk() {
 }
 
 function onAssrClick() {
-  if (!props.strip.squawk) requestTopskySquawk()
-}
-
-function onAssrDblClick() {
-  if (props.strip.squawk) requestTopskySquawk()
+  requestTopskySquawk()
 }
 </script>
 
 <style>
-/* CLNC Dialog - unscoped because v-dialog teleports content outside component */
+/* CLNC Dialog — unscoped (v-dialog teleports); chrome from efs-popup-menu.css */
 .clnc-dialog-wrapper {
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: none !important;
+  background: transparent !important;
 }
 
 .clnc-dialog {
   --s: var(--efs-scale, 1);
-  background: #2a2a2e;
-  border: 2px solid #555;
-  padding: 0;
   position: relative;
+  width: 100%;
+  max-width: min(92vw, calc(320px * var(--s)));
 }
 
-.clnc-header {
-  background: #3b7dd8;
-  color: #fff;
-  font-size: calc(15px * var(--s));
-  font-weight: bold;
-  padding: calc(6px * var(--s)) calc(12px * var(--s));
-  letter-spacing: calc(0.5px * var(--s));
+.clnc-subheader {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
+  gap: calc(4px * var(--s));
 }
 
-.clnc-header-right {
+.clnc-callsign {
+  font-size: calc(13px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.clnc-header-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: calc(6px * var(--s));
-}
-
-.clnc-header-info {
   font-size: calc(10px * var(--s));
-  font-weight: normal;
-  opacity: 0.8;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  color: #333;
 }
 
 .clnc-slow-tag {
-  font-size: calc(9px * var(--s));
-  font-weight: bold;
-  padding: calc(1px * var(--s)) calc(6px * var(--s));
-  border-radius: calc(2px * var(--s));
-  background: #f57c00;
-  color: #fff;
-  letter-spacing: calc(0.5px * var(--s));
+  min-width: 0;
+  padding: calc(1px * var(--s)) calc(5px * var(--s));
+  background: #f0c040;
+  color: #000;
+  box-shadow: inset 0 0 0 1px #a08020;
 }
 
-.clnc-destination {
+.clnc-airport {
+  border-bottom: 1px solid #888;
+}
+
+.clnc-airport .efs-popup-item-title,
+.clnc-airport .efs-popup-item-sub {
   text-align: center;
-  padding: calc(6px * var(--s)) calc(12px * var(--s)) calc(2px * var(--s));
-  border-bottom: 1px solid #444;
 }
 
-.clnc-dest-icao {
-  font-size: calc(13px * var(--s));
-  font-weight: bold;
-  color: #e0e0e0;
-  display: block;
-}
-
-.clnc-dest-name {
-  font-size: calc(10px * var(--s));
-  color: #999;
-  display: block;
-  margin-top: calc(1px * var(--s));
+.clnc-action-ok {
+  background: #1a3a6e !important;
+  color: #fff !important;
 }
 
 .clnc-route {
-  color: #ccc;
-  font-size: calc(10px * var(--s));
   word-break: break-all;
-  line-height: 1.4;
-  padding: calc(4px * var(--s)) calc(12px * var(--s)) calc(6px * var(--s));
-  border-bottom: 1px solid #444;
+  line-height: 1.35;
+  text-transform: uppercase;
+  border-bottom: 1px solid #888;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .clnc-fields {
-  padding: calc(8px * var(--s)) calc(12px * var(--s));
+  max-height: none;
 }
 
-.clnc-row {
-  display: flex;
+.clnc-field-row {
   justify-content: space-between;
-  padding: calc(4px * var(--s)) 0;
-  border-bottom: 1px solid #444;
+  gap: calc(10px * var(--s));
+  text-align: left;
 }
 
-.clnc-row:last-child {
-  border-bottom: none;
-}
-
-.clnc-label {
-  color: #aaa;
-  font-size: calc(11px * var(--s));
-  font-weight: 600;
+.clnc-field-label {
+  flex: 0 0 auto;
   min-width: calc(48px * var(--s));
-}
-
-.clnc-value {
-  color: #e0e0e0;
-  font-size: calc(13px * var(--s));
-  font-weight: bold;
-  text-align: right;
-}
-
-.clnc-clickable {
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-style: dotted;
-  text-underline-offset: 2px;
-}
-
-.clnc-clickable:hover {
-  color: #64b5f6;
-}
-
-.clnc-actions {
-  display: flex;
-  border-top: calc(1px * var(--s)) solid #555;
-}
-
-.clnc-btn {
-  flex: 1;
-  padding: calc(8px * var(--s)) 0;
-  border: none;
-  font-size: calc(12px * var(--s));
-  font-weight: bold;
-  cursor: pointer;
-  letter-spacing: calc(0.5px * var(--s));
-  min-height: max(32px, calc(32px * var(--s)));
-}
-
-.clnc-btn-cancel {
-  background: #555;
-  color: #ccc;
-  border-right: calc(1px * var(--s)) solid #666;
-}
-
-.clnc-btn-cancel:hover {
-  background: #666;
-}
-
-.clnc-btn-ok {
-  background: #2e7d32;
-  color: #fff;
-}
-
-.clnc-btn-ok:hover:not(:disabled) {
-  background: #388e3c;
-}
-
-.clnc-btn-ok:disabled {
-  background: #3a3a3a;
-  color: #666;
-  cursor: not-allowed;
-}
-
-/* DCL section */
-.clnc-dcl-section {
-  padding: calc(8px * var(--s)) calc(12px * var(--s));
-  border-top: calc(1px * var(--s)) solid #555;
-  background: #1e1e22;
-}
-
-.clnc-dcl-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: calc(6px * var(--s));
-}
-
-.clnc-dcl-label {
-  color: #aaa;
-  font-size: calc(11px * var(--s));
-  font-weight: 600;
-}
-
-.clnc-dcl-status {
   font-size: calc(10px * var(--s));
-  font-weight: bold;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #333;
+}
+
+.clnc-field-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: calc(12px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-align: right;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clnc-field-row:hover:not(:disabled):not(.is-disabled) .clnc-field-label {
+  color: var(--efs-popup-strip-white, #ebebeb);
+}
+
+.efs-popup-section .clnc-dcl-status {
+  display: inline-block;
+  margin-left: calc(8px * var(--s));
   padding: calc(1px * var(--s)) calc(6px * var(--s));
-  border-radius: calc(2px * var(--s));
+  font-size: calc(9px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+  border: 1px solid #666;
 }
 
 .dcl-status-request {
-  background: #f9a825;
+  background: #f0c040;
   color: #000;
+  border-color: #a08020;
 }
 
 .dcl-status-sent {
-  background: #2e7d32;
-  color: #fff;
+  background: #b8d4a8;
+  color: #1a3a1a;
+  border-color: #7a9a6a;
 }
 
 .dcl-status-done {
-  background: #1565c0;
-  color: #fff;
+  background: var(--efs-popup-strip-white, #ebebeb);
+  color: #1a3a6e;
+  border-color: #1a3a6e;
 }
 
 .dcl-status-error {
-  background: #c62828;
-  color: #fff;
+  background: #e8b4b4;
+  color: #6a1010;
+  border-color: #a05050;
+}
+
+.dcl-status-online {
+  background: #b8d4a8;
+  color: #1a3a1a;
+  border-color: #7a9a6a;
+}
+
+.clnc-action-dcl:hover:not(:disabled) {
+  background: #c8e0b8;
 }
 
 .clnc-dcl-message {
-  color: #999;
-  font-size: calc(9px * var(--s));
-  margin-bottom: calc(6px * var(--s));
   word-break: break-all;
+  opacity: 0.85;
 }
 
 .clnc-dcl-preview {
-  color: #e0e0e0;
-  font-size: calc(11px * var(--s));
-  font-weight: 500;
-  line-height: 1.4;
-  margin-bottom: calc(6px * var(--s));
-  padding: calc(4px * var(--s)) calc(6px * var(--s));
-  background: #2a2a2e;
-  border: 1px solid #444;
-  border-radius: calc(2px * var(--s));
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  background: var(--efs-popup-strip-white, #ebebeb);
+  border-bottom: 1px solid #888;
 }
 
-.clnc-remarks-row {
-  display: flex;
-  align-items: center;
-  gap: calc(8px * var(--s));
-  margin-top: calc(4px * var(--s));
+.clnc-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-top: 3px solid #333;
+  background: #a8a8a8;
 }
 
-.clnc-remarks-input {
-  flex: 1;
-  background: #333;
-  border: 1px solid #555;
-  color: #e0e0e0;
-  font-size: calc(11px * var(--s));
-  padding: calc(3px * var(--s)) calc(6px * var(--s));
-  border-radius: calc(2px * var(--s));
-  outline: none;
+.clnc-actions-2 {
+  grid-template-columns: 1fr 1fr;
 }
 
-.clnc-remarks-input:focus {
-  border-color: #3b7dd8;
+.clnc-action {
+  border-top: none;
+  border-right: 1px solid #777;
+  box-shadow: none;
+  min-height: max(32px, calc(32px * var(--s)));
 }
 
-.clnc-remarks-input::placeholder {
-  color: #666;
+.clnc-action:last-child {
+  border-right: none;
 }
 
-/* Reject and Send buttons */
-.clnc-btn-reject {
-  background: #c62828;
-  color: #fff;
-  border-right: calc(1px * var(--s)) solid #666;
-}
-
-.clnc-btn-reject:hover {
-  background: #e53935;
-}
-
-.clnc-btn-send {
-  background: #1565c0;
-  color: #fff;
-}
-
-.clnc-btn-send:hover:not(:disabled) {
-  background: #1976d2;
-}
-
-.clnc-btn-send:disabled {
-  background: #3a3a3a;
-  color: #666;
+.clnc-action:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
+  background: #a8a8a8;
+  color: #444;
+  box-shadow: none;
 }
 
-/* Dropdown overlay and items */
-.clnc-dropdown-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
+.clnc-action:disabled:hover {
+  background: #a8a8a8;
+  color: #444;
+  box-shadow: none;
 }
 
-.clnc-dropdown {
-  position: absolute;
-  top: calc(30px * var(--s));
-  left: calc(12px * var(--s));
-  right: calc(12px * var(--s));
-  background: #1e1e22;
-  border: 1px solid #666;
-  border-radius: calc(2px * var(--s));
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
-}
-
-.clnc-dropdown-scroll {
-  max-height: calc(200px * var(--s));
-  overflow-y: auto;
-}
-
-.clnc-dropdown-item {
-  padding: calc(5px * var(--s)) calc(10px * var(--s));
-  color: #ddd;
-  font-size: calc(12px * var(--s));
-  font-weight: 600;
-  cursor: pointer;
-  border-bottom: 1px solid #333;
-}
-
-.clnc-dropdown-item:last-child {
-  border-bottom: none;
-}
-
-.clnc-dropdown-empty {
-  padding: calc(10px * var(--s));
-  color: #888;
-  font-size: calc(11px * var(--s));
-  text-align: center;
-}
-
-.clnc-dropdown-item:hover {
-  background: #3b7dd8;
+.clnc-action-reject:hover:not(:disabled) {
+  background: #6a1010;
   color: #fff;
-}
-
-.clnc-dropdown-selected {
-  background: #2a4a6e;
-  color: #8cbcf0;
-}
-
-.clnc-dropdown-scroll::-webkit-scrollbar {
-  width: calc(6px * var(--s));
-}
-
-.clnc-dropdown-scroll::-webkit-scrollbar-track {
-  background: #1e1e22;
-}
-
-.clnc-dropdown-scroll::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: calc(3px * var(--s));
 }
 </style>

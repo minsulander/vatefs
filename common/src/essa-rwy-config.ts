@@ -177,6 +177,12 @@ function nightRank(c: EssaRwyCombination): number {
     return 3
 }
 
+/** Options for AUTO config resolution */
+export interface ResolveEssaRwyConfigOptions {
+    /** Config id to prefer among matching lettered variants (9A/9B/9C, 15A/15B/15C) */
+    preferConfigId?: string | null
+}
+
 /**
  * Resolve ESSA runway combination id from active ARR/DEP runways.
  * When several lettered variants share the same runways, pick night (B)
@@ -185,10 +191,15 @@ function nightRank(c: EssaRwyCombination): number {
 export function resolveEssaRwyConfigId(
     arr: string[],
     dep: string[],
-    now: Date = new Date()
+    now: Date = new Date(),
+    options?: ResolveEssaRwyConfigOptions
 ): string | null {
     const matches = findMatchingEssaRwyConfigs(arr, dep)
     if (matches.length === 0) return null
+    // AUTO-mode hint (e.g. AUP "R16 utökad" → 9C / 15C). Only honoured when it matches the
+    // active ES runways, so it can never pick a config that contradicts ARR/DEP.
+    const preferred = options?.preferConfigId
+    if (preferred && matches.some(c => c.id === preferred)) return preferred
     if (matches.length === 1) return matches[0]!.id
 
     const night = !isEssaRwyDayHours(now)

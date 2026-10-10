@@ -18,6 +18,24 @@ export function useSectionResize() {
   const resizeState = ref<ResizeState | null>(null)
 
   const MIN_HEIGHT = 80
+  /** Approximate strip row height — snap divider to strip-aligned positions. */
+  const SNAP_STRIP_PX = 44
+  const SNAP_THRESHOLD_PX = 10
+
+  function snapHeight(height: number, pairTotal: number): number {
+    const maxH = pairTotal - MIN_HEIGHT
+    let h = Math.max(MIN_HEIGHT, Math.min(maxH, height))
+    // Snap to equal split
+    const half = pairTotal / 2
+    if (Math.abs(h - half) <= SNAP_THRESHOLD_PX) return Math.round(half)
+    // Snap to strip-height grid from the top of the pair
+    const steps = Math.round((h - MIN_HEIGHT) / SNAP_STRIP_PX)
+    const snapped = MIN_HEIGHT + steps * SNAP_STRIP_PX
+    if (Math.abs(h - snapped) <= SNAP_THRESHOLD_PX) {
+      return Math.max(MIN_HEIGHT, Math.min(maxH, snapped))
+    }
+    return Math.round(h)
+  }
 
   function startResize(
     event: MouseEvent | TouchEvent,
@@ -70,8 +88,11 @@ export function useSectionResize() {
     const maxShrink = resizeState.value.aboveStartHeight - MIN_HEIGHT
     delta = Math.max(-maxShrink, Math.min(maxGrow, delta))
 
-    const aboveNewHeight = resizeState.value.aboveStartHeight + delta
-    const belowNewHeight = resizeState.value.belowStartHeight - delta
+    const pairTotal =
+      resizeState.value.aboveStartHeight + resizeState.value.belowStartHeight
+    let aboveNewHeight = resizeState.value.aboveStartHeight + delta
+    aboveNewHeight = snapHeight(aboveNewHeight, pairTotal)
+    const belowNewHeight = pairTotal - aboveNewHeight
 
     store.setSectionHeight(
       resizeState.value.bayId,

@@ -166,6 +166,48 @@
                 Automatically set PARK when an assumed arrival is stationary at a stand
                 (requires GRP stand data).
             </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Auto squawk and CFL for new departures"
+                class="mt-2"
+                :model-value="efs.autoDepSquawkCfl"
+                @update:model-value="onAutoDepSquawkCfl"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                When enabled, assign a TopSky squawk and initial climb (CFL) as soon as a new
+                departure strip appears, and the strip action shows <strong>ACK CLR</strong>
+                (never CLR) to voice-ack the clearance flag. When off, open the clearance window.
+            </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Equal bay column widths"
+                class="mt-2"
+                :model-value="efs.equalBayColumns"
+                @update:model-value="onEqualBayColumns"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                Keep all bay columns the same width. When off, columns may size by content.
+            </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Show TOBT set-by A (ATC)"
+                class="mt-2"
+                :model-value="efs.showTobtSetByA"
+                @update:model-value="onShowTobtSetByA"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                When on, show <strong>A</strong> next to TOBT if ATC set it. Pilot <strong>P</strong>
+                always shows when applicable. Default: show A.
+            </p>
         </v-container>
     </v-main>
 </template>
@@ -247,6 +289,21 @@ function onShowAppDepXcFrequency(value: boolean | null) {
 function onAutoParkEnabled(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ autoParkEnabled: value })
+}
+
+function onAutoDepSquawkCfl(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ autoDepSquawkCfl: value })
+}
+
+function onEqualBayColumns(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ equalBayColumns: value })
+}
+
+function onShowTobtSetByA(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ showTobtSetByA: value })
 }
 </script>
 

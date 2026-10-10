@@ -17,9 +17,14 @@ import {
     syncEssaRunwaySectionToBay,
     essaRunwayPairsFingerprint,
     activeOnlineTwrRoles,
+    activeOnlineGndRoles,
     remapStripsForEssaGndOnly,
     remapBayIdsToLayout,
 } from "./essa-roles.js"
+import {
+    essaAorLayoutKey,
+    filterEssaRunwayPlacementsForMyAor,
+} from "./essa-next-si.js"
 
 /**
  * Resolve template variables in section titles.
@@ -77,6 +82,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "route",
     "sid",
     "rfl",
+    "xfl",
     "squawk",
     "clearedAltitude",
     "assignedHeading",
@@ -187,6 +193,8 @@ class EfsStore {
     private strips: Map<string, FlightStrip>
     private deletedStrips: Map<string, DeletedStripEntry>  // Soft-deleted (trash recovery)
     private gaps: Map<string, Gap>  // key: bayId:sectionId:index
+    /** Session-wide RWY occupied/closed flags (`rwyOccupied:sectionId`, …) — survives clear(). */
+    private activeRwyFlags = new Set<string>()
 
     constructor() {
         this.layout = { bays: [] }
@@ -208,7 +216,14 @@ class EfsStore {
      * Returns the strip ids removed.
      */
     softDeleteCallsignToTrash(callsign: string, reason?: string): string[] {
-        const matches = [...this.strips.values()].filter((s) => s.callsign === callsign)
+        // Empty callsign would match every local note/vehicle strip — never mass-delete those
+        if (!callsign) return []
+        const matches = [...this.strips.values()].filter(
+            (s) =>
+                s.callsign === callsign &&
+                s.stripType !== 'note' &&
+                s.stripType !== 'vehicle',
+        )
         const ids: string[] = []
         for (const strip of matches) {
             this.stashDeletedStrip(strip, reason)
@@ -281,6 +296,8 @@ class EfsStore {
         shiftedGaps?: Gap[]
         deletedGapKeys?: string[]
         setScratchValue?: string
+        clearHs?: boolean
+        assignDepRwy?: string
         clearScratchpadCallsign?: string
         clearScratchpadDelayMs?: number
         transferSound?: ProcessMessageResult['transferSound']
@@ -324,19 +341,23 @@ class EfsStore {
                     )
                 }
 
-                this.strips.set(update.strip.id, update.strip)
-                strips.push(update.strip)
+                const applied = this.applyStripUpdate(
+                    update.strip,
+                    update.isNew || update.sectionChanged ? { allowPositionChange: true } : undefined
+                )
+                strips.push(applied)
 
                 if ((update.isNew || update.sectionChanged) && update.shiftedCallsigns && update.shiftedCallsigns.length > 0) {
                     if (!shiftedStrips) shiftedStrips = []
                     for (const sid of update.shiftedCallsigns) {
                         const regeneratedStrip = flightStore.regenerateStrip(sid)
                         if (regeneratedStrip) {
-                            this.strips.set(regeneratedStrip.id, regeneratedStrip)
-                            shiftedStrips.push(regeneratedStrip)
+                            shiftedStrips.push(
+                                this.applyStripUpdate(regeneratedStrip, { allowPositionChange: true })
+                            )
                         }
                     }
-                    const gapResult = this.shiftGapsDown(update.strip.bayId, update.strip.sectionId)
+                    const gapResult = this.shiftGapsDown(applied.bayId, applied.sectionId)
                     shiftedGaps = [...(shiftedGaps ?? []), ...gapResult.shiftedGaps]
                     deletedGapKeys = [...(deletedGapKeys ?? []), ...gapResult.deletedGapKeys]
                 }
@@ -352,6 +373,8 @@ class EfsStore {
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
+                clearHs: result.clearHs,
+                assignDepRwy: result.assignDepRwy,
                 ...scratchClear,
                 transferSound,
                 multiUpdates: result.multiUpdates
@@ -470,7 +493,11 @@ class EfsStore {
                 )
             }
 
-            this.strips.set(result.strip.id, result.strip)
+            // Same-slot GS/field updates pin appearance order; new/moved strips may change position
+            const appliedStrip = this.applyStripUpdate(
+                result.strip,
+                isNew || result.sectionChanged ? { allowPositionChange: true } : undefined
+            )
 
             // Handle shifted strips and gaps (from add-from-top)
             // Shift when a strip enters a section: either new or moved from another section
@@ -482,19 +509,20 @@ class EfsStore {
                 for (const callsign of result.shiftedCallsigns) {
                     const regeneratedStrip = flightStore.regenerateStrip(callsign)
                     if (regeneratedStrip) {
-                        this.strips.set(regeneratedStrip.id, regeneratedStrip)
-                        shiftedStrips.push(regeneratedStrip)
+                        shiftedStrips.push(
+                            this.applyStripUpdate(regeneratedStrip, { allowPositionChange: true })
+                        )
                     }
                 }
 
                 // Also shift gaps in the section
-                const gapResult = this.shiftGapsDown(result.strip.bayId, result.strip.sectionId)
+                const gapResult = this.shiftGapsDown(appliedStrip.bayId, appliedStrip.sectionId)
                 shiftedGaps = gapResult.shiftedGaps
                 deletedGapKeys = gapResult.deletedGapKeys
             }
 
             return {
-                strip: result.strip,
+                strip: appliedStrip,
                 isNew,
                 sectionChanged: result.sectionChanged,
                 previousSection: result.previousSection,
@@ -503,13 +531,15 @@ class EfsStore {
                 shiftedGaps: shiftedGaps && shiftedGaps.length > 0 ? shiftedGaps : undefined,
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
+                clearHs: result.clearHs,
+                assignDepRwy: result.assignDepRwy,
                 ...scratchClear,
                 transferSound
             }
         }
 
-        if (transferSound || scratchClear.clearScratchpadCallsign) {
-            return { transferSound, ...scratchClear }
+        if (transferSound || scratchClear.clearScratchpadCallsign || result.clearHs) {
+            return { transferSound, clearHs: result.clearHs, ...scratchClear }
         }
         return {}
     }
@@ -555,22 +585,27 @@ class EfsStore {
                 ? [...staticConfig.onlineControllers.keys()]
                 : []
             const activeTwr = activeOnlineTwrRoles(onlineCallsigns)
+            const activeGnd = activeOnlineGndRoles(onlineCallsigns)
             withHeights = filterEssaLayout(
                 withHeights,
                 staticConfig.essaRoles ?? [],
                 staticConfig.sectionVisibleFor,
-                activeTwr
+                activeTwr,
+                activeGnd
             )
-            const placements = collectEssaRunwayPairs(
-                staticConfig.activeRunways,
-                staticConfig.myAirports,
-                staticConfig.essaAssignedRunways
+            const placements = filterEssaRunwayPlacementsForMyAor(
+                collectEssaRunwayPairs(
+                    staticConfig.activeRunways,
+                    staticConfig.myAirports,
+                    staticConfig.essaAssignedRunways
+                )
             )
             const { layout: rwyLayout, sectionToBay: rwySectionToBay } =
                 applyEssaRunwayPairLayout(withHeights, placements)
             withHeights = rwyLayout
             syncEssaRunwaySectionToBay(staticConfig.sectionToBay, rwySectionToBay)
-            staticConfig.essaRunwayLayoutFingerprint = essaRunwayPairsFingerprint(placements)
+            staticConfig.essaRunwayLayoutFingerprint =
+                `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
         }
 
         return resolveLayoutTemplates(withHeights, staticConfig)
@@ -596,14 +631,73 @@ class EfsStore {
         return remapBayIdsToLayout(gaps, this.getLayout())
     }
 
+    getActiveRwyFlags(): string[] {
+        return [...this.activeRwyFlags]
+    }
+
+    /**
+     * Set or clear a RWY occupied/closed flag.
+     * `flagId` format: `rwyOccupied:runway_08_26` or `rwyClosed:…`
+     */
+    setRwyFlag(flagId: string, active: boolean): { flagId: string; active: boolean; changed: boolean } {
+        const id = (flagId || "").trim()
+        if (!id || !id.includes(":")) {
+            return { flagId: id, active: false, changed: false }
+        }
+        const has = this.activeRwyFlags.has(id)
+        if (active === has) return { flagId: id, active, changed: false }
+        if (active) this.activeRwyFlags.add(id)
+        else this.activeRwyFlags.delete(id)
+        return { flagId: id, active, changed: true }
+    }
+
     // Get a single strip
     getStrip(stripId: string): FlightStrip | undefined {
         return this.strips.get(stripId)
     }
 
-    // Update a strip (used when backend flags change)
-    updateStripFromFlight(strip: FlightStrip): void {
-        this.strips.set(strip.id, strip)
+    /**
+     * Write a regenerated strip into the bay store.
+     * Same bay/section/zone: keep appearance `position` so groundstate updates
+     * (e.g. TAXIWAY ARR ARR→TXIN/TAXI) do not reshuffle when flightStore
+     * assignments are stale — same sticky sync as taxi DEP manual moves.
+     * Pass allowPositionChange for add-from-top neighbor shifts.
+     */
+    updateStripFromFlight(
+        strip: FlightStrip,
+        opts?: { allowPositionChange?: boolean }
+    ): FlightStrip {
+        return this.applyStripUpdate(strip, opts)
+    }
+
+    /**
+     * Apply strip to store; pin position on same-slot updates unless allowed to change.
+     */
+    private applyStripUpdate(
+        strip: FlightStrip,
+        opts?: { allowPositionChange?: boolean }
+    ): FlightStrip {
+        const existing = this.strips.get(strip.id)
+        const sameSlot = !!(
+            existing &&
+            existing.bayId === strip.bayId &&
+            existing.sectionId === strip.sectionId &&
+            !!existing.bottom === !!strip.bottom
+        )
+
+        let next = strip
+        if (sameSlot && existing && !opts?.allowPositionChange && existing.position !== strip.position) {
+            next = { ...strip, position: existing.position }
+            // Keep flightStore in sync — regenerateStrip otherwise restores stale order
+            flightStore.setStripAssignment(next.id, {
+                bayId: next.bayId,
+                sectionId: next.sectionId,
+                position: next.position,
+                bottom: next.bottom,
+            })
+        }
+        this.strips.set(next.id, next)
+        return next
     }
 
     // Get strips for a specific section and zone
@@ -650,8 +744,11 @@ class EfsStore {
         const strip = this.strips.get(stripId)
         if (!strip) return null
 
-        // Notify flight store about manual move (prevents auto-move back)
-        flightStore.setStripAssignment(strip.id, targetBayId, targetSectionId, position ?? 0, isBottom)
+        // Other-owned strips stay where rules placed them (notes/vehicles have no owner)
+        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') {
+            console.log(`[MOVE] rejected ${strip.callsign || stripId}: owned by other`)
+            return null
+        }
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -691,6 +788,17 @@ class EfsStore {
         targetStrips.splice(targetPosition, 0, strip)
         targetStrips.forEach((s, index) => {
             s.position = index
+            // Keep flightStore assignments in sync — regenerateStrip otherwise restores stale order
+            if (s.id === stripId) {
+                flightStore.setStripAssignment(s.id, targetBayId, targetSectionId, index, isBottom)
+            } else {
+                flightStore.setStripAssignment(s.id, {
+                    bayId: targetBayId,
+                    sectionId: targetSectionId,
+                    position: index,
+                    bottom: isBottom,
+                })
+            }
         })
 
         // If moved to different section/zone, recompute old section too
@@ -876,6 +984,93 @@ class EfsStore {
     }
 
     /**
+     * Create a local vehicle strip (C/S, HP, STD) — no EuroScope flight link.
+     */
+    createVehicleStrip(
+        targetBayId?: string,
+        targetSectionId?: string,
+        position?: number,
+        isBottom?: boolean,
+        airport?: string
+    ): FlightStrip | undefined {
+        const stripId = `vehicle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const icao = airport?.toUpperCase()
+
+        let bayId: string
+        let sectionId: string
+        let pos: number
+
+        if (targetBayId && targetSectionId) {
+            bayId = targetBayId
+            sectionId = targetSectionId
+            pos = position ?? 0
+        } else if (icao && isMultiAirportConfig(staticConfig)) {
+            bayId = resolveBayForAirport(icao, staticConfig.columnAirports)
+            sectionId = prefixedSectionId(bayId, 'app')
+            pos = position ?? 0
+        } else {
+            // Prefer a non-runway section so the strip lands somewhere useful
+            let found: { bayId: string; sectionId: string } | undefined
+            for (const bay of staticConfig.layout.bays) {
+                for (const section of bay.sections) {
+                    if (!/runway/i.test(section.id)) {
+                        found = { bayId: bay.id, sectionId: section.id }
+                        break
+                    }
+                }
+                if (found) break
+            }
+            if (!found) {
+                const bay = staticConfig.layout.bays[0]
+                const section = bay?.sections[0]
+                if (!bay || !section) return undefined
+                found = { bayId: bay.id, sectionId: section.id }
+            }
+            bayId = found.bayId
+            sectionId = found.sectionId
+            pos = 0
+        }
+
+        const strip: FlightStrip = {
+            id: stripId,
+            callsign: '',
+            aircraftType: '',
+            wakeTurbulence: 'M',
+            flightRules: 'V',
+            adep: '',
+            ades: '',
+            stripType: 'vehicle',
+            bayId,
+            sectionId,
+            position: pos,
+            bottom: isBottom ?? false,
+            hp: '',
+            std: '',
+            airport: icao,
+        }
+
+        this.strips.set(stripId, strip)
+        return strip
+    }
+
+    /**
+     * Update a field on a local vehicle strip (broadcast to all EFS clients; no ES).
+     */
+    updateVehicleStripField(
+        stripId: string,
+        field: 'callsign' | 'hp' | 'std',
+        text: string,
+    ): FlightStrip | undefined {
+        const strip = this.strips.get(stripId)
+        if (!strip || strip.stripType !== 'vehicle') return undefined
+        const value = text.trim()
+        if (field === 'callsign') strip.callsign = value
+        else if (field === 'hp') strip.hp = value || undefined
+        else strip.std = value || undefined
+        return strip
+    }
+
+    /**
      * Manually delete a strip (user-initiated from context menu)
      * Returns the strip ID if successfully deleted, undefined otherwise
      */
@@ -903,7 +1098,13 @@ class EfsStore {
         return [...this.deletedStrips.values()]
             .map(({ strip, deletedAt, reason }) => ({
                 stripId: strip.id,
-                callsign: strip.callsign || (strip.stripType === 'note' ? '(note)' : strip.id),
+                callsign:
+                    strip.callsign ||
+                    (strip.stripType === 'note'
+                        ? '(note)'
+                        : strip.stripType === 'vehicle'
+                          ? '(vehicle)'
+                          : strip.id),
                 stripType: strip.stripType,
                 adep: strip.adep,
                 ades: strip.ades,
@@ -971,7 +1172,7 @@ class EfsStore {
         }
 
         // Notes / unmatched specials: restore snapshot
-        if (saved.stripType === 'note' || !flight) {
+        if (saved.stripType === 'note' || saved.stripType === 'vehicle' || !flight) {
             const restored: FlightStrip = {
                 ...saved,
                 bayId,
@@ -1107,12 +1308,54 @@ class EfsStore {
         return { shiftedGaps, deletedGapKeys }
     }
 
-    // Recompute strip positions
+    // Recompute strip positions and sync flightStore assignments
     recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
         const strips = this.getStripsForSection(bayId, sectionId, bottom)
         strips.forEach((strip, index) => {
             strip.position = index
+            flightStore.setStripAssignment(strip.id, {
+                bayId,
+                sectionId,
+                position: index,
+                bottom,
+            })
         })
+    }
+
+    /**
+     * Apply an explicit top-zone order (e.g. freeze TOBT/TSAT visual order into MAN).
+     * Syncs flightStore assignments so add-from-top / regenerate keep the frozen sequence.
+     */
+    reorderTopStrips(bayId: string, sectionId: string, stripIds: string[]): FlightStrip[] {
+        const current = this.getStripsForSection(bayId, sectionId, false)
+        if (current.length === 0) return []
+
+        const byId = new Map(current.map((s) => [s.id, s]))
+        const ordered: FlightStrip[] = []
+        for (const id of stripIds) {
+            const strip = byId.get(id)
+            if (strip) {
+                ordered.push(strip)
+                byId.delete(id)
+            }
+        }
+        // Keep any strips omitted from stripIds in prior relative order at the end
+        for (const strip of current) {
+            if (byId.has(strip.id)) ordered.push(strip)
+        }
+
+        ordered.forEach((strip, index) => {
+            strip.position = index
+            // Object form: do not mark lastSectionRule=manual (order freeze ≠ section override)
+            flightStore.setStripAssignment(strip.id, {
+                bayId,
+                sectionId,
+                position: index,
+                bottom: false,
+            })
+        })
+        flightStore.resetPositionCounter(bayId, sectionId, ordered.length)
+        return ordered
     }
 }
 

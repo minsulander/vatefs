@@ -20,6 +20,8 @@ layout:
     bay1:
       sections:
         inbound:
+          # TWR → titled INBOUND APP; ETA≤15 gate + ETA sort (common-rules myRole TWR/APP/CTR).
+          # GND → INBOUND TWR-* (near/tower-bound rules, no ETA gate; appearance order).
           title: INBOUND
           visibleFor: [GND, TWR]
         ctr_arr:
@@ -28,9 +30,11 @@ layout:
         arr_runway:
           # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
           title: RUNWAY
+          # First L/U into bay stays above later; CFTO ranks above LINEUP in UI
+          addFromTop: false
           visibleFor: [TWR]
         taxi_arr:
-          title: TAXI ARR
+          title: TAXIWAY ARR
           # TWR-only: still-on-RWY hold; once vacated → TAXI ARR + XFER to GND.
           # With GND selected, TWR uses this for assumed taxi-in as usual.
           visibleFor: [GND, TWR]
@@ -39,19 +43,28 @@ layout:
       sections:
         ctr_dep:
           title: CTR DEP
+          addFromTop: false
           visibleFor: [TWR]
         dep_runway:
           # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
           title: RUNWAY
+          addFromTop: false
           visibleFor: [TWR]
 
     bay3:
       sections:
+        # TWR with GND online below: other-owned taxi-out (mirror INBOUND APP).
+        # Hidden when alone covering GND. Assumed / inbound-transfer → TAXI DEP.
+        inbound_gnd:
+          title: INBOUND GND
+          visibleFor: [TWR]
         taxi_dep:
-          title: TAXI DEP
+          title: TAXIWAY DEP
+          addFromTop: true
           visibleFor: [GND, TWR]
         push_start:
           title: PUSH BACK / START-UP
+          addFromTop: true
           visibleFor: [GND]
 
     bay4:
@@ -59,12 +72,14 @@ layout:
         cleared:
           # Cleared IFR, waiting for push/startup (CD and GND)
           title: TSAT
+          addFromTop: true
           visibleFor: [CD, GND]
 
     bay5:
       sections:
         pending_dep:
           title: CD ALL
+          addFromTop: true
           visibleFor: [CD]
 
 sectionRules:
@@ -83,6 +98,69 @@ sectionRules:
     groundstates: [TAXI]
     priority: 30
 
+  # TWR + separate GND: pending inbound handoff → TAXI DEP (like CTR ARR pending transfer)
+  taxi_dep_pending_inbound_transfer:
+    sectionId: taxi_dep
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [TWR]
+    notEssaFamilies: [GND]
+    priority: 95
+
+  taxi_dep_pending_inbound_transfer_local:
+    sectionId: taxi_dep
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [TWR]
+    notEssaFamilies: [GND]
+    priority: 95
+
+  # TWR: assumed taxi-out → TAXI DEP (not yet on RWY)
+  taxi_dep_assumed_twr:
+    sectionId: taxi_dep
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: myself
+    myRole: [TWR]
+    priority: 90
+
+  taxi_dep_assumed_local_twr:
+    sectionId: taxi_dep
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: myself
+    myRole: [TWR]
+    priority: 90
+
+  # TWR + separate GND: other-owned taxi-out → INBOUND GND-* (mirror INBOUND APP)
+  inbound_gnd_taxi_dep:
+    sectionId: inbound_gnd
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    myRole: [TWR]
+    notEssaFamilies: [GND]
+    priority: 70
+
+  inbound_gnd_taxi_local:
+    sectionId: inbound_gnd
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: not_myself
+    myRole: [TWR]
+    notEssaFamilies: [GND]
+    priority: 70
+
   taxi_arr_local:
     sectionId: taxi_arr
     direction: local
@@ -96,6 +174,29 @@ sectionRules:
     airborne: false
     groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
+
+  # GND: pending inbound transfer from TWR → hop to TAXI ARR (before assume)
+  taxi_arr_pending_inbound_transfer:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    onRunway: false
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 115
+
+  taxi_arr_pending_inbound_transfer_local:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    onRunway: false
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 115
 
   # GND: after assuming a vacated arrival, move INBOUND → TAXI ARR
   taxi_arr_assumed_gnd:
@@ -116,22 +217,49 @@ sectionRules:
     myRole: [GND]
     priority: 105
 
-  # GND (not covering TWR): CTR / runway arrivals appear in INBOUND TWR
-  inbound_airborne_arr_gnd:
+  # GND (not covering TWR): only tower-bound traffic under INBOUND TWR —
+  # same moments TWR would see CTR ARR / ARR RWY (APP→TWR transfer, CTR, runway).
+  # Far-out APP arrivals stay out of INBOUND TWR until then.
+  inbound_pending_twr_transfer_gnd:
     sectionId: inbound
     direction: arrival
     airborne: true
+    groundstates: ['', NSTS, ARR]
+    handoffToRole: [TWR]
     myRole: [GND]
     notMyRole: [TWR]
-    priority: 110
+    priority: 115
 
-  inbound_airborne_local_gnd:
+  inbound_pending_twr_transfer_local_gnd:
     sectionId: inbound
     direction: local
     airborne: true
+    groundstates: ['', NSTS, ARR]
+    handoffToRole: [TWR]
     myRole: [GND]
     notMyRole: [TWR]
-    priority: 110
+    priority: 115
+
+  # Inside CTR → TWR would use ctr_arr_within_ctr; GND keeps it in INBOUND TWR
+  inbound_within_ctr_arr_gnd:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 112
+
+  inbound_within_ctr_local_gnd:
+    sectionId: inbound
+    direction: local
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 112
 
   inbound_on_runway_arr_gnd:
     sectionId: inbound
@@ -285,6 +413,15 @@ sectionRules:
     priority: 85
 
 actionRules:
+  # CD ALL: CLNC / ACK CLR for uncleared deps (CD family selected)
+  clnc_cd_pending:
+    action: CLNC
+    sectionId: pending_dep
+    direction: either
+    clearance: false
+    essaFamilies: [CD]
+    priority: 120
+
   # GOA while CTL — runway or CTR ARR. Do not use notMyRole:[GND] (hides GOA for solo TWR).
   goa_arr_runway:
     action: GOA
@@ -330,8 +467,22 @@ actionRules:
     withinRangeAirports: [ESSA]
     priority: 120
 
-  # Override common-rules: split taxi uses taxi_dep (not unified taxi)
+  # Override common-rules rof_taxi_dep_twr (sectionId: taxi).
+  # Separate GND online → ROF on INBOUND GND-*; alone covering GND → TAXI DEP.
   rof_taxi_dep_twr:
+    action: ROF
+    sectionId: inbound_gnd
+    groundstates: [TAXI]
+    airborne: false
+    controller: not_myself
+    notParallelTwrOwner: true
+    withinCtr: true
+    handoffInitiated: false
+    myRole: [TWR]
+    notEssaFamilies: [GND]
+    priority: 40
+
+  rof_taxi_dep_twr_covering_gnd:
     action: ROF
     sectionId: taxi_dep
     groundstates: [TAXI]
@@ -341,6 +492,7 @@ actionRules:
     withinCtr: true
     handoffInitiated: false
     myRole: [TWR]
+    essaFamilies: [GND]
     priority: 40
 
 moveRules:
@@ -429,6 +581,24 @@ moveRules:
   # toSectionIdContains matches runway_01L_19R etc. and legacy arr/dep_runway
   move_taxi_dep_to_runway:
     fromSectionId: taxi_dep
+    toSectionIdContains: runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  # INBOUND GND → TAXI DEP: assume / take taxi-out
+  move_inbound_gnd_to_taxi_dep:
+    fromSectionId: inbound_gnd
+    toSectionId: taxi_dep
+    direction: either
+    myRole: [TWR]
+    priority: 20
+
+  # INBOUND GND → RUNWAY: LU
+  move_inbound_gnd_to_runway:
+    fromSectionId: inbound_gnd
     toSectionIdContains: runway
     direction: either
     myRole: [TWR, APP, CTR]

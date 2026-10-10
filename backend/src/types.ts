@@ -19,6 +19,8 @@ export interface Flight {
     alternate?: string        // ALTN - alternate aerodrome
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
+    /** EuroScope engine type: P piston, T turboprop, J jet, E electric, ? unknown */
+    engineType?: string
     flightRules?: string      // I/V/Y/Z
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
@@ -48,6 +50,16 @@ export interface Flight {
     squawk?: string
     rfl?: number              // Requested/Final flight level (feet)
     cfl?: number              // Cleared flight level (feet), 0=use RFL, 1=ILS/CA, 2=visual/VA
+    /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
+    xfl?: number
+    /**
+     * True after at least one controllerAssignedDataUpdate for this flight.
+     * Used to avoid TopSky SSR allocate before ES has reported existing ASSR
+     * (reload/refresh race: FPD+radar can create strips before CAD with squawk).
+     */
+    controllerAssignedSeen?: boolean
+    /** Auto dep prep (squawk+CFL) already attempted for this flight */
+    autoDepPrepDone?: boolean
     /** TopSky approach clearance type (CAT2/CAT3/OS/…) when cfl is 1 or 2 */
     approachType?: string
     groundstate?: GroundState
@@ -183,6 +195,8 @@ export interface FlightPlanDataUpdateMessage {
     alternate?: string        // ALTN
     aircraftType?: string
     wakeTurbulence?: string   // L/M/H/J
+    /** EuroScope engine type: P/T/J/E/? */
+    engineType?: string
     flightRules?: string      // I/V/Y/Z
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
@@ -190,6 +204,8 @@ export interface FlightPlanDataUpdateMessage {
     eobt?: string              // Estimated Off Block Time (HHmm)
     ete?: number               // ES prediction points ≈ minutes to destination
     rfl?: number              // Requested flight level (feet)
+    /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
+    xfl?: number
     /** Flight plan item 18 remarks */
     fplRemarks?: string
     // Route data from UpdateRoute()
@@ -215,6 +231,8 @@ export interface ControllerAssignedDataUpdateMessage {
     squawk?: string
     rfl?: number
     cfl?: number
+    /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
+    xfl?: number
     groundstate?: GroundState
     clearance?: boolean
     /** VCH CTL — strip annotation 3 */

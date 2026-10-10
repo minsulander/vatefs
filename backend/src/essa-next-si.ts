@@ -10,8 +10,12 @@ import {
     ALL_GND_POSITIONS,
     ALL_TWR_POSITIONS,
     formatEssaDisplaySi,
+    isEssaDynamicRunwaySectionId,
+    isEssaGndOnly,
     isEssaRolesConfig,
+    isGndOnlyInboundSection,
     parseEssaLoginId,
+    parseOnlineEssaLoginIds,
 } from "./essa-roles.js"
 import {
     bearingDeg,
@@ -205,17 +209,154 @@ export function isNextOnlineForGndFamily(
     return false
 }
 
-function twrFamilyForRunway(rwy: string, pt?: EseCoord): EssaCtrFamily {
+/**
+ * AOR column for a runway (ESAA TWR split table):
+ *   TW = 01L/19R (+ CTR W)
+ *   TS = 08/26 = 07/25 (+ CTR E)
+ *   TE = 01R/19L
+ */
+type EssaAorColumn = "TW" | "TS" | "TE"
+
+function aorColumnForRunway(rwy: string, pt?: EseCoord): EssaAorColumn {
     const r = normalizeRwy(rwy)
-    // Physical pairs: 01L/19R west-ish, 01R/19L east, 08/26 south
-    if (r === "01R" || r === "19L") return "TE"
     if (r === "01L" || r === "19R") return "TW"
-    if (r === "08" || r === "26") return "TS"
+    if (r === "08" || r === "26" || r === "07" || r === "25") return "TS"
+    if (r === "01R" || r === "19L") return "TE"
     if (pt) {
         const ctr = primaryCtrFamilyAt(pt.lat, pt.lon, activeEssaRunways())
-        if (ctr) return ctr
+        if (ctr === "TW") return "TW"
+        if (ctr === "TS") return "TS"
+        if (ctr === "TE") return "TE"
     }
     return "TE"
+}
+
+function twrFamilyForRunway(rwy: string, pt?: EseCoord): EssaCtrFamily {
+    return aorColumnForRunway(rwy, pt)
+}
+
+/**
+ * TWR → RWY priority (first online wins each column independently):
+ *   01L/19R (TW):  W → E → S
+ *   08/26=07/25 (TS): E → S → W
+ *   01R/19L (TE):  S → E → W
+ */
+const AOR_PRIO_TW = ["TWR-W", "TWR-E", "TWR-S"] as const
+const AOR_PRIO_TS = ["TWR-E", "TWR-S", "TWR-W"] as const
+const AOR_PRIO_TE = ["TWR-S", "TWR-E", "TWR-W"] as const
+
+function firstOnlineInPrio(
+    prio: readonly string[],
+    online: Set<string>
+): string | undefined {
+    for (const id of prio) {
+        if (online.has(id)) return id
+    }
+    return undefined
+}
+
+/** Who covers [TW, TS, TE] from online TWR logins; null = solo (all columns). */
+function aorRowForOnlineTwrs(
+    online: Set<string>
+): [string, string, string] | null {
+    const n =
+        (online.has("TWR-E") ? 1 : 0) +
+        (online.has("TWR-W") ? 1 : 0) +
+        (online.has("TWR-S") ? 1 : 0)
+    if (n <= 1) return null // solo → all columns
+    const tw = firstOnlineInPrio(AOR_PRIO_TW, online)
+    const ts = firstOnlineInPrio(AOR_PRIO_TS, online)
+    const te = firstOnlineInPrio(AOR_PRIO_TE, online)
+    if (!tw || !ts || !te) return null
+    return [tw, ts, te]
+}
+
+/** AOR columns covered by this TWR login given who is online. */
+function aorColumnsForTwrLogin(login: string, onlineLogins: Iterable<string>): Set<EssaAorColumn> {
+    const online = new Set<string>()
+    for (const id of onlineLogins) {
+        if (id === "TWR-E" || id === "TWR-W" || id === "TWR-S") online.add(id)
+    }
+    online.add(login)
+    const row = aorRowForOnlineTwrs(online)
+    if (!row) return new Set(["TW", "TS", "TE"])
+    const cols = new Set<EssaAorColumn>()
+    if (row[0] === login) cols.add("TW")
+    if (row[1] === login) cols.add("TS")
+    if (row[2] === login) cols.add("TE")
+    return cols
+}
+
+/**
+ * AOR columns for this session's TWR. null = cover all (solo / non-split / not TWR).
+ * Used to hide RUNWAY bays + MAP/breakout for uncovered ARR RWYs.
+ * Prefer login callsign (incl. TWR-S) over physical EFS roles — S may hold both
+ * E+W roles for section visibility while still owning only the TE AOR column.
+ */
+export function getMyEssaAorColumns(): Set<EssaAorColumn> | null {
+    const roles = staticConfig.essaRoles ?? []
+    const myTwrs = roles.filter((r) => ALL_TWR_POSITIONS.includes(r))
+    if (myTwrs.length === 0) return null
+
+    const myLogin = staticConfig.myCallsign
+        ? parseEssaLoginId(staticConfig.myCallsign)
+        : undefined
+    if (myLogin === "TWR-E" || myLogin === "TWR-W" || myLogin === "TWR-S") {
+        const onlineCallsigns = staticConfig.onlineControllers
+            ? [...staticConfig.onlineControllers.keys()]
+            : []
+        const onlineLogins = parseOnlineEssaLoginIds(onlineCallsigns)
+        const cols = aorColumnsForTwrLogin(myLogin, onlineLogins)
+        if (cols.size >= 3) return null
+        return cols
+    }
+
+    // Top-down / no ESSA_*_TWR login: both physical roles → all; else no AOR filter
+    if (ALL_TWR_POSITIONS.every((r) => myTwrs.includes(r))) return null
+    return null
+}
+
+function aorColumnForPairId(pairId: string): EssaAorColumn {
+    if (pairId === "01L_19R") return "TW"
+    if (pairId === "08_26") return "TS"
+    return "TE" // 01R_19L
+}
+
+/** Stable key for layout fingerprint when AOR split changes. */
+export function essaAorLayoutKey(): string {
+    const cols = getMyEssaAorColumns()
+    if (!cols) return "ALL"
+    return [...cols].sort().join("+")
+}
+
+/** Drop RUNWAY pair headers not covered by our TWR AOR columns. */
+export function filterEssaRunwayPlacementsForMyAor<
+    T extends { pair: { id: string } },
+>(placements: T[]): T[] {
+    const cols = getMyEssaAorColumns()
+    if (!cols) return placements
+    return placements.filter((p) => cols.has(aorColumnForPairId(p.pair.id)))
+}
+
+/**
+ * Runway ends we cover under current TWR AOR split.
+ * undefined → all runways (no split / not TWR).
+ */
+export function getMyEssaCoveredRunways(): string[] | undefined {
+    const cols = getMyEssaAorColumns()
+    if (!cols) return undefined
+    const ends: string[] = []
+    if (cols.has("TW")) ends.push("01L", "19R")
+    if (cols.has("TS")) ends.push("08", "26", "07", "25")
+    if (cols.has("TE")) ends.push("01R", "19L")
+    return ends
+}
+
+/** True when MAP/breakout for this ARR runway should show for us. */
+export function essaAorCoversRunway(rwy: string): boolean {
+    const cols = getMyEssaAorColumns()
+    if (!cols) return true
+    return cols.has(aorColumnForRunway(rwy))
 }
 
 /** Resolve EuroScope SI for an online controller (plugin position, ESE, or callsign pattern). */
@@ -383,6 +524,66 @@ function ctrToRoles(fam: EssaCtrFamily): EssaPositionRole[] {
     if (fam === "TE") return ["TWR-E"]
     if (fam === "TW") return ["TWR-W"]
     return [...ALL_TWR_POSITIONS]
+}
+
+/** Physical TWR role(s) for hop/relevance fallback (by ARR RWY column). */
+function twrRolesForArrivalFlight(flight: Flight): EssaPositionRole[] {
+    const pt = resolveAircraftPoint(flight)
+    const assigned = normalizeRwy(flight.arrRwy)
+    if (assigned) {
+        return ctrToRoles(twrFamilyForRunway(assigned, pt))
+    }
+    const activeArr = staticConfig.activeRunways?.["ESSA"]?.arr ?? []
+    if (activeArr.length === 0) return [...ALL_TWR_POSITIONS]
+    const roles = new Set<EssaPositionRole>()
+    for (const a of activeArr) {
+        for (const r of ctrToRoles(twrFamilyForRunway(a, pt))) roles.add(r)
+    }
+    return roles.size > 0 ? [...roles] : [...ALL_TWR_POSITIONS]
+}
+
+/**
+ * True when our TWR login covers this arrival per RWY priority
+ * (01L/19R: W→E→S, 08/26: E→S→W, 01R/19L: S→E→W).
+ * Solo TWR → all ARR. When split, use login AOR columns even if the login
+ * holds both physical EFS roles for bay visibility (TWR-S with E+W+S → TE only).
+ */
+function selectedTwrsCoverArrival(
+    selectedRoles: EssaPositionRole[],
+    flight: Flight | undefined
+): boolean {
+    const myTwrs = selectedRoles.filter((r) => ALL_TWR_POSITIONS.includes(r))
+    if (myTwrs.length === 0) return false
+    if (!flight) return true
+
+    const myLogin = staticConfig.myCallsign
+        ? parseEssaLoginId(staticConfig.myCallsign)
+        : undefined
+    const onlineCallsigns = staticConfig.onlineControllers
+        ? [...staticConfig.onlineControllers.keys()]
+        : []
+    const onlineLogins = parseOnlineEssaLoginIds(onlineCallsigns)
+
+    // Login AOR first — TWR-S may have both E+W roles for layout but only TE AOR.
+    if (myLogin === "TWR-E" || myLogin === "TWR-W" || myLogin === "TWR-S") {
+        const cols = aorColumnsForTwrLogin(myLogin, onlineLogins)
+        if (cols.size >= 3) return true // solo / all columns
+        const pt = resolveAircraftPoint(flight)
+        const assigned = normalizeRwy(flight.arrRwy)
+        if (assigned) {
+            return cols.has(aorColumnForRunway(assigned, pt))
+        }
+        const activeArr = staticConfig.activeRunways?.["ESSA"]?.arr ?? []
+        if (activeArr.length === 0) return true
+        return activeArr.some((a) => cols.has(aorColumnForRunway(a, pt)))
+    }
+
+    // Top-down / no ESSA_*_TWR login with both physical roles → all ARR
+    if (ALL_TWR_POSITIONS.every((r) => myTwrs.includes(r))) return true
+
+    // Top-down TWR without ESSA_*_TWR login — fall back to physical role ∩ runway family
+    const needed = twrRolesForArrivalFlight(flight)
+    return needed.some((r) => myTwrs.includes(r))
 }
 
 // --- DEP tables ---
@@ -776,6 +977,12 @@ export function resolveEssaNextSi(
             const myFam = myLoggedInGndFamily()
             if (myFam) hops = skipCurrentGnd(hops, myFam, "GND")
         }
+        // Airborne ARR/local: TWR-relevant for the ARR runway's tower side only
+        // (split TWR-E/W). Hop chain is GND taxi — without TWR roles, separate GND
+        // online would hide INBOUND APP from TWR entirely.
+        if (flight.airborne) {
+            for (const r of twrRolesForArrivalFlight(flight)) relevant.add(r)
+        }
     } else if (coveringTwr && flight.airborne && (stripType === "departure" || stripType === "local")) {
         const sector = resolveIdealAppDepSector(flight, false)
         hops = [{ kind: "app", sector }]
@@ -830,7 +1037,7 @@ export function resolveEssaNextSi(
 function flightIsSlowForApp(flight: Flight): boolean {
     if (!isEssaAutoSlowHours()) return false
     const wake = flight.wakeTurbulence ?? ""
-    return isSlowAircraft(wake, flight.aircraftType ?? "")
+    return isSlowAircraft(wake, flight.aircraftType ?? "", flight.engineType)
 }
 
 function resolveIdealAppDepSector(flight: Flight, missedApproach: boolean): AppDepSector {
@@ -990,7 +1197,8 @@ export function isEssaStripVisibleForRoles(
     next: EssaNextSiResult | undefined
 ): boolean {
     if (!isEssaRolesConfig(staticConfig)) return true
-    if (strip.stripType === "note") return true
+    // Local-only strips (no flight / next-SI) — always visible when created
+    if (strip.stripType === "note" || strip.stripType === "vehicle") return true
     if (selectedRoles.length === 0) return true
 
     // Overrides
@@ -999,6 +1207,36 @@ export function isEssaStripVisibleForRoles(
     if (strip.isAssumed) return true
     // After handoff (e.g. GW→GN): keep strip until aircraft leaves our geographic AoR
     if (isInSelectedGndAor(flight, selectedRoles)) return true
+
+    // GND-only: show tower-bound arrivals under INBOUND TWR (CTR ARR / RWY / inbound
+    // after APP→TWR transfer). Do not require GND in the next-SI chain.
+    if (isEssaGndOnly(selectedRoles)) {
+        if (strip.sectionId === "inbound" || isGndOnlyInboundSection(strip.sectionId)) {
+            if (
+                strip.stripType === "departure" &&
+                (strip.sectionId === "dep_runway" || isEssaDynamicRunwaySectionId(strip.sectionId))
+            ) {
+                // Dep runway: leave to next-SI filter below
+            } else {
+                return true
+            }
+        }
+    }
+
+    // TWR: arrival INBOUND APP / CTR ARR / RWY is independent of GND next-SI roles,
+    // but when split TWR only show ARR RWYs covered by our physical role(s).
+    if (selectedRoles.some((r) => ALL_TWR_POSITIONS.includes(r))) {
+        if (
+            (strip.stripType === "arrival" || strip.stripType === "local") &&
+            (strip.sectionId === "inbound" ||
+                strip.sectionId === "ctr_arr" ||
+                strip.sectionId === "arr_runway" ||
+                strip.sectionId === "dep_runway" ||
+                isEssaDynamicRunwaySectionId(strip.sectionId))
+        ) {
+            return selectedTwrsCoverArrival(selectedRoles, flight)
+        }
+    }
 
     const hasCd = selectedRoles.includes("CD")
     const hasGnd = selectedRoles.some((r) => ALL_GND_POSITIONS.includes(r))
@@ -1044,4 +1282,7 @@ export const __test = {
     dedupeHops,
     normalizeRwy,
     firstOnlineInChain,
+    aorRowForOnlineTwrs,
+    aorColumnsForTwrLogin,
+    selectedTwrsCoverArrival,
 }

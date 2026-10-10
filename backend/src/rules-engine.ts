@@ -16,8 +16,10 @@ import type {
     StripAction,
     EuroscopeCommand
 } from "./config-types.js"
+import { isApproachClearanceLabel } from "@vatefs/common"
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport, isWithinRangeOfAnyAirport, isWithinStripVisibilityRange } from "./geo-utils.js"
+import { minutesUntilFlightEta } from "./hhmm-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole, isParallelTwr } from "./static-config.js"
@@ -38,6 +40,7 @@ type CommonRuleConditions = {
     controller?: ControllerCondition
     clearance?: boolean
     clearedToLand?: boolean
+    approachClearance?: boolean
     airborne?: boolean
     onRunway?: boolean
     depRunway?: boolean
@@ -48,6 +51,59 @@ type CommonRuleConditions = {
     notEssaFamilies?: EssaFamily[]
     nextControllerRole?: ControllerRole[]
     missedApproach?: boolean
+    notOnlineRoles?: ControllerRole[]
+    arrivalLike?: boolean
+}
+
+/** CA / VA / OS / CAT2 / CAT3 — EuroScope cfl 1|2 or TopSky approachType. */
+export function flightHasApproachClearance(flight: Flight): boolean {
+    if (flight.cfl === 1 || flight.cfl === 2) return true
+    if (flight.approachType && isApproachClearanceLabel(flight.approachType)) return true
+    return false
+}
+
+/**
+ * Arrival-like cues that survive a broken FLEG / wrong destination classification.
+ * Pure departures from our airport (origin ours, dest not) are excluded unless they
+ * carry an explicit arrival signal (ARR / CTL / STAR while somehow tagged as dep).
+ */
+export function flightLooksLikeArrival(flight: Flight, config: EfsStaticConfig): boolean {
+    const myAirports = config.myAirports
+    const originOurs = flight.origin !== undefined && myAirports.includes(flight.origin)
+    const destOurs = flight.destination !== undefined && myAirports.includes(flight.destination)
+    const altOurs = flight.alternate !== undefined && myAirports.includes(flight.alternate)
+    const gs = flight.groundstate ?? ''
+
+    if (gs === 'ARR') return true
+    if (flight.clearedToLand) return true
+    if (destOurs && !originOurs) return true
+    if (altOurs && !originOurs) return true
+    if (flight.star && !originOurs) return true
+    if (flight.arrRwy && (flight.airborne ?? false) && !originOurs) return true
+
+    return false
+}
+
+/**
+ * True when any of the given roles is online covering our airports.
+ * CTR covers all airports; APP/TWR/GND/DEL match by callsign ICAO prefix.
+ * Self is never in onlineControllers.
+ */
+export function hasOnlineRolesCoveringAirports(
+    config: EfsStaticConfig,
+    roles: ControllerRole[]
+): boolean {
+    if (!config.onlineControllers || roles.length === 0) return false
+    const roleSet = new Set(roles)
+    for (const ctrl of config.onlineControllers.values()) {
+        if (!roleSet.has(ctrl.role)) continue
+        if (ctrl.role === 'CTR') return true
+        const callsign = ctrl.callsign.toUpperCase()
+        if (config.myAirports.some((a) => callsign.startsWith(a.toUpperCase()))) {
+            return true
+        }
+    }
+    return false
 }
 
 function sortByPriorityDesc<T extends PrioritizedRule>(rules: T[]): T[] {
@@ -352,6 +408,16 @@ function evaluateCommonConditions(
         }
     }
 
+    if (rule.approachClearance !== undefined) {
+        if (flightHasApproachClearance(flight) !== rule.approachClearance) {
+            return false
+        }
+        // Approach pull-in for "other assumed": must have a tracking controller
+        if (rule.approachClearance && !flight.controller) {
+            return false
+        }
+    }
+
     if (rule.airborne !== undefined) {
         const isAirborne = flight.airborne ?? false
         if (isAirborne !== rule.airborne) {
@@ -413,6 +479,20 @@ function evaluateCommonConditions(
         return false
     }
 
+    // notOnlineRoles: none of these roles may be online at our airports
+    if (rule.notOnlineRoles) {
+        if (hasOnlineRolesCoveringAirports(config, rule.notOnlineRoles)) {
+            return false
+        }
+    }
+
+    // arrivalLike: geo/FPL cues that the aircraft is inbound despite bad direction
+    if (rule.arrivalLike !== undefined) {
+        if (flightLooksLikeArrival(flight, config) !== rule.arrivalLike) {
+            return false
+        }
+    }
+
     return true
 }
 
@@ -470,6 +550,22 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
     // Pending inbound transfer: handoff target is me
     if (rule.handoffToMyself !== undefined) {
         if (isHandoffToMyself(flight, config) !== rule.handoffToMyself) {
+            return false
+        }
+    }
+
+    // Handoff target role (e.g. APP→TWR while viewing as GND)
+    if (rule.handoffToRole) {
+        const target = flight.handoffTargetController
+        if (!target) return false
+        const targetRole = parseControllerRole(target, config.myAirports)
+        if (!rule.handoffToRole.includes(targetRole)) return false
+    }
+
+    // INBOUND APP time gate: ETA must exist and be within maxEtaMinutes (HHMM wrap)
+    if (rule.maxEtaMinutes !== undefined) {
+        const mins = minutesUntilFlightEta(flight)
+        if (mins == null || mins > rule.maxEtaMinutes) {
             return false
         }
     }

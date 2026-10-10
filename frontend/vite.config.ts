@@ -78,6 +78,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
   },
   server: {
+    host: true, // listen on 0.0.0.0 so LAN devices can reach the Vite dev server
     proxy: {
       '/api': 'http://localhost:17770',
     },

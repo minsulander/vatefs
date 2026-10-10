@@ -1,0 +1,312 @@
+/**
+ * Shared strip-style popup chrome (same language as SID / CFL menus).
+ * Use on v-menu content / teleported panels.
+ */
+.efs-popup-menu {
+  --efs-popup-strip-white: #ebebeb;
+  --s: var(--efs-scale, 1);
+  min-width: calc(160px * var(--s));
+  max-width: min(92vw, calc(360px * var(--s)));
+  background: #d8d8d8;
+  border: 1px solid #888;
+  border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: #000;
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+
+.efs-popup-menu--wide {
+  min-width: calc(240px * var(--s));
+  max-width: min(92vw, calc(420px * var(--s)));
+}
+
+.efs-popup-header {
+  padding: calc(6px * var(--s)) calc(8px * var(--s)) calc(2px * var(--s));
+  font-size: calc(9px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #000;
+  text-transform: uppercase;
+  text-align: center;
+  background: #c0c0c0;
+}
+
+.efs-popup-subheader {
+  padding: 0 calc(8px * var(--s)) calc(6px * var(--s));
+  font-size: calc(12px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #000;
+  text-align: center;
+  text-transform: uppercase;
+  background: #c0c0c0;
+  border-bottom: 2px solid #555;
+}
+
+.efs-popup-section {
+  padding: calc(5px * var(--s)) calc(8px * var(--s)) calc(4px * var(--s));
+  font-size: calc(9px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #000;
+  text-transform: uppercase;
+  text-align: center;
+  border-top: 2px solid #555;
+  border-bottom: 2px solid #555;
+  background: #c0c0c0;
+}
+
+.efs-popup-list {
+  display: flex;
+  flex-direction: column;
+  background: #d8d8d8;
+  max-height: min(50vh, calc(320px * var(--s)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.efs-popup-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(6px * var(--s));
+  width: 100%;
+  margin: 0;
+  padding: calc(5px * var(--s)) calc(8px * var(--s));
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid #888;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #d8d8d8;
+  color: #000;
+  font-size: calc(11px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  text-align: center;
+  cursor: pointer;
+  line-height: 1.15;
+  font-family: inherit;
+  min-height: max(28px, calc(28px * var(--s)));
+  box-sizing: border-box;
+}
+
+.efs-popup-item:last-child {
+  border-bottom: none;
+}
+
+.efs-popup-item--start {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.efs-popup-item--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(2px * var(--s));
+  text-align: left;
+}
+
+.efs-popup-item-title {
+  font-size: calc(11px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: inherit;
+}
+
+.efs-popup-item-sub {
+  font-size: calc(10px * var(--s));
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: none;
+  color: #333;
+  opacity: 0.85;
+}
+
+.efs-popup-item.selected {
+  background: var(--efs-popup-strip-white);
+  color: #1a3a6e;
+  box-shadow: inset 0 0 0 2px #1a3a6e;
+}
+
+/* Manual override (ESSA RWY / roles) — amber text only, no fill/border box */
+.efs-popup-item.is-manual:not(.selected) {
+  color: #b45309;
+}
+
+.efs-popup-item.is-manual:not(.selected) .efs-popup-item-sub {
+  color: #b45309;
+  opacity: 1;
+  font-weight: 700;
+}
+
+.efs-popup-item:hover:not(:disabled):not(.is-disabled) {
+  background: #1a3a6e;
+  color: var(--efs-popup-strip-white);
+  box-shadow: inset 0 0 0 2px #000;
+  position: relative;
+  z-index: 1;
+}
+
+.efs-popup-item:hover:not(:disabled):not(.is-disabled) .efs-popup-item-sub {
+  color: var(--efs-popup-strip-white);
+  opacity: 0.9;
+}
+
+.efs-popup-item:disabled,
+.efs-popup-item.is-disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.efs-popup-item:disabled:hover,
+.efs-popup-item.is-disabled:hover {
+  background: #d8d8d8;
+  color: #000;
+  box-shadow: none;
+}
+
+.efs-popup-meta {
+  padding: calc(6px * var(--s)) calc(8px * var(--s));
+  font-size: calc(10px * var(--s));
+  font-weight: 600;
+  color: #000;
+  text-align: center;
+  background: #d8d8d8;
+  border-bottom: 1px solid #888;
+}
+
+.efs-popup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  padding: calc(10px * var(--s)) calc(8px * var(--s));
+  border: none;
+  border-top: 3px solid #333;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #a8a8a8;
+  color: #000;
+  font-size: calc(11px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  line-height: 1.1;
+  font-family: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  min-height: max(32px, calc(32px * var(--s)));
+}
+
+.efs-popup-footer:hover {
+  background: #1a3a6e;
+  color: var(--efs-popup-strip-white);
+  box-shadow: inset 0 0 0 2px #000;
+}
+
+.efs-popup-search {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--s));
+  padding: calc(6px * var(--s)) calc(8px * var(--s));
+  background: #c8c8c8;
+  border-bottom: 2px solid #555;
+}
+
+.efs-popup-search-input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: calc(5px * var(--s)) calc(6px * var(--s));
+  border: 1px solid #666;
+  border-radius: 0;
+  background: #fff;
+  color: #000;
+  font-size: calc(13px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-family: inherit;
+  outline: none;
+}
+
+.efs-popup-search-input:focus {
+  border-color: #1a3a6e;
+  box-shadow: inset 0 0 0 1px #1a3a6e;
+}
+
+.efs-popup-search-input::placeholder {
+  color: #888;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: calc(10px * var(--s));
+}
+
+.efs-popup-muted {
+  opacity: 0.55;
+}
+
+.efs-popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #d8d8d8;
+  font-size: calc(11px * var(--s));
+  color: #000;
+}
+
+.efs-popup-table th,
+.efs-popup-table td {
+  padding: calc(5px * var(--s)) calc(8px * var(--s));
+  text-align: center;
+  vertical-align: middle;
+  border-bottom: 1px solid #888;
+}
+
+.efs-popup-table thead th {
+  font-size: calc(9px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: #c0c0c0;
+}
+
+.efs-popup-table tbody th {
+  text-align: left;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.efs-popup-chip {
+  min-width: calc(40px * var(--s));
+  padding: calc(2px * var(--s)) calc(6px * var(--s));
+  border: 1px solid #666;
+  border-radius: 0;
+  background: #c8c8c8;
+  color: #000;
+  font-size: calc(10px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.2;
+}
+
+.efs-popup-chip:hover {
+  background: #1a3a6e;
+  color: var(--efs-popup-strip-white);
+  border-color: #000;
+}
+
+.efs-popup-chip.active {
+  background: var(--efs-popup-strip-white);
+  color: #1a3a6e;
+  box-shadow: inset 0 0 0 2px #1a3a6e;
+}

@@ -70,19 +70,21 @@
     "slowPrefs": [
       {
         "exits": [
-          "ARS",
           "PETEV",
           "NOSLI",
           "INWIQ"
         ],
-        "track": "240"
+        "track": "240",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
-          "RESNA",
-          "KOGAV"
+          "ARS",
+          "KOGAV",
+          "RESNA"
         ],
-        "track": "330"
+        "track": "330",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -90,7 +92,8 @@
           "TOVRI"
         ],
         "track": "360",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -264,27 +267,30 @@
     "slowPrefs": [
       {
         "exits": [
-          "ARS",
           "PETEV",
           "NOSLI",
           "INWIQ"
         ],
-        "track": "240"
+        "track": "240",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
-          "RESNA",
-          "KOGAV"
+          "ARS",
+          "KOGAV",
+          "RESNA"
         ],
         "track": "270",
-        "heading": "330"
+        "heading": "330",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",

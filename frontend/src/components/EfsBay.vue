@@ -19,7 +19,7 @@
         :class="{ 'airport-picker-btn--empty': isEmpty, 'airport-picker-btn--open': pickerOpen }"
         @click="onPickerClick"
       >
-        <span class="airport-picker-icao">{{ selectedAirport ?? '—' }}</span>
+        <span class="airport-picker-icao">{{ selectedAirport ?? '-' }}</span>
         <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
       </button>
 
@@ -27,16 +27,16 @@
         <div
           v-if="pickerOpen"
           ref="pickerPanel"
-          class="airport-picker-panel"
+          class="efs-popup-menu efs-popup-menu--wide airport-picker-panel"
           :style="pickerStyle"
           @click.stop
         >
-          <div class="airport-picker-search">
-            <v-icon size="14" class="search-icon">mdi-magnify</v-icon>
+          <div class="efs-popup-header">Airport</div>
+          <div class="efs-popup-search">
             <input
               ref="searchInput"
               v-model="searchQuery"
-              class="search-input"
+              class="efs-popup-search-input"
               type="text"
               placeholder="Enter ICAO…"
               maxlength="4"
@@ -48,25 +48,21 @@
             <button
               v-if="selectedAirport"
               type="button"
-              class="clear-btn"
+              class="efs-popup-chip"
               title="Clear column"
               @click="selectAirport(null)"
-            >
-              Clear
-            </button>
+            >Clear</button>
           </div>
 
-          <div class="airport-picker-list">
+          <div class="efs-popup-list airport-picker-list">
             <button
               v-for="opt in filteredOptions"
               :key="opt.icao"
               type="button"
-              class="airport-picker-item"
+              class="efs-popup-item efs-popup-item--start"
               :class="{
-                'airport-picker-item--active': opt.icao === selectedAirport,
-                'airport-picker-item--taken': opt.taken,
-                'airport-picker-item--busy': opt.isActive && opt.total > 0,
-                'airport-picker-item--inactive': !opt.isActive,
+                selected: opt.icao === selectedAirport,
+                'efs-popup-muted': !opt.isActive,
               }"
               @click="selectAirport(opt.icao)"
             >
@@ -80,13 +76,8 @@
                 <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
               </span>
               <span v-if="opt.taken" class="item-taken">swap</span>
-              <v-icon
-                v-else-if="opt.icao === selectedAirport"
-                size="14"
-                class="item-check"
-              >mdi-check</v-icon>
             </button>
-            <div v-if="filteredOptions.length === 0" class="airport-picker-empty">
+            <div v-if="filteredOptions.length === 0" class="efs-popup-meta">
               No airports match
             </div>
           </div>
@@ -336,6 +327,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--efs-bay-bg, #3b3c41);
 }
 
 .efs-bay--empty {
@@ -394,132 +386,19 @@ onMounted(() => {
   font-size: max(calc(12px * var(--bay-scale)), calc(12px * var(--efs-scale, 1))) !important;
 }
 
-.traffic-dep {
-  color: #4dd0e1;
-  font-size: calc(12px * var(--efs-scale, 1));
-  font-weight: 700;
-}
-
-.traffic-arr {
-  color: #ffb74d;
-  font-size: calc(12px * var(--efs-scale, 1));
-  font-weight: 700;
-}
-
 .airport-picker-panel {
-  background: #1e2126;
-  border: 1px solid #3a3f46;
-  border-radius: calc(4px * var(--efs-scale, 1));
   width: min(calc(340px * var(--efs-scale, 1)), calc(100vw - 16px));
   max-height: calc(360px * var(--efs-scale, 1));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-.airport-picker-search {
-  display: flex;
-  align-items: center;
-  gap: calc(6px * var(--efs-scale, 1));
-  padding: calc(6px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1));
-  border-bottom: 1px solid #2f343b;
-  background: #25292f;
-}
-
-.search-icon {
-  color: #888;
-  flex-shrink: 0;
-}
-
-.search-input {
-  flex: 1;
-  min-width: 0;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #eee;
-  font-size: calc(13px * var(--efs-scale, 1));
-  font-family: inherit;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.search-input::placeholder {
-  color: #666;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.clear-btn {
-  flex-shrink: 0;
-  background: transparent;
-  border: 1px solid #555;
-  color: #bbb;
-  border-radius: 2px;
-  font-size: calc(11px * var(--efs-scale, 1));
-  padding: calc(1px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.clear-btn:hover {
-  color: #fff;
-  border-color: #888;
-}
-
 .airport-picker-list {
   max-height: calc(280px * var(--efs-scale, 1));
-  overflow-y: auto;
-  padding: calc(4px * var(--efs-scale, 1)) 0;
-}
-
-.airport-picker-item {
-  display: flex;
-  align-items: center;
-  gap: calc(8px * var(--efs-scale, 1));
-  width: 100%;
-  padding: calc(5px * var(--efs-scale, 1)) calc(10px * var(--efs-scale, 1));
-  background: transparent;
-  border: none;
-  color: #ddd;
-  font-family: inherit;
-  font-size: calc(13px * var(--efs-scale, 1));
-  cursor: pointer;
-  text-align: left;
-}
-
-.airport-picker-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.airport-picker-item--active {
-  background: rgba(144, 202, 249, 0.15);
-}
-
-.airport-picker-item--busy .item-icao {
-  color: #fff;
-  font-weight: 700;
-}
-
-.airport-picker-item--inactive {
-  opacity: 0.45;
-}
-
-.airport-picker-item--inactive:hover {
-  opacity: 0.75;
-}
-
-.airport-picker-item--taken {
-  opacity: 0.85;
-}
-
-.airport-picker-item--taken:hover {
-  background: rgba(255, 183, 77, 0.12);
 }
 
 .item-icao {
-  font-weight: 600;
+  font-weight: 800;
   letter-spacing: 0.05em;
   min-width: calc(42px * var(--efs-scale, 1));
   flex-shrink: 0;
@@ -531,19 +410,21 @@ onMounted(() => {
   gap: 1px;
   min-width: 0;
   flex: 1;
+  text-transform: none;
 }
 
 .item-name {
-  font-size: calc(12px * var(--efs-scale, 1));
-  color: #bbb;
+  font-size: calc(11px * var(--efs-scale, 1));
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .item-country {
-  font-size: calc(11px * var(--efs-scale, 1));
-  color: #888;
+  font-size: calc(10px * var(--efs-scale, 1));
+  font-weight: 600;
+  opacity: 0.75;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -554,25 +435,20 @@ onMounted(() => {
   gap: calc(6px * var(--efs-scale, 1));
   flex-shrink: 0;
   margin-left: auto;
+  font-weight: 800;
 }
 
 .item-taken {
   margin-left: auto;
+  font-size: calc(10px * var(--efs-scale, 1));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.traffic-dep,
+.traffic-arr {
+  color: inherit;
   font-size: calc(11px * var(--efs-scale, 1));
-  color: #ffb74d;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.item-check {
-  margin-left: auto;
-  color: #90caf9;
-}
-
-.airport-picker-empty {
-  padding: calc(12px * var(--efs-scale, 1));
-  text-align: center;
-  color: #777;
-  font-size: calc(12px * var(--efs-scale, 1));
+  font-weight: 800;
 }
 </style>

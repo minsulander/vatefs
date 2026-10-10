@@ -18,6 +18,9 @@ import {
     normalizeEssaRwy,
     type EssaPhysicalRwyPair,
 } from "@vatefs/common"
+
+/** Re-export for backend modules that resolve runway_* sections */
+export { isEssaDynamicRunwaySectionId }
 import { getGndOwnerChain, type EssaGndFamily } from "./ese-airspace.js"
 
 /** Fine-grained ESSA positions shown in the role picker / headers (physical only) */
@@ -113,15 +116,17 @@ export function parseEssaPosition(callsign: string): EssaPositionRole | undefine
 }
 
 /**
- * AOR: when two TWR callsigns are open, runway/CTR work is split across E/W/S slots.
- * Physical EFS roles are only TWR-E and TWR-W. Map a login + online peers to those.
+ * AOR: when two+ TWR callsigns are open, runway/CTR work splits by RWY priority
+ * (see aorRowForOnlineTwrs in essa-next-si):
+ *   01L/19R: W→E→S | 08/26: E→S→W | 01R/19L: S→E→W
+ * Physical EFS roles remain only TWR-E and TWR-W for layout/picker.
  *
- * Solo (≤1 TWR login online, counting self): covers both physical TWR roles.
- * Two open — inherit the complementary physical role(s):
- *   E+W online → S gets neither exclusive sector (third-runway pseudo); still needs
- *     TWR family visibility → both E+W for layout until geo-routing exists.
- *   E+S online → S inherits TWR-W areas (AOR row pairing); E keeps TWR-E.
- *   W+S online → S inherits TWR-E areas; W keeps TWR-W.
+ * Solo (≤1 TWR login): both physical TWR roles.
+ * Staffing → physical EFS roles (arrival/bay filter uses AOR cols in essa-next-si):
+ *   E+W+S → E=TWR-E, W=TWR-W, S keeps both for bay visibility
+ *   E+S → E=TWR-E, S=TWR-W
+ *   W+S → W=TWR-W, S=TWR-E
+ *   E+W → E=TWR-E, W=TWR-W
  */
 export function resolvePhysicalTwrsForLogin(
     loginId: EssaLoginId | undefined,
@@ -146,7 +151,8 @@ export function resolvePhysicalTwrsForLogin(
         const hasW = twrLogins.has('TWR-W')
         if (hasE && !hasW) return ['TWR-W']
         if (hasW && !hasE) return ['TWR-E']
-        // E+W+S or E+W: S is pseudo for 01R/19L — keep both for section visibility (no geo split yet)
+        // E+W+S or E+W: S is pseudo for 01R/19L — both physical roles for bay/section
+        // visibility; strip filter uses AOR columns (TE) via selectedTwrsCoverArrival.
         return [...ALL_TWR_POSITIONS]
     }
 
@@ -291,23 +297,56 @@ export function activeOnlineTwrRoles(onlineCallsigns: Iterable<string>): EssaPos
 /**
  * Inbound header:
  * - TWR covered → INBOUND APP (arrivals from approach)
- * - GND-only → INBOUND TWR-* (active/online TWR peers, else both)
+ * - GND-only → INBOUND TWR-E, TWR-W (always both physical TWRs; stable vs flaky
+ *   online detection — e.g. ARR 01R / TWR-E linked still lists TWR-W and TWR-E)
  */
 export function resolveInboundTitle(
     roles: EssaPositionRole[],
     yamlTitle: string,
-    activeTwrPeers?: EssaPositionRole[]
+    _activeTwrPeers?: EssaPositionRole[]
 ): string {
     const families = familiesFromRoles(roles)
     if (families.has('TWR')) return 'INBOUND APP'
     if (families.has('GND')) {
-        const twrs =
-            activeTwrPeers && activeTwrPeers.length > 0
-                ? activeTwrPeers
-                : ALL_TWR_POSITIONS
-        return `INBOUND ${twrs.join(', ')}`
+        return `INBOUND ${ALL_TWR_POSITIONS.join(', ')}`
     }
     return yamlTitle
+}
+
+/**
+ * Physical GND positions currently online (from ESSA_*_GND callsigns).
+ * Empty when no ESSA GND is online (no fallback).
+ */
+export function activeOnlineGndRoles(onlineCallsigns: Iterable<string>): EssaPositionRole[] {
+    const set = new Set<EssaPositionRole>()
+    for (const cs of onlineCallsigns) {
+        const id = parseEssaLoginId(cs)
+        if (id === 'GND-E' || id === 'GND-N' || id === 'GND-W') set.add(id)
+    }
+    return ALL_GND_POSITIONS.filter(r => set.has(r))
+}
+
+/**
+ * INBOUND GND header (taxi-out from ground → TWR):
+ * When TWR-only with GND online below, always list all GND positions
+ * (GND-E, GND-N, GND-W) — not only the one(s) currently open.
+ */
+export function resolveInboundGndTitle(
+    _roles: EssaPositionRole[],
+    _yamlTitle: string,
+    _activeGndPeers?: EssaPositionRole[]
+): string {
+    return `INBOUND ${ALL_GND_POSITIONS.join(', ')}`
+}
+
+/** Show INBOUND GND only for TWR when a separate GND is online (not when covering GND alone). */
+export function shouldShowInboundGnd(
+    roles: EssaPositionRole[],
+    activeGndPeers?: EssaPositionRole[]
+): boolean {
+    const families = familiesFromRoles(roles)
+    if (!families.has('TWR') || families.has('GND')) return false
+    return !!activeGndPeers && activeGndPeers.length > 0
 }
 
 /** Max visible ESSA columns; CD ALL + TSAT share a column when this would be exceeded */
@@ -382,7 +421,8 @@ export function filterEssaLayout(
     layout: EfsLayout,
     roles: EssaPositionRole[],
     sectionVisibleFor: Map<string, EssaFamily[]> | undefined,
-    activeTwrPeers?: EssaPositionRole[]
+    activeTwrPeers?: EssaPositionRole[],
+    activeGndPeers?: EssaPositionRole[]
 ): EfsLayout {
     if (!sectionVisibleFor || sectionVisibleFor.size === 0) {
         return layout
@@ -400,16 +440,27 @@ export function filterEssaLayout(
                 ...bay,
                 sections: bay.sections
                     .filter(section => {
+                        if (section.id === 'inbound_gnd') {
+                            return shouldShowInboundGnd(roles, activeGndPeers)
+                        }
                         const visibleFor = sectionVisibleFor.get(section.id)
                         if (!visibleFor || visibleFor.length === 0) return true
                         return visibleFor.some(f => families.has(f))
                     })
                     .map(section => {
-                        if (section.id !== 'inbound') return section
-                        return {
-                            ...section,
-                            title: resolveInboundTitle(roles, section.title, activeTwrPeers),
+                        if (section.id === 'inbound') {
+                            return {
+                                ...section,
+                                title: resolveInboundTitle(roles, section.title, activeTwrPeers),
+                            }
                         }
+                        if (section.id === 'inbound_gnd') {
+                            return {
+                                ...section,
+                                title: resolveInboundGndTitle(roles, section.title, activeGndPeers),
+                            }
+                        }
+                        return section
                     })
             }))
             .filter(bay => bay.sections.length > 0)
@@ -570,7 +621,8 @@ export function applyEssaRunwayPairLayout(
     const insertStack = (bayId: string, afterSectionId: string, stack: EssaRunwaySectionPlacement[]) => {
         let after = afterSectionId
         for (const p of stack) {
-            const section: Section = { id: p.sectionId, title: p.title }
+            // addFromTop:false — first L/U into RWY stays above later; CFTO sort is frontend
+            const section: Section = { id: p.sectionId, title: p.title, addFromTop: false }
             insertAfter(bayId, after, section)
             after = p.sectionId
         }
@@ -678,7 +730,7 @@ export function normalizeRunwayList(rwys: string[]): string[] {
 /** Sections whose strips appear under inbound in GND-only ESSA view */
 const GND_ONLY_INBOUND_SECTIONS = new Set(['ctr_arr', 'arr_runway', 'dep_runway'])
 
-function isGndOnlyInboundSection(sectionId: string): boolean {
+export function isGndOnlyInboundSection(sectionId: string): boolean {
     return GND_ONLY_INBOUND_SECTIONS.has(sectionId) || isEssaDynamicRunwaySectionId(sectionId)
 }
 

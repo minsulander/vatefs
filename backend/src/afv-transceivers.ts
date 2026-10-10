@@ -24,6 +24,8 @@ interface AfvStation {
 let freqsByCallsign: Map<string, Set<string>> = new Map()
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let inFlight = false
+let lastFetchOk = false
+let everFetched = false
 
 export function formatFreqMhz(hzOrMhz: number): string {
     // Values > 1000 are treated as Hz (AFV); else already MHz
@@ -81,21 +83,38 @@ export async function refreshAfvTransceivers(): Promise<boolean> {
         })
         if (!res.ok) {
             console.warn(`AFV transceivers HTTP ${res.status}`)
+            everFetched = true
+            lastFetchOk = false
             return false
         }
         const data = (await res.json()) as AfvStation[]
         if (!Array.isArray(data)) {
             console.warn("AFV transceivers: unexpected payload")
+            everFetched = true
+            lastFetchOk = false
             return false
         }
         applyTransceiverSnapshot(data)
+        everFetched = true
+        lastFetchOk = true
         return true
     } catch (e) {
         console.warn("AFV transceivers fetch failed:", e instanceof Error ? e.message : e)
+        everFetched = true
+        lastFetchOk = false
         return false
     } finally {
         inFlight = false
     }
+}
+
+/** Health for Connection status popup */
+export function getAfvHealth(): { ok: boolean; detail: string } {
+    if (!pollTimer) return { ok: false, detail: "Not started" }
+    if (!everFetched) return { ok: false, detail: "Waiting…" }
+    return lastFetchOk
+        ? { ok: true, detail: `Connected (${freqsByCallsign.size})` }
+        : { ok: false, detail: "Fetch failed" }
 }
 
 export function startAfvTransceiverPolling(intervalMs = DEFAULT_POLL_MS): void {

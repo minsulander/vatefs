@@ -7,7 +7,8 @@
  *   .URNAV /Y2     — remarks + HP (HP after remarks)
  *   .URNAV         — remarks only
  *   /Y2            — HP only (single alphanumeric token)
- *   SLOW           — TopSky slow flag (remarks)
+ *   .SLOW          — slow flag (leading dot, same as other remarks)
+ *   SLOW           — bare TopSky form still accepted when reading
  *
  * TopSky protocol scratches (/ROF/…, /LAM/ROF/…, /RJC/…, etc.) must not
  * touch remarks or HP — return null to leave existing fields unchanged.
@@ -21,10 +22,7 @@ export function buildCombinedScratch(
     const h = hp?.trim().toUpperCase()
     if (r && h) return `.${r} /${h}`
     if (h) return `/${h}`
-    if (r) {
-        if (r.toUpperCase() === "SLOW") return "SLOW"
-        return `.${r}`
-    }
+    if (r) return `.${r}`
     return ""
 }
 

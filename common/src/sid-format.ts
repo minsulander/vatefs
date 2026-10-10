@@ -14,6 +14,22 @@ const TRACK_SEP_RE = /[·•*]/
 /** Real SLOW/track SIDs: NNN·EXIT or NNN·NNN·EXIT (not namedSID·EXIT). */
 const TRACK_SID_RE = /^\d{3}([·•*]\d{3})?[·•*][A-Z]{2,}$/i
 
+/** Compact uppercase SID for comparison (drops spaces). */
+export function normalizeSidName(sid: string | undefined | null): string {
+    if (!sid) return ''
+    return sid.trim().toUpperCase().replace(/\s+/g, '')
+}
+
+/** True when two SID designators refer to the same procedure (PETEV2G ≡ "PETEV 2G"). */
+export function sidsMatch(
+    a: string | undefined | null,
+    b: string | undefined | null,
+): boolean {
+    const na = normalizeSidName(a)
+    const nb = normalizeSidName(b)
+    return !!na && !!nb && na === nb
+}
+
 /**
  * True when the FPL route starts with a forced SID/rwy (or track·…/rwy),
  * not bare ICAO/rwy (e.g. ESSA/01L).
@@ -79,6 +95,33 @@ export function isIfrSidEligible(flightRules: string | undefined | null): boolea
     return flightRules === 'I' || flightRules === 'Y'
 }
 
+/**
+ * Display FRUL on strips: Y = IFR→VFR, Z = VFR→IFR.
+ * When FPL rules are I/V but the route contains the opposite rules token
+ * (standalone IFR / VFR), upgrade to Y/Z. Already Y/Z are left unchanged.
+ */
+export function resolveDisplayFlightRules(
+    fplRules: string | undefined | null,
+    route: string | undefined | null,
+): 'I' | 'V' | 'Y' | 'Z' {
+    const base =
+        fplRules === 'I' || fplRules === 'V' || fplRules === 'Y' || fplRules === 'Z'
+            ? fplRules
+            : 'I'
+    if (base === 'Y' || base === 'Z') return base
+
+    const tokens = (route ?? '')
+        .toUpperCase()
+        .split(/[^A-Z0-9]+/)
+        .filter(Boolean)
+    const hasIfr = tokens.includes('IFR')
+    const hasVfr = tokens.includes('VFR')
+
+    if (base === 'V' && hasIfr) return 'Z'
+    if (base === 'I' && hasVfr) return 'Y'
+    return base
+}
+
 /** True when remarks contain a SLOW token (exact or among other flags). */
 export function hasSlowRemark(remarks: string | undefined | null): boolean {
     return /\bSLOW\b/i.test(remarks ?? '')
@@ -92,6 +135,27 @@ export function withSlowRemark(remarks: string | undefined | null, enabled: bool
         return current ? `${current} SLOW` : 'SLOW'
     }
     return current.replace(/\.?\bSLOW\b/gi, '').replace(/\s+/g, ' ').trim()
+}
+
+/** True when remarks contain a VECT token. */
+export function hasVectRemark(remarks: string | undefined | null): boolean {
+    return /\bVECT\b/i.test(remarks ?? '')
+}
+
+/** Add or remove the VECT remarks token. Returns trimmed remarks (may be empty). */
+export function withVectRemark(remarks: string | undefined | null, enabled: boolean): string {
+    const current = (remarks ?? '').trim()
+    if (enabled) {
+        if (hasVectRemark(current)) return current
+        return current ? `${current} VECT` : 'VECT'
+    }
+    return current.replace(/\.?\bVECT\b/gi, '').replace(/\s+/g, ' ').trim()
+}
+
+/** Strip SID cell when AHD is set and no procedure SID: veARS / veKOGAV. */
+export function formatAhdVectorSidDisplay(tmaExit: string | undefined | null): string {
+    const exit = (tmaExit ?? '').trim().toUpperCase()
+    return exit ? `ve${exit}` : 've'
 }
 
 /** Strip display form for ESE track/SLOW SIDs. */

@@ -79,10 +79,20 @@ export class AtisService {
     private essaCache: { arrLetter?: string; depLetter?: string; qnh?: number } = {}
     private onUpdate: () => void
     private pollIntervalMs: number
+    private lastFetchOk = false
+    private started = false
 
     constructor(options: { onUpdate: () => void; pollIntervalMs?: number }) {
         this.onUpdate = options.onUpdate
         this.pollIntervalMs = options.pollIntervalMs ?? 60_000
+    }
+
+    /** Health for Connection status popup */
+    getHealth(): { ok: boolean; detail: string } {
+        if (!this.started) return { ok: false, detail: "Not started" }
+        return this.lastFetchOk
+            ? { ok: true, detail: "Connected" }
+            : { ok: false, detail: "Fetch failed" }
     }
 
     /**
@@ -90,6 +100,7 @@ export class AtisService {
      */
     start(airports: string[]): void {
         this.airports = airports
+        this.started = true
         this.poll()
     }
 
@@ -97,6 +108,8 @@ export class AtisService {
      * Stop polling.
      */
     stop(): void {
+        this.started = false
+        this.lastFetchOk = false
         if (this.pollTimer) {
             clearTimeout(this.pollTimer)
             this.pollTimer = null
@@ -129,16 +142,19 @@ export class AtisService {
             const response = await fetch(VATSIM_DATA_URL)
             if (!response.ok) {
                 console.warn(`[ATIS] Failed to fetch VATSIM data: ${response.status}`)
+                this.lastFetchOk = false
                 this.schedulePoll()
                 return
             }
 
             const data = (await response.json()) as VatsimDataResponse
             if (!data.atis) {
+                this.lastFetchOk = false
                 this.schedulePoll()
                 return
             }
 
+            this.lastFetchOk = true
             let changed = false
 
             for (const airport of this.airports) {
@@ -153,6 +169,7 @@ export class AtisService {
                 this.onUpdate()
             }
         } catch (err) {
+            this.lastFetchOk = false
             console.warn(`[ATIS] Error fetching VATSIM data: ${err instanceof Error ? err.message : err}`)
         }
 

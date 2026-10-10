@@ -23,15 +23,18 @@ layout:
           title: CTR ARR
         runway:
           title: RUNWAY
+          addFromTop: false
         ctr_dep:
           title: CTR DEP
+          addFromTop: false
 
     bay3:
       sections:
         taxi:
-          title: TAXI
+          title: TAXIWAY
         push_start:
           title: PUSH&START
+          addFromTop: true
 
     bay4:
       sections:

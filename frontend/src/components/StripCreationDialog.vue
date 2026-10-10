@@ -64,7 +64,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useEfsStore } from '@/store/efs'
 
-type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 
 const props = defineProps<{
   modelValue: boolean
@@ -90,7 +90,7 @@ const isSearching = ref(false)
 
 let searchDebounce: ReturnType<typeof setTimeout> | undefined
 
-const isNote = computed(() => props.stripType === 'note')
+const isNote = computed(() => props.stripType === 'note' || props.stripType === 'vehicle')
 
 const airports = computed(() => {
   if (store.multiAirport) {
@@ -105,16 +105,16 @@ const airports = computed(() => {
 
 function airportOptionLabel(icao: string): string {
   const meta = store.airportMeta(icao)
-  if (meta?.name && meta?.country) return `${icao} — ${meta.name} (${meta.country})`
-  if (meta?.country) return `${icao} — ${meta.country}`
-  if (meta?.name) return `${icao} — ${meta.name}`
+  if (meta?.name && meta?.country) return `${icao} - ${meta.name} (${meta.country})`
+  if (meta?.country) return `${icao} - ${meta.country}`
+  if (meta?.name) return `${icao} - ${meta.name}`
   return icao
 }
 
 const showAirportSelector = computed(() => {
   if (airports.value.length === 0) return false
   // CROSS/NOTE airport choice is only meaningful in RTC (multi-airport) columns
-  if (props.stripType === 'cross' || props.stripType === 'note') {
+  if (props.stripType === 'cross' || props.stripType === 'note' || props.stripType === 'vehicle') {
     return store.multiAirport
   }
   // VFR DEP/ARR
@@ -135,6 +135,7 @@ const dialogTitle = computed(() => {
     case 'vfrArr': return 'NEW VFR ARRIVAL'
     case 'cross': return 'NEW CROSSING TRAFFIC'
     case 'note': return 'NEW NOTE'
+    case 'vehicle': return 'NEW VEHICLE'
     default: return 'NEW STRIP'
   }
 })
@@ -144,6 +145,7 @@ const headerIndicatorClass = computed(() => {
     case 'vfrDep': return 'indicator-dep'
     case 'vfrArr': return 'indicator-arr'
     case 'cross': return 'indicator-cross'
+    case 'vehicle': return 'indicator-vehicle'
     default: return 'indicator-note'
   }
 })
@@ -258,10 +260,11 @@ function onCancel() {
   flex-shrink: 0;
 }
 
-.indicator-dep { background: #3b7dd8; }
+.indicator-dep { background: #3a72d4; }
 .indicator-arr { background: #daa520; }
 .indicator-cross { background: #881fe0; }
 .indicator-note { background: #888; }
+.indicator-vehicle { background: #4a4a4a; }
 
 .dialog-header-title {
   font-size: calc(12px * var(--s));

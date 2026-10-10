@@ -24,6 +24,8 @@ export interface AppClrEntry {
 
 /** Raw APPCLR rows from TopSkyAirspace.txt */
 const appClrEntries: AppClrEntry[] = []
+/** Whether TopSkyAirspace.txt was found and parsed */
+let topskyFileLoaded = false
 
 function parseEsTaComment(comment: string | undefined): number | undefined {
     if (!comment) return undefined
@@ -42,6 +44,7 @@ export function loadTopSkyAirspace(euroscopeDir: string): {
 } {
     airportTa.clear()
     appClrEntries.length = 0
+    topskyFileLoaded = false
     defaultTransitionAltitudeFt = DEFAULT_TRANSITION_ALTITUDE_FT
 
     const file = path.join(euroscopeDir, "ESAA", "Plugins", "TopSkyAirspace.txt")
@@ -49,6 +52,7 @@ export function loadTopSkyAirspace(euroscopeDir: string): {
         console.log(`TopSkyAirspace.txt not found: ${file} (using TA ${defaultTransitionAltitudeFt} ft)`)
         return { defaultTaFt: defaultTransitionAltitudeFt, airportCount: 0 }
     }
+    topskyFileLoaded = true
 
     const content = fs.readFileSync(file, "latin1")
     for (const rawLine of content.split(/\r?\n/)) {
@@ -106,6 +110,15 @@ export function loadTopSkyAirspace(euroscopeDir: string): {
             ` (from ${file})`,
     )
     return { defaultTaFt: defaultTransitionAltitudeFt, airportCount: airportTa.size }
+}
+
+/** Health for Parsing status popup */
+export function getTopSkyAirspaceHealth(): { ok: boolean; detail: string } {
+    if (!topskyFileLoaded) return { ok: false, detail: "Not found" }
+    return {
+        ok: true,
+        detail: `Loaded (TA ${defaultTransitionAltitudeFt}, ${airportTa.size} apt, ${appClrEntries.length} APPCLR)`,
+    }
 }
 
 /** Transition altitude (ft) for an airport ICAO, or Swedish default. */

@@ -18,10 +18,15 @@
           </span>
           <span class="map-box-right">
             <span class="map-box-item">
-              <span class="map-turn" aria-hidden="true" />
+              <span
+                v-if="variant.turn"
+                class="map-turn"
+                :class="variant.turn === 'LEFT' ? 'left' : 'right'"
+                aria-hidden="true"
+              />
               <span class="map-box-val">{{ headingLabel }}</span>
             </span>
-            <span class="map-box-item">
+            <span class="map-box-item" :title="freqCallsignTitle">
               <span class="map-box-label">fq:</span>
               <span class="map-box-val">{{ freqLabel }}</span>
             </span>
@@ -49,6 +54,7 @@ const headingLabel = computed(() => {
 
 /** Live freq from backend (ESE OWNER + AFV XC); fallback to static default. */
 const resolvedFreq = ref<string | null>(null)
+const resolvedCallsign = ref<string | null>(null)
 let freqPollTimer: ReturnType<typeof setInterval> | null = null
 const FREQ_POLL_MS = 30_000
 
@@ -56,13 +62,16 @@ async function refreshMapFreq() {
   const v = variant.value
   if (!v || !visible.value) {
     resolvedFreq.value = null
+    resolvedCallsign.value = null
     return
   }
   try {
     const res = await fetch(`/api/essa-map-freq?config=${encodeURIComponent(v.configId)}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = (await res.json()) as { frequency?: string | null }
+    const data = (await res.json()) as { frequency?: string | null; callsign?: string | null }
     resolvedFreq.value = typeof data.frequency === 'string' && data.frequency ? data.frequency : null
+    resolvedCallsign.value =
+      typeof data.callsign === 'string' && data.callsign.trim() ? data.callsign.trim() : null
   } catch {
     // keep previous / fall through to default
   }
@@ -73,6 +82,8 @@ const freqLabel = computed(() => {
   if (!v) return ''
   return resolvedFreq.value || v.defaultFreq
 })
+
+const freqCallsignTitle = computed(() => resolvedCallsign.value || undefined)
 
 function startFreqPoll() {
   stopFreqPoll()
@@ -105,6 +116,7 @@ watch(
     } else {
       stopFreqPoll()
       resolvedFreq.value = null
+      resolvedCallsign.value = null
     }
   },
   { immediate: true },
@@ -140,8 +152,8 @@ onUnmounted(() => {
 
 .map-rwy-text {
   display: block;
-  font-size: calc(49px * var(--strip-scale, 1));
-  font-weight: 700;
+  font-size: calc(42px * var(--strip-scale, 1));
+  font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1;
   white-space: nowrap;
@@ -254,20 +266,23 @@ onUnmounted(() => {
   border-radius: 0.5px;
 }
 
-/* Right-turn delivery symbol — shorter horizontal arm, slightly thicker stroke */
+/* Turn-to-heading symbol — direction from RWY hdg → delivery hdg */
 .map-turn {
   display: inline-block;
   width: calc(8px * var(--strip-scale, 1));
   height: calc(12px * var(--strip-scale, 1));
-  border-left: 3.25px solid #8b1a2b;
-  border-top: 3.25px solid #8b1a2b;
-  border-top-left-radius: 1px;
   position: relative;
   margin-right: 1px;
   box-sizing: border-box;
 }
 
-.map-turn::after {
+.map-turn.right {
+  border-left: 3.25px solid #8b1a2b;
+  border-top: 3.25px solid #8b1a2b;
+  border-top-left-radius: 1px;
+}
+
+.map-turn.right::after {
   content: '';
   position: absolute;
   right: -1.5px;
@@ -275,6 +290,24 @@ onUnmounted(() => {
   width: 0;
   height: 0;
   border-left: 6px solid #8b1a2b;
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+}
+
+.map-turn.left {
+  border-right: 3.25px solid #8b1a2b;
+  border-top: 3.25px solid #8b1a2b;
+  border-top-right-radius: 1px;
+}
+
+.map-turn.left::after {
+  content: '';
+  position: absolute;
+  left: -1.5px;
+  top: -6px;
+  width: 0;
+  height: 0;
+  border-right: 6px solid #8b1a2b;
   border-top: 4.5px solid transparent;
   border-bottom: 4.5px solid transparent;
 }

@@ -1,6 +1,6 @@
 // Flight strip types
 
-export type StripType = 'departure' | 'arrival' | 'local' | 'vfr' | 'cross' | 'note'
+export type StripType = 'departure' | 'arrival' | 'local' | 'vfr' | 'cross' | 'note' | 'vehicle'
 export type FlightRules = 'I' | 'V' | 'Y' | 'Z' // IFR, VFR, IFR->VFR, VFR->IFR
 export type WakeCategory = 'L' | 'M' | 'H' | 'J' // Light, Medium, Heavy, Super
 
@@ -36,6 +36,8 @@ export interface FlightStrip {
     tmaExit?: string
     star?: string              // Standard Terminal Arrival Route
     rfl?: string               // Requested Flight Level e.g., "FL340", "A050"
+    /** EuroScope exit coordination altitude / XFL e.g. "A050", "FL90" */
+    xfl?: string
 
     // Assigned data (from controller)
     squawk?: string            // Assigned transponder code
@@ -131,6 +133,11 @@ export interface FlightStrip {
 
     // Special strip fields
     noteText?: string            // Text content for note strips
+    /**
+     * Free-text STD field on local vehicle strips (not EuroScope-linked).
+     * Distinct from stand / scratchpad HP on flight strips.
+     */
+    std?: string
     hasMatchingFlight?: boolean  // Whether a matching flight was found (false = greyed-out callsign)
 
     // Controller state
@@ -216,6 +223,21 @@ export interface UiSettings {
      * Only applies at airports with GRP stand geometry loaded.
      */
     autoParkEnabled: boolean
+    /**
+     * When a new departure strip appears, auto-assign TopSky squawk and initial climb (CFL)
+     * without opening the clearance window. Off by default.
+     * When on, the strip action shows ACK CLR (never CLR) and voice-acks set the clearance flag.
+     */
+    autoDepSquawkCfl: boolean
+    /**
+     * Keep bay columns equal width (flex 1 1 0). When off, columns may size by content.
+     */
+    equalBayColumns: boolean
+    /**
+     * Show the "A" (ATC) marker next to TOBT when TOBT was set by ATC.
+     * Pilot "P" always shows when applicable. Default on.
+     */
+    showTobtSetByA: boolean
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -227,6 +249,9 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     transferSoundsEnabled: false,
     showAppDepXcFrequency: false,
     autoParkEnabled: true,
+    autoDepSquawkCfl: false,
+    equalBayColumns: true,
+    showTobtSetByA: true,
 }
 
 export interface AirportAtisInfo {

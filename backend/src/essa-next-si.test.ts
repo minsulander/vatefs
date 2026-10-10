@@ -20,6 +20,9 @@ const {
     twrFamilyForRunway,
     dedupeHops,
     firstOnlineInChain,
+    aorRowForOnlineTwrs,
+    aorColumnsForTwrLogin,
+    selectedTwrsCoverArrival,
 } = __test
 
 let passed = 0
@@ -47,6 +50,74 @@ check("TWR family for runway", () => {
     assert.equal(twrFamilyForRunway("19L"), "TE")
     assert.equal(twrFamilyForRunway("01L"), "TW")
     assert.equal(twrFamilyForRunway("08"), "TS")
+    assert.equal(twrFamilyForRunway("07"), "TS")
+    assert.equal(twrFamilyForRunway("25"), "TS")
+})
+
+check("TWR RWY AOR priority (TW|TS|TE)", () => {
+    assert.equal(aorRowForOnlineTwrs(new Set(["TWR-W"])), null) // solo
+    assert.deepEqual(
+        aorRowForOnlineTwrs(new Set(["TWR-E", "TWR-W", "TWR-S"])),
+        ["TWR-W", "TWR-E", "TWR-S"]
+    )
+    // E+S: TW→E, TS→E, TE→S
+    assert.deepEqual(
+        aorRowForOnlineTwrs(new Set(["TWR-E", "TWR-S"])),
+        ["TWR-E", "TWR-E", "TWR-S"]
+    )
+    // W+S: TW→W, TS→S, TE→S
+    assert.deepEqual(
+        aorRowForOnlineTwrs(new Set(["TWR-W", "TWR-S"])),
+        ["TWR-W", "TWR-S", "TWR-S"]
+    )
+    // E+W: TW→W, TS→E, TE→E
+    assert.deepEqual(
+        aorRowForOnlineTwrs(new Set(["TWR-E", "TWR-W"])),
+        ["TWR-W", "TWR-E", "TWR-E"]
+    )
+})
+
+check("E+W+S: TWR-S AOR is TE only (01R/19L)", () => {
+    const online = ["TWR-E", "TWR-W", "TWR-S"]
+    const cols = aorColumnsForTwrLogin("TWR-S", online)
+    assert.deepEqual([...cols].sort(), ["TE"])
+    const eCols = aorColumnsForTwrLogin("TWR-E", online)
+    assert.deepEqual([...eCols].sort(), ["TS"])
+    const wCols = aorColumnsForTwrLogin("TWR-W", online)
+    assert.deepEqual([...wCols].sort(), ["TW"])
+})
+
+check("TWR-S with both EFS roles still filters INBOUND by TE AOR", () => {
+    const prevCs = staticConfig.myCallsign
+    const prevOnline = staticConfig.onlineControllers
+    const prevArr = staticConfig.activeRunways
+    try {
+        staticConfig.myCallsign = "ESSA_S_TWR"
+        staticConfig.onlineControllers = new Map([
+            ["ESSA_E_TWR", { callsign: "ESSA_E_TWR", frequency: 118.5, role: "TWR" }],
+            ["ESSA_W_TWR", { callsign: "ESSA_W_TWR", frequency: 118.6, role: "TWR" }],
+            ["ESSA_S_TWR", { callsign: "ESSA_S_TWR", frequency: 118.7, role: "TWR" }],
+        ])
+        staticConfig.activeRunways = { ESSA: { arr: ["01R", "01L"], dep: ["01L"] } }
+        // Both physical roles (layout visibility) must NOT bypass AOR
+        const bothRoles = ["TWR-E", "TWR-W"] as const
+        assert.equal(
+            selectedTwrsCoverArrival([...bothRoles], { callsign: "SAS1", arrRwy: "01R" } as never),
+            true,
+        )
+        assert.equal(
+            selectedTwrsCoverArrival([...bothRoles], { callsign: "SAS2", arrRwy: "01L" } as never),
+            false,
+        )
+        assert.equal(
+            selectedTwrsCoverArrival([...bothRoles], { callsign: "SAS3", arrRwy: "26" } as never),
+            false,
+        )
+    } finally {
+        staticConfig.myCallsign = prevCs
+        staticConfig.onlineControllers = prevOnline
+        staticConfig.activeRunways = prevArr
+    }
 })
 
 check("DEP from GW to 01R → TWR", () => {

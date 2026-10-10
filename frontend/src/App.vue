@@ -7,9 +7,11 @@
 <script lang="ts" setup>
 import { useEfsStore } from "./store/efs"
 import { useEfsUiScale } from "./composables/useEfsUiScale"
+import { startBayBackground } from "./composables/useBayBackground"
 
 const efs = useEfsStore()
 useEfsUiScale()
+startBayBackground()
 </script>
 
 <style>
@@ -34,13 +36,6 @@ body.touch-dragging * {
     -webkit-touch-callout: none !important;
     user-select: none !important;
     -webkit-user-select: none !important;
-}
-
-/* Section highlight during drag */
-.section-content.drag-over {
-    background: rgba(0, 136, 170, 0.15) !important;
-    outline: 2px dashed #0088aa;
-    outline-offset: -2px;
 }
 
 /* Prevent text selection and callout on touch devices globally for strips */

@@ -25,23 +25,26 @@
         >{{ opt.label }}</button>
       </div>
 
-      <div class="cfl-menu-app">
+      <div ref="appEl" class="cfl-menu-app">
         <button
           type="button"
           class="cfl-menu-item cfl-menu-app-item"
           :class="{ selected: isAppSelected('CA') }"
+          data-app="CA"
           @click="onSelectApp('CA')"
         >CA</button>
         <button
           type="button"
           class="cfl-menu-item cfl-menu-app-item"
           :class="{ selected: isAppSelected('VA') }"
+          data-app="VA"
           @click="onSelectApp('VA')"
         >VA</button>
         <button
           type="button"
           class="cfl-menu-item cfl-menu-app-item"
           :class="{ selected: isAppSelected('OS') }"
+          data-app="OS"
           @click="onSelectApp('OS')"
         >OS</button>
         <button
@@ -50,6 +53,7 @@
           type="button"
           class="cfl-menu-item cfl-menu-app-item"
           :class="{ selected: isAppSelected(app) }"
+          :data-app="app"
           @click="onSelectApp(app)"
         >{{ app }}</button>
       </div>
@@ -100,6 +104,7 @@ const emit = defineEmits<{
 
 const store = useEfsStore()
 const listEl = ref<HTMLElement | null>(null)
+const appEl = ref<HTMLElement | null>(null)
 const manualInput = ref<HTMLInputElement | null>(null)
 const manualText = ref('')
 const appClrTypes = ref<string[]>([])
@@ -135,7 +140,10 @@ watch(
       ignoreCloseUntil = Date.now() + 450
       manualText.value = ''
       await fetchAppClr()
-      nextTick(() => {
+      await nextTick()
+      scrollToSelected()
+      // Layout settles after APPCLR rows mount
+      requestAnimationFrame(() => {
         scrollToSelected()
         manualInput.value?.focus()
       })
@@ -226,16 +234,42 @@ function isAppSelected(app: string): boolean {
   return label === app.toUpperCase()
 }
 
+function scrollIntoCenter(container: HTMLElement, el: HTMLElement) {
+  const cRect = container.getBoundingClientRect()
+  const eRect = el.getBoundingClientRect()
+  const offset = eRect.top - cRect.top - (cRect.height / 2 - eRect.height / 2)
+  container.scrollTop += offset
+}
+
 function scrollToSelected() {
+  const label = currentLabel.value
+  if (isApproachClearanceLabel(label)) {
+    const app = appEl.value
+    if (!app) return
+    const selected =
+      (app.querySelector('.cfl-menu-app-item.selected') as HTMLElement | null) ||
+      (app.querySelector(`[data-app="${label}"]`) as HTMLElement | null)
+    selected?.scrollIntoView({ block: 'nearest' })
+    return
+  }
+
   const container = listEl.value
   if (!container) return
   const selected = container.querySelector('.cfl-menu-item.selected') as HTMLElement | null
   if (selected) {
-    selected.scrollIntoView({ block: 'center' })
+    scrollIntoCenter(container, selected)
     return
   }
+  const feet = currentFeet()
+  if (feet != null) {
+    const byData = container.querySelector(`[data-cfl="${feet}"]`) as HTMLElement | null
+    if (byData) {
+      scrollIntoCenter(container, byData)
+      return
+    }
+  }
   const mid = container.querySelector('[data-cfl="5000"]') as HTMLElement | null
-  mid?.scrollIntoView({ block: 'center' })
+  if (mid) scrollIntoCenter(container, mid)
 }
 
 function onSelectLevel(value: string) {

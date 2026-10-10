@@ -3,7 +3,7 @@
  * Secret API key lives on Vatiris; VatEFS calls https://backend.vatiris.se/cdm/*
  *
  * Network-wide: CTOT (restricted) + status/REA/FLS (allStatus) + DPI.
- * CDM airport times (TOBT/TSAT): only for supported airports currently online
+ * CDM airport times (TOBT/TSAT/TTOT): only for supported airports currently online
  * in myAirports — today ESSA only via /ifps/depAirport.
  */
 
@@ -33,6 +33,7 @@ export interface ViffCdmEntry {
     airport: string
     tobt?: string
     tsat?: string
+    ttot?: string
     ctot?: string
     cdmSts?: string
     taxiMinutes?: number
@@ -98,11 +99,22 @@ export class ViffService {
     private getMyAirports: () => string[]
     private polling = false
     private lastLoggedCdmAirports = ""
+    private lastPollOk = false
+    private everPolled = false
 
     constructor(onPoll: PollCallback, getMyAirports: () => string[], baseUrl?: string) {
         this.onPoll = onPoll
         this.getMyAirports = getMyAirports
         this.baseUrl = (baseUrl || process.env.VIFF_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "")
+    }
+
+    /** Health for Connection status popup */
+    getHealth(): { ok: boolean; detail: string } {
+        if (!this.pollTimer) return { ok: false, detail: "Not started" }
+        if (!this.everPolled) return { ok: false, detail: "Waiting…" }
+        return this.lastPollOk
+            ? { ok: true, detail: "Connected" }
+            : { ok: false, detail: "Poll failed" }
     }
 
     /** Schedule a near-term poll (coalesced) after a write that should change TSAT/status. */
@@ -112,6 +124,11 @@ export class ViffService {
             this.postWriteTimer = null
             void this.pollOnce()
         }, POST_WRITE_POLL_DELAY_MS)
+    }
+
+    /** Immediate poll (status popup “Reload feeds”). */
+    forcePoll(): void {
+        void this.pollOnce()
     }
 
     private activeCdmAirports(): string[] {
@@ -218,8 +235,12 @@ export class ViffService {
                 this.fetchAllStatus(),
                 this.fetchCdmFlights(),
             ])
+            this.everPolled = true
+            this.lastPollOk = true
             this.onPoll({ restricted, statuses, cdm })
         } catch (err) {
+            this.everPolled = true
+            this.lastPollOk = false
             console.error(`[VIFF] Poll error:`, err instanceof Error ? err.message : err)
         } finally {
             this.polling = false
@@ -254,8 +275,14 @@ export class ViffService {
                     : {}
                 const eobt = normalizeHhmm((item as any).eobt)
                 const tobt = normalizeHhmm((item as any).tobt) ?? normalizeHhmm(cdmData.tobt)
-                // TSAT may be top-level (like TOBT) or nested under cdmData
-                const tsat = normalizeHhmm((item as any).tsat) ?? normalizeHhmm(cdmData.tsat)
+                // TSAT may be top-level (like TOBT) or nested under cdmData.
+                // When CDM marks confirmed but omits tsat (common for unimpeded), ES shows TOBT as TSAT.
+                let tsat = normalizeHhmm((item as any).tsat) ?? normalizeHhmm(cdmData.tsat)
+                if (!tsat && tobt && cdmData.confirmed === true) {
+                    tsat = tobt
+                }
+                // TTOT is nested under cdmData (HHMMSS) more often than top-level
+                const ttot = normalizeHhmm((item as any).ttot) ?? normalizeHhmm(cdmData.ttot)
                 const ctot = normalizeHhmm((item as any).ctot) ?? normalizeHhmm(cdmData.ctot)
                 const cdmSts = String((item as any).cdmSts ?? "").trim() || undefined
                 const taxiRaw = (item as any).taxi
@@ -268,6 +295,7 @@ export class ViffService {
                     airport,
                     tobt,
                     tsat,
+                    ttot,
                     ctot,
                     cdmSts,
                     taxiMinutes,

@@ -8,7 +8,7 @@
   <TrashDialog v-model="trashOpen" />
 
   <div class="efs-bottom-bar">
-    <div class="bottom-left-cluster">
+    <div class="bottom-bar-side bottom-bar-left">
       <button
         type="button"
         class="bar-icon-btn trash-btn efs-trash-drop"
@@ -33,54 +33,127 @@
           <button
             type="button"
             class="bar-icon-btn info-strips-btn"
-            :class="{ 'has-restore': hasDismissedAvailable }"
+            :class="{ 'has-restore': hasMenuRestoreHint }"
             title="Info strips"
             v-bind="menuProps"
           >
             <v-icon :size="barIconSize">mdi-information-outline</v-icon>
-            <span v-if="hasDismissedAvailable" class="info-dot" aria-hidden="true" />
+            <span v-if="hasMenuRestoreHint" class="info-dot" aria-hidden="true" />
           </button>
         </template>
 
-        <div class="info-strips-menu" @click.stop>
-          <div class="info-strips-menu-header">Info strips</div>
-          <div
-            v-for="entry in infoEntries"
-            :key="entry.id"
-            class="info-strips-row"
-            :class="{ unavailable: !entry.available }"
-          >
-            <div class="info-strips-row-main">
-              <span class="info-strips-label">{{ entry.label }}</span>
-              <span v-if="!entry.available" class="info-strips-status">Not available</span>
-              <span v-else-if="entry.dismissed" class="info-strips-status hidden">Hidden</span>
-              <span v-else class="info-strips-status shown">Shown</span>
-            </div>
-            <div v-if="entry.available" class="info-strips-row-actions">
-              <button
-                v-if="entry.dismissed"
-                type="button"
-                class="info-strips-action primary"
-                @click="onShowInfoStrip(entry)"
-              >
-                Show
-              </button>
-              <button
-                v-else-if="entry.hasCustomPlacement"
-                type="button"
-                class="info-strips-action"
-                @click="onResetInfoPlacement(entry)"
-              >
-                Reset position
-              </button>
-              <span v-else class="info-strips-action-spacer" />
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-header">Info strips</div>
+          <div class="efs-popup-list">
+            <div
+              v-for="entry in infoEntries"
+              :key="entry.id"
+              class="efs-popup-item efs-popup-item--stack efs-popup-item--start"
+              :class="{ 'efs-popup-muted is-disabled': !entry.available }"
+            >
+              <span class="efs-popup-item-title">{{ entry.label }}</span>
+              <span class="efs-popup-item-sub">
+                <template v-if="!entry.available">{{ entry.unavailableReason || 'Not available' }}</template>
+                <template v-else-if="entry.dismissed">Hidden</template>
+                <template v-else>Shown</template>
+              </span>
+              <div v-if="entry.available" class="info-strips-row-actions">
+                <button
+                  v-if="entry.dismissed"
+                  type="button"
+                  class="efs-popup-chip active"
+                  @click="onShowInfoStrip(entry)"
+                >Show</button>
+                <button
+                  v-else-if="entry.hasCustomPlacement"
+                  type="button"
+                  class="efs-popup-chip"
+                  @click="onResetInfoPlacement(entry)"
+                >Reset</button>
+              </div>
             </div>
           </div>
+
+          <template v-if="showRwyFlagTable">
+            <div class="efs-popup-section">RWY flags</div>
+            <table class="efs-popup-table">
+              <thead>
+                <tr>
+                  <th scope="col">RWY</th>
+                  <th scope="col" title="Occupied by vehicle">OCC</th>
+                  <th scope="col" title="Closed (AVSTÄNGD)">CLSD</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in rwyFlagRows" :key="row.sectionId">
+                  <th scope="row">{{ row.label }}</th>
+                  <td>
+                    <button
+                      type="button"
+                      class="efs-popup-chip"
+                      :class="{ active: row.occupied }"
+                      :title="row.occupied ? 'Hide occupied flag' : 'Show occupied flag'"
+                      @click="onToggleRwyFlag(row.sectionId, 'rwyOccupied')"
+                    >{{ row.occupied ? 'ON' : 'OFF' }}</button>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      class="efs-popup-chip"
+                      :class="{ active: row.closed }"
+                      :title="row.closed ? 'Hide closed flag' : 'Show closed flag'"
+                      @click="onToggleRwyFlag(row.sectionId, 'rwyClosed')"
+                    >{{ row.closed ? 'ON' : 'OFF' }}</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
         </div>
       </v-menu>
+
+      <div
+        class="bay-bg-slider"
+        title="Strip bay background · double-click to reset"
+        @pointerdown.stop
+        @dblclick="onBayBgReset"
+      >
+        <v-icon class="bay-bg-slider-icon bay-bg-slider-moon" :size="bayBgIconSize"
+          >mdi-moon-waning-crescent</v-icon
+        >
+        <input
+          class="bay-bg-slider-input"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="bayBgBrightness"
+          @input="onBayBgInput"
+          @dblclick.stop="onBayBgReset"
+        />
+        <v-icon class="bay-bg-slider-icon bay-bg-slider-sun" :size="bayBgIconSize"
+          >mdi-white-balance-sunny</v-icon
+        >
+      </div>
     </div>
 
     <div class="tiny-strips">
+      <div
+        class="tiny-strip tiny-strip-vehicle"
+        draggable="true"
+        @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
+        @dragend="onTinyDragEnd"
+        @click="() => onTinyClick('vehicle')"
+        @touchstart="(e) => onTinyTouchStart(e, 'vehicle')"
+        @touchmove.prevent="onTinyTouchMove"
+        @touchend="(e) => onTinyTouchEnd(e, 'vehicle')"
+        @touchcancel="onTinyTouchCancel"
+      >
+        <div class="tiny-body">
+          <span class="tiny-label">VEHICLE</span>
+        </div>
+      </div>
+
       <template v-if="store.myAirports.length > 0">
         <div
           class="tiny-strip tiny-strip-dep"
@@ -147,25 +220,60 @@
         </div>
       </div>
     </div>
+
+    <div class="bottom-bar-side bottom-bar-right">
+      <Clock />
+      <img
+        class="vatsim-logo"
+        src="@/assets/vatsim-scandinavia.png"
+        alt="VATSIM Scandinavia"
+        draggable="false"
+      />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useEfsStore } from '@/store/efs'
-import { useEfsScaleValue } from '@/composables/useEfsUiScale'
+import { useEfsChromeScaleValue } from '@/composables/useEfsUiScale'
 import {
   useInfoStripMenu,
   type InfoStripMenuEntry,
 } from '@/composables/useInfoStrips'
+import {
+  useRwyFlagMenu,
+  type RwyFlagKind,
+} from '@/composables/useRunwayFlagStrips'
+import {
+  BAY_BG_BRIGHTNESS_DEFAULT,
+  setBayBgBrightness,
+  useBayBgBrightness,
+} from '@/composables/useBayBackground'
+import {
+  clearTouchDropPlacementIndicators,
+  setTouchDropPlacementFromPoint,
+} from '@/composables/useTouchDrag'
+import Clock from './Clock.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import TrashDialog from './TrashDialog.vue'
 
-type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 
 const store = useEfsStore()
-const efsScale = useEfsScaleValue()
-const barIconSize = computed(() => Math.max(22, Math.round(22 * efsScale.value)))
+const chromeScale = useEfsChromeScaleValue()
+const barIconSize = computed(() => Math.max(14, Math.round(18 * chromeScale.value)))
+const bayBgIconSize = computed(() => Math.max(16, Math.round(22 * chromeScale.value)))
+const bayBgBrightness = useBayBgBrightness()
+
+function onBayBgInput(event: Event) {
+  const el = event.target as HTMLInputElement
+  setBayBgBrightness(Number(el.value))
+}
+
+function onBayBgReset() {
+  setBayBgBrightness(BAY_BG_BRIGHTNESS_DEFAULT)
+}
 
 const {
   entries: infoEntries,
@@ -173,6 +281,17 @@ const {
   showEntry,
   resetPlacement,
 } = useInfoStripMenu()
+
+const {
+  showTable: showRwyFlagTable,
+  rows: rwyFlagRows,
+  hasInactive: hasInactiveRwyFlags,
+  toggle: toggleRwyFlag,
+} = useRwyFlagMenu()
+
+const hasMenuRestoreHint = computed(
+  () => hasDismissedAvailable.value || hasInactiveRwyFlags.value,
+)
 
 const trashOpen = ref(false)
 const trashDragOver = ref(false)
@@ -196,6 +315,10 @@ function onShowInfoStrip(entry: InfoStripMenuEntry) {
 
 function onResetInfoPlacement(entry: InfoStripMenuEntry) {
   resetPlacement(entry)
+}
+
+function onToggleRwyFlag(sectionId: string, kind: RwyFlagKind) {
+  toggleRwyFlag(sectionId, kind)
 }
 
 function onTrashDragOver(event: DragEvent) {
@@ -249,6 +372,15 @@ function airportForBay(bayId: string | undefined): string | undefined {
   return bay?.airport ?? undefined
 }
 
+/** First section in the visible client layout (ESSA-filtered). */
+function firstVisiblePlacement(): { bayId: string; sectionId: string } | undefined {
+  for (const bay of store.layout.bays) {
+    const section = bay.sections[0]
+    if (section) return { bayId: bay.id, sectionId: section.id }
+  }
+  return undefined
+}
+
 function openCreateDialog(type: SpecialStripType, target?: {
   bayId?: string
   sectionId?: string
@@ -257,33 +389,38 @@ function openCreateDialog(type: SpecialStripType, target?: {
   gapIndex?: number
   gapSize?: number
 }) {
+  const fallback = firstVisiblePlacement()
+  const bayId = target?.bayId ?? fallback?.bayId
+  const sectionId = target?.sectionId ?? fallback?.sectionId
+
   dialogStripType.value = type
-  dialogTargetBayId.value = target?.bayId
-  dialogTargetSectionId.value = target?.sectionId
+  dialogTargetBayId.value = bayId
+  dialogTargetSectionId.value = sectionId
   dialogTargetPosition.value = target?.position
   dialogTargetIsBottom.value = target?.isBottom ?? false
   dialogTargetGapIndex.value = target?.gapIndex
   dialogTargetGapSize.value = target?.gapSize ?? 0
-  dialogInitialAirport.value = airportForBay(target?.bayId)
+  dialogInitialAirport.value = airportForBay(bayId)
 
-  // Note dialog only asks for airport (RTC). Otherwise create immediately.
-  if (type === 'note' && !store.multiAirport) {
+  // Vehicle: always create immediately into a visible section (no ES / no dialog).
+  // Note: immediate unless multi-airport RTC needs an airport column choice.
+  if (type === 'vehicle' || (type === 'note' && !store.multiAirport)) {
     store.createStrip(
-      'note',
+      type,
       undefined,
       undefined,
       dialogInitialAirport.value ?? store.myAirports[0],
-      dialogTargetBayId.value,
-      dialogTargetSectionId.value,
+      bayId,
+      sectionId,
       dialogTargetPosition.value,
       dialogTargetIsBottom.value
     )
     if (
       dialogTargetGapIndex.value !== undefined &&
       dialogTargetGapSize.value >= store.GAP_BUFFER &&
-      dialogTargetBayId.value && dialogTargetSectionId.value
+      bayId && sectionId
     ) {
-      store.setGapAtIndex(dialogTargetBayId.value, dialogTargetSectionId.value, dialogTargetGapIndex.value, dialogTargetGapSize.value)
+      store.setGapAtIndex(bayId, sectionId, dialogTargetGapIndex.value, dialogTargetGapSize.value)
     }
     return
   }
@@ -362,8 +499,8 @@ function onTinyTouchMove(event: TouchEvent) {
     touchClone.style.left = `${touch.clientX - rect.width / 2}px`
     touchClone.style.top = `${touch.clientY - 20}px`
 
-    // Highlight drop target section
-    highlightDropTarget(touch.clientX, touch.clientY)
+    // Insert line / bottom-slot (no full-bay highlight)
+    setTouchDropPlacementFromPoint(touch.clientX, touch.clientY, touchClone)
   }
 }
 
@@ -402,22 +539,7 @@ function cleanupTouchDrag() {
     touchClone = null
   }
   document.body.classList.remove('touch-dragging')
-  clearDropHighlights()
-}
-
-function highlightDropTarget(x: number, y: number) {
-  clearDropHighlights()
-  const el = document.elementFromPoint(x, y)
-  const sectionContent = el?.closest('.section-content')
-  if (sectionContent) {
-    sectionContent.classList.add('drag-over')
-  }
-}
-
-function clearDropHighlights() {
-  document.querySelectorAll('.section-content.drag-over').forEach(el => {
-    el.classList.remove('drag-over')
-  })
+  clearTouchDropPlacementIndicators()
 }
 
 const HALF_STRIP_HEIGHT = 22
@@ -516,25 +638,57 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 
 <style scoped>
 .efs-bottom-bar {
-  height: max(52px, calc(52px * var(--efs-scale, 1)));
-  background: #2b2d31;
-  display: flex;
+  --bb: var(--efs-chrome-scale, var(--efs-scale, 1));
+  --bar-h: var(--efs-bottom-bar-h, calc(40px * var(--bb)));
+  height: var(--bar-h);
+  min-height: var(--bar-h);
+  max-height: var(--bar-h);
+  background: #000000;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
+  column-gap: calc(6px * var(--bb));
   border-top: 1px solid #3a3e42;
   flex-shrink: 0;
-  padding: 0;
-  position: relative;
+  padding: 0 calc(6px * var(--bb));
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
-.bottom-left-cluster {
-  position: absolute;
-  left: calc(10px * var(--efs-scale, 1));
-  top: 50%;
-  transform: translateY(-50%);
+.bottom-bar-side {
   display: flex;
   align-items: center;
-  gap: calc(6px * var(--efs-scale, 1));
+  gap: calc(4px * var(--bb));
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.bottom-bar-left {
+  justify-content: flex-start;
+}
+
+.bottom-bar-right {
+  justify-content: flex-end;
+  gap: calc(10px * var(--bb));
+  padding-right: calc(2px * var(--bb));
+}
+
+.vatsim-logo {
+  display: block;
+  height: 100%;
+  max-height: 100%;
+  width: auto;
+  object-fit: contain;
+  object-position: right center;
+  flex-shrink: 0;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .bar-icon-btn {
@@ -542,8 +696,9 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: max(32px, calc(32px * var(--efs-scale, 1)));
-  height: max(32px, calc(32px * var(--efs-scale, 1)));
+  flex: 0 0 auto;
+  width: calc(28px * var(--bb));
+  height: calc(28px * var(--bb));
   padding: 0;
   border: 1px solid #4a4e54;
   background: #35373c;
@@ -572,26 +727,100 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 
 .info-dot {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 7px;
-  height: 7px;
+  top: calc(4px * var(--bb));
+  right: calc(4px * var(--bb));
+  width: calc(7px * var(--bb));
+  height: calc(7px * var(--bb));
   border-radius: 50%;
   background: #60a5fa;
   box-shadow: 0 0 0 1px #35373c;
 }
 
-.tiny-strips {
+.bay-bg-slider {
   display: flex;
-  gap: calc(14px * var(--efs-scale, 1));
   align-items: center;
+  flex: 1 1 auto;
+  min-width: calc(140px * var(--bb));
+  max-width: calc(280px * var(--bb));
+  align-self: stretch;
+  gap: calc(8px * var(--bb));
+  height: 100%;
+  padding: 0 calc(10px * var(--bb));
+  border: none;
+  border-radius: 0;
+  background: linear-gradient(90deg, #000000 0%, #c8c8ce 100%);
+  box-sizing: border-box;
 }
 
-/* Mini flight strips — thicker L/R frame, thinner T/B */
+.bay-bg-slider-icon {
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+.bay-bg-slider-moon {
+  color: #d1d5db;
+  transform: rotate(-25deg);
+}
+
+.bay-bg-slider-sun {
+  color: #000;
+}
+
+.bay-bg-slider-input {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: calc(100px * var(--bb));
+  height: calc(6px * var(--bb));
+  margin: 0;
+  border-radius: 3px;
+  background: #3a3a40;
+  outline: none;
+  cursor: pointer;
+}
+
+.bay-bg-slider-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: calc(20px * var(--bb));
+  height: calc(20px * var(--bb));
+  border-radius: 50%;
+  background: #b0b0b6;
+  border: 1px solid #2a2a2e;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.bay-bg-slider-input::-moz-range-thumb {
+  width: calc(20px * var(--bb));
+  height: calc(20px * var(--bb));
+  border-radius: 50%;
+  background: #b0b0b6;
+  border: 1px solid #2a2a2e;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.bay-bg-slider-input::-moz-range-track {
+  height: calc(6px * var(--bb));
+  border-radius: 3px;
+  background: #3a3a40;
+}
+
+.tiny-strips {
+  display: flex;
+  gap: calc(5px * var(--bb));
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Mini flight strips — compact so brightness slider keeps room */
 .tiny-strip {
   --tiny-type: #888;
-  --tiny-side: calc(14px * var(--efs-scale, 1));
-  --tiny-tb: calc(3px * var(--efs-scale, 1));
+  --tiny-side: calc(8px * var(--bb));
+  --tiny-tb: calc(2px * var(--bb));
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -599,8 +828,8 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   border-style: solid;
   border-color: var(--tiny-type);
   border-width: var(--tiny-tb) var(--tiny-side);
-  height: max(36px, calc(34px * var(--efs-scale, 1)));
-  min-width: calc(148px * var(--efs-scale, 1));
+  height: calc(28px * var(--bb));
+  min-width: calc(88px * var(--bb));
   margin: 0;
   cursor: grab;
   user-select: none;
@@ -611,17 +840,18 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-.tiny-strip-dep { --tiny-type: #3b7dd8; }
+.tiny-strip-dep { --tiny-type: #3a72d4; }
 .tiny-strip-arr { --tiny-type: #daa520; }
 .tiny-strip-cross { --tiny-type: #881fe0; }
 .tiny-strip-note { --tiny-type: #888; }
+.tiny-strip-vehicle { --tiny-type: #4a4a4a; }
 
 .tiny-body {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 calc(10px * var(--efs-scale, 1));
+  padding: 0 calc(6px * var(--bb));
   min-height: 0;
 }
 
@@ -636,10 +866,10 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 }
 
 .tiny-label {
-  font-size: calc(17px * var(--efs-scale, 1));
+  font-size: calc(12px * var(--bb));
   font-weight: 700;
   color: #222;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
   white-space: nowrap;
   line-height: 1;
 }
@@ -656,98 +886,8 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-/* Teleported v-menu content */
-.info-strips-menu {
-  min-width: 240px;
-  background: #2b2d31;
-  border: 1px solid #4a4e54;
-  border-radius: 4px;
-  padding: 6px 0;
-  color: #d1d5db;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-}
-
-.info-strips-menu-header {
-  padding: 4px 12px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #9ca3af;
-}
-
-.info-strips-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-}
-
-.info-strips-row.unavailable {
-  opacity: 0.45;
-}
-
-.info-strips-row-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.info-strips-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #e5e7eb;
-}
-
-.info-strips-status {
-  font-size: 11px;
-  color: #9ca3af;
-}
-
-.info-strips-status.hidden {
-  color: #fbbf24;
-}
-
-.info-strips-status.shown {
-  color: #86efac;
-}
-
 .info-strips-row-actions {
-  flex-shrink: 0;
-}
-
-.info-strips-action {
-  border: 1px solid #4a4e54;
-  background: #35373c;
-  color: #d1d5db;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 2px;
-  cursor: pointer;
-}
-
-.info-strips-action:hover {
-  background: #3f4248;
-  border-color: #6b7280;
-  color: #fff;
-}
-
-.info-strips-action.primary {
-  background: #1e3a5f;
-  border-color: #3b82f6;
-  color: #bfdbfe;
-}
-
-.info-strips-action.primary:hover {
-  background: #254a75;
-  color: #fff;
-}
-
-.info-strips-action-spacer {
-  display: inline-block;
-  min-width: 48px;
+  margin-top: 2px;
+  align-self: flex-start;
 }
 </style>

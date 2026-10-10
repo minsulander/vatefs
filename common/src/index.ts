@@ -23,6 +23,7 @@ export {
     ESSA_PHYSICAL_RWY_PAIRS,
     VATIRIS_QUICKREF_BASE,
     resolveEssaRwyConfigId,
+    type ResolveEssaRwyConfigOptions,
     formatEssaRwyConfigLabel,
     formatEssaRwyPdfName,
     formatEssaArrDisplay,
@@ -40,6 +41,14 @@ export {
 export type { EssaRwyCombination, EssaPhysicalRwyPair } from "./essa-rwy-config.js"
 
 export {
+    isRunwayOrderSectionId,
+    runwayLuRank,
+    compareRunwayLuOrder,
+    sortRunwayLuOrder,
+} from "./runway-strip-order.js"
+export type { RunwayOrderStrip } from "./runway-strip-order.js"
+
+export {
     DEFAULT_TRANSITION_ALTITUDE_FT,
     parseAltitudeToFeet,
     parseManualCfl,
@@ -53,12 +62,18 @@ export {
     formatVectorSidDisplay,
     parseVectorSidName,
     parseTrackSid,
+    normalizeSidName,
+    sidsMatch,
     hasForcedSidInRoute,
     isTrackSidName,
     isVectorSidName,
     isIfrSidEligible,
+    resolveDisplayFlightRules,
     hasSlowRemark,
     withSlowRemark,
+    hasVectRemark,
+    withVectRemark,
+    formatAhdVectorSidDisplay,
     extractTmaExitPoint,
 } from "./sid-format.js"
 
@@ -72,16 +87,23 @@ export type {
     SectionMessage,
     RefreshMessage,
     StatusMessage,
+    FeedStatusItem,
+    FeedsStatus,
     DclStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
+    AupR16Status,
+    AupR16Message,
+    RwyFlagsMessage,
     ControllerInfo,
     ControllersMessage,
     UserSettingsMessage,
     NotifyMessage,
     ServerMessage,
     RequestMessage,
+    ReloadFeedsMessage,
     MoveStripMessage,
+    ReorderStripsMessage,
     SetGapMessage,
     SetSectionHeightMessage,
     StripActionMessage,
@@ -99,6 +121,7 @@ export type {
     SwitchConfigMessage,
     CreateStripMessage,
     UpdateNoteMessage,
+    UpdateVehicleStripMessage,
     ReleaseStripMessage,
     ManualTransferMessage,
     ViffReaMessage,
@@ -109,6 +132,7 @@ export type {
     SetColumnCountMessage,
     UpdateUserSettingsMessage,
     SetEssaRolesMessage,
+    SetRwyFlagMessage,
     ConfigInfo,
     ConfigListMessage,
     ClientMessage

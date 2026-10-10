@@ -2,7 +2,7 @@
   <div
     ref="rootEl"
     class="info-strip"
-    :class="{ dragging: isDragging }"
+    :class="{ dragging: isDragging, 'tone-green': tone === 'green', 'tone-yellow': tone === 'yellow' }"
     :data-info-strip-id="stripId"
     draggable="true"
     @dragstart="onDragStart"
@@ -31,9 +31,14 @@ import StripCloseButton from './StripCloseButton.vue'
 const STRIP_REF_WIDTH_PX = 400
 const LONG_PRESS_DELAY = 150
 
-const props = defineProps<{
-  stripId: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    stripId: string
+    /** Visual tone — green briefing strips (08 turn / 19L SIDs), yellow R16 utökad */
+    tone?: 'default' | 'green' | 'yellow'
+  }>(),
+  { tone: 'default' },
+)
 
 const emit = defineEmits<{
   close: []
@@ -204,6 +209,24 @@ onUnmounted(() => {
 .info-strip.dragging {
   opacity: 0.45;
   cursor: grabbing;
+}
+
+.info-strip.tone-green {
+  background: #096a2e;
+  border-color: #065022;
+}
+
+.info-strip.tone-green .info-strip-actions {
+  background: #096a2e;
+}
+
+.info-strip.tone-yellow {
+  background: #ffe81a;
+  border-color: #b5a400;
+}
+
+.info-strip.tone-yellow .info-strip-actions {
+  background: #ffe81a;
 }
 
 .info-strip-body {

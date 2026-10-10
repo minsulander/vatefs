@@ -1,6 +1,10 @@
 /**
  * Slow aircraft detection.
  * Determines if an aircraft is "slow" based on wake turbulence category and type.
+ *
+ * Per ESSA procedures (low speed traffic):
+ * - WTC L: all propeller-driven (P/T engines), except P180
+ * - WTC M: explicit turboprop include list
  */
 
 import fs from "fs"
@@ -9,6 +13,8 @@ interface SlowRule {
     wakeTurbulence: string
     includeTypes?: string[]
     excludeTypes?: string[]
+    /** When set, only these EuroScope engine types match (P/T/J/E). */
+    engineTypes?: string[]
 }
 
 let rules: SlowRule[] = []
@@ -28,26 +34,47 @@ export function loadSlowAircraft(filePath: string) {
     console.log(`Loaded ${rules.length} slow aircraft rules`)
 }
 
+/** True for piston / turboprop / turboshaft (not jet or electric). */
+export function isPropellerEngine(engineType: string | undefined | null): boolean {
+    if (!engineType) return false
+    const e = engineType.trim().toUpperCase()
+    return e === "P" || e === "T"
+}
+
 /**
  * Check if an aircraft is considered "slow" based on its wake turbulence and type.
+ * @param engineType Optional EuroScope engine type (P/T/J/E/?). Used when rule has engineTypes.
  */
-export function isSlowAircraft(wakeTurbulence: string, aircraftType: string): boolean {
+export function isSlowAircraft(
+    wakeTurbulence: string,
+    aircraftType: string,
+    engineType?: string | null,
+): boolean {
     const type = aircraftType.toUpperCase()
     const wtc = wakeTurbulence.toUpperCase()
+    const eng = (engineType ?? "").trim().toUpperCase()
 
     for (const rule of rules) {
         if (rule.wakeTurbulence.toUpperCase() !== wtc) continue
 
-        if (rule.includeTypes) {
-            // Only match specific types
-            if (rule.includeTypes.some(t => t.toUpperCase() === type)) return true
-        } else if (rule.excludeTypes) {
-            // Match all of this WTC except excluded types
-            if (!rule.excludeTypes.some(t => t.toUpperCase() === type)) return true
-        } else {
-            // Match all of this WTC
-            return true
+        if (rule.excludeTypes?.some((t) => t.toUpperCase() === type)) {
+            continue
         }
+
+        if (rule.engineTypes?.length) {
+            // Propeller-only L rule: require known P/T; unknown engine → not slow
+            if (!eng || !rule.engineTypes.some((e) => e.toUpperCase() === eng)) {
+                continue
+            }
+        }
+
+        if (rule.includeTypes) {
+            if (rule.includeTypes.some((t) => t.toUpperCase() === type)) return true
+            continue
+        }
+
+        // Match all of this WTC (optionally filtered by engineTypes / excludeTypes above)
+        return true
     }
     return false
 }

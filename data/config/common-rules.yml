@@ -57,6 +57,25 @@ sectionRules:
     airborne: true
     priority: 100
 
+  # Hold in CTR DEP while XFER to APP/CTR is pending (until APP assumes)
+  ctr_dep_hold_pending_app:
+    sectionId: ctr_dep
+    direction: departure
+    airborne: true
+    handoffInitiated: true
+    handoffToRole: [APP, CTR]
+    myRole: [TWR]
+    priority: 120
+
+  ctr_dep_hold_pending_app_local:
+    sectionId: ctr_dep
+    direction: local
+    airborne: true
+    handoffInitiated: true
+    handoffToRole: [APP, CTR]
+    myRole: [TWR]
+    priority: 120
+
   # === LOCAL FLIGHT GROUND FLOW (mirrors departure flow) ===
 
   # PENDING DEP: Local flights without clearance
@@ -110,13 +129,18 @@ sectionRules:
 
   # === ARRIVAL FLOW ===
 
-  # INBOUND: Arrivals not yet assumed (ARR groundstate or just arriving)
+  # INBOUND APP (TWR/APP/CTR): unassumed arrivals within 15 min of ETA only.
+  # Farther-out traffic stays out until ETA≤15 (or CTR ARR / approach rules pull them).
+  # Missing ETA → do not match (no strip in this section).
+  # Not for GND: ESSA INBOUND TWR-* uses inbound_*_gnd rules (no ETA gate; ground ETA unreliable).
   inbound_arr_groundstate:
     sectionId: inbound
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]
     controller: not_myself
+    myRole: [TWR, APP, CTR]
+    maxEtaMinutes: 15
     priority: 70
 
   # CTR ARR: pending inbound handoff to me (TWR covering ARRs)
@@ -142,6 +166,17 @@ sectionRules:
     myRole: [TWR, APP, CTR]
     priority: 90
 
+  # CTR ARR: Approach clearance (CA/VA/CAT2/CAT3/OS) while owned by someone else
+  # Pulls from INBOUND APP onto final even outside CTR
+  ctr_arr_approach_clearance_other:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    approachClearance: true
+    priority: 85
+
   # CTR ARR: Arrivals inside CTR boundary (real LFV data) — unassumed pull-in
   ctr_arr_within_ctr:
     sectionId: ctr_arr
@@ -150,6 +185,20 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     withinCtr: true
     priority: 76
+
+  # CTR ARR: Bad FLEG / misclassified inbound inside CTR when APP/CTR offline.
+  # No direction gate — wrong dest makes direction cross (or even departure).
+  # arrivalLike uses ARR/CTL/STAR/alt/ades cues; clearedToLand:false keeps CTL on runway.
+  # Priority above ctr_dep_airborne so a false "departure" still lands in CTR ARR.
+  ctr_arr_within_ctr_no_app:
+    sectionId: ctr_arr
+    airborne: true
+    withinCtr: true
+    arrivalLike: true
+    clearedToLand: false
+    notOnlineRoles: [APP, CTR]
+    myRole: [TWR]
+    priority: 101
 
   # CTR ARR: Fallback - arrivals below 1500ft AGL (when CTR data unavailable)
   ctr_arr_low_altitude:
@@ -170,11 +219,14 @@ sectionRules:
 
   # === FALLBACKS ===
 
-  # Catch-all for arrivals at our airport
+  # Catch-all for arrivals at our airport (same 15 min ETA gate as INBOUND APP).
+  # myRole excludes GND so ESSA INBOUND TWR-* is never ETA-gated via this fallback.
   fallback_arrival:
     sectionId: inbound
     direction: arrival
     airborne: true
+    myRole: [TWR, APP, CTR]
+    maxEtaMinutes: 15
     priority: 5
 
   # Catch-all for departures at our airport
@@ -315,20 +367,24 @@ actionRules:
 
   # RUNWAY lineup: CTO (cleared for takeoff) for departures and local (TWR/APP/CTR top-down)
   # No sectionId — works for both single-runway and dual-runway layouts
+  # airborne: false — after takeoff (CTR DEP) without CFTO, groundstate may still be LINEUP
   cto_lineup:
     action: CTO
     direction: either
     controller: myself
     groundstates: [LINEUP]
+    airborne: false
     myRole: [TWR]
     priority: 90
 
   # TAXI departures: LU (line up) — frontend shows LU+CTO pair (TWR/APP/CTR top-down)
+  # airborne: false — after takeoff without CFTO, groundstate may still be TAXI in CTR DEP
   lu_taxi_dep:
     action: LU
     direction: departure
     controller: myself
     groundstates: [TAXI]
+    airborne: false
     myRole: [TWR]
     priority: 85
 
@@ -338,6 +394,7 @@ actionRules:
     direction: local
     controller: myself
     groundstates: [TAXI]
+    airborne: false
     myRole: [TWR]
     priority: 85
 
@@ -353,6 +410,7 @@ actionRules:
 
   # CTR DEP airborne: XFER (transfer to next controller) (TWR/APP/CTR top-down)
   # Departures only — local flights stay in the pattern, no XFER
+  # Priority above LU/CTO so stale TAXI/LINEUP after takeoff without CFTO still shows XFER
   xfer_ctr_dep:
     action: XFER
     sectionId: ctr_dep
@@ -361,7 +419,7 @@ actionRules:
     airborne: true
     handoffInitiated: false
     myRole: [TWR]
-    priority: 80
+    priority: 95
 
   # Taxiing arrivals/local: PARK (set parked) (GND/TWR/APP/CTR)
   park_arr:

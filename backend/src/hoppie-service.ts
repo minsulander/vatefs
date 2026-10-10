@@ -15,6 +15,8 @@ export interface HoppieParsedMessage {
     packet: string
 }
 
+const ONLINE_CACHE_MS = 30_000
+
 export class HoppieService {
     private logonCode: string
     private callsign: string
@@ -25,6 +27,8 @@ export class HoppieService {
     private onMessage: (from: string, type: string, packet: string) => void
     private onStatusChange: (status: DclStatus, error?: string) => void
     private fastPollUntil: number = 0 // timestamp when fast polling expires
+    /** Short TTL cache for callsign online pings (avoid hammering Hoppie). */
+    private onlineCache = new Map<string, { online: boolean; until: number }>()
 
     constructor(
         logonCode: string,
@@ -72,11 +76,51 @@ export class HoppieService {
             this.pollTimer = null
         }
         this.connected = false
+        this.onlineCache.clear()
         console.log(`[HOPPIE] Logged out (${this.callsign})`)
     }
 
     isConnected(): boolean {
         return this.connected
+    }
+
+    /**
+     * Check whether a station callsign is currently online on Hoppie.
+     * Uses type=ping with the callsign in the packet (does not register us online).
+     * Response lists which of the queried callsigns are online, e.g. `ok {SAS123}` or `ok`.
+     */
+    async checkCallsignOnline(callsign: string): Promise<boolean> {
+        if (!this.connected) return false
+        const cs = callsign.trim().toUpperCase()
+        if (!cs) return false
+
+        const cached = this.onlineCache.get(cs)
+        if (cached && cached.until > Date.now()) {
+            return cached.online
+        }
+
+        try {
+            const response = await this.sendRequest("SERVER", "ping", cs)
+            if (!response.toLowerCase().startsWith("ok")) {
+                this.onlineCache.set(cs, { online: false, until: Date.now() + ONLINE_CACHE_MS })
+                return false
+            }
+            // After "ok": tokens may be bare or braced — e.g. "ok {SAS123}" / "ok SAS123"
+            const rest = response.slice(2).trim()
+            const tokens = rest
+                .replace(/[{}]/g, " ")
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((t) => t.toUpperCase())
+            const online = tokens.includes(cs)
+            this.onlineCache.set(cs, { online, until: Date.now() + ONLINE_CACHE_MS })
+            return online
+        } catch (err) {
+            console.warn(
+                `[HOPPIE] Online check failed for ${cs}: ${err instanceof Error ? err.message : err}`,
+            )
+            return false
+        }
     }
 
     getNextSeq(): number {

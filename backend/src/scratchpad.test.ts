@@ -37,7 +37,9 @@ check("remarks + HP", () => {
 })
 
 check("SLOW", () => {
+    // Bare TopSky form still parses; we write with leading dot
     assert.deepEqual(parseCombinedScratch("SLOW"), { remarks: "SLOW", hp: undefined })
+    assert.deepEqual(parseCombinedScratch(".SLOW"), { remarks: "SLOW", hp: undefined })
 })
 
 check("empty clears", () => {
@@ -79,7 +81,7 @@ check("NOSTATE / MISAP leave fields", () => {
 check("build roundtrip", () => {
     assert.equal(buildCombinedScratch("URNAV", "Y2"), ".URNAV /Y2")
     assert.equal(buildCombinedScratch(undefined, "Y2"), "/Y2")
-    assert.equal(buildCombinedScratch("SLOW", undefined), "SLOW")
+    assert.equal(buildCombinedScratch("SLOW", undefined), ".SLOW")
 })
 
 console.log(`scratchpad: ${passed} passed`)

@@ -516,6 +516,15 @@ export function isEseAirspaceLoaded(): boolean {
     return loaded
 }
 
+/** Health for Parsing status popup */
+export function getEseAirspaceHealth(): { ok: boolean; detail: string } {
+    if (!loaded) return { ok: false, detail: "Not loaded" }
+    return {
+        ok: true,
+        detail: `Loaded (${positionsBySi.size} pos, ${sectors.length} sectors)`,
+    }
+}
+
 export function getEsePositionBySi(si: string | undefined): EsePosition | undefined {
     if (!si) return undefined
     return positionsBySi.get(si.toUpperCase())

@@ -21,6 +21,9 @@ export interface UserSettings {
     transferSoundsEnabled?: boolean
     showAppDepXcFrequency?: boolean
     autoParkEnabled?: boolean
+    autoDepSquawkCfl?: boolean
+    equalBayColumns?: boolean
+    showTobtSetByA?: boolean
     /** Manual ESSA role selection (physical positions) */
     essaRoles?: string[]
     essaRolesManual?: boolean
@@ -104,5 +107,17 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.autoParkEnabled === "boolean"
                 ? saved.autoParkEnabled
                 : DEFAULT_UI_SETTINGS.autoParkEnabled,
+        autoDepSquawkCfl:
+            typeof saved.autoDepSquawkCfl === "boolean"
+                ? saved.autoDepSquawkCfl
+                : DEFAULT_UI_SETTINGS.autoDepSquawkCfl,
+        equalBayColumns:
+            typeof saved.equalBayColumns === "boolean"
+                ? saved.equalBayColumns
+                : DEFAULT_UI_SETTINGS.equalBayColumns,
+        showTobtSetByA:
+            typeof saved.showTobtSetByA === "boolean"
+                ? saved.showTobtSetByA
+                : DEFAULT_UI_SETTINGS.showTobtSetByA,
     }
 }

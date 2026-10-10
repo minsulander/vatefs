@@ -151,6 +151,14 @@ export function isCtrDataLoaded(): boolean {
     return dataLoaded
 }
 
+/** Health for Connection status popup */
+export function getCtrHealth(): { ok: boolean; detail: string } {
+    if (!dataLoaded) return { ok: false, detail: "Not loaded" }
+    let zones = 0
+    for (const list of ctrZones.values()) zones += list.length
+    return { ok: true, detail: `Loaded (${zones} zones)` }
+}
+
 /**
  * Check if a position is within any CTR/TIZ zone for the specified airports.
  *

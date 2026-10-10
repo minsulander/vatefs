@@ -55,6 +55,11 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void PollOwnershipChanges();
     /** Poll VCH annotations (H/S=4, CTL=3) — ES has no CAD DataType for annotations */
     void PollVchAnnotationChanges();
+    /** Poll exit coordination altitude (XFL) — no CTR_DATA_TYPE callback */
+    void PollXflChanges();
+    /** Append ES exit coordination altitude (XFL) to a CAD/FP JSON message */
+    static void AppendXfl(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan,
+                          std::stringstream *out = nullptr);
     std::string GetHoldShort(const std::string &callsign);
     bool SetHoldShort(const std::string &callsign, const std::string &holdShort);
     /** VCH CTL flag — strip annotation 3 ("CTL" or empty) */
@@ -96,8 +101,12 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::string GetCdmAsrt(const std::string &callsign);
     /** CDM TSAC — annotation field 1 (HHMM); TSAT communicated to pilot */
     std::string GetCdmTsac(const std::string &callsign);
+    /** CDM TOBT — annotation field 2 (HHMM); fills gaps when CDM_data_*.txt omits the flight */
+    std::string GetCdmTobt(const std::string &callsign);
     /** CDM TSAT — annotation field 3 (HHMM); what ES displays, may lead CDM_data_*.txt */
     std::string GetCdmTsat(const std::string &callsign);
+    /** CDM TTOT — annotation field 4 (HHMM) */
+    std::string GetCdmTtot(const std::string &callsign);
     /** CDM CTOC — annotation field 8 (HHMM); CTOT communicated to pilot */
     std::string GetCdmCtoc(const std::string &callsign);
     /** Write CDM slash-fields in annotation 0 (e.g. TOBT=2, setBy=9, ASRT=0) */
@@ -113,6 +122,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::map<std::string, std::string> lastHoldShortSnapshot;
     // Last sent VCH CTL (annotation 3) per callsign — "1" / "0"
     std::map<std::string, std::string> lastCtlSnapshot;
+    // Last sent ES XFL (exit coordination altitude, feet) per callsign
+    std::map<std::string, int> lastXflSnapshot;
 
     static bool IsValidUtf8(const char* str);
     static std::string SanitizeUtf8(const char* str);

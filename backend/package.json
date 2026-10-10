@@ -5,11 +5,11 @@
     "main": "index.js",
     "readmeFilename": "README.md",
     "scripts": {
-        "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js && cp -r public/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
-        "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js",
+        "build": "rm -rf dist/ && esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js --external:pdfjs-dist && cp -r public/ dist/ && cp package.json dist/ && cd dist/ && npm install --save ../../common && npm install --only=prod",
+        "build:only": "esbuild src/server.ts --bundle --platform=node --target=node22 --outfile=dist/server.js --external:pdfjs-dist",
         "start": "tsx --watch src/server.ts",
         "playback": "tsx src/playback.ts",
-        "test": "tsx src/ese-airspace.test.ts && tsx src/essa-roles.test.ts && tsx src/essa-next-si.test.ts && tsx src/afv-transceivers.test.ts && tsx src/esgg-app.test.ts && tsx src/geo-utils.test.ts && tsx src/esms-sid.test.ts && tsx src/display-si.test.ts && tsx src/scratchpad.test.ts"
+        "test": "tsx src/ese-airspace.test.ts && tsx src/essa-roles.test.ts && tsx src/essa-next-si.test.ts && tsx src/afv-transceivers.test.ts && tsx src/esgg-app.test.ts && tsx src/geo-utils.test.ts && tsx src/hhmm-utils.test.ts && tsx src/esms-sid.test.ts && tsx src/display-si.test.ts && tsx src/scratchpad.test.ts && tsx src/squawk.test.ts && tsx src/aup/r16.test.ts && tsx src/runway-strip-order.test.ts"
     },
     "keywords": [],
     "author": "",
@@ -28,6 +28,7 @@
         "moment": "^2.30.1",
         "morgan": "^1.10.1",
         "node-wav-player": "^1.0.0",
+        "pdfjs-dist": "^4.10.38",
         "serve-static": "^2.2.0",
         "ws": "^8.18.3"
     }

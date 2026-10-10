@@ -172,19 +172,21 @@ export function findTrackSid(
         })
 
     if (track && heading) {
+        // Appendix A Tttt/Hhhh → exact track·heading·exit only (e.g. 270·330·ARS)
         const exact = `${track}${TRACK_SEP}${heading}${TRACK_SEP}${exitU}`
-        const hit = names.find(n => n.toUpperCase() === exact.toUpperCase())
-        if (hit) return hit
+        return names.find(n => n.toUpperCase() === exact.toUpperCase())
     }
 
     if (track) {
-        // Prefer exact track·exit (matches typical ES selection); fall back to NNN·track·exit
+        // Prefer exact track·exit (e.g. 240·PETEV / 330·ARS)
         const simple = `${track}${TRACK_SEP}${exitU}`
         const hit = names.find(n => n.toUpperCase() === simple.toUpperCase())
         if (hit) return hit
 
+        // 3-part form is track·heading·exit — track is FIRST, not middle.
+        // (Never match NNN·track·exit — that wrongly picked 010·240·ARS for T240.)
         const leadRe = new RegExp(
-            `^\\d{3}${escapeRe(TRACK_SEP)}${escapeRe(track)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
+            `^${escapeRe(track)}${escapeRe(TRACK_SEP)}\\d{3}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
             "i",
         )
         const lead = names.filter(n => leadRe.test(n))
@@ -232,6 +234,155 @@ const SECTOR_TO_SI: Record<AppDepSector, string> = {
 
 export function appDepSectorToSi(sector: AppDepSector): string {
     return SECTOR_TO_SI[sector]
+}
+
+/** Fallback freqs when ESE / online resolve is unavailable (VatIRIS TWR strip). */
+const DEP_INFO_DEFAULT_FREQ: Record<AppDepSector, string> = {
+    "DEP-W": "124.105",
+    "DEP-E": "130.330",
+    "ARR-W": "123.755",
+    "ARR-E": "126.655",
+}
+
+export type EssaDepInfoRow = {
+    /** e.g. "TOVRI & BABAP" or "LÅGFART: KOGAV & RESNA" */
+    label: string
+    sector: AppDepSector
+    /** Visual tone: east (red) vs slow/lågfart (black) */
+    tone: "east" | "slow"
+    defaultFreq: string
+}
+
+export type EssaDepInfoStrip = {
+    configId: string
+    runway: string
+    /** Initial turn from config DEP name (-LT / -RT) */
+    turn?: "LEFT" | "RIGHT"
+    /** Large primary freq (DEP-W published / live) */
+    primarySector: AppDepSector
+    primaryDefaultFreq: string
+    holdLines: [string, string]
+    rows: EssaDepInfoRow[]
+}
+
+/** Briefing label: "ARS", "TOVRI & BABAP", or "ARS, KOGAV & RESNA". */
+function joinExits(exits: string[]): string {
+    const u = exits.map((e) => e.toUpperCase())
+    if (u.length <= 1) return u[0] ?? ""
+    if (u.length === 2) return `${u[0]} & ${u[1]}`
+    return `${u.slice(0, -1).join(", ")} & ${u[u.length - 1]}`
+}
+
+function turnFromDepName(depName: string | undefined): "LEFT" | "RIGHT" | undefined {
+    if (!depName) return undefined
+    const u = depName.toUpperCase()
+    if (u.endsWith("-LT") || u.includes("-LT")) return "LEFT"
+    if (u.endsWith("-RT") || u.includes("-RT")) return "RIGHT"
+    return undefined
+}
+
+/**
+ * VatIRIS-style DEP RWY info strip content for an ESSA runway config.
+ * East SID exits (DEP-E) + LÅGFART west exits (slowNextSector).
+ */
+export function resolveEssaDepInfoStrip(configId: string): EssaDepInfoStrip | null {
+    const config = prefsByConfig.get(configId)
+    if (!config) return null
+
+    const combo = getEssaRwyCombination(configId)
+    const runway = normalizeEssaRwy(config.depRunway || combo?.dep?.[0] || "")
+    if (!runway) return null
+
+    // Collect DEP-E exits (briefing strip prefers TOVRI & BABAP when present)
+    const eastAll: string[] = []
+    const eastSeen = new Set<string>()
+    for (const p of config.prefs) {
+        if (p.nextSector !== "DEP-E") continue
+        for (const e of p.exits) {
+            const u = e.toUpperCase()
+            if (eastSeen.has(u)) continue
+            eastSeen.add(u)
+            eastAll.push(u)
+        }
+    }
+    const EAST_BRIEF = ["TOVRI", "BABAP"]
+    const eastBrief = EAST_BRIEF.filter((e) => eastSeen.has(e))
+    const eastExits = eastBrief.length > 0 ? eastBrief : eastAll
+
+    // LÅGFART briefing: prefer Appendix A DEP-W slow group ARS, KOGAV & RESNA
+    const SLOW_BRIEF = ["ARS", "KOGAV", "RESNA"]
+    let slowExits: string[] = []
+    let slowSector: AppDepSector = config.slowNextSector ?? "ARR-W"
+    if (!config.slowFollowSid && config.slowPrefs) {
+        const westGroups = config.slowPrefs.filter(
+            (p) => !p.exits.some((e) => eastSeen.has(e.toUpperCase())),
+        )
+        // Prefer the group that contains the ARS/KOGAV/RESNA briefing set
+        const briefGroup = westGroups.find((p) =>
+            SLOW_BRIEF.every((e) => p.exits.some((x) => x.toUpperCase() === e)),
+        )
+        if (briefGroup) {
+            slowExits = SLOW_BRIEF.filter((e) =>
+                briefGroup.exits.some((x) => x.toUpperCase() === e),
+            )
+            slowSector = briefGroup.nextSector ?? "DEP-W"
+        } else {
+            const briefHits = SLOW_BRIEF.filter((e) =>
+                westGroups.some((p) => p.exits.some((x) => x.toUpperCase() === e)),
+            )
+            if (briefHits.length > 0) {
+                slowExits = briefHits
+                const hitGroup = westGroups.find((p) =>
+                    briefHits.some((e) => p.exits.some((x) => x.toUpperCase() === e)),
+                )
+                slowSector = hitGroup?.nextSector ?? "DEP-W"
+            } else if (westGroups.length > 0) {
+                const smallest = [...westGroups].sort((a, b) => a.exits.length - b.exits.length)[0]!
+                const seen = new Set<string>()
+                for (const e of smallest.exits) {
+                    const u = e.toUpperCase()
+                    if (seen.has(u)) continue
+                    seen.add(u)
+                    slowExits.push(u)
+                }
+                slowSector = smallest.nextSector ?? config.slowNextSector ?? "ARR-W"
+            }
+        }
+    }
+
+    // ARS / KOGAV / RESNA share the primary DEP-W (big blue) frequency —
+    // do not list them again as a separate red row (LÅGFART line covers them).
+    const rows: EssaDepInfoRow[] = []
+    if (eastExits.length > 0) {
+        rows.push({
+            label: joinExits(eastExits),
+            sector: "DEP-E",
+            tone: "east",
+            defaultFreq: DEP_INFO_DEFAULT_FREQ["DEP-E"],
+        })
+    }
+    if (slowExits.length > 0) {
+        rows.push({
+            label: `LÅGFART: ${joinExits(slowExits)}`,
+            sector: slowSector,
+            tone: "slow",
+            defaultFreq:
+                DEP_INFO_DEFAULT_FREQ[slowSector] ?? DEP_INFO_DEFAULT_FREQ["DEP-W"],
+        })
+    }
+
+    return {
+        configId,
+        runway,
+        turn: turnFromDepName(combo?.depName),
+        primarySector: "DEP-W",
+        primaryDefaultFreq: DEP_INFO_DEFAULT_FREQ["DEP-W"],
+        holdLines: [
+            "HOLD POSITION, CANCEL TAKE-OFF, I SAY AGAIN HOLD",
+            "STOP IMMEDIATELY + CS: STOP IMMEDIATELY",
+        ],
+        rows,
+    }
 }
 
 /**
@@ -370,8 +521,9 @@ function addPrefSidsToSet(names: string[], pref: SidPref, out: Set<string>, exit
             continue
         }
         if (trk) {
+            // track·exit or track·heading·exit (track is always the first number)
             if (parts.length === 2 && parts[0] === trk) out.add(name)
-            else if (parts.length === 3 && parts[1] === trk) out.add(name)
+            else if (parts.length === 3 && parts[0] === trk) out.add(name)
             continue
         }
         if (hdg && parts.length === 2 && parts[0] === hdg) out.add(name)

@@ -14,7 +14,7 @@ export type ControllerRole = 'DEL' | 'GND' | 'TWR' | 'APP' | 'CTR'
 /**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA' | 'ROF'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'STUP' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA' | 'ROF'
 
 /**
  * Flight direction relative to our airport.
@@ -80,6 +80,12 @@ export interface SectionRule {
      * Cleared to land flag must match this value
      */
     clearedToLand?: boolean
+
+    /**
+     * Approach clearance CFL (CA / VA / OS / CAT2 / CAT3 / …) must match.
+     * true = flight has an approach clearance (not a numeric level).
+     */
+    approachClearance?: boolean
 
     /**
      * Airborne flag must match this value
@@ -160,6 +166,34 @@ export interface SectionRule {
      * Distinct from handoffInitiated, which is true for any non-empty handoff target.
      */
     handoffToMyself?: boolean
+
+    /**
+     * Handoff target's controller role must be one of these (e.g. [TWR] for APP→TWR).
+     * Fails when there is no handoff target.
+     */
+    handoffToRole?: ControllerRole[]
+
+    /**
+     * Maximum minutes until ETA (HHMM, midnight-wrapped) for this rule to match.
+     * Used e.g. so INBOUND APP only lists arrivals within the next 15 minutes.
+     * Missing/invalid ETA → rule fails (do not show without ETA).
+     * Past ETAs (overdue) still match when within the wrap window.
+     */
+    maxEtaMinutes?: number
+
+    /**
+     * None of these roles may be online covering our airports (self excluded from online list).
+     * Used e.g. so a bad-FLEG CTR ARR fallback only applies when APP/CTR is not online
+     * to correct the flight plan.
+     */
+    notOnlineRoles?: ControllerRole[]
+
+    /**
+     * When true, flight must look like an arrival despite possible bad FPL direction:
+     * ARR groundstate, clearedToLand, destination/alternate at our airport (not a pure
+     * departure from us), or STAR/arrRwy while not originating at our airport.
+     */
+    arrivalLike?: boolean
 }
 
 /**

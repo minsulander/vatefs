@@ -246,7 +246,7 @@ watch(dialogOpen, (open) => {
 }
 
 .fpl-header {
-  background: #3b7dd8;
+  background: #3a72d4;
   color: #fff;
   padding: calc(6px * var(--s)) calc(12px * var(--s));
   display: flex;

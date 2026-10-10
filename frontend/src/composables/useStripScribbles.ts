@@ -109,9 +109,10 @@ export function measureScribbleBands(root: HTMLElement): ScribbleBandScreen[] {
   }
   add('.strip-expander-top', 'top')
   add('.strip-grid', 'body')
-  // Note strips have no .strip-grid — scribble fills the note body
+  // Note / vehicle strips have no .strip-grid — scribble fills the body area
   if (!bands.some((b) => b.band === 'body')) {
     add('.note-content', 'body')
+    add('.vehicle-body', 'body')
   }
   add('.strip-expander-bottom', 'bottom')
   return bands

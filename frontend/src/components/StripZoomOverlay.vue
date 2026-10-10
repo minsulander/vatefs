@@ -44,7 +44,7 @@
               type="button"
               class="zoom-key"
               :class="{ active: penMode }"
-              :title="penMode ? 'Pen on — tap to use strip controls' : 'Enable scribble'"
+              :title="penMode ? 'Pen on - tap to use strip controls' : 'Enable scribble'"
               @click="togglePen"
             >
               <v-icon :size="toolIconSize" class="zoom-key-icon">{{ penMode ? 'mdi-check' : 'mdi-pencil' }}</v-icon>
@@ -76,20 +76,21 @@
               <v-icon :size="toolIconSize" class="zoom-key-icon">mdi-close</v-icon>
             </button>
           </div>
+        </div>
 
-          <div class="strip-zoom-scale" @pointerdown.stop>
-            <span class="zoom-scale-label">Size</span>
-            <input
-              class="zoom-scale-slider"
-              type="range"
-              :min="ZOOM_STRIP_SCALE_PERCENT_MIN"
-              :max="ZOOM_STRIP_SCALE_PERCENT_MAX"
-              :step="ZOOM_STRIP_SCALE_PERCENT_STEP"
-              :value="zoomScalePercent"
-              @input="onZoomScaleInput"
-            />
-            <span class="zoom-scale-value">{{ zoomScalePercent }}%</span>
-          </div>
+        <div class="strip-zoom-scale" @pointerdown.stop>
+          <span class="zoom-scale-label">Size</span>
+          <input
+            class="zoom-scale-slider"
+            type="range"
+            :min="ZOOM_STRIP_SCALE_PERCENT_MIN"
+            :max="ZOOM_STRIP_SCALE_PERCENT_MAX"
+            :step="ZOOM_STRIP_SCALE_PERCENT_STEP"
+            :value="sliderPercent"
+            @input="onZoomScaleDrag"
+            @change="onZoomScaleCommit"
+          />
+          <span class="zoom-scale-value">{{ sliderPercent }}%</span>
         </div>
       </div>
     </div>
@@ -130,8 +131,9 @@ export interface StripZoomAnchor {
 /** Design width at zoom-strip scale 100% */
 const ZOOM_REF_WIDTH_PX = 780
 const KEY_COL_REF_PX = 44
-/** Scale bar height — tracks Settings UI scale only, not zoomed-strip size */
-const SCALE_BAR_REF_H = 36
+/** Tight bottom-right size bar — tracks Settings UI scale only, not zoomed-strip size */
+const SCALE_BAR_REF_H = 22
+const SCALE_BAR_REF_W = 350
 const DRAW_MOVE_THRESHOLD_PX = 8
 
 const props = defineProps<{
@@ -152,8 +154,11 @@ const drawEl = ref<SVGSVGElement | null>(null)
 
 const efsScale = useEfsScaleValue()
 const zoomScalePercent = useZoomStripScalePercent()
+/** Draft while dragging — strip size applies only on release (`change`). */
+const sliderPercent = ref(zoomScalePercent.value)
 const scribbleMode = useStripScribbleMode()
 const stripId = computed(() => props.strip.id)
+/** Notes always draw in zoom (no pen toggle). Vehicles match aircraft (pen toggle). */
 const isNote = computed(() => props.strip.stripType === 'note')
 const { hasScribbles } = useStripScribbles(stripId)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripId)
@@ -186,9 +191,12 @@ const keyColWidth = computed(() =>
   Math.max(44, Math.round(KEY_COL_REF_PX * zoomFactor.value)),
 )
 
-/** Slider chrome height follows Settings UI scale only (bar spans strip width). */
+/** Compact bottom-right slider chrome — Settings UI scale only. */
 const scaleBarHeight = computed(() =>
-  Math.max(28, Math.round(SCALE_BAR_REF_H * efsScale.value)),
+  Math.max(18, Math.round(SCALE_BAR_REF_H * efsScale.value)),
+)
+const scaleBarWidth = computed(() =>
+  Math.max(120, Math.round(SCALE_BAR_REF_W * efsScale.value)),
 )
 
 const toolIconSize = computed(() => Math.max(18, Math.round(18 * zoomFactor.value)))
@@ -230,15 +238,28 @@ const shellStyle = computed(() => {
   return {
     left: `${Math.round(left)}px`,
     top: `${Math.round(top)}px`,
+    width: `${totalW}px`,
     '--zoom-panel-w': `${pw}px`,
     '--zoom-scale-bar-h': `${barH}px`,
+    '--zoom-scale-bar-w': `${scaleBarWidth.value}px`,
   }
 })
 
-function onZoomScaleInput(event: Event) {
+function onZoomScaleDrag(event: Event) {
   const el = event.target as HTMLInputElement
-  setZoomStripScalePercent(Number(el.value))
+  sliderPercent.value = Number(el.value)
 }
+
+function onZoomScaleCommit(event: Event) {
+  const el = event.target as HTMLInputElement
+  const next = Number(el.value)
+  sliderPercent.value = next
+  setZoomStripScalePercent(next)
+}
+
+watch(zoomScalePercent, (v) => {
+  sliderPercent.value = v
+})
 
 function measureStage() {
   const stage = stageEl.value
@@ -271,7 +292,7 @@ function clickThroughToStrip(clientX: number, clientY: number) {
   if (!el) return
   const target =
     (el.closest(
-      'button, a, input, select, textarea, [role="button"], .action-button, .callsign-box, .cell, .exp-chip, .ctrl-arrow, .exp-assr, .exp-rmk, .strip-time',
+      'button, a, input, select, textarea, [role="button"], .action-button, .callsign-box, .cell, .vehicle-cell, .exp-chip, .ctrl-arrow, .exp-assr, .exp-rmk, .strip-time',
     ) as HTMLElement | null) ?? el
   target.focus?.({ preventScroll: true })
   target.dispatchEvent(
@@ -315,14 +336,14 @@ function onEscape() {
   close()
 }
 
-function toScribble(clientX: number, clientY: number) {
-  // Refresh bands during drag so expander open/close mid-gesture still maps
-  if (stageEl.value) bands.value = measureScribbleBands(stageEl.value)
+function toScribble(clientX: number, clientY: number, remountBands = false) {
+  // Freeze band rects while drawing — remounting every move shakes ink at 200% zoom
+  if (remountBands && stageEl.value) bands.value = measureScribbleBands(stageEl.value)
   return clientToScribble(clientX, clientY, bands.value)
 }
 
 function beginStrokeAt(clientX: number, clientY: number, pointerId: number) {
-  const pt = toScribble(clientX, clientY)
+  const pt = toScribble(clientX, clientY, true)
   if (!pt) return
   drawing.value = true
   pointerPending = false
@@ -419,7 +440,11 @@ async function afterOpenMeasure() {
   })
   if (stageEl.value && typeof ResizeObserver !== 'undefined') {
     stageResizeObs?.disconnect()
-    stageResizeObs = new ResizeObserver(() => measureStage())
+    stageResizeObs = new ResizeObserver(() => {
+      // Remeasuring mid-stroke causes scribble shake at high zoom
+      if (drawing.value || pointerPending) return
+      measureStage()
+    })
     stageResizeObs.observe(stageEl.value)
   }
 }
@@ -474,8 +499,9 @@ onUnmounted(() => {
   position: absolute;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0;
+  /* No shell shadow — empty space left of the short Size bar would ghost it */
   box-shadow: none;
   background: transparent;
   pointer-events: none;
@@ -484,7 +510,7 @@ onUnmounted(() => {
 .strip-zoom-row {
   display: grid;
   grid-template-columns: var(--zoom-panel-w, 560px) auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto;
   gap: 0;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
@@ -497,44 +523,43 @@ onUnmounted(() => {
   width: 100%;
   border: 1px solid #888;
   border-right: none;
-  border-bottom: none;
   background: #12151a;
   touch-action: none;
 }
 
 .strip-zoom-scale {
-  grid-column: 1;
-  grid-row: 2;
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: calc(8px * var(--efs-scale, 1));
-  width: 100%;
-  height: var(--zoom-scale-bar-h, 36px);
-  padding: 0 calc(10px * var(--efs-scale, 1));
+  align-self: flex-end;
+  gap: calc(6px * var(--efs-scale, 1));
+  width: var(--zoom-scale-bar-w, 350px);
+  max-width: 100%;
+  height: var(--zoom-scale-bar-h, 22px);
+  margin-top: -1px;
+  padding: 0 calc(8px * var(--efs-scale, 1));
   box-sizing: border-box;
   background: #d8d8d8;
   border: 1px solid #888;
-  border-right: none;
-  border-top: none;
   color: #000;
   font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   user-select: none;
   -webkit-user-select: none;
+  pointer-events: auto;
 }
 
 .zoom-scale-label,
 .zoom-scale-value {
   flex: 0 0 auto;
-  font-size: calc(11px * var(--efs-scale, 1));
+  font-size: calc(10px * var(--efs-scale, 1));
   font-weight: 700;
   letter-spacing: 0.3px;
   text-transform: uppercase;
 }
 
 .zoom-scale-value {
-  min-width: 3.2em;
+  min-width: 2.8em;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -542,8 +567,8 @@ onUnmounted(() => {
 .zoom-scale-slider {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: calc(280px * var(--efs-scale, 1));
   width: 0;
+  height: calc(14px * var(--efs-scale, 1));
   margin: 0;
   accent-color: #666;
   cursor: pointer;
@@ -566,7 +591,7 @@ onUnmounted(() => {
 
 .strip-zoom-keys {
   grid-column: 2;
-  grid-row: 1 / -1; /* strip body + Size slider */
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   justify-content: stretch;

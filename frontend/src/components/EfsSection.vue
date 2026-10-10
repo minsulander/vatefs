@@ -16,38 +16,56 @@
         { 'no-resize': isFirstSection },
         essaHeaderClass,
       ]"
-      @mousedown="onResizeStart"
-      @touchstart="onResizeStart"
     >
-      <span class="section-title">{{ section.title }}</span>
-      <div class="section-header-right">
-        <div
-          v-if="showTimeSortControls"
-          class="section-sort-controls"
+      <div class="section-header-left">
+        <button
+          type="button"
+          class="section-hdr-btn section-hdr-drag"
+          :class="{ 'is-inactive': isFirstSection }"
+          :disabled="isFirstSection"
+          :title="isFirstSection ? 'Adjust height' : 'Drag to adjust height · double-click to reset'"
+          @mousedown="onResizeStart"
+          @touchstart="onResizeStart"
+          @dblclick="onResizeReset"
+        >
+          <span class="section-hdr-drag-icon" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="section-hdr-btn section-hdr-search"
+          disabled
+          title="Search"
+        >
+          <svg class="section-hdr-search-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="6.5" cy="6.5" r="4.25" fill="none" stroke="currentColor" stroke-width="1.75" />
+            <path d="M9.6 9.6 L13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" />
+          </svg>
+        </button>
+        <button
+          v-if="showSortModeControls"
+          type="button"
+          class="section-hdr-btn section-sort-btn"
+          :title="sortModeTitle"
           @mousedown.stop
           @touchstart.stop
+          @click.stop="toggleSortMode"
+        >{{ sortModeLabel }}</button>
+      </div>
+      <span class="section-title">{{ section.title }}</span>
+      <div class="section-header-right">
+        <button
+          type="button"
+          class="section-hdr-btn section-hdr-close"
+          disabled
+          title="Close"
         >
-          <button
-            type="button"
-            class="section-sort-btn"
-            :title="timeSortFieldTitle"
-            :disabled="!showTsatSortOption"
-            @click.stop="toggleTimeSortField"
-          >SORT {{ timeSortFieldLabel }}</button>
-          <button
-            type="button"
-            class="section-sort-btn section-sort-dir-btn"
-            :title="timeSortDirTitle"
-            @click.stop="toggleTimeSortDir"
-          >{{ timeSortDir === 'asc' ? '▲' : '▼' }}</button>
-        </div>
-        <div v-if="!isFirstSection" class="resize-handle"></div>
+          <svg class="section-hdr-close-icon" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M1 1 L11 11 M11 1 L1 11" />
+          </svg>
+        </button>
       </div>
     </div>
-    <div
-      class="section-content"
-      :class="{ 'drag-over': isDragOver }"
-    >
+    <div class="section-content">
       <!-- Top strips container (scrollable) -->
       <div
         ref="topContainer"
@@ -57,9 +75,32 @@
         @dragleave="onTopDragLeave"
         @drop="onTopDrop"
       >
+        <!-- RWY flags always pinned to top of this runway bay -->
+        <RwyFlagStrip
+          v-if="showRwyFlagControls"
+          kind="rwyOccupied"
+          :section-id="section.id"
+          :section-title="section.title"
+        />
+        <RwyFlagStrip
+          v-if="showRwyFlagControls"
+          kind="rwyClosed"
+          :section-id="section.id"
+          :section-title="section.title"
+        />
         <template v-for="(strip, index) in topStrips" :key="strip.id">
+          <!-- Info strips first so the insert line can sit between them and the flight strip -->
           <BreakoutInfoStrip v-if="showBreakoutBeforeTopIndex(index)" />
           <MapInfoStrip v-if="showMapBeforeTopIndex(index)" />
+          <DepInfoStrip v-if="showDepBeforeTopIndex(index)" />
+          <TurnDepInfoStrip v-if="showTurnBeforeTopIndex(index)" />
+          <Sid19LInfoStrip v-if="showSid19lBeforeTopIndex(index)" />
+          <R16InfoStrip v-if="showR16BeforeTopIndex(index)" />
+          <div
+            v-if="dropInsertIndex === index"
+            class="drop-placement-line"
+            aria-hidden="true"
+          />
           <!-- Gap before this strip (if any); skipped while auto time-sorted -->
           <div
             v-if="showGaps && sectionGaps[index]"
@@ -76,18 +117,22 @@
         </template>
         <BreakoutInfoStrip v-if="showBreakoutAtEndOfTop" />
         <MapInfoStrip v-if="showMapAtEndOfTop" />
+        <DepInfoStrip v-if="showDepAtEndOfTop" />
+        <TurnDepInfoStrip v-if="showTurnAtEndOfTop" />
+        <Sid19LInfoStrip v-if="showSid19lAtEndOfTop" />
+        <R16InfoStrip v-if="showR16AtEndOfTop" />
+        <!-- After trailing info strips so drops below DEP/ARR info work -->
         <div
-          v-if="topStrips.length === 0 && bottomStrips.length === 0 && !showBreakoutHere && !showMapHere"
-          class="empty-section"
-        >
-          Empty
-        </div>
+          v-if="dropInsertIndex === topStrips.length"
+          class="drop-placement-line"
+          aria-hidden="true"
+        />
       </div>
 
       <!-- Bottom drop zone -->
       <div
         class="bottom-drop-zone"
-        :class="{ 'drop-active': isBottomDragOver, 'has-bottom': bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom }"
+        :class="{ 'drop-active': isBottomDragOver, 'has-bottom': bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom || showDepAtBottom || showTurnAtBottom || showSid19lAtBottom || showR16AtBottom }"
         @dragover.prevent="onBottomDragOver"
         @dragenter="onBottomDragEnter"
         @dragleave="onBottomDragLeave"
@@ -96,7 +141,8 @@
 
       <!-- Bottom strips container (pinned) -->
       <div
-        v-if="bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom"
+        v-if="bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom || showDepAtBottom || showTurnAtBottom || showSid19lAtBottom || showR16AtBottom"
+        ref="bottomContainer"
         class="bottom-strips-container"
         @dragover.prevent="onBottomStripsDragOver"
         @drop="onBottomStripsDrop"
@@ -104,48 +150,113 @@
         <template v-for="(strip, index) in bottomStrips" :key="strip.id">
           <BreakoutInfoStrip v-if="showBreakoutBeforeBottomIndex(index)" />
           <MapInfoStrip v-if="showMapBeforeBottomIndex(index)" />
+          <DepInfoStrip v-if="showDepBeforeBottomIndex(index)" />
+          <TurnDepInfoStrip v-if="showTurnBeforeBottomIndex(index)" />
+          <Sid19LInfoStrip v-if="showSid19lBeforeBottomIndex(index)" />
+          <R16InfoStrip v-if="showR16BeforeBottomIndex(index)" />
           <FlightStrip
             :strip="strip"
             :section-id="section.id"
             :bay-id="bayId"
           />
         </template>
-        <!-- Default: bottom of bay above RUNWAY 01R/19L; also end of bottom list -->
+        <!-- Default: bottom of bay above RUNWAY; also end of bottom list -->
         <BreakoutInfoStrip v-if="showBreakoutAtEndOfBottom" />
         <MapInfoStrip v-if="showMapAtEndOfBottom" />
+        <DepInfoStrip v-if="showDepAtEndOfBottom" />
+        <TurnDepInfoStrip v-if="showTurnAtEndOfBottom" />
+        <Sid19LInfoStrip v-if="showSid19lAtEndOfBottom" />
+        <R16InfoStrip v-if="showR16AtEndOfBottom" />
+        <!-- Explicit hit target below trailing info strips -->
+        <div
+          class="bottom-info-drop-tail"
+          @dragover.prevent="onBottomStripsDragOver"
+          @dragenter.prevent="onBottomStripsDragOver"
+          @drop="onBottomStripsDropAtEnd"
+        />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, type ComputedRef, type Ref } from 'vue'
 import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
+import { useStripOrderFlip } from '@/composables/useStripOrderFlip'
 import FlightStrip from './FlightStrip.vue'
 import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
 import MapInfoStrip from './MapInfoStrip.vue'
+import DepInfoStrip from './DepInfoStrip.vue'
+import TurnDepInfoStrip from './TurnDepInfoStrip.vue'
+import Sid19LInfoStrip from './Sid19LInfoStrip.vue'
+import R16InfoStrip from './R16InfoStrip.vue'
+import RwyFlagStrip from './RwyFlagStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import {
   INFO_STRIP_KINDS,
   setInfoStripPlacement,
   useBreakoutInfoStrip,
   useMapInfoStrip,
+  useDepInfoStrip,
+  useTurnDepInfoStrip,
+  useSid19LInfoStrip,
+  useR16InfoStrip,
+  type InfoStripPlacement,
 } from '@/composables/useInfoStrips'
+import {
+  RWY_CLOSED_FLAG_KIND,
+  RWY_OCCUPIED_FLAG_KIND,
+  isRwyFlagActive,
+  isRwyFlagHostSection,
+} from '@/composables/useRunwayFlagStrips'
+import { useTouchDropPlacement } from '@/composables/useTouchDrag'
+import { isRunwayOrderSectionId, sortRunwayLuOrder } from '@vatefs/common'
 
-type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note'
+type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 type TimeSortField = 'etobt' | 'tsat'
 type TimeSortDir = 'asc' | 'desc'
 
-const TIME_SORT_FIELD_KEY = 'efs/depTimeSort'
-const TIME_SORT_DIR_KEY = 'efs/depTimeSortDir'
 const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared', 'dep'])
 
 /** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
 function isTimeSortSectionId(sectionId: string): boolean {
   if (TIME_SORT_SECTIONS.has(sectionId)) return true
+  if (sectionId.endsWith('_pending_dep') || sectionId.endsWith('_cleared')) return true
   return /^(bay\d+|idle)_dep$/.test(sectionId)
+}
+
+/**
+ * Any INBOUND bay (APP / TWR / GND) — header tint, dimming helpers.
+ * Matches layout ids (`inbound`, `inbound_*`, `*_inbound`) and INBOUND titles.
+ */
+function isInboundSectionId(sectionId: string, title?: string): boolean {
+  const id = sectionId.toLowerCase()
+  if (id === 'inbound' || id.startsWith('inbound_') || id.endsWith('_inbound')) return true
+  if (title && title.toUpperCase().startsWith('INBOUND')) return true
+  return false
+}
+
+/**
+ * INBOUND APP only — ETA auto-sort (earliest at bottom).
+ * Plain "INBOUND" (ESGG) and "INBOUND APP" (ESSA TWR). Not INBOUND TWR-* / GND-*.
+ */
+function isInboundAppSectionTitle(title?: string): boolean {
+  const t = (title || '').toUpperCase().trim()
+  return t === 'INBOUND' || t === 'INBOUND APP'
+}
+
+function isCtrDepSectionId(sectionId: string): boolean {
+  return sectionId === 'ctr_dep' || sectionId.endsWith('_ctr_dep')
+}
+
+function isClearedSectionId(sectionId: string): boolean {
+  return sectionId === 'cleared' || sectionId.endsWith('_cleared')
+}
+
+function isPendingDepSectionId(sectionId: string): boolean {
+  return sectionId === 'pending_dep' || sectionId.endsWith('_pending_dep')
 }
 
 const props = withDefaults(defineProps<{
@@ -171,12 +282,116 @@ const pendingCreateGapSize = ref<number>(0)
 const store = useEfsStore()
 const { startResize } = useSectionResize()
 
+const showRwyFlagControls = computed(() =>
+  isRwyFlagHostSection(props.section.id, props.section.title),
+)
+const occupiedFlagActive = computed(
+  () =>
+    showRwyFlagControls.value &&
+    isRwyFlagActive(RWY_OCCUPIED_FLAG_KIND, props.section.id),
+)
+const closedFlagActive = computed(
+  () =>
+    showRwyFlagControls.value &&
+    isRwyFlagActive(RWY_CLOSED_FLAG_KIND, props.section.id),
+)
+
 const { visible: breakoutVisible, placement: breakoutPlacement } = useBreakoutInfoStrip()
 const {
   visible: mapVisible,
   placement: mapPlacement,
   defaultSectionId: mapDefaultSectionId,
 } = useMapInfoStrip()
+const {
+  visible: depVisible,
+  placement: depPlacement,
+  defaultSectionId: depDefaultSectionId,
+} = useDepInfoStrip()
+const {
+  visible: turnVisible,
+  placement: turnPlacement,
+  defaultSectionId: turnDefaultSectionId,
+} = useTurnDepInfoStrip()
+const {
+  visible: sid19lVisible,
+  placement: sid19lPlacement,
+  defaultSectionId: sid19lDefaultSectionId,
+} = useSid19LInfoStrip()
+const {
+  visible: r16Visible,
+  placement: r16Placement,
+  defaultBayId: r16DefaultBayId,
+  defaultSectionId: r16DefaultSectionId,
+} = useR16InfoStrip()
+
+/**
+ * Host for turn / Q·E briefing strips: default at the TOP of the DEP RWY bay itself.
+ * (DEP freq strip stays on the section above — see isDefaultDepHost.)
+ */
+function createRwyBayTopHost(
+  visible: Ref<boolean> | ComputedRef<boolean>,
+  placement: ComputedRef<InfoStripPlacement | null>,
+  defaultSectionId: ComputedRef<string | null>,
+  topList: ComputedRef<FlightStripData[]>,
+  bottomList: ComputedRef<FlightStripData[]>,
+  options?: {
+    /** Restrict the default host to this bay (section ids repeat across bays) */
+    defaultBayId?: ComputedRef<string | null>
+    /** Default true; R16 shows regardless of ESSA roles mode */
+    requireRolesMode?: boolean
+  },
+) {
+  const isDefaultHost = computed(() => {
+    if ((options?.requireRolesMode ?? true) && !store.essaRolesMode) return false
+    if (!visible.value) return false
+    const def = defaultSectionId.value
+    if (!def) return false
+    if (options?.defaultBayId && options.defaultBayId.value !== props.bayId) return false
+    return props.section.id === def
+  })
+  const showHere = computed(() => {
+    if (!visible.value) return false
+    const p = placement.value
+    if (!p) return isDefaultHost.value
+    return p.bayId === props.bayId && p.sectionId === props.section.id
+  })
+  /** Default: top of bay. Custom placement may pin to bottom. */
+  const atBottom = computed(() => {
+    if (!showHere.value) return false
+    const p = placement.value
+    return !!p && p.bottom
+  })
+  const inTop = computed(() => {
+    if (!showHere.value) return false
+    const p = placement.value
+    return !p || !p.bottom
+  })
+  function beforeTop(index: number): boolean {
+    if (!inTop.value) return false
+    const p = placement.value
+    if (!p) return index === 0 // default: first slot in the RWY bay
+    return p.index === index
+  }
+  const endTop = computed(() => {
+    if (!inTop.value) return false
+    const p = placement.value
+    if (!p) return topList.value.length === 0
+    return p.index >= topList.value.length
+  })
+  function beforeBottom(index: number): boolean {
+    if (!atBottom.value) return false
+    const p = placement.value
+    if (!p) return false
+    return p.index === index
+  }
+  const endBottom = computed(() => {
+    if (!atBottom.value) return false
+    const p = placement.value
+    if (!p) return true
+    return p.index >= bottomList.value.length
+  })
+  return { showHere, atBottom, beforeTop, endTop, beforeBottom, endBottom }
+}
 
 /** Default host: section immediately above RUNWAY 01R/19L. */
 const isDefaultBreakoutHost = computed(() => {
@@ -189,17 +404,31 @@ const isDefaultBreakoutHost = computed(() => {
   return nextId === 'runway_01R_19L' || /runway_01R_19L/i.test(nextId)
 })
 
-/** Default host: physical runway pair for the active ARR runway (or legacy arr_runway). */
+/**
+ * Default host: section immediately above the physical RWY bay for the MAP ARR runway
+ * (same pattern as breakout above 01R/19L).
+ */
 const isDefaultMapHost = computed(() => {
   if (!store.essaRolesMode || !mapVisible.value) return false
   const def = mapDefaultSectionId.value
-  if (def && props.section.id === def) return true
-  // Fallback when physical pair sections are not in layout
   if (!def) return false
   const bay = store.layout.bays.find((b) => b.id === props.bayId)
-  const hasPhysical = bay?.sections.some((s) => s.id === def)
-  if (hasPhysical) return false
-  return props.section.id === 'arr_runway' || props.section.id.endsWith('_arr_runway')
+  if (!bay) return false
+  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
+  if (idx < 0 || idx >= bay.sections.length - 1) return false
+  return bay.sections[idx + 1]?.id === def
+})
+
+/** Default host: section immediately above the physical DEP RWY bay. */
+const isDefaultDepHost = computed(() => {
+  if (!store.essaRolesMode || !depVisible.value) return false
+  const def = depDefaultSectionId.value
+  if (!def) return false
+  const bay = store.layout.bays.find((b) => b.id === props.bayId)
+  if (!bay) return false
+  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
+  if (idx < 0 || idx >= bay.sections.length - 1) return false
+  return bay.sections[idx + 1]?.id === def
 })
 
 const showBreakoutHere = computed(() => {
@@ -216,6 +445,13 @@ const showMapHere = computed(() => {
   return p.bayId === props.bayId && p.sectionId === props.section.id
 })
 
+const showDepHere = computed(() => {
+  if (!depVisible.value) return false
+  const p = depPlacement.value
+  if (!p) return isDefaultDepHost.value
+  return p.bayId === props.bayId && p.sectionId === props.section.id
+})
+
 const showBreakoutAtBottom = computed(() => {
   if (!showBreakoutHere.value) return false
   const p = breakoutPlacement.value
@@ -225,15 +461,27 @@ const showBreakoutAtBottom = computed(() => {
 const showMapAtBottom = computed(() => {
   if (!showMapHere.value) return false
   const p = mapPlacement.value
-  return !!p && p.bottom
+  return !p || p.bottom
+})
+
+const showDepAtBottom = computed(() => {
+  if (!showDepHere.value) return false
+  const p = depPlacement.value
+  return !p || p.bottom
 })
 
 const showBreakoutInTop = computed(() => showBreakoutHere.value && !!breakoutPlacement.value && !breakoutPlacement.value.bottom)
-/** Default MAP placement: top of the ARR runway bay (index 0). */
+/** Default MAP: bottom of the section above the RWY bay (sits just above the header). */
 const showMapInTop = computed(() => {
   if (!showMapHere.value) return false
   const p = mapPlacement.value
-  return !p || !p.bottom
+  return !!p && !p.bottom
+})
+
+const showDepInTop = computed(() => {
+  if (!showDepHere.value) return false
+  const p = depPlacement.value
+  return !!p && !p.bottom
 })
 
 function showBreakoutBeforeTopIndex(index: number): boolean {
@@ -242,10 +490,13 @@ function showBreakoutBeforeTopIndex(index: number): boolean {
 }
 
 function showMapBeforeTopIndex(index: number): boolean {
-  if (!showMapInTop.value) return false
-  const p = mapPlacement.value
-  if (!p) return index === 0 // default → first slot in top
-  return p.index === index
+  if (!showMapInTop.value || !mapPlacement.value) return false
+  return mapPlacement.value.index === index
+}
+
+function showDepBeforeTopIndex(index: number): boolean {
+  if (!showDepInTop.value || !depPlacement.value) return false
+  return depPlacement.value.index === index
 }
 
 const showBreakoutAtEndOfTop = computed(() => {
@@ -254,10 +505,13 @@ const showBreakoutAtEndOfTop = computed(() => {
 })
 
 const showMapAtEndOfTop = computed(() => {
-  if (!showMapInTop.value) return false
-  const p = mapPlacement.value
-  if (!p) return topStrips.value.length === 0 // default in empty top zone
-  return p.index >= topStrips.value.length
+  if (!showMapInTop.value || !mapPlacement.value) return false
+  return mapPlacement.value.index >= topStrips.value.length
+})
+
+const showDepAtEndOfTop = computed(() => {
+  if (!showDepInTop.value || !depPlacement.value) return false
+  return depPlacement.value.index >= topStrips.value.length
 })
 
 function showBreakoutBeforeBottomIndex(index: number): boolean {
@@ -270,6 +524,13 @@ function showBreakoutBeforeBottomIndex(index: number): boolean {
 function showMapBeforeBottomIndex(index: number): boolean {
   if (!showMapAtBottom.value) return false
   const p = mapPlacement.value
+  if (!p) return false // default → end of bottom (just above next RWY header)
+  return p.index === index
+}
+
+function showDepBeforeBottomIndex(index: number): boolean {
+  if (!showDepAtBottom.value) return false
+  const p = depPlacement.value
   if (!p) return false
   return p.index === index
 }
@@ -284,7 +545,14 @@ const showBreakoutAtEndOfBottom = computed(() => {
 const showMapAtEndOfBottom = computed(() => {
   if (!showMapAtBottom.value) return false
   const p = mapPlacement.value
-  if (!p) return false
+  if (!p) return true // default: end of section above RWY bay
+  return p.index >= bottomStrips.value.length
+})
+
+const showDepAtEndOfBottom = computed(() => {
+  if (!showDepAtBottom.value) return false
+  const p = depPlacement.value
+  if (!p) return true
   return p.index >= bottomStrips.value.length
 })
 
@@ -346,7 +614,7 @@ const essaHeaderClass = computed(() => {
   ) {
     return 'section-header--essa-runway'
   }
-  if (id === 'inbound' || id.endsWith('_inbound') || title.startsWith('INBOUND')) {
+  if (isInboundSectionId(id, title)) {
     return 'section-header--essa-inbound'
   }
   return 'section-header--essa-other'
@@ -357,47 +625,119 @@ const bayAirport = computed(() => {
   return bay?.airport
 })
 
-const isDragOver = ref(false)
+/** Index among topStrips where a dragged strip would insert (line before that index; length = end). */
+const dropInsertIndex = ref<number | null>(null)
+
+function updateDropPlacementLine(event: DragEvent) {
+  const container = topContainer.value
+  if (!container) {
+    dropInsertIndex.value = null
+    return
+  }
+  const strips = Array.from(container.querySelectorAll('.flight-strip'))
+  if (strips.length === 0) {
+    // Only info strips (or empty): still show end-of-list insert line
+    dropInsertIndex.value = 0
+    return
+  }
+  for (let i = 0; i < strips.length; i++) {
+    const el = strips[i]
+    if (!el) continue
+    const rect = el.getBoundingClientRect()
+    const mid = rect.top + rect.height / 2
+    if (event.clientY < mid) {
+      dropInsertIndex.value = i
+      return
+    }
+  }
+  dropInsertIndex.value = strips.length
+}
+
+function clearDropPlacementLine() {
+  dropInsertIndex.value = null
+}
 const isBottomDragOver = ref(false)
 const topContainer = ref<HTMLElement | null>(null)
+const bottomContainer = ref<HTMLElement | null>(null)
+
+/** Touch/iPad drag: same insert line / bottom-slot as HTML5 dragover. */
+const touchDropPlacement = useTouchDropPlacement()
+let touchOwnedHighlight = false
+watch(touchDropPlacement, (p) => {
+  const mine = !!p && p.bayId === props.bayId && p.sectionId === props.section.id
+  if (!mine) {
+    if (touchOwnedHighlight) {
+      dropInsertIndex.value = null
+      isBottomDragOver.value = false
+      touchOwnedHighlight = false
+    }
+    return
+  }
+  touchOwnedHighlight = true
+  if (p!.isBottom) {
+    dropInsertIndex.value = null
+    isBottomDragOver.value = true
+    return
+  }
+  isBottomDragOver.value = false
+  dropInsertIndex.value = p!.insertIndex
+})
 
 const isTimeSortedSection = computed(() => isTimeSortSectionId(props.section.id))
+const isInboundAppSection = computed(() =>
+  isInboundAppSectionTitle(props.section.title),
+)
+const isCtrDepSection = computed(() => isCtrDepSectionId(props.section.id))
 const hasEssa = computed(() =>
   store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
-/** Time-sort auto-sort: single-airport dep sections (not RTC). */
+/** Time-sort auto-sort: single-airport dep sections (not RTC multi columns). */
 const timeSortEnabled = computed(
   () => isTimeSortedSection.value && !store.multiAirport,
 )
-/** Sort field/dir are fixed per section — no UI controls */
-const showTimeSortControls = computed(() => false)
-const showTsatSortOption = computed(() => hasEssa.value && !store.multiAirport)
+/** INBOUND APP only: always ETA auto-sort (no sticky manual order). */
+const etaSortEnabled = computed(() => isInboundAppSection.value)
+/** CTR DEP: always ATD auto-sort (earliest at top; no ATD → add sequence at bottom). */
+const atdSortEnabled = computed(() => isCtrDepSection.value)
+/** RUNWAY: CFTO above L/U; sticky appearance within each tier (addFromTop:false). */
+const runwayLuSortEnabled = computed(() => isRunwayOrderSectionId(props.section.id))
 
-function loadTimeSortField(): TimeSortField {
-  // Migrate older pending-dep-only key if present
-  const stored = localStorage.getItem(TIME_SORT_FIELD_KEY) ?? localStorage.getItem('efs/pendingDepSort')
-  return stored === 'tsat' ? 'tsat' : 'etobt'
-}
+/** CD ALL / TSAT: one toggle (TOBT↔MAN or TSAT↔MAN) right of search */
+const showSortModeControls = computed(
+  () => store.isModeToggleSectionId(props.section.id) && !store.multiAirport,
+)
 
-function loadTimeSortDir(): TimeSortDir {
-  return localStorage.getItem(TIME_SORT_DIR_KEY) === 'desc' ? 'desc' : 'asc'
-}
+const sectionSortMode = computed(() =>
+  store.getSectionSortMode(props.bayId, props.section.id),
+)
 
-const timeSortField = ref<TimeSortField>(loadTimeSortField())
-const timeSortDir = ref<TimeSortDir>(loadTimeSortDir())
-/** Last preferred HHMM per strip — used to detect real time changes (not clock wrap) */
-const lastSortTimes = ref<Map<string, string>>(new Map())
+const timeModeName = computed(() =>
+  isClearedSectionId(props.section.id) ? 'TSAT' : 'TOBT',
+)
+
+/** Button label = active mode */
+const sortModeLabel = computed(() =>
+  sectionSortMode.value === 'man' ? 'MAN' : timeModeName.value,
+)
+
+const sortModeTitle = computed(() => {
+  if (sectionSortMode.value === 'man') {
+    return `Manual order - click for ${timeModeName.value}`
+  }
+  return isClearedSectionId(props.section.id)
+    ? 'Sort by TSAT (else EOBT) - click for MAN'
+    : 'Sort by TOBT (else EOBT) - click for MAN'
+})
 
 /**
  * Fixed sort field per section:
- * - pending_dep (CD ALL / PENDING DEP): TOBT → EOBT
- * - cleared (CLEARED / TSAT): TSAT → TOBT → EOBT
+ * - pending_dep (CD ALL): TOBT → EOBT
+ * - cleared (TSAT): TSAT → EOBT
  * - other time-sort sections: TOBT → EOBT
  */
 function activeTimeSortField(): TimeSortField {
-  if (props.section.id === 'cleared') return 'tsat'
-  if (props.section.id === 'pending_dep') return 'etobt'
-  // RTC bay*_dep / dep: E/TOBT (TOBT → EOBT); TSAT used only when present via cleared rule above
+  if (isClearedSectionId(props.section.id)) return 'tsat'
+  if (isPendingDepSectionId(props.section.id)) return 'etobt'
   return 'etobt'
 }
 
@@ -405,44 +745,16 @@ function activeTimeSortDir(): TimeSortDir {
   return 'asc'
 }
 
-const timeSortFieldLabel = computed(() =>
-  activeTimeSortField() === 'tsat' ? 'TSAT' : 'E/TOBT',
-)
-
-const timeSortFieldTitle = computed(() => {
-  if (!showTsatSortOption.value) {
-    return 'Sorting by TOBT when set, else EOBT'
-  }
-  return activeTimeSortField() === 'tsat'
-    ? 'Sorting by TSAT (else TOBT/EOBT) — click for E/TOBT'
-    : 'Sorting by TOBT (else EOBT) — click for TSAT'
+/**
+ * Sticky manual order: MAN mode on CD ALL/TSAT, or drag-sticky on other time-sort
+ * sections (RTC dep). INBOUND APP / CTR DEP always auto-sort (never sticky).
+ * Other INBOUND (TWR/GND) use appearing order + sticky like taxi.
+ */
+const preferManualOrder = computed(() => {
+  if (etaSortEnabled.value || atdSortEnabled.value) return false
+  if (!timeSortEnabled.value) return false
+  return store.hasManualOrder(props.bayId, props.section.id)
 })
-
-const timeSortDirTitle = computed(() =>
-  timeSortDir.value === 'asc'
-    ? 'Earliest at top — click for earliest at bottom'
-    : 'Earliest at bottom — click for earliest at top',
-)
-
-/** Fixed auto-sort — no manual override (sort controls removed) */
-const preferManualOrder = computed(() => false)
-
-function clearManualAndPersist() {
-  store.clearManualOrder(props.bayId, props.section.id)
-}
-
-function toggleTimeSortField() {
-  if (!showTsatSortOption.value) return
-  timeSortField.value = timeSortField.value === 'tsat' ? 'etobt' : 'tsat'
-  localStorage.setItem(TIME_SORT_FIELD_KEY, timeSortField.value)
-  clearManualAndPersist()
-}
-
-function toggleTimeSortDir() {
-  timeSortDir.value = timeSortDir.value === 'asc' ? 'desc' : 'asc'
-  localStorage.setItem(TIME_SORT_DIR_KEY, timeSortDir.value)
-  clearManualAndPersist()
-}
 
 /** Current UTC minutes since midnight */
 function utcNowMinutes(): number {
@@ -479,14 +791,13 @@ function hhmmSortKey(hhmm: string | undefined, nowMin: number = utcNowMinutes())
 }
 
 /**
- * Preferred departure time for the active sort mode, with CDM fallbacks so
- * strips that only have EOBT (or TOBT without TSAT) still interleave correctly:
- * - TSAT mode: TSAT → TOBT → EOBT
- * - E/TOBT mode: TOBT → EOBT
+ * Preferred departure time for the active sort mode:
+ * - TSAT (cleared): TSAT → EOBT
+ * - TOBT (pending_dep / RTC dep): TOBT → EOBT
  */
 function preferredDepTime(strip: FlightStripData, field: TimeSortField): string | undefined {
   if (field === 'tsat') {
-    return strip.tsat || strip.tobt || strip.eobt || undefined
+    return strip.tsat || strip.eobt || undefined
   }
   return strip.tobt || strip.eobt || undefined
 }
@@ -531,12 +842,77 @@ function sortByDepTime(
   })
 }
 
-/** Gaps only when not in auto time-sort mode */
-const showGaps = computed(() => !timeSortEnabled.value || preferManualOrder.value)
+/** ETA sort for INBOUND APP — earliest at bottom (bay fills from top); missing ETA at top. */
+function sortByEta(list: FlightStripData[]): FlightStripData[] {
+  const nowMin = utcNowMinutes()
+  return [...list].sort((a, b) => {
+    const ka = hhmmSortKey(a.eta, nowMin)
+    const kb = hhmmSortKey(b.eta, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    // Missing ETA at top so they don't sit under the sequence
+    if (aMiss !== bMiss) return aMiss ? -1 : 1
+    // Later ETAs toward the top; earliest (first in sequence) at bottom
+    const d = kb - ka
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/**
+ * ATD sort for CTR DEP — earliest ATD at top (upwards DEP RWY → CTR DEP flow).
+ * No ATD → add-sequence at bottom (position order; new strips addFromTop:false → high position).
+ * Equal ATD → keep add-sequence / bay appearance order (earlier appearance toward top).
+ */
+function sortByAtd(list: FlightStripData[]): FlightStripData[] {
+  const nowMin = utcNowMinutes()
+  return [...list].sort((a, b) => {
+    const ka = hhmmSortKey(a.atd, nowMin)
+    const kb = hhmmSortKey(b.atd, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    if (aMiss && bMiss) return a.position - b.position
+    // Missing ATD at bottom so new/unset sit under the ATD sequence
+    if (aMiss !== bMiss) return aMiss ? 1 : -1
+    // Earliest ATD at top (first departed toward top)
+    const d = ka - kb
+    if (d !== 0) return d
+    // Same ATD: earlier bay appearance (lower position) toward top
+    return a.position - b.position
+  })
+}
+
+/** Gaps only when not in auto time/ETA/ATD/RWY-L/U-sort mode */
+const showGaps = computed(
+  () =>
+    !etaSortEnabled.value &&
+    !atdSortEnabled.value &&
+    !runwayLuSortEnabled.value &&
+    (!timeSortEnabled.value || preferManualOrder.value),
+)
 
 const topStrips = computed(() => {
   void store.stripsVersion
+  // Re-read mode when user toggles TOBT/MAN
+  void sectionSortMode.value
   const list = collectTopStrips()
+
+  // INBOUND APP: always ETA (drag reorder does not stick)
+  if (etaSortEnabled.value) {
+    return sortByEta(list)
+  }
+
+  // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
+  if (atdSortEnabled.value) {
+    return sortByAtd(list)
+  }
+
+  // RUNWAY: CFTO above LINEUP; sticky appearance within tier / for non-L/U
+  if (runwayLuSortEnabled.value) {
+    return sortRunwayLuOrder(list)
+  }
 
   if (timeSortEnabled.value && !preferManualOrder.value) {
     return sortByDepTime(list, activeTimeSortField(), activeTimeSortDir())
@@ -545,11 +921,27 @@ const topStrips = computed(() => {
   return list.sort((a, b) => a.position - b.position)
 })
 
-// When preferred dep time (TSAT/TOBT/EOBT) changes, drop manual order and re-sort
+function toggleSortMode() {
+  if (sectionSortMode.value === 'man') {
+    // MAN → TOBT/TSAT: resume time-sort (re-sort OK)
+    store.setSectionSortMode(props.bayId, props.section.id, 'time')
+    return
+  }
+  // TOBT/TSAT → MAN: freeze current visual (time-sorted) order; do not reshuffle
+  const orderedIds = topStrips.value.map((s) => s.id)
+  store.enterManualSortMode(props.bayId, props.section.id, orderedIds)
+}
+
+/** Last preferred HHMM per strip — RTC dep sticky-manual clears when times change */
+const lastSortTimes = ref<Map<string, string>>(new Map())
+
+// RTC / non-toggle time-sort sections: drop sticky manual when TOBT/EOBT changes
 watch(
-  () => [store.stripsVersion, timeSortField.value, timeSortDir.value, hasEssa.value, store.multiAirport, store.essaRolesMode] as const,
+  () => [store.stripsVersion, hasEssa.value, store.multiAirport] as const,
   () => {
     if (!timeSortEnabled.value) return
+    // CD ALL / TSAT use explicit TOBT|MAN / TSAT|MAN — do not auto-clear MAN
+    if (store.isModeToggleSectionId(props.section.id)) return
     const field = activeTimeSortField()
     const list = collectTopStrips()
     const nextTimes = new Map<string, string>()
@@ -568,9 +960,47 @@ watch(
   },
 )
 
-const bottomStrips = computed(() => store.getBottomStrips(props.bayId, props.section.id))
+const bottomStrips = computed(() => {
+  void store.stripsVersion
+  return store.getBottomStrips(props.bayId, props.section.id)
+})
 const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.section.id))
 
+/** Ordered ids for FLIP when sort/add shifts neighbors (matches auto-move timing). */
+const topStripIds = computed(() => topStrips.value.map((s) => s.id))
+const bottomStripIds = computed(() => bottomStrips.value.map((s) => s.id))
+useStripOrderFlip(topContainer, topStripIds)
+useStripOrderFlip(bottomContainer, bottomStripIds)
+
+const {
+  showHere: showTurnHere,
+  atBottom: showTurnAtBottom,
+  beforeTop: showTurnBeforeTopIndex,
+  endTop: showTurnAtEndOfTop,
+  beforeBottom: showTurnBeforeBottomIndex,
+  endBottom: showTurnAtEndOfBottom,
+} = createRwyBayTopHost(turnVisible, turnPlacement, turnDefaultSectionId, topStrips, bottomStrips)
+
+const {
+  showHere: showSid19lHere,
+  atBottom: showSid19lAtBottom,
+  beforeTop: showSid19lBeforeTopIndex,
+  endTop: showSid19lAtEndOfTop,
+  beforeBottom: showSid19lBeforeBottomIndex,
+  endBottom: showSid19lAtEndOfBottom,
+} = createRwyBayTopHost(sid19lVisible, sid19lPlacement, sid19lDefaultSectionId, topStrips, bottomStrips)
+
+const {
+  showHere: showR16Here,
+  atBottom: showR16AtBottom,
+  beforeTop: showR16BeforeTopIndex,
+  endTop: showR16AtEndOfTop,
+  beforeBottom: showR16BeforeBottomIndex,
+  endBottom: showR16AtEndOfBottom,
+} = createRwyBayTopHost(r16Visible, r16Placement, r16DefaultSectionId, topStrips, bottomStrips, {
+  defaultBayId: r16DefaultBayId,
+  requireRolesMode: false,
+})
 
 const sectionStyle = computed(() => {
   // Last section always flexes to fill remaining space
@@ -589,39 +1019,71 @@ const sectionStyle = computed(() => {
 })
 
 // Resize handling
-function onResizeStart(event: MouseEvent | TouchEvent) {
-  // First section header is not resizable (no section above to resize)
-  if (props.isFirstSection) return
-
-  const sectionEl = (event.currentTarget as HTMLElement).closest('.efs-section')
-  if (!sectionEl) return
-
+function findResizePair(eventTarget: EventTarget | null): {
+  sectionAbove: Element
+  sectionAboveId: string
+  sectionEl: Element
+  aboveHeight: number
+  belowHeight: number
+} | null {
+  if (props.isFirstSection) return null
+  const sectionEl = (eventTarget as HTMLElement | null)?.closest?.('.efs-section')
+  if (!sectionEl) return null
   const bayEl = sectionEl.closest('.efs-bay')
-  if (!bayEl) return
-
-  // Find the section above this one
+  if (!bayEl) return null
   const allSections = Array.from(bayEl.querySelectorAll('.efs-section'))
   const currentIndex = allSections.indexOf(sectionEl)
-  if (currentIndex <= 0) return // No section above
-
+  if (currentIndex <= 0) return null
   const sectionAbove = allSections[currentIndex - 1]
   const sectionAboveId = sectionAbove?.getAttribute('data-section-id')
-  if (!sectionAbove || !sectionAboveId) return
+  if (!sectionAbove || !sectionAboveId) return null
+  return {
+    sectionAbove,
+    sectionAboveId,
+    sectionEl,
+    aboveHeight: sectionAbove.getBoundingClientRect().height,
+    belowHeight: sectionEl.getBoundingClientRect().height,
+  }
+}
+
+function onResizeStart(event: MouseEvent | TouchEvent) {
+  const pair = findResizePair(event.currentTarget)
+  if (!pair) return
 
   // Only fix height on the section above (the one we're resizing)
   // Don't touch other sections to avoid unintended layout shifts
-  const aboveHeight = sectionAbove.getBoundingClientRect().height
-  store.setSectionHeight(props.bayId, sectionAboveId, aboveHeight)
+  store.setSectionHeight(props.bayId, pair.sectionAboveId, pair.aboveHeight)
 
   // For the current section, only fix height if it's NOT the last section
   // Last section always flexes to fill remaining space
-  const belowHeight = sectionEl.getBoundingClientRect().height
   if (!props.isLastSection) {
-    store.setSectionHeight(props.bayId, props.section.id, belowHeight)
+    store.setSectionHeight(props.bayId, props.section.id, pair.belowHeight)
   }
 
   // Start resize: section above grows/shrinks, current section does the inverse
-  startResize(event, props.bayId, sectionAboveId, aboveHeight, props.section.id, belowHeight, props.isLastSection)
+  startResize(
+    event,
+    props.bayId,
+    pair.sectionAboveId,
+    pair.aboveHeight,
+    props.section.id,
+    pair.belowHeight,
+    props.isLastSection,
+  )
+}
+
+/** Double-click the header resize key → put the divider halfway between the pair. */
+function onResizeReset(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  const pair = findResizePair(event.currentTarget)
+  if (!pair) return
+
+  const half = Math.max(80, (pair.aboveHeight + pair.belowHeight) / 2)
+  store.setSectionHeight(props.bayId, pair.sectionAboveId, half)
+  if (!props.isLastSection) {
+    store.setSectionHeight(props.bayId, props.section.id, half)
+  }
 }
 
 // Gap click handler - remove the gap
@@ -749,9 +1211,9 @@ function openCreateDialog(type: SpecialStripType, position?: number, isBottom = 
   pendingCreateGapIndex.value = gapIndex
   pendingCreateGapSize.value = gapSize
 
-  // Note dialog only asks for airport (RTC). Otherwise create immediately.
-  if (type === 'note' && !store.multiAirport) {
-    applyCreate('note', undefined, undefined, bayAirport.value, position, isBottom, gapIndex, gapSize)
+  // Vehicle: always create in this section. Note: immediate unless multi-airport RTC.
+  if (type === 'vehicle' || (type === 'note' && !store.multiAirport)) {
+    applyCreate(type, undefined, undefined, bayAirport.value, position, isBottom, gapIndex, gapSize)
     return
   }
 
@@ -766,23 +1228,27 @@ function onTopDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  isBottomDragOver.value = false
+  updateDropPlacementLine(event)
 }
 
-function onTopDragEnter() {
-  isDragOver.value = true
+function onTopDragEnter(event: DragEvent) {
+  isBottomDragOver.value = false
+  updateDropPlacementLine(event)
 }
 
 function onTopDragLeave(event: DragEvent) {
   const target = event.currentTarget as HTMLElement
   const relatedTarget = event.relatedTarget as HTMLElement
   if (!target.contains(relatedTarget)) {
-    isDragOver.value = false
+    clearDropPlacementLine()
   }
 }
 
 function onTopDrop(event: DragEvent) {
   event.preventDefault()
-  isDragOver.value = false
+  clearDropPlacementLine()
+  isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
 
@@ -1023,10 +1489,13 @@ function onBottomDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  isBottomDragOver.value = true
+  clearDropPlacementLine()
 }
 
 function onBottomDragEnter() {
   isBottomDragOver.value = true
+  clearDropPlacementLine()
 }
 
 function onBottomDragLeave(event: DragEvent) {
@@ -1072,10 +1541,13 @@ function onBottomStripsDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  isBottomDragOver.value = true
+  clearDropPlacementLine()
 }
 
 function onBottomStripsDrop(event: DragEvent) {
   event.preventDefault()
+  isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
 
@@ -1095,12 +1567,34 @@ function onBottomStripsDrop(event: DragEvent) {
     if (data?.type === 'infoStrip') return
     const { stripId } = data
 
-    // Find position within bottom strips
+    // Find position within bottom strips (past last flight / over info → end)
     const position = computeBottomStripsDrop(event)
 
     store.moveStripToBottom(stripId, props.bayId, props.section.id, position)
   } catch (error) {
     console.error('Error handling bottom strips drop:', error)
+  }
+}
+
+/** Drop after trailing bottom info strips (append to bottom list). */
+function onBottomStripsDropAtEnd(event: DragEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  isBottomDragOver.value = false
+  if (!event.dataTransfer) return
+
+  const createType = event.dataTransfer.getData('application/efs-create')
+  if (createType) {
+    openCreateDialog(createType as SpecialStripType, bottomStrips.value.length, true)
+    return
+  }
+  if (tryHandleInfoStripDrop(event, true)) return
+  try {
+    const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data?.type === 'infoStrip') return
+    store.moveStripToBottom(data.stripId, props.bayId, props.section.id, bottomStrips.value.length)
+  } catch (error) {
+    console.error('Error handling bottom end drop:', error)
   }
 }
 </script>
@@ -1123,20 +1617,35 @@ function onBottomStripsDrop(event: DragEvent) {
 .section-header {
   position: relative;
   background: #2c3138;
-  padding: 0 calc(6px * var(--bay-scale, 1));
+  /* Clear left (drag+search[+sort]) and right (close) action buttons */
+  padding: 0 max(calc(22px * var(--bay-scale, 1)), calc(24px * var(--efs-scale, 1)))
+    0 max(calc(40px * var(--bay-scale, 1)), calc(44px * var(--efs-scale, 1)));
   border-bottom: 1px solid #4a5058;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: calc(6px * var(--bay-scale, 1));
-  cursor: ns-resize;
   user-select: none;
   /* Floor with --efs-scale so large UI % stays readable on narrow bays */
   min-height: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
 }
 
+.section-header:has(.section-sort-btn) {
+  /* drag + search + TOBT|TSAT|MAN toggle */
+  padding-left: max(calc(76px * var(--bay-scale, 1)), calc(82px * var(--efs-scale, 1)));
+}
+
 .section-header.no-resize {
   cursor: default;
+}
+
+.section-header-left {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: stretch;
+  z-index: 1;
 }
 
 /* ESSA mode — SAAB EFS section header colours */
@@ -1148,15 +1657,15 @@ function onBottomStripsDrop(event: DragEvent) {
   color: #e8d0d0;
 }
 .section-header--essa-inbound {
-  background: #8aa09d;
-  border-bottom-color: #6f8784;
+  background: #97aba9;
+  border-bottom-color: #7a908d;
 }
 .section-header--essa-inbound .section-title {
   color: #ebebeb; /* same as strip body */
 }
 .section-header--essa-other {
-  background: #848386;
-  border-bottom-color: #6a696b;
+  background: #94979d;
+  border-bottom-color: #787a81;
 }
 .section-header--essa-other .section-title {
   color: #000;
@@ -1175,72 +1684,93 @@ function onBottomStripsDrop(event: DragEvent) {
 
 .section-header-right {
   position: absolute;
-  right: calc(8px * var(--bay-scale, 1));
-  top: 50%;
-  transform: translateY(-50%);
+  right: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
-  align-items: center;
-  gap: calc(8px * var(--bay-scale, 1));
-  margin-left: 0;
+  align-items: stretch;
+  z-index: 1;
 }
 
-.section-sort-controls {
+/* Same look as strip .action-button keys */
+.section-hdr-btn {
   display: flex;
   align-items: center;
-  gap: calc(2px * var(--bay-scale, 1));
-}
-
-.section-sort-btn {
-  font-size: max(calc(10px * var(--bay-scale, 1)), calc(11px * var(--efs-scale, 1)));
-  font-weight: 700;
-  letter-spacing: calc(0.4px * var(--bay-scale, 1));
-  text-transform: uppercase;
-  color: #c5ccd3;
-  background: #2a2e33;
-  border: 1px solid #4a5058;
-  border-radius: 2px;
-  padding: 0 calc(4px * var(--bay-scale, 1));
+  justify-content: center;
+  box-sizing: border-box;
+  width: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #d8d8d8;
+  color: #000;
   cursor: pointer;
-  line-height: 1;
-  font-family: 'Segoe UI', 'Arial', sans-serif;
-  min-height: max(calc(15px * var(--bay-scale, 1)), calc(16px * var(--efs-scale, 1)));
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
 }
 
-.section-sort-dir-btn {
-  min-width: max(calc(16px * var(--bay-scale, 1)), calc(16px * var(--efs-scale, 1)));
-  padding-left: calc(2px * var(--bay-scale, 1));
-  padding-right: calc(2px * var(--bay-scale, 1));
-  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
+.section-header-left .section-hdr-btn:not(:last-child) {
+  border-right: 1px solid #666;
 }
 
-.section-sort-btn:hover:not(:disabled) {
-  background: #3a4048;
-  color: #fff;
+.section-hdr-btn:hover:not(:disabled):not(.is-inactive) {
+  background: #e8e8e8;
 }
 
-.section-sort-btn:disabled {
+.section-hdr-btn:disabled,
+.section-hdr-btn.is-inactive {
   cursor: default;
-  opacity: 0.85;
+  background: #d8d8d8;
+  color: #9a9a9a;
 }
 
-.resize-handle {
-  width: calc(20px * var(--bay-scale, 1));
-  height: calc(4px * var(--bay-scale, 1));
-  background: linear-gradient(
-    to bottom,
-    transparent 0px,
-    #3a3e42 0px,
-    #3a3e42 1px,
-    transparent 1px,
-    transparent 3px,
-    #3a3e42 3px,
-    #3a3e42 4px
-  );
-  opacity: 0.6;
+.section-hdr-drag:not(:disabled) {
+  cursor: ns-resize;
 }
 
-.section-header:hover .resize-handle {
-  opacity: 1;
+.section-hdr-drag-icon {
+  display: block;
+  width: 58%;
+  height: 2px;
+  background: currentColor;
+  box-shadow: 0 4px 0 currentColor;
+}
+
+.section-hdr-search-icon {
+  display: block;
+  width: 70%;
+  height: 70%;
+}
+
+.section-hdr-close-icon {
+  display: block;
+  width: 55%;
+  height: 55%;
+  overflow: visible;
+}
+
+.section-hdr-close-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+/* Text key — same chrome as drag/search; wider for TOBT/TSAT/MAN label */
+.section-sort-btn {
+  width: auto;
+  min-width: max(calc(28px * var(--bay-scale, 1)), calc(30px * var(--efs-scale, 1)));
+  padding: 0 calc(3px * var(--bay-scale, 1));
+  font-size: max(calc(9px * var(--bay-scale, 1)), calc(10px * var(--efs-scale, 1)));
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-family: 'Segoe UI', 'Arial', sans-serif;
+  line-height: 1;
 }
 
 .section-content {
@@ -1248,12 +1778,19 @@ function onBottomStripsDrop(event: DragEvent) {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #12151a;
+  background: var(--efs-bay-bg, #3b3c41);
   transition: background 0.2s ease;
 }
 
-.section-content.drag-over {
-  background: rgba(0, 150, 180, 0.1);
+/* Horizontal insert marker while dragging between strips */
+.drop-placement-line {
+  height: 3px;
+  margin: 1px 6px;
+  border-radius: 1px;
+  background: rgb(0, 150, 180);
+  box-shadow: 0 0 0 1px rgba(0, 150, 180, 0.45);
+  pointer-events: none;
+  flex-shrink: 0;
 }
 
 /* Top strips container - scrollable */
@@ -1288,11 +1825,12 @@ function onBottomStripsDrop(event: DragEvent) {
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* Bottom drop zone */
+/* Bottom drop zone — append-to-bottom slot (distinct from between-strip insert line) */
 .bottom-drop-zone {
   height: 25px;
   flex-shrink: 0;
-  transition: background 0.2s ease, border-top 0.2s ease;
+  position: relative;
+  transition: background 0.15s ease, border-top 0.15s ease, box-shadow 0.15s ease;
   border-top: 1px dashed transparent;
   background: transparent;
 }
@@ -1302,8 +1840,41 @@ function onBottomStripsDrop(event: DragEvent) {
 }
 
 .bottom-drop-zone.drop-active {
-  background: rgba(0, 150, 180, 0.3);
-  border-top: 1px dashed rgba(0, 150, 180, 0.6);
+  border-top: 7px solid rgb(0, 150, 180);
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 150, 180, 0.45) 0%,
+    rgba(0, 150, 180, 0.12) 55%,
+    transparent 100%
+  );
+  box-shadow:
+    0 -1px 0 0 rgba(0, 180, 200, 0.55),
+    inset 0 10px 14px -8px rgba(0, 150, 180, 0.55);
+}
+
+/* End caps so the bottom slot reads as a bay-wide “tray”, not a thin insert */
+.bottom-drop-zone.drop-active::before,
+.bottom-drop-zone.drop-active::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  width: 4px;
+  height: 14px;
+  background: rgb(0, 150, 180);
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(0, 150, 180, 0.7);
+  pointer-events: none;
+}
+.bottom-drop-zone.drop-active::before {
+  left: 2px;
+}
+.bottom-drop-zone.drop-active::after {
+  right: 2px;
+}
+
+.bottom-info-drop-tail {
+  min-height: 12px;
+  flex-shrink: 0;
 }
 
 /* Bottom strips container - pinned */
@@ -1312,16 +1883,6 @@ function onBottomStripsDrop(event: DragEvent) {
   padding: 2px 0;
   background: rgba(0, 100, 130, 0.1);
   border-top: 1px solid rgba(0, 150, 180, 0.3);
-}
-
-.empty-section {
-  text-align: center;
-  padding: calc(15px * var(--bay-scale, 1));
-  color: #3a3e42;
-  font-size: calc(14px * var(--bay-scale, 1));
-  font-style: normal;
-  text-transform: uppercase;
-  letter-spacing: calc(1px * var(--bay-scale, 1));
 }
 
 /* Strip gap - clickable area between strips */

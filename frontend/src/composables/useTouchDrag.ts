@@ -11,6 +11,15 @@ export interface DragData {
   dragOffsetY?: number
 }
 
+/** Live insert index for the green placement line during touch/iPad drag. */
+export interface TouchDropPlacement {
+  sectionId: string
+  bayId: string
+  /** Index among top strips (length = append at end). Null when bottom / trash. */
+  insertIndex: number | null
+  isBottom: boolean
+}
+
 // Global state for touch drag operations
 const isDragging = ref(false)
 const dragData = ref<DragData | null>(null)
@@ -19,6 +28,72 @@ const dragClone = ref<HTMLElement | null>(null)
 const currentDropTarget = ref<HTMLElement | null>(null)
 const isOverBottomZone = ref(false)
 const isOverTrash = ref(false)
+/** Shared so EfsSection can show the same drop-placement-line as HTML5 drag. */
+const touchDropPlacement = ref<TouchDropPlacement | null>(null)
+
+/**
+ * Insert index among flight strips. Also treats leading/trailing .info-strip
+ * blocks so drops between/below runway DEP·ARR info strips resolve correctly
+ * (not only “above” → previous section bottom).
+ */
+function computeTopInsertIndex(container: Element, clientY: number): number {
+  const strips = Array.from(container.querySelectorAll('.flight-strip'))
+  if (strips.length === 0) {
+    // Empty bay with only info strips: still allow append (index 0)
+    return 0
+  }
+  for (let i = 0; i < strips.length; i++) {
+    const el = strips[i]
+    if (!el) continue
+    const rect = el.getBoundingClientRect()
+    if (clientY < rect.top + rect.height / 2) return i
+  }
+  return strips.length
+}
+
+function clearTouchDropPlacement() {
+  touchDropPlacement.value = null
+}
+
+/** Update insert-line / bottom-slot from a hit-test element (no full-bay highlight).
+ *  Bottom-slot styling is driven by EfsSection via touchDropPlacement → isBottomDragOver.
+ */
+function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) {
+  const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
+  const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
+  const isOverBottom = bottomZone !== null || bottomStripsContainer !== null
+
+  const sectionEl =
+    (elementUnder?.closest('.efs-section') as HTMLElement | null) ||
+    bottomZone?.closest('.efs-section') ||
+    bottomStripsContainer?.closest('.efs-section')
+  const bayEl = sectionEl?.closest('.efs-bay') as HTMLElement | null
+  const sectionId = sectionEl?.getAttribute('data-section-id')
+  const bayId = bayEl?.getAttribute('data-bay-id')
+
+  if (!sectionId || !bayId) {
+    clearTouchDropPlacement()
+    return { dropTarget: null as HTMLElement | null, isOverBottom: false }
+  }
+
+  if (isOverBottom) {
+    touchDropPlacement.value = { sectionId, bayId, insertIndex: null, isBottom: true }
+    const dropTarget =
+      (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
+    return { dropTarget, isOverBottom: true }
+  }
+
+  const topContainer =
+    (elementUnder?.closest('.top-strips-container') as HTMLElement | null) ||
+    (sectionEl?.querySelector('.top-strips-container') as HTMLElement | null)
+  const insertIndex = topContainer ? computeTopInsertIndex(topContainer, clientY) : 0
+  touchDropPlacement.value = { sectionId, bayId, insertIndex, isBottom: false }
+
+  const dropTarget =
+    (elementUnder?.closest('.section-content') as HTMLElement | null) ||
+    topContainer
+  return { dropTarget, isOverBottom: false }
+}
 
 // Offset from touch point to element top-left
 let offsetX = 0
@@ -89,56 +164,16 @@ export function useTouchDrag() {
     })
     if (trashZone) trashZone.classList.add('drag-over')
 
-    // Check if over bottom drop zone OR bottom strips container
-    const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
-    const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
-    const isOverBottom = !trashZone && (bottomZone !== null || bottomStripsContainer !== null)
-    isOverBottomZone.value = isOverBottom
-
-    // Find the section-content element (or the section wrapper for bottom zone)
-    let dropTarget: HTMLElement | null = null
+    // Trash: no bay insert/bottom indicators
     if (trashZone) {
-      dropTarget = trashZone
-    } else if (isOverBottom) {
-      // When over bottom zone or bottom strips, use the parent section-content for positioning
-      // but don't highlight the section-content itself
-      dropTarget = (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
-      if (bottomZone) {
-        bottomZone.classList.add('drop-active')
-      }
-      if (bottomStripsContainer) {
-        bottomStripsContainer.classList.add('drag-over')
-      }
-    } else {
-      // Find top-strips-container or section-content
-      dropTarget = elementUnder?.closest('.top-strips-container, .section-content') as HTMLElement | null
+      clearTouchDropPlacement()
+      currentDropTarget.value = trashZone
+      isOverBottomZone.value = false
+      return
     }
 
-    // Remove highlight from previous bottom zone
-    document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => {
-      if (el !== bottomZone) {
-        el.classList.remove('drop-active')
-      }
-    })
-
-    // Remove highlight from previous bottom strips container
-    document.querySelectorAll('.bottom-strips-container.drag-over').forEach(el => {
-      if (el !== bottomStripsContainer) {
-        el.classList.remove('drag-over')
-      }
-    })
-
-    // Update highlight - but NOT when over bottom area (bottom has its own highlight)
-    if (currentDropTarget.value && currentDropTarget.value !== dropTarget) {
-      currentDropTarget.value.classList.remove('drag-over')
-    }
-    if (dropTarget && dropTarget !== currentDropTarget.value && !isOverBottom) {
-      dropTarget.classList.add('drag-over')
-    }
-    // Remove drag-over from section-content when over bottom area
-    if (isOverBottom && dropTarget) {
-      dropTarget.classList.remove('drag-over')
-    }
+    const { dropTarget, isOverBottom } = applyTouchDropPlacement(elementUnder, touch.clientY)
+    isOverBottomZone.value = isOverBottom
     currentDropTarget.value = dropTarget
   }
 
@@ -201,17 +236,11 @@ export function useTouchDrag() {
       dragClone.value.remove()
       dragClone.value = null
     }
-    if (currentDropTarget.value) {
-      currentDropTarget.value.classList.remove('drag-over')
-      currentDropTarget.value = null
-    }
+    currentDropTarget.value = null
 
-    // Clean up bottom zone and bottom strips container highlights
+    // Clean up bottom-slot / trash highlights
     document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => {
       el.classList.remove('drop-active')
-    })
-    document.querySelectorAll('.bottom-strips-container.drag-over').forEach(el => {
-      el.classList.remove('drag-over')
     })
     document.querySelectorAll('.efs-trash-drop.drag-over').forEach((el) => {
       el.classList.remove('drag-over')
@@ -222,6 +251,7 @@ export function useTouchDrag() {
     isOverTrash.value = false
     dragData.value = null
     dragElement.value = null
+    clearTouchDropPlacement()
 
     document.body.classList.remove('touch-dragging')
 
@@ -236,10 +266,10 @@ export function useTouchDrag() {
       dragClone.value.remove()
       dragClone.value = null
     }
-    if (currentDropTarget.value) {
-      currentDropTarget.value.classList.remove('drag-over')
-      currentDropTarget.value = null
-    }
+    currentDropTarget.value = null
+    document.querySelectorAll('.bottom-drop-zone.drop-active').forEach((el) => {
+      el.classList.remove('drop-active')
+    })
     document.querySelectorAll('.efs-trash-drop.drag-over').forEach((el) => {
       el.classList.remove('drag-over')
     })
@@ -248,6 +278,7 @@ export function useTouchDrag() {
     isOverTrash.value = false
     dragData.value = null
     dragElement.value = null
+    clearTouchDropPlacement()
 
     document.body.classList.remove('touch-dragging')
   }
@@ -257,10 +288,10 @@ export function useTouchDrag() {
     // Remove any stuck clones
     document.querySelectorAll('.drag-clone').forEach(el => el.remove())
 
-    // Remove drag-over highlights
+    // Remove trash / misc drag-over highlights
     document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'))
 
-    // Remove bottom zone highlights
+    // Remove bottom-slot highlights
     document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => el.classList.remove('drop-active'))
 
     // Reset dragging elements opacity
@@ -275,6 +306,7 @@ export function useTouchDrag() {
     dragElement.value = null
     dragClone.value = null
     currentDropTarget.value = null
+    clearTouchDropPlacement()
 
     document.body.classList.remove('touch-dragging')
   }
@@ -319,12 +351,30 @@ export function useTouchDrag() {
     isDragging,
     isOverBottomZone,
     dragData,
+    touchDropPlacement,
     startDrag,
     moveDrag,
     endDrag,
     cancelDrag,
     forceCleanup
   }
+}
+
+/** Read-only placement ref for section components (HTML5 + touch share the line). */
+export function useTouchDropPlacement() {
+  return touchDropPlacement
+}
+
+/** For create-from-bottom-bar touch drag: drive the same insert line / bottom slot. */
+export function setTouchDropPlacementFromPoint(clientX: number, clientY: number, hideEl?: HTMLElement | null) {
+  if (hideEl) hideEl.style.display = 'none'
+  const elementUnder = document.elementFromPoint(clientX, clientY)
+  if (hideEl) hideEl.style.display = ''
+  applyTouchDropPlacement(elementUnder, clientY)
+}
+
+export function clearTouchDropPlacementIndicators() {
+  clearTouchDropPlacement()
 }
 
 // Singleton instance for global access

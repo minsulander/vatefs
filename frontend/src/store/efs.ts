@@ -1,49 +1,167 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo, AupR16Status } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
     gapKey,
     DEFAULT_UI_SETTINGS,
     resolveEssaRwyConfigId,
+    extractTmaExitPoint,
+    formatAhdVectorSidDisplay,
     formatSidForDisplay,
     formatStripAltitude,
+    parseAltitudeToFeet,
     DEFAULT_TRANSITION_ALTITUDE_FT,
     hasForcedSidInRoute,
+    hasVectRemark,
     isIfrSidEligible,
     isTrackSidName,
     hasSlowRemark,
+    sidsMatch,
+    withVectRemark,
 } from "@vatefs/common"
+import {
+    collapseExpandersOnLeaveCdAllOrTsat,
+    collapseTopExpanderOnCdAllToTsatIfNoCtot,
+} from "@/composables/useStripExpanders"
 
 export const useEfsStore = defineStore("efs", () => {
 
     let socket: WebSocket | undefined = undefined
 
     const connected = ref(false)
+    /** EuroScope plugin sending UDP (from status.pluginConnected) */
+    const pluginConnected = ref(false)
+    /** Installed VatEFS / backend version */
+    const backendVersion = ref<string | undefined>()
+    /** Version pushed by the loaded ES plugin (myselfUpdate) */
+    const pluginVersion = ref<string | undefined>()
+    /** Primary frequency MHz from myselfUpdate */
+    const myFrequency = ref<number | undefined>()
+    /** Connection + parsing feed health */
+    const feeds = ref<import('@vatefs/common').FeedsStatus | null>(null)
     const layout = ref<EfsLayout>({ bays: [] })
     const strips = ref<Map<string, FlightStrip>>(new Map())
     /** Bumps on every strip add/update/delete so list computeds (e.g. time-sort) always re-run */
     const stripsVersion = ref(0)
     /** Sections where the user manually reordered; time-sort resumes when E/TOBT or TSAT changes */
     const manualOrderSections = ref<Set<string>>(new Set())
+    /** Explicit TOBT/TSAT vs MAN mode for CD ALL / TSAT (and multi-airport variants) */
+    type SectionSortMode = 'time' | 'man'
+    const sectionSortModes = ref<Map<string, SectionSortMode>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
     /** Soft-deleted strips for trash recovery */
     const deletedStrips = ref<DeletedStripInfo[]>([])
 
     const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
+    const SECTION_SORT_MODE_PREFIX = 'efs/sectionSortMode/'
 
     /** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
     function isTimeSortSectionId(sectionId: string): boolean {
         if (TIME_SORT_SECTION_IDS.has(sectionId)) return true
+        if (sectionId.endsWith('_pending_dep') || sectionId.endsWith('_cleared')) return true
         return /^(bay\d+|idle)_dep$/.test(sectionId)
+    }
+
+    /** CD ALL / TSAT — sections that show TOBT|MAN or TSAT|MAN controls */
+    function isModeToggleSectionId(sectionId: string): boolean {
+        return (
+            sectionId === 'pending_dep' ||
+            sectionId === 'cleared' ||
+            sectionId.endsWith('_pending_dep') ||
+            sectionId.endsWith('_cleared')
+        )
+    }
+
+    function sectionTitleFromLayout(sectionId: string): string | undefined {
+        for (const bay of layout.value.bays) {
+            const section = bay.sections.find((s) => s.id === sectionId)
+            if (section) return section.title
+        }
+        return undefined
+    }
+
+    /**
+     * INBOUND APP only — always ETA auto-sort; never sticky manual.
+     * Titles: plain "INBOUND" (ESGG) or "INBOUND APP" (ESSA TWR).
+     * INBOUND TWR-* / INBOUND GND-* use appearing order + sticky like taxi.
+     */
+    function isInboundAppSection(sectionId: string): boolean {
+        const t = (sectionTitleFromLayout(sectionId) || '').toUpperCase().trim()
+        return t === 'INBOUND' || t === 'INBOUND APP'
+    }
+
+    /** CTR DEP — always ATD auto-sort (earliest at top); never sticky manual */
+    function isCtrDepSectionId(sectionId: string): boolean {
+        return sectionId === 'ctr_dep' || sectionId.endsWith('_ctr_dep')
     }
 
     function sectionOrderKey(bayId: string, sectionId: string): string {
         return `${bayId}:${sectionId}`
     }
 
+    function loadSectionSortMode(key: string): SectionSortMode | undefined {
+        try {
+            const stored = sessionStorage.getItem(SECTION_SORT_MODE_PREFIX + key)
+            if (stored === 'time' || stored === 'man') return stored
+        } catch {
+            /* ignore */
+        }
+        return undefined
+    }
+
+    function persistSectionSortMode(key: string, mode: SectionSortMode) {
+        try {
+            sessionStorage.setItem(SECTION_SORT_MODE_PREFIX + key, mode)
+        } catch {
+            /* ignore */
+        }
+    }
+
+    function getSectionSortMode(bayId: string, sectionId: string): SectionSortMode {
+        const key = sectionOrderKey(bayId, sectionId)
+        return sectionSortModes.value.get(key) ?? loadSectionSortMode(key) ?? 'time'
+    }
+
+    function setSectionSortMode(bayId: string, sectionId: string, mode: SectionSortMode) {
+        if (!isModeToggleSectionId(sectionId)) return
+        const key = sectionOrderKey(bayId, sectionId)
+        const next = new Map(sectionSortModes.value)
+        next.set(key, mode)
+        sectionSortModes.value = next
+        persistSectionSortMode(key, mode)
+        if (mode === 'man') {
+            const man = new Set(manualOrderSections.value)
+            man.add(key)
+            manualOrderSections.value = man
+        } else {
+            const man = new Set(manualOrderSections.value)
+            man.delete(key)
+            manualOrderSections.value = man
+        }
+    }
+
+    /**
+     * Enter MAN on CD ALL / TSAT: freeze `orderedIds` (current visual order) into
+     * strip positions and sync flightStore via WS so add-from-top keeps that sequence.
+     */
+    function enterManualSortMode(bayId: string, sectionId: string, orderedIds: string[]) {
+        if (!isModeToggleSectionId(sectionId)) return
+        if (orderedIds.length > 0) {
+            reindexTopStripsByIds(bayId, sectionId, orderedIds)
+            sendMessage({ type: 'reorderStrips', bayId, sectionId, stripIds: orderedIds })
+        }
+        setSectionSortMode(bayId, sectionId, 'man')
+    }
+
     function markManualOrder(bayId: string, sectionId: string) {
+        // INBOUND APP / CTR DEP always auto-sort; never stick a manual drag order
+        if (isInboundAppSection(sectionId) || isCtrDepSectionId(sectionId)) return
+        if (isModeToggleSectionId(sectionId)) {
+            setSectionSortMode(bayId, sectionId, 'man')
+            return
+        }
         if (!isTimeSortSectionId(sectionId)) return
         const next = new Set(manualOrderSections.value)
         next.add(sectionOrderKey(bayId, sectionId))
@@ -52,6 +170,10 @@ export const useEfsStore = defineStore("efs", () => {
 
     function clearManualOrder(bayId: string, sectionId: string) {
         const key = sectionOrderKey(bayId, sectionId)
+        if (isModeToggleSectionId(sectionId)) {
+            setSectionSortMode(bayId, sectionId, 'time')
+            return
+        }
         if (!manualOrderSections.value.has(key)) return
         const next = new Set(manualOrderSections.value)
         next.delete(key)
@@ -59,6 +181,9 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function hasManualOrder(bayId: string, sectionId: string): boolean {
+        if (isModeToggleSectionId(sectionId)) {
+            return getSectionSortMode(bayId, sectionId) === 'man'
+        }
         return manualOrderSections.value.has(sectionOrderKey(bayId, sectionId))
     }
 
@@ -91,6 +216,8 @@ export const useEfsStore = defineStore("efs", () => {
     const myCallsign = ref('')
     const myAirports = ref<string[]>([])
     const myRole = ref<string | undefined>(undefined)
+    /** EuroScope position / SI */
+    const myPositionId = ref<string | undefined>(undefined)
     const isController = ref(false)
 
     // Multi-airport mode
@@ -107,6 +234,8 @@ export const useEfsStore = defineStore("efs", () => {
     const essaRolesMode = ref(false)
     const essaRoles = ref<string[]>([])
     const essaRolesManual = ref(false)
+    /** TWR AOR: runway ends we cover; null = all (solo / no split) */
+    const essaCoveredRunways = ref<string[] | null>(null)
 
     /** Manual ESSA RWY combination id (Appendix A/B); cleared when ES runways change */
     const essaRwyConfigId = ref<string | null>(null)
@@ -147,6 +276,104 @@ export const useEfsStore = defineStore("efs", () => {
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
 
+    /** Last seen ATIS letters + last acknowledged QNH per airport */
+    type AtisAckSnapshot = {
+        arrAtis?: string
+        depAtis?: string
+        atis?: string
+        qnh?: number
+    }
+    const atisAckByAirport = ref<Record<string, AtisAckSnapshot>>({})
+
+    /** Airports whose ATIS letter is briefly flashing (auto-clears; no ack). */
+    const atisLetterFlashAirports = ref<string[]>([])
+    const atisLetterFlashTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    const ATIS_LETTER_FLASH_MS = 4000
+
+    function atisSnapshot(info: AirportAtisInfo): AtisAckSnapshot {
+        return {
+            arrAtis: info.arrAtis,
+            depAtis: info.depAtis,
+            atis: info.atis,
+            qnh: info.qnh,
+        }
+    }
+
+    function atisLettersEqual(info: AirportAtisInfo, snap: AtisAckSnapshot): boolean {
+        return (
+            (info.arrAtis || '') === (snap.arrAtis || '') &&
+            (info.depAtis || '') === (snap.depAtis || '') &&
+            (info.atis || '') === (snap.atis || '')
+        )
+    }
+
+    function startAtisLetterFlash(airport: string) {
+        if (!atisLetterFlashAirports.value.includes(airport)) {
+            atisLetterFlashAirports.value = [...atisLetterFlashAirports.value, airport]
+        }
+        const existing = atisLetterFlashTimers.get(airport)
+        if (existing) clearTimeout(existing)
+        atisLetterFlashTimers.set(airport, setTimeout(() => {
+            atisLetterFlashAirports.value = atisLetterFlashAirports.value.filter((a) => a !== airport)
+            atisLetterFlashTimers.delete(airport)
+        }, ATIS_LETTER_FLASH_MS))
+    }
+
+    function applyAtisUpdate(airports: AirportAtisInfo[]) {
+        atisInfo.value = airports
+        const nextAck = { ...atisAckByAirport.value }
+        for (const a of airports) {
+            // First sighting: baseline letters + QNH so we don't flash on connect
+            const prev = nextAck[a.airport]
+            if (!prev) {
+                nextAck[a.airport] = atisSnapshot(a)
+                continue
+            }
+            const letterChanged = !atisLettersEqual(a, prev)
+            if (letterChanged) {
+                // Temporary informational flash; advance letter baseline immediately (no sticky ack)
+                startAtisLetterFlash(a.airport)
+                nextAck[a.airport] = {
+                    ...prev,
+                    arrAtis: a.arrAtis,
+                    depAtis: a.depAtis,
+                    atis: a.atis,
+                    // Keep prior QNH ack until user confirms a real QNH change
+                    qnh: prev.qnh,
+                }
+            }
+            // QNH: leave ack.qnh unchanged so isQnhChanged stays sticky until acknowledgeQnh
+        }
+        atisAckByAirport.value = nextAck
+    }
+
+    /** Acknowledge current QNH for an airport (clears amber). ATIS letters auto-clear. */
+    function acknowledgeQnh(airport: string) {
+        const info = atisInfo.value.find((a) => a.airport === airport)
+        if (!info) return
+        const prev = atisAckByAirport.value[airport]
+        atisAckByAirport.value = {
+            ...atisAckByAirport.value,
+            [airport]: {
+                arrAtis: prev?.arrAtis ?? info.arrAtis,
+                depAtis: prev?.depAtis ?? info.depAtis,
+                atis: prev?.atis ?? info.atis,
+                qnh: info.qnh,
+            },
+        }
+    }
+
+    function isAtisLetterChanged(airport: string): boolean {
+        return atisLetterFlashAirports.value.includes(airport)
+    }
+
+    function isQnhChanged(airport: string): boolean {
+        const info = atisInfo.value.find((a) => a.airport === airport)
+        const ack = atisAckByAirport.value[airport]
+        if (!info || !ack) return false
+        return (info.qnh ?? null) !== (ack.qnh ?? null)
+    }
+
     /** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
     const essaEsRunways = computed(() => {
         const info = atisInfo.value.find(a => a.airport === 'ESSA') ?? atisInfo.value[0]
@@ -154,11 +381,52 @@ export const useEfsStore = defineStore("efs", () => {
         return { arr: info.arrRunways ?? [], dep: info.depRunways ?? [] }
     })
 
-    /** Resolved ESSA RWY config id (manual override or ES + night/day auto) */
+    /** AUP R16 status ("R16 utökad"); null until the backend has sent one */
+    const aupR16 = ref<AupR16Status | null>(null)
+
+    /** Synced RWY occupied/closed flags (server authority; not localStorage). */
+    const activeRwyFlags = ref<Set<string>>(new Set())
+    /** Bump so Vue tracks Set membership changes. */
+    const activeRwyFlagsVersion = ref(0)
+
+    function applyRwyFlags(active: string[]) {
+        activeRwyFlags.value = new Set(active.filter((x) => typeof x === 'string' && x.includes(':')))
+        activeRwyFlagsVersion.value++
+    }
+
+    function isRwyFlagActive(flagId: string): boolean {
+        void activeRwyFlagsVersion.value
+        return activeRwyFlags.value.has(flagId)
+    }
+
+    function setRwyFlag(flagId: string, active: boolean) {
+        const id = (flagId || '').trim()
+        if (!id) return
+        const next = new Set(activeRwyFlags.value)
+        if (active) next.add(id)
+        else next.delete(id)
+        activeRwyFlags.value = next
+        activeRwyFlagsVersion.value++
+        sendMessage({ type: 'setRwyFlag', flagId: id, active })
+    }
+
+    /**
+     * AUTO-mode preference from AUP R16 (9C / 15C). Ignored in manual RWY mode —
+     * a manual config lock always wins (see essaRwyConfigIdResolved).
+     */
+    const essaRwyAutoPreferId = computed<string | null>(() => {
+        if (essaRwyConfigManual.value) return null
+        const r = aupR16.value
+        return r?.active && r.suggestConfigId ? r.suggestConfigId : null
+    })
+
+    /** Resolved ESSA RWY config id (manual override or ES + night/day auto, R16 utökad hint) */
     const essaRwyConfigIdResolved = computed(() => {
         if (essaRwyConfigManual.value && essaRwyConfigId.value) return essaRwyConfigId.value
         const { arr, dep } = essaEsRunways.value
-        return resolveEssaRwyConfigId(arr, dep)
+        return resolveEssaRwyConfigId(arr, dep, new Date(), {
+            preferConfigId: essaRwyAutoPreferId.value,
+        })
     })
 
     // Configuration
@@ -177,6 +445,9 @@ export const useEfsStore = defineStore("efs", () => {
     const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
     const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
     const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
+    const autoDepSquawkCfl = ref(DEFAULT_UI_SETTINGS.autoDepSquawkCfl)
+    const equalBayColumns = ref(DEFAULT_UI_SETTINGS.equalBayColumns)
+    const showTobtSetByA = ref(DEFAULT_UI_SETTINGS.showTobtSetByA)
     /** Backend: any myAirport has GNG stand data */
     const autoParkAvailable = ref(false)
 
@@ -192,6 +463,18 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.autoParkEnabled === 'boolean'
                 ? settings.autoParkEnabled
                 : DEFAULT_UI_SETTINGS.autoParkEnabled
+        autoDepSquawkCfl.value =
+            typeof settings.autoDepSquawkCfl === 'boolean'
+                ? settings.autoDepSquawkCfl
+                : DEFAULT_UI_SETTINGS.autoDepSquawkCfl
+        equalBayColumns.value =
+            typeof settings.equalBayColumns === 'boolean'
+                ? settings.equalBayColumns
+                : DEFAULT_UI_SETTINGS.equalBayColumns
+        showTobtSetByA.value =
+            typeof settings.showTobtSetByA === 'boolean'
+                ? settings.showTobtSetByA
+                : DEFAULT_UI_SETTINGS.showTobtSetByA
         if (typeof available === 'boolean') autoParkAvailable.value = available
     }
 
@@ -205,6 +488,9 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
         if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
+        if (typeof partial.autoDepSquawkCfl === 'boolean') autoDepSquawkCfl.value = partial.autoDepSquawkCfl
+        if (typeof partial.equalBayColumns === 'boolean') equalBayColumns.value = partial.equalBayColumns
+        if (typeof partial.showTobtSetByA === 'boolean') showTobtSetByA.value = partial.showTobtSetByA
         sendMessage({ type: 'updateUserSettings', settings: partial })
     }
     function connect() {
@@ -223,6 +509,9 @@ export const useEfsStore = defineStore("efs", () => {
         socket.onclose = () => {
             console.log("socket closed")
             connected.value = false
+            pluginConnected.value = false
+            pluginVersion.value = undefined
+            // keep last feeds/backendVersion for offline display of parse state if needed
         }
         socket.onmessage = (event: MessageEvent) => {
             handleMessage(event.data)
@@ -278,7 +567,15 @@ export const useEfsStore = defineStore("efs", () => {
                         if (message.dclMode) dclMode.value = message.dclMode
                         break
                     case 'atisUpdate':
-                        atisInfo.value = message.airports
+                        applyAtisUpdate(message.airports)
+                        break
+                    case 'aupR16': {
+                        const { type: _type, ...status } = message
+                        aupR16.value = status
+                        break
+                    }
+                    case 'rwyFlags':
+                        applyRwyFlags(message.active)
                         break
                     case 'configList':
                         availableConfigs.value = message.configs
@@ -326,6 +623,26 @@ export const useEfsStore = defineStore("efs", () => {
 
     // Auto-move animation: maps strip ID -> old rect + cloned DOM node (non-reactive, consumed once)
     const autoMoveData = new Map<string, { rect: DOMRect; clone: HTMLElement }>()
+    /**
+     * Strip ids whose destination instance must stay invisible until the fly-clone
+     * finishes. Reactive and set *before* the strip map update so the first paint
+     * of the remounted destination strip is already hidden (avoids ghost/double).
+     */
+    const autoMovingStripIds = ref<Set<string>>(new Set())
+
+    function beginAutoMove(stripId: string) {
+        if (autoMovingStripIds.value.has(stripId)) return
+        const next = new Set(autoMovingStripIds.value)
+        next.add(stripId)
+        autoMovingStripIds.value = next
+    }
+
+    function endAutoMove(stripId: string) {
+        if (!autoMovingStripIds.value.has(stripId)) return
+        const next = new Set(autoMovingStripIds.value)
+        next.delete(stripId)
+        autoMovingStripIds.value = next
+    }
 
     /** Awaiting server id, then that strip id — bay note opens zoom scribble once. */
     const PENDING_NOTE_SCRIBBLE_AWAIT = '__awaiting__'
@@ -341,6 +658,8 @@ export const useEfsStore = defineStore("efs", () => {
     function handleStripMessage(strip: FlightStrip, autoMoved?: boolean) {
         console.log("received strip:", strip.callsign)
 
+        const prev = strips.value.get(strip.id)
+
         // Capture old position and clone for fly-across animation before updating
         if (autoMoved) {
             const el = document.querySelector(`[data-strip-id="${strip.id}"]`) as HTMLElement | null
@@ -348,17 +667,32 @@ export const useEfsStore = defineStore("efs", () => {
                 const rect = el.getBoundingClientRect()
                 const clone = el.cloneNode(true) as HTMLElement
                 autoMoveData.set(strip.id, { rect, clone })
+                // Hide destination on first paint (before stripsVersion triggers remount)
+                beginAutoMove(strip.id)
             }
         }
 
-        const isNew = !strips.value.has(strip.id)
+        // Collapse before remount: leaving CD ALL/TSAT destroys the old FlightStrip
+        // instance, so its sectionId watcher never sees the transition.
+        if (prev) {
+            collapseExpandersOnLeaveCdAllOrTsat(strip.id, prev.sectionId, strip.sectionId)
+            // CD ALL → TSAT: close top expander when unregulated (no CTOT)
+            collapseTopExpanderOnCdAllToTsatIfNoCtot(
+                strip.id,
+                prev.sectionId,
+                strip.sectionId,
+                strip.ctot ?? prev.ctot,
+            )
+        }
+
+        const isNew = !prev
         strips.value.set(strip.id, strip)
         stripsVersion.value++
 
-        // Bind pending “open scribble” to the newly created note strip id
+        // Bind pending “open zoom” to newly created note / vehicle strip id
         if (
             isNew &&
-            strip.stripType === 'note' &&
+            (strip.stripType === 'note' || strip.stripType === 'vehicle') &&
             pendingNoteScribbleId.value === PENDING_NOTE_SCRIBBLE_AWAIT
         ) {
             pendingNoteScribbleId.value = strip.id
@@ -409,6 +743,7 @@ export const useEfsStore = defineStore("efs", () => {
         strips.value.clear()
         stripsVersion.value++
         manualOrderSections.value = new Set()
+        sectionSortModes.value = new Map()
         gaps.value.clear()
 
         // Request fresh data from server
@@ -417,11 +752,27 @@ export const useEfsStore = defineStore("efs", () => {
         if (!serverRequested) sendRequest('refresh')
     }
 
+    function reloadFeeds() {
+        sendMessage({ type: 'reloadFeeds' })
+    }
+
+    /** Top-bar refresh (layout/strips/plugin) plus re-parse local files and network feeds */
+    function reloadAll() {
+        refresh()
+        reloadFeeds()
+    }
+
     // Handle status message from server
     function handleStatusMessage(message: {
         callsign: string
         airports: string[]
         role?: string
+        positionId?: string
+        pluginConnected?: boolean
+        feeds?: import('@vatefs/common').FeedsStatus
+        backendVersion?: string
+        pluginVersion?: string
+        frequency?: number
         isController?: boolean
         multiAirport?: boolean
         activeAirports?: string[]
@@ -431,15 +782,23 @@ export const useEfsStore = defineStore("efs", () => {
         essaRolesMode?: boolean
         essaRoles?: string[]
         essaRolesManual?: boolean
+        essaCoveredRunways?: string[]
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
         myRole.value = message.role
+        myPositionId.value = message.positionId || undefined
+        pluginConnected.value = message.pluginConnected ?? false
+        feeds.value = message.feeds ?? null
+        backendVersion.value = message.backendVersion
+        pluginVersion.value = message.pluginVersion
+        myFrequency.value = typeof message.frequency === 'number' ? message.frequency : undefined
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
         essaRolesMode.value = message.essaRolesMode ?? false
         essaRoles.value = message.essaRoles ?? []
         essaRolesManual.value = message.essaRolesManual ?? false
+        essaCoveredRunways.value = message.essaCoveredRunways ?? null
         const nextActive = message.activeAirports ?? message.airports
         markNewlyActiveAirports(nextActive)
         activeAirports.value = nextActive
@@ -714,15 +1073,20 @@ export const useEfsStore = defineStore("efs", () => {
     /**
      * Before a manual move into a time-sorted section still in auto-sort mode,
      * align store positions to the current DOM order so insert indices match what the user sees.
+     * Also syncs backend/flightStore (same as sticky taxi) so the following moveStrip
+     * and later add-from-top use the frozen visual sequence.
      */
     function syncTimeSortSectionFromDom(bayId: string, sectionId: string, container: Element | null) {
+        if (isInboundAppSection(sectionId) || isCtrDepSectionId(sectionId)) return
         if (!isTimeSortSectionId(sectionId)) return
         if (hasManualOrder(bayId, sectionId)) return
         if (!container) return
         const ids = Array.from(container.querySelectorAll<HTMLElement>('[data-strip-id]'))
             .map((el) => el.getAttribute('data-strip-id'))
             .filter((id): id is string => !!id)
-        if (ids.length > 0) reindexTopStripsByIds(bayId, sectionId, ids)
+        if (ids.length === 0) return
+        reindexTopStripsByIds(bayId, sectionId, ids)
+        sendMessage({ type: 'reorderStrips', bayId, sectionId, stripIds: ids })
     }
 
     function resolveTargetPosition(position: number | undefined, stripCount: number): number {
@@ -758,6 +1122,8 @@ export const useEfsStore = defineStore("efs", () => {
     ) {
         const strip = strips.value.get(stripId)
         if (!strip) return
+        // Other-owned flight strips cannot be moved (notes always allowed)
+        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') return
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -774,6 +1140,9 @@ export const useEfsStore = defineStore("efs", () => {
         if (isSameZone) {
             adjustGapsForMove(targetBayId, targetSectionId, oldPosition, targetPosition)
         }
+
+        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, targetSectionId)
+        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, targetSectionId, strip.ctot)
 
         // Update strip location
         strip.bayId = targetBayId
@@ -820,6 +1189,7 @@ export const useEfsStore = defineStore("efs", () => {
     ) {
         const strip = strips.value.get(stripId)
         if (!strip) return
+        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') return
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -828,6 +1198,9 @@ export const useEfsStore = defineStore("efs", () => {
         // Get target bottom strips count (excluding the moving strip)
         const targetStrips = getBottomStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
         const targetPosition = resolveTargetPosition(position, targetStrips.length)
+
+        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, targetSectionId)
+        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, targetSectionId, strip.ctot)
 
         // Update strip location
         strip.bayId = targetBayId
@@ -1018,6 +1391,69 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    /**
+     * Set/clear AHD: setting clears SID (preferred + assigned) and adds VECT;
+     * clearing removes VECT. Strip SID cell shows ve{TMA exit} while AHD is set.
+     */
+    function applyAssignedHeading(stripId: string, heading: string) {
+        const strip = strips.value.get(stripId)
+        if (!strip) return
+
+        const padded = heading.trim()
+        const clearing = !padded || padded === '0' || padded === '000'
+
+        if (clearing) {
+            sendAssignment(stripId, 'assignHeading', '0')
+            // Clearing AHD also drops VECT (auto-set with heading)
+            if (hasVectRemark(strip.remarks)) {
+                updateRemarks(stripId, withVectRemark(strip.remarks, false))
+            }
+            strips.value.set(stripId, {
+                ...strips.value.get(stripId)!,
+                assignedHeading: undefined,
+            })
+            stripsVersion.value++
+            return
+        }
+
+        const hdg = String(Math.min(360, Math.max(1, parseInt(padded, 10) || 0))).padStart(3, '0')
+
+        // Drop preferred SID preview immediately
+        if (essaPreferredSids.value.has(stripId)) {
+            const next = new Map(essaPreferredSids.value)
+            next.delete(stripId)
+            essaPreferredSids.value = next
+        }
+        if (essaPreferredCfls.value.has(stripId)) {
+            const next = new Map(essaPreferredCfls.value)
+            next.delete(stripId)
+            essaPreferredCfls.value = next
+        }
+
+        sendAssignment(stripId, 'assignHeading', hdg)
+        // Backend drops forced SID/rwy only — never injects ADEP/rwy for VECT
+
+        if (!hasVectRemark(strip.remarks)) {
+            updateRemarks(stripId, withVectRemark(strip.remarks, true))
+        }
+
+        // Optimistic: drop forced SID prefix if present; leave ADEP/rwy or bare route alone
+        const nextRoute = (() => {
+            const route = strip.route || ''
+            if (!hasForcedSidInRoute(route)) return route
+            const tokens = route.trim().split(/\s+/).filter(Boolean)
+            tokens.shift()
+            return tokens.join(' ')
+        })()
+        strips.value.set(stripId, {
+            ...strips.value.get(stripId)!,
+            assignedHeading: hdg,
+            sid: undefined,
+            route: nextRoute,
+        })
+        stripsVersion.value++
+    }
+
     function dclLogin() {
         sendMessage({ type: 'dclAction', action: 'login' })
     }
@@ -1026,8 +1462,8 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclAction', action: 'logout' })
     }
 
-    function dclSend(stripId: string, remarks: string) {
-        sendMessage({ type: 'dclSend', stripId, remarks })
+    function dclSend(stripId: string, remarks: string, proactive = false) {
+        sendMessage({ type: 'dclSend', stripId, remarks, ...(proactive ? { proactive: true } : {}) })
     }
 
     function dclReject(stripId: string) {
@@ -1051,8 +1487,9 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'viffUpdateTobt', stripId, tobt })
     }
 
-    function viffReadyTobt(stripId: string) {
-        sendMessage({ type: 'viffReadyTobt', stripId })
+    /** Ready TOBT: server sets TOBT=now (UTC HHMM) then REA. Optional tobt is ignored. */
+    function viffReadyTobt(stripId: string, tobt?: string) {
+        sendMessage({ type: 'viffReadyTobt', stripId, tobt })
     }
 
     /** Set or clear TSAC (communicated TSAT). Empty string clears. */
@@ -1157,28 +1594,187 @@ export const useEfsStore = defineStore("efs", () => {
      * GetSid may already show the same name — still amber until CLR assigns it.
      */
     function isPreferredSidPending(strip: FlightStrip): boolean {
+        if (strip.assignedHeading) return false
         if (!isEssaPreferredIfrDep(strip)) return false
         if (hasForcedSidInRoute(strip.route)) return false
         return !!essaPreferredSids.value.get(strip.id)
     }
 
     /**
-     * Preferred CFL shown but not yet assigned (amber on strip until CLR opens).
+     * @deprecated Prefer isXflPending — kept for callers; amber moved to XFL cell.
+     * True when XFL is known but no real CFL is set.
      */
     function isPreferredCflPending(strip: FlightStrip): boolean {
-        if (!isEssaPreferredIfrDep(strip)) return false
-        if (hasRealAssignedCfl(strip)) return false
-        return essaPreferredCfls.value.has(strip.id)
+        return isXflPending(strip)
+    }
+
+    /** SID altitude cache: `AIRPORT|sid|0|1` → feet */
+    const sidAltitudeCache = ref<Map<string, number>>(new Map())
+
+    function sidAltCacheKey(airport: string, sid: string, slow: boolean): string {
+        return `${airport.toUpperCase()}|${sid}|${slow ? '1' : '0'}`
+    }
+
+    function defaultInitialClimbFt(airport: string, slow: boolean): number | undefined {
+        const apt = airport.toUpperCase()
+        if (apt !== 'ESSA' && apt !== 'ESGG' && apt !== 'ESMS') return undefined
+        if (slow) return 3000
+        if (apt === 'ESMS') return 4000
+        return 5000
+    }
+
+    /** Raw SID used to resolve XFL (preferred preview or strip SID). */
+    function sidForXfl(strip: FlightStrip): string | undefined {
+        if (strip.assignedHeading && !hasForcedSidInRoute(strip.route) && !strip.sid) {
+            return undefined
+        }
+        if (isEssaPreferredIfrDep(strip)) {
+            const preferred = essaPreferredSids.value.get(strip.id)
+            if (preferred) {
+                const forced = hasForcedSidInRoute(strip.route)
+                if (!forced || !strip.sid) return preferred
+            }
+        }
+        return strip.sid || undefined
+    }
+
+    /**
+     * XFL in feet — prefer EuroScope exit coordination altitude.
+     * Fallback: preferred SID-alt / /api/sidalt / TMA default (mock / pre-refresh).
+     */
+    function xflFeetForStrip(strip: FlightStrip): number | undefined {
+        if (
+            strip.stripType === 'arrival' ||
+            strip.stripType === 'cross' ||
+            strip.stripType === 'note' ||
+            strip.stripType === 'vehicle'
+        ) {
+            return undefined
+        }
+
+        // EuroScope XFL (GetExitCoordinationAltitude)
+        const esXfl = parseAltitudeToFeet(strip.xfl)
+        if (esXfl != null) return esXfl
+
+        const airport = (strip.adep || '').toUpperCase()
+        const slow = hasSlowRemark(strip.remarks)
+
+        if (isEssaPreferredIfrDep(strip)) {
+            const preferred = essaPreferredCfls.value.get(strip.id)
+            if (preferred) return preferred
+        }
+
+        const sid = sidForXfl(strip)
+        if (sid && airport) {
+            const cached = sidAltitudeCache.value.get(sidAltCacheKey(airport, sid, slow))
+            if (cached != null) return cached
+        }
+
+        return defaultInitialClimbFt(airport, slow)
+    }
+
+    /** XFL shown on strip. */
+    function displayXflForStrip(strip: FlightStrip): string {
+        const feet = xflFeetForStrip(strip)
+        return formatStripAltitude(feet, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
+    }
+
+    /**
+     * CFL shown on strip — only when a real CFL is set and it differs from XFL.
+     * XFL === CFL → empty CFL cell (XFL cell carries the level).
+     * Arrivals: CA is treated as empty (VA / CAT2/3 / OS still shown).
+     */
+    function displayCflForStrip(strip: FlightStrip): string {
+        if (!hasRealAssignedCfl(strip)) return ''
+        const formatted =
+            formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
+        if (strip.stripType === 'arrival' && formatted === 'CA') return ''
+        const cflFeet = parseAltitudeToFeet(strip.clearedAltitude)
+        const xflFeet = xflFeetForStrip(strip)
+        if (cflFeet != null && xflFeet != null && cflFeet === xflFeet) return ''
+        return formatted
+    }
+
+    /** No CFL selected → XFL shown in orange. */
+    function isXflPending(strip: FlightStrip): boolean {
+        return !!xflFeetForStrip(strip) && !hasRealAssignedCfl(strip)
+    }
+
+    async function fetchAndCacheSidAltitude(
+        airport: string,
+        sid: string,
+        slow: boolean,
+    ): Promise<number | undefined> {
+        const key = sidAltCacheKey(airport, sid, slow)
+        const existing = sidAltitudeCache.value.get(key)
+        if (existing != null) return existing
+        try {
+            const params = new URLSearchParams({ airport, sid })
+            if (slow) params.set('slow', '1')
+            const res = await fetch(`/api/sidalt?${params}`)
+            let altitude: number | undefined
+            if (res.ok) {
+                const altData = (await res.json()) as { altitude: number | null }
+                altitude = altData.altitude ?? defaultInitialClimbFt(airport, slow)
+            } else {
+                altitude = defaultInitialClimbFt(airport, slow)
+            }
+            if (altitude) {
+                const next = new Map(sidAltitudeCache.value)
+                next.set(key, altitude)
+                sidAltitudeCache.value = next
+            }
+            return altitude
+        } catch {
+            return defaultInitialClimbFt(airport, slow)
+        }
+    }
+
+    /** Populate SID-alt cache for dep/local strips that have a resolvable SID. */
+    async function refreshSidAltitudeCache() {
+        const jobs: Promise<unknown>[] = []
+        for (const strip of strips.value.values()) {
+            if (
+                strip.stripType !== 'departure' &&
+                strip.stripType !== 'local' &&
+                strip.stripType !== 'vfr'
+            ) {
+                continue
+            }
+            const airport = (strip.adep || '').toUpperCase()
+            if (airport !== 'ESSA' && airport !== 'ESGG' && airport !== 'ESMS') continue
+            const sid = sidForXfl(strip)
+            if (!sid) continue
+            const slow = hasSlowRemark(strip.remarks)
+            if (sidAltitudeCache.value.has(sidAltCacheKey(airport, sid, slow))) continue
+            jobs.push(fetchAndCacheSidAltitude(airport, sid, slow))
+        }
+        if (jobs.length) await Promise.all(jobs)
     }
 
     /**
      * SID shown on strip.
+     * - AHD set → ve{TMA exit} (SID/preferred cleared)
      * - ESE preferred preview when FPL has no forced SID/rwy (after clear in ES/EFS)
      * - Forced SID in FPL (RNAV / track / VFR) always wins when present
      */
     function displaySidForStrip(strip: FlightStrip): string {
+        const exit = strip.tmaExit || extractTmaExitPoint(undefined, strip.route)
+        // Vector departure: keep ve{exit} while AHD/VECT is set — ignore GetSid until a
+        // real SID/rwy is forced into the FPL (or AHD is cleared).
+        if (
+            (strip.assignedHeading || hasVectRemark(strip.remarks)) &&
+            !hasForcedSidInRoute(strip.route)
+        ) {
+            return formatAhdVectorSidDisplay(exit)
+        }
+
         let raw = strip.sid || ''
-        if (isEssaPreferredIfrDep(strip)) {
+        if (
+            !strip.assignedHeading &&
+            !hasVectRemark(strip.remarks) &&
+            isEssaPreferredIfrDep(strip)
+        ) {
             const preferred = essaPreferredSids.value.get(strip.id)
             if (preferred) {
                 const forced = hasForcedSidInRoute(strip.route)
@@ -1191,25 +1787,6 @@ export const useEfsStore = defineStore("efs", () => {
             }
         }
         return formatSidForDisplay(raw, strip.tmaExit)
-    }
-
-    /** CFL shown on strip — preferred preview when uncleared and no real CFL yet. */
-    function displayCflForStrip(strip: FlightStrip): string {
-        if (!hasRealAssignedCfl(strip) && isEssaPreferredIfrDep(strip)) {
-            const preferred = essaPreferredCfls.value.get(strip.id)
-            if (preferred) {
-                return formatStripAltitude(preferred, DEFAULT_TRANSITION_ALTITUDE_FT)
-            }
-        }
-        return formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT)
-    }
-
-    function defaultInitialClimbFt(airport: string, slow: boolean): number | undefined {
-        const apt = airport.toUpperCase()
-        if (apt !== 'ESSA' && apt !== 'ESGG' && apt !== 'ESMS') return undefined
-        if (slow) return 3000
-        if (apt === 'ESMS') return 4000
-        return 5000
     }
 
     /**
@@ -1235,6 +1812,8 @@ export const useEfsStore = defineStore("efs", () => {
                 isIfrSidEligible(s.flightRules) &&
                 (s.stripType === 'departure' || s.stripType === 'local') &&
                 !s.clearance &&
+                !s.assignedHeading &&
+                !hasVectRemark(s.remarks) &&
                 !!s.runway
         )
 
@@ -1243,7 +1822,8 @@ export const useEfsStore = defineStore("efs", () => {
         await Promise.all(
             candidates.map(async strip => {
                 try {
-                    const slow = !!(strip.isSlow || hasSlowRemark(strip.remarks))
+                    // Preferred SID table follows SLOW remarks flag (not isSlow ATYP alone)
+                    const slow = hasSlowRemark(strip.remarks)
                     const params = new URLSearchParams({
                         airport: strip.adep,
                         runway: strip.runway!,
@@ -1262,16 +1842,8 @@ export const useEfsStore = defineStore("efs", () => {
                         sid: data.sid,
                     })
                     if (slow) altParams.set('slow', '1')
-                    const altRes = await fetch(`/api/sidalt?${altParams}`)
-                    if (altRes.ok) {
-                        const altData = (await altRes.json()) as { altitude: number | null }
-                        const altitude =
-                            altData.altitude ?? defaultInitialClimbFt(strip.adep, slow)
-                        if (altitude) nextCfls.set(strip.id, altitude)
-                    } else {
-                        const fallback = defaultInitialClimbFt(strip.adep, slow)
-                        if (fallback) nextCfls.set(strip.id, fallback)
-                    }
+                    const altitude = await fetchAndCacheSidAltitude(strip.adep, data.sid, slow)
+                    if (altitude) nextCfls.set(strip.id, altitude)
                 } catch {
                     // ignore per-strip failures
                 }
@@ -1279,6 +1851,7 @@ export const useEfsStore = defineStore("efs", () => {
         )
         essaPreferredSids.value = nextSids
         essaPreferredCfls.value = nextCfls
+        void refreshSidAltitudeCache()
     }
 
     /**
@@ -1292,6 +1865,8 @@ export const useEfsStore = defineStore("efs", () => {
     ): Promise<void> {
         const strip = strips.value.get(stripId)
         if (!strip || strip.clearance || !strip.canEditClearance) return
+        // AHD / VECT: vector departure — do not auto-enter preferred SID
+        if (strip.assignedHeading || hasVectRemark(strip.remarks)) return
         // V / Z: never auto-assign preferred / SLOW SID
         if (!isIfrSidEligible(strip.flightRules)) return
         if (strip.stripType !== 'departure' && strip.stripType !== 'local') return
@@ -1319,11 +1894,16 @@ export const useEfsStore = defineStore("efs", () => {
             const res = await fetch(`/api/preferred-sid?${params}`)
             if (!res.ok) return
             const data = (await res.json()) as { sid: string | null }
-            if (!data.sid || data.sid === strip.sid) {
+            if (!data.sid) {
                 void refreshEssaPreferredSids()
                 return
             }
-            // Already on a track SID while enabling slow — keep it (not after RWY change)
+            // ES GetSid already matches preferred — do not force into FPL
+            if (sidsMatch(data.sid, strip.sid)) {
+                void refreshEssaPreferredSids()
+                return
+            }
+            // Already on a track SID while enabling slow — keep it (not after RWY change / SLOW chip)
             if (slow && !opts?.ignoreForcedRoute && isTrackSidName(strip.sid)) {
                 void refreshEssaPreferredSids()
                 return
@@ -1351,11 +1931,11 @@ export const useEfsStore = defineStore("efs", () => {
     })
     let preferredSidRefreshTimer: ReturnType<typeof setTimeout> | null = null
     watch(stripsVersion, () => {
-        if (!essaRolesMode.value) return
         if (preferredSidRefreshTimer) clearTimeout(preferredSidRefreshTimer)
         preferredSidRefreshTimer = setTimeout(() => {
             preferredSidRefreshTimer = null
-            void refreshEssaPreferredSids()
+            if (essaRolesMode.value) void refreshEssaPreferredSids()
+            else void refreshSidAltitudeCache()
         }, 250)
     })
 
@@ -1380,7 +1960,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function createStrip(
-        stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note',
+        stripType: 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle',
         callsign?: string,
         aircraftType?: string,
         airport?: string,
@@ -1389,7 +1969,7 @@ export const useEfsStore = defineStore("efs", () => {
         position?: number,
         isBottom?: boolean
     ) {
-        if (stripType === 'note') {
+        if (stripType === 'note' || stripType === 'vehicle') {
             pendingNoteScribbleId.value = PENDING_NOTE_SCRIBBLE_AWAIT
         }
         sendMessage({
@@ -1417,6 +1997,24 @@ export const useEfsStore = defineStore("efs", () => {
             type: 'updateNote',
             stripId,
             text
+        })
+    }
+
+    function updateVehicleStrip(stripId: string, field: 'callsign' | 'hp' | 'std', text: string) {
+        const strip = strips.value.get(stripId)
+        if (strip && strip.stripType === 'vehicle') {
+            const next = { ...strip }
+            if (field === 'callsign') next.callsign = text.trim()
+            else if (field === 'hp') next.hp = text.trim() || undefined
+            else next.std = text.trim() || undefined
+            strips.value.set(stripId, next)
+            stripsVersion.value++
+        }
+        sendMessage({
+            type: 'updateVehicleStrip',
+            stripId,
+            field,
+            text,
         })
     }
 
@@ -1507,6 +2105,13 @@ export const useEfsStore = defineStore("efs", () => {
 
     return {
         connected,
+        pluginConnected,
+        backendVersion,
+        pluginVersion,
+        myFrequency,
+        feeds,
+        reloadFeeds,
+        reloadAll,
         notifyText,
         notifyLevel,
         notifyVisible,
@@ -1518,6 +2123,11 @@ export const useEfsStore = defineStore("efs", () => {
         markManualOrder,
         clearManualOrder,
         hasManualOrder,
+        getSectionSortMode,
+        setSectionSortMode,
+        enterManualSortMode,
+        isModeToggleSectionId,
+        isCtrDepSectionId,
         reindexTopStripsByIds,
         syncTimeSortSectionFromDom,
         bumpStripsVersion,
@@ -1525,22 +2135,34 @@ export const useEfsStore = defineStore("efs", () => {
         myCallsign,
         myAirports,
         myRole,
+        myPositionId,
         isController,
         multiAirport,
         essaRolesMode,
         essaRoles,
         essaRolesManual,
+        essaCoveredRunways,
         setEssaRoles,
         essaRwyConfigId,
         essaRwyConfigManual,
         essaRwyConfigIdResolved,
+        aupR16,
+        activeRwyFlags,
+        activeRwyFlagsVersion,
+        isRwyFlagActive,
+        setRwyFlag,
+        equalBayColumns,
+        showTobtSetByA,
+        essaRwyAutoPreferId,
         essaPreferredSids,
         essaPreferredCfls,
         getEssaPreferredSid,
         getEssaPreferredCfl,
         isPreferredSidPending,
         isPreferredCflPending,
+        isXflPending,
         displaySidForStrip,
+        displayXflForStrip,
         displayCflForStrip,
         refreshEssaPreferredSids,
         preferSidForStrip,
@@ -1587,12 +2209,16 @@ export const useEfsStore = defineStore("efs", () => {
         broadcastSectionHeights,
         sendStripAction,
         sendAssignment,
+        applyAssignedHeading,
         deleteStrip,
         deletedStrips,
         listDeletedStrips,
         restoreStrip,
         GAP_BUFFER,
         atisInfo,
+        acknowledgeQnh,
+        isAtisLetterChanged,
+        isQnhChanged,
         dclStatus,
         dclError,
         dclMode,
@@ -1618,10 +2244,13 @@ export const useEfsStore = defineStore("efs", () => {
         pendingNoteScribbleId,
         consumePendingNoteScribbleOpen,
         updateNote,
+        updateVehicleStrip,
         updateRemarks,
         updateHp,
         updateHs,
         autoMoveData,
+        autoMovingStripIds,
+        endAutoMove,
         controllers,
         releaseStrip,
         manualTransfer,
@@ -1633,6 +2262,7 @@ export const useEfsStore = defineStore("efs", () => {
         transferSoundsEnabled,
         showAppDepXcFrequency,
         autoParkEnabled,
+        autoDepSquawkCfl,
         autoParkAvailable,
         updateUserSettings,
     }

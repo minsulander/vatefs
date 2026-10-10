@@ -1,7 +1,8 @@
 <template>
     <div class="efs-clock">
+        <span class="efs-clock-prefix">UTC:</span>
         <span @click="clickTime" class="efs-clock-time">{{ time }}</span>
-        <span v-if="timer" @click="clickTimer" class="efs-clock-timer ml-2">{{ moment(timerElapsed).utc().format("mm:ss") }}</span>
+        <span v-if="timer" @click="clickTimer" class="efs-clock-timer">{{ moment(timerElapsed).utc().format("mm:ss") }}</span>
     </div>
 </template>
 
@@ -42,13 +43,29 @@ function clickTimer() {
 
 <style scoped>
 .efs-clock {
-  font-size: calc(13px * var(--efs-scale, 1));
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  font-size: calc(22px * var(--efs-chrome-scale, var(--efs-scale, 1)));
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+  color: #d1d5db;
+  white-space: nowrap;
+}
+
+.efs-clock-prefix {
+  font-weight: 400;
+  letter-spacing: 0.04em;
 }
 
 .efs-clock-time,
 .efs-clock-timer {
   cursor: pointer;
+  font-weight: 400;
+}
+
+.efs-clock-timer {
+  color: #93c5fd;
 }
 </style>

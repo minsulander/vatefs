@@ -130,6 +130,8 @@ check("ARR-only header inserts between CTR ARR and TAXI ARR in bay1", () => {
     assert.deepEqual(bay2Ids, ["ctr_dep", "runway_08_26"])
     assert.equal(sectionToBay.get("runway_01R_19L"), "bay1")
     assert.equal(sectionToBay.get("runway_08_26"), "bay2")
+    const rwySec = out.bays.find(b => b.id === "bay2")!.sections.find(s => s.id === "runway_08_26")
+    assert.equal(rwySec?.addFromTop, false)
 })
 
 console.log(`\n${passed} passed`)

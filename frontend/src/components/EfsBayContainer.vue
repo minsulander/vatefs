@@ -18,6 +18,8 @@
             'bay-column--empty': store.multiAirport && !store.columnAirports[index],
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
+            'bay-column--equal': store.equalBayColumns,
+            'bay-column--content': !store.equalBayColumns,
           }"
           :style="store.multiAirport ? { '--bay-accent': columnAccent(index) } : undefined"
           @click="onColumnClick(index, $event)"
@@ -73,7 +75,7 @@ function onContainerClick() {
   position: relative;
   height: 100vh;
   overflow: hidden;
-  background: #080a0c;
+  background: var(--efs-bay-bg, #3b3c41);
   display: flex;
   flex-direction: column;
 }
@@ -99,12 +101,20 @@ function onContainerClick() {
 }
 
 .bay-column {
-  flex: 1 1 0;
-  min-width: 0;
   height: 100%;
   overflow: hidden;
   box-sizing: border-box;
   position: relative;
+}
+
+.bay-column--equal {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bay-column--content {
+  flex: 1 1 auto;
+  min-width: 180px;
 }
 
 /* Full coloured frame around each column — multi-airport only */
@@ -112,11 +122,11 @@ function onContainerClick() {
   border: 2px solid var(--bay-accent, #444);
   border-top-width: 5px;
   border-radius: 0;
-  background: #080a0c;
+  background: var(--efs-bay-bg, #3b3c41);
 }
 
 .bay-column--empty {
-  background: #121417;
+  background: color-mix(in srgb, var(--efs-bay-bg, #3b3c41) 65%, black);
 }
 
 .bay-row--choosing .bay-column--swap-target {
@@ -200,7 +210,7 @@ function onContainerClick() {
 .efs-notify {
   position: absolute;
   left: 50%;
-  bottom: calc(56px * var(--efs-scale, 1));
+  bottom: calc(var(--efs-bottom-bar-h, 40px) + 6px);
   transform: translateX(-50%);
   z-index: 50;
   max-width: min(90vw, calc(560px * var(--efs-scale, 1)));

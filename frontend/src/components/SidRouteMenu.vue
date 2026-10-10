@@ -247,6 +247,10 @@ function close() {
 }
 
 function onSelect(sid: string) {
+  // Real SID replaces AHD/vector mode
+  if (props.strip.assignedHeading) {
+    store.applyAssignedHeading(props.strip.id, '')
+  }
   store.sendAssignment(props.strip.id, 'assignSid', sid)
   // Vector SIDs are normal RNAV (5000 ft) — never auto-set SLOW
   // V / Z: never auto-add SLOW flag from SID selection

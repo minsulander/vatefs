@@ -1,24 +1,76 @@
 <template>
-  <div class="efs-top-bar-host" :style="{ height: topBarHeight + 'px' }">
-    <v-app-bar color="#2b2d31" :height="topBarHeight" elevation="0" class="efs-top-bar text-body-2 text-grey">
-      <!-- Refresh button -->
-      <v-btn variant="text" icon="mdi-refresh" size="small" class="text-grey" @click="efs.refresh()" title="Refresh"></v-btn>
-      <v-btn variant="text" icon="mdi-cog" size="small" class="text-grey" to="/settings" title="Settings"></v-btn>
-      <!-- Callsign -->
-      <span class="text-grey ml-1">{{ efs.myCallsign || 'NOT CONNECTED' }}</span>
-      <!-- ESSA runway combination (Appendix A/B) — click to select, hover for VatIRIS quickref -->
+  <div class="efs-top-bar text-body-2 text-grey">
+      <!-- Main menu: ESSA RWY / roles -->
+      <v-menu v-if="efs.essaRolesMode" v-model="mainMenuOpen" location="bottom" offset="4">
+        <template #activator="{ props: menuProps }">
+          <button
+            type="button"
+            class="top-menu-btn"
+            :class="{ 'is-open': mainMenuOpen }"
+            title="Menu"
+            v-bind="menuProps"
+          >
+            <span class="top-menu-tri" aria-hidden="true" />
+          </button>
+        </template>
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-list">
+            <div class="efs-popup-section">ESSA</div>
+            <button
+              type="button"
+              class="efs-popup-item efs-popup-item--stack"
+              :class="{ 'is-manual': efs.essaRwyConfigManual }"
+              @click="onMainMenuEssaRwy"
+              @mouseenter="onEssaRwyHoverEnter"
+              @mouseleave="onEssaRwyHoverLeave"
+            >
+              <span class="efs-popup-item-title">RWY config</span>
+              <span class="efs-popup-item-sub">{{ essaRwyLabel || '-' }}{{ efs.essaRwyConfigManual ? ' · MANUAL' : '' }}</span>
+            </button>
+            <button
+              type="button"
+              class="efs-popup-item efs-popup-item--stack"
+              :class="{ 'is-manual': efs.essaRolesManual }"
+              @click="onMainMenuEssaRoles"
+            >
+              <span class="efs-popup-item-title">Roles</span>
+              <span class="efs-popup-item-sub">{{ essaRolesLabel }}{{ efs.essaRolesManual ? ' · MANUAL' : '' }}</span>
+            </button>
+          </div>
+        </div>
+      </v-menu>
+      <v-btn
+        variant="text"
+        icon="mdi-cog"
+        class="text-grey top-settings-btn"
+        to="/settings"
+        title="Settings"
+      />
+
+      <!-- ESSA status indicators (also editable via menu) -->
       <button
         v-if="efs.essaRolesMode"
-        ref="essaRwyBtnEl"
         type="button"
-        class="essa-rwy-btn ml-3"
-        :title="essaRwyLabel || 'Select RWY config'"
+        class="essa-status-btn"
+        :class="{ 'is-manual': efs.essaRwyConfigManual }"
+        :title="essaRwyStatusTitle"
         @click="essaRwyDialog = true"
         @mouseenter="onEssaRwyHoverEnter"
         @mouseleave="onEssaRwyHoverLeave"
       >
-        {{ essaRwyLabel || 'RWY: —' }}
+        {{ essaRwyLabel || 'RWY: -' }}
       </button>
+      <button
+        v-if="efs.essaRolesMode"
+        type="button"
+        class="essa-status-btn"
+        :class="{ 'is-manual': efs.essaRolesManual }"
+        :title="essaRolesStatusTitle"
+        @click="essaRolesDialog = true"
+      >
+        Roles: {{ essaRolesLabel }}
+      </button>
+
       <Teleport to="body">
         <div
           v-if="essaRwyQuickrefVisible && essaRwyQuickrefUrl"
@@ -54,59 +106,62 @@
               @click="draftEssaRwyId = row.id"
             >
               <span class="essa-rwy-id">{{ row.id }}</span>
-              <span class="essa-rwy-detail">{{ row.pdfName }}</span>
+              <span class="essa-rwy-detail" :title="row.pdfName">{{ row.pdfName }}</span>
               <span v-if="row.autoPreferred" class="essa-rwy-auto-tag">AUTO</span>
             </button>
           </div>
           <div class="essa-rwy-actions">
-            <button type="button" class="essa-rwy-action" @click="onEssaRwyAuto">AUTO</button>
             <button type="button" class="essa-rwy-action" @click="essaRwyDialog = false">CANCEL</button>
+            <button type="button" class="essa-rwy-action" @click="onEssaRwyAuto">AUTO</button>
             <button type="button" class="essa-rwy-action essa-rwy-action-ok" @click="onEssaRwyOk">OK</button>
           </div>
         </div>
       </v-dialog>
-      <!-- ESSA roles -->
-      <button
-        v-if="efs.essaRolesMode"
-        type="button"
-        class="essa-roles-btn ml-3"
-        title="ESSA roles (click to change)"
-        @click="essaRolesDialog = true"
-      >
-        Roles: {{ essaRolesLabel }}
-      </button>
-      <v-dialog v-model="essaRolesDialog" max-width="360" scrim>
-        <v-card bg-color="#2b2d31" class="essa-roles-dialog text-grey">
-          <v-card-title class="text-body-1 py-2">Roles</v-card-title>
-          <v-card-text class="pt-0">
-            <div class="essa-role-rows">
-              <div class="essa-role-row">
-                <label v-for="role in essaTwrRoles" :key="role" class="essa-role-option">
-                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
-                  <span>{{ role }}</span>
-                </label>
-              </div>
-              <div class="essa-role-row">
-                <label v-for="role in essaGndRoles" :key="role" class="essa-role-option">
-                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
-                  <span>{{ role }}</span>
-                </label>
-              </div>
-              <div class="essa-role-row">
-                <label v-for="role in essaCdRoles" :key="role" class="essa-role-option">
-                  <input v-model="draftEssaRoles" type="checkbox" :value="role" />
-                  <span>{{ role }}</span>
-                </label>
-              </div>
-            </div>
-          </v-card-text>
-          <v-card-actions class="px-4 pb-3">
-            <v-btn size="small" variant="text" class="text-grey" @click="onEssaRolesAuto">Auto</v-btn>
-            <v-spacer />
-            <v-btn size="small" variant="text" class="text-grey" @click="essaRolesDialog = false">Cancel</v-btn>
-            <v-btn size="small" color="success" variant="flat" @click="onEssaRolesOk">OK</v-btn>
-          </v-card-actions>
-        </v-card>
+      <v-dialog v-model="essaRolesDialog" max-width="360" scrim content-class="essa-roles-dialog-wrap">
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-header">Roles</div>
+          <div class="efs-popup-section">TWR</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in essaTwrRoles"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftEssaRoles.includes(role) }"
+            >
+              <input v-model="draftEssaRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ role }}</span>
+            </label>
+          </div>
+          <div class="efs-popup-section">GND</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in essaGndRoles"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftEssaRoles.includes(role) }"
+            >
+              <input v-model="draftEssaRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ role }}</span>
+            </label>
+          </div>
+          <div class="efs-popup-section">CD</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in essaCdRoles"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftEssaRoles.includes(role) }"
+            >
+              <input v-model="draftEssaRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ role }}</span>
+            </label>
+          </div>
+          <div class="essa-roles-actions">
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="essaRolesDialog = false">Cancel</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEssaRolesAuto">Auto</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEssaRolesOk">OK</button>
+          </div>
+        </div>
       </v-dialog>
       <!-- ATIS / airports (hidden in ESSA mode — RWY config indicator covers runways) -->
       <template v-if="!efs.essaRolesMode">
@@ -144,57 +199,50 @@
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
       </template>
-      <v-btn
-        v-if="efs.dclStatus !== 'unavailable'"
-        variant="text"
-        size="small"
-        class="ml-2"
-        :class="{
-          'text-grey': efs.dclStatus === 'available',
-          'text-green': efs.dclStatus === 'connected',
-          'text-red': efs.dclStatus === 'error'
-        }"
-        :title="dclTooltip"
-        @click="onDclClick"
-      >
-        DCL
-      </v-btn>
-      <v-menu v-if="efs.dclStatus !== 'unavailable'" offset-y>
-        <template v-slot:activator="{ props }">
-          <v-btn
-            variant="text"
-            size="small"
-            class="dcl-mode-btn text-grey"
-            v-bind="props"
-            :title="`DCL mode: ${efs.dclMode.toUpperCase()}`"
-          >
-            {{ efs.dclMode.toUpperCase() }}
-            <v-icon end size="x-small">mdi-chevron-down</v-icon>
-          </v-btn>
-        </template>
-        <v-list density="compact" bg-color="#2b2d31" class="text-grey">
-          <v-list-item
-            v-for="mode in dclModes"
-            :key="mode.value"
-            :active="mode.value === efs.dclMode"
-            @click="efs.dclSetMode(mode.value)"
-          >
-            <v-list-item-title>{{ mode.label }}</v-list-item-title>
-          </v-list-item>
-        </v-list>
-      </v-menu>
+      <template v-if="showDclControls">
+        <v-btn
+          variant="text"
+          size="small"
+          class="ml-2 dcl-btn"
+          :class="{
+            'text-grey': !dclConnected,
+            'text-green': dclConnected,
+            'text-red': efs.dclStatus === 'error',
+          }"
+          :title="dclTooltip"
+          @click="onDclClick"
+        >
+          {{ dclConnected ? 'DCL' : 'DCL: Voice' }}
+        </v-btn>
+        <v-menu v-if="dclConnected" location="bottom" offset="4">
+          <template v-slot:activator="{ props }">
+            <v-btn
+              variant="text"
+              size="small"
+              class="dcl-mode-btn text-grey"
+              v-bind="props"
+              :title="`DCL mode: ${efs.dclMode.toUpperCase()}`"
+            >
+              {{ efs.dclMode.toUpperCase() }}
+              <v-icon end size="x-small">mdi-chevron-down</v-icon>
+            </v-btn>
+          </template>
+          <div class="efs-popup-menu" @click.stop>
+            <div class="efs-popup-header">DCL mode</div>
+            <div class="efs-popup-list">
+              <button
+                v-for="mode in dclModes"
+                :key="mode.value"
+                type="button"
+                class="efs-popup-item"
+                :class="{ selected: mode.value === efs.dclMode }"
+                @click="efs.dclSetMode(mode.value)"
+              >{{ mode.label }}</button>
+            </div>
+          </div>
+        </v-menu>
+      </template>
       <v-spacer />
-      <!-- ESSA mode: ATIS letters + QNH left of config selector -->
-      <span
-        v-if="efs.essaRolesMode && essaAtisBar"
-        class="essa-atis-bar mr-2"
-        :title="essaAtisBar.title"
-      >
-        <span v-if="essaAtisBar.arrAtis" class="text-amber">{{ essaAtisBar.arrAtis }}</span>
-        <span v-if="essaAtisBar.depAtis" class="text-cyan ml-1">{{ essaAtisBar.depAtis }}</span>
-        <span v-if="essaAtisBar.atis && !essaAtisBar.arrAtis && !essaAtisBar.depAtis" class="text-amber">{{ essaAtisBar.atis }}</span>
-        <span v-if="essaAtisBar.qnh" class="text-grey ml-1">{{ essaAtisBar.qnh }}</span>
-      </span>
       <!-- Config selector -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
@@ -208,53 +256,229 @@
             <v-icon end size="x-small">mdi-chevron-down</v-icon>
           </v-btn>
         </template>
-        <v-list density="compact" bg-color="#2b2d31" class="text-grey config-menu">
-          <v-list-item
-            v-for="config in efs.availableConfigs"
-            :key="config.file"
-            :active="config.file === efs.activeConfig"
-            @click="onConfigClick(config.file)"
-          >
-            <v-list-item-title>{{ config.name }}</v-list-item-title>
-            <template v-if="isRtcConfig(config)" #append>
-              <div class="column-count-ctrl" @click.stop>
-                <v-btn
-                  variant="text"
-                  icon="mdi-minus"
-                  size="x-small"
-                  class="text-grey"
-                  :disabled="!efs.multiAirport || config.file !== efs.activeConfig || efs.columnCount <= 2"
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-header">Configuration</div>
+          <div class="efs-popup-list">
+            <button
+              v-for="config in efs.availableConfigs"
+              :key="config.file"
+              type="button"
+              class="efs-popup-item"
+              :class="{ selected: config.file === efs.activeConfig }"
+              @click="onConfigClick(config.file)"
+            >
+              <span class="efs-popup-item-title">{{ config.name }}</span>
+              <span
+                v-if="isRtcConfig(config) && config.file === efs.activeConfig"
+                class="column-count-ctrl"
+                @click.stop
+              >
+                <button
+                  type="button"
+                  class="column-count-btn"
+                  :disabled="!efs.multiAirport || efs.columnCount <= 2"
                   title="Fewer columns"
                   @click="efs.adjustColumnCount(-1)"
-                />
+                >−</button>
                 <span class="column-count-label" :title="`${efs.columnCount} columns`">{{ efs.columnCount }}</span>
-                <v-btn
-                  variant="text"
-                  icon="mdi-plus"
-                  size="x-small"
-                  class="text-grey"
-                  :disabled="!efs.multiAirport || config.file !== efs.activeConfig || efs.columnCount >= 6"
+                <button
+                  type="button"
+                  class="column-count-btn"
+                  :disabled="!efs.multiAirport || efs.columnCount >= 6"
                   title="More columns"
                   @click="efs.adjustColumnCount(1)"
-                />
-              </div>
-            </template>
-          </v-list-item>
-        </v-list>
+                >+</button>
+              </span>
+            </button>
+          </div>
+        </div>
       </v-menu>
-      <v-btn v-if="!fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen" class="text-grey"
-        @click="requestFullScreen"></v-btn>
-      <v-btn v-if="fullscreen && !isStandalone" variant="text" icon="mdi-fullscreen-exit" class="text-grey"
-        @click="exitFullScreen"></v-btn>
-      <clock class="mx-2" />
-    </v-app-bar>
+
+      <!-- Right chrome (L→R): SEP/DLV/GAP · ATIS · QNH · OK/OFF · Fullscreen -->
+      <div class="top-right-chrome">
+        <div class="top-sep-group" title="Separation">
+          <div class="top-sep-cell">
+            <span class="top-sep-lbl">SEP</span>
+            <span class="top-sep-val">{{ sepIndicators.sep }}</span>
+          </div>
+          <div class="top-sep-cell" title="Delivery separation TWR→APP">
+            <span class="top-sep-lbl">DLV</span>
+            <span class="top-sep-val">{{ sepIndicators.dlv }}</span>
+          </div>
+          <div class="top-sep-cell">
+            <span class="top-sep-lbl">DEP GAP</span>
+            <span class="top-sep-val">{{ sepIndicators.depGap }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="topAtisEntries.length"
+          class="top-atis"
+          :class="{ 'is-changed': topAtisChanged }"
+          :title="topAtisTitle"
+        >
+          <span class="top-atis-lbl">ATIS</span>
+          <span
+            v-for="(entry, i) in topAtisEntries"
+            :key="`${entry.kind}-${entry.letter}-${i}`"
+            class="top-atis-letter"
+            :class="{
+              'is-changed': topAtisChanged,
+              'is-arr': !topAtisChanged && entry.kind === 'arr',
+              'is-dep': !topAtisChanged && entry.kind === 'dep',
+            }"
+          >{{ entry.letter }}</span>
+        </div>
+
+        <button
+          v-if="topQnh != null"
+          type="button"
+          class="top-qnh"
+          :class="{ 'is-changed': topQnhChanged }"
+          :title="topQnhChanged ? `QNH ${topQnh} - click to acknowledge` : `QNH ${topQnh}`"
+          @click="onTopQnhClick"
+        >
+          <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
+        </button>
+
+        <div
+          ref="connBtnWrap"
+          class="top-conn-wrap"
+          @mouseenter="onConnBtnEnter"
+          @mouseleave="onConnBtnLeave"
+        >
+          <button
+            type="button"
+            class="top-conn-btn"
+            :class="{
+              'is-ok': connOk,
+              'is-off': !connOk,
+              'is-icon': showConnReloadIcon,
+            }"
+            :title="connTitle"
+            @click="onConnReload"
+          >
+            <v-icon v-if="showConnReloadIcon" :size="connIconSize" aria-hidden="true">mdi-autorenew</v-icon>
+            <span v-else class="top-conn-label">{{ connOk ? 'OK' : 'ERR' }}</span>
+          </button>
+        </div>
+        <Teleport to="body">
+          <div
+            v-if="connStatusOpen"
+            class="efs-popup-menu top-conn-status"
+            :style="connStatusStyle"
+            @mouseenter="onConnStatusEnter"
+            @mouseleave="onConnStatusLeave"
+            @click.stop
+          >
+            <div class="efs-popup-header">Status</div>
+            <div class="top-conn-cols">
+              <div class="top-conn-col">
+                <div class="efs-popup-section">Versions</div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">VatEFS</span>
+                  <span class="efs-popup-item-sub">{{ efs.backendVersion || '-' }}</span>
+                </div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">ES plugin (loaded)</span>
+                  <span
+                    class="efs-popup-item-sub"
+                    :class="{ 'conn-err': !efs.pluginConnected || !efs.pluginVersion }"
+                  >{{ efs.pluginConnected && efs.pluginVersion ? efs.pluginVersion : 'Not loaded' }}</span>
+                </div>
+
+                <div class="efs-popup-section">Network</div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">Backend</span>
+                  <span
+                    class="efs-popup-item-sub"
+                    :class="{ 'conn-err': !efs.connected }"
+                  >{{ efs.connected ? 'Connected' : 'Not connected' }}</span>
+                </div>
+                <div
+                  v-for="row in networkFeedRows"
+                  :key="row.key"
+                  class="efs-popup-item efs-popup-item--stack is-disabled"
+                >
+                  <span class="efs-popup-item-title">{{ row.title }}</span>
+                  <span
+                    class="efs-popup-item-sub"
+                    :class="{ 'conn-err': !row.ok }"
+                  >{{ row.detail }}</span>
+                </div>
+              </div>
+
+              <div class="top-conn-col">
+                <div class="efs-popup-section">Session</div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">Active position</span>
+                  <span class="efs-popup-item-sub">{{ efs.myCallsign || '-' }}</span>
+                </div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">Detected SI</span>
+                  <span class="efs-popup-item-sub">{{ detectedSiLabel }}</span>
+                </div>
+                <div v-if="efs.myRole" class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">Role</span>
+                  <span class="efs-popup-item-sub">{{ efs.myRole }}</span>
+                </div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">airports</span>
+                  <span class="efs-popup-item-sub">{{ menuAirportsLabel }}</span>
+                </div>
+                <div class="efs-popup-item efs-popup-item--stack is-disabled">
+                  <span class="efs-popup-item-title">ES selected RWYs</span>
+                  <span class="efs-popup-item-sub">{{ menuEsRwysLabel }}</span>
+                </div>
+
+                <div class="efs-popup-section">Parsing</div>
+                <div
+                  v-for="row in parsingFeedRows"
+                  :key="row.key"
+                  class="efs-popup-item efs-popup-item--stack is-disabled"
+                >
+                  <span class="efs-popup-item-title">{{ row.title }}</span>
+                  <span
+                    class="efs-popup-item-sub"
+                    :class="{
+                      'conn-err': !row.ok,
+                      'conn-path': row.key === 'euroscopeDir' || row.key === 'cdmLocal',
+                    }"
+                  >{{ row.detail }}</span>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="efs-popup-item top-conn-reload-btn"
+              :disabled="feedsReloading"
+              @click="onReloadFeeds"
+            >
+              {{ feedsReloading ? 'Reloading…' : 'Reload all' }}
+            </button>
+          </div>
+        </Teleport>
+
+        <button
+          v-if="!isStandalone"
+          type="button"
+          class="top-menu-btn top-fs-btn"
+          :class="{ 'is-fullscreen': fullscreen }"
+          :title="fullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+          @click="fullscreen ? exitFullScreen() : requestFullScreen()"
+        >
+          <v-icon :size="fsIconSize" aria-hidden="true">
+            {{ fullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen' }}
+          </v-icon>
+        </button>
+      </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import Clock from './Clock.vue'
 import { ref, computed, onMounted, onUnmounted, watch } from "vue"
 import { useEfsStore } from "../store/efs"
+import { useEfsChromeScaleValue } from "@/composables/useEfsUiScale"
 import type { ConfigInfo, DclMode } from "@vatefs/common"
 import {
   ESSA_RWY_COMBINATIONS,
@@ -264,14 +488,84 @@ import {
   resolveEssaRwyConfigId,
   essaRwyQuickrefImageUrl,
 } from "@vatefs/common"
-import { useEfsScaleValue } from "@/composables/useEfsUiScale"
-
 const efs = useEfsStore()
-const efsScale = useEfsScaleValue()
-const topBarHeight = computed(() => Math.max(28, Math.round(28 * efsScale.value)))
+const chromeScale = useEfsChromeScaleValue()
+const fsIconSize = computed(() => Math.max(16, Math.round(20 * chromeScale.value)))
+const connIconSize = computed(() => Math.max(16, Math.round(18 * chromeScale.value)))
+/** OK only when backend WS + EuroScope plugin are both live */
+const connOk = computed(() => efs.connected && efs.pluginConnected)
+/** Prefer UDP bind conflict detail when plugin feed reports it */
+const connTitle = computed(() => {
+  if (connOk.value) return 'Connected - click to reload'
+  const plugin = efs.feeds?.plugin
+  if (plugin && !plugin.ok && plugin.detail?.includes('UDP')) {
+    return `${plugin.detail} - click to reload`
+  }
+  return 'Not fully connected - click to reload'
+})
+
+const detectedSiLabel = computed(() => {
+  const si = efs.myPositionId
+  if (!si) return '-'
+  const freq = efs.myFrequency
+  if (typeof freq === 'number' && Number.isFinite(freq) && freq > 0) {
+    return `${si} (${freq.toFixed(3)})`
+  }
+  return si
+})
+
+const feedsReloading = ref(false)
+async function onReloadFeeds() {
+  if (feedsReloading.value) return
+  feedsReloading.value = true
+  efs.reloadAll()
+  // Server has no ack; brief UI feedback then clear
+  window.setTimeout(() => {
+    feedsReloading.value = false
+  }, 1500)
+}
+
+type FeedRow = { key: string; title: string; ok: boolean; detail: string }
+
+const networkFeedRows = computed((): FeedRow[] => {
+  const f = efs.feeds
+  const miss = { ok: false, detail: '-' }
+  const rows: { key: keyof NonNullable<typeof f>; title: string }[] = [
+    { key: 'plugin', title: 'EuroScope plugin' },
+    { key: 'hoppie', title: 'Hoppie / DCL' },
+    { key: 'viff', title: 'vIFF / CDM' },
+    { key: 'atis', title: 'VATSIM ATIS' },
+    { key: 'afv', title: 'AFV transceivers' },
+    { key: 'ctr', title: 'CTR / TIZ (LFV)' },
+  ]
+  return rows.map(({ key, title }) => {
+    const item = f?.[key] ?? miss
+    return { key, title, ok: item.ok, detail: item.detail }
+  })
+})
+
+const parsingFeedRows = computed((): FeedRow[] => {
+  const f = efs.feeds
+  const miss = { ok: false, detail: '-' }
+  const rows: { key: keyof NonNullable<typeof f>; title: string }[] = [
+    { key: 'euroscopeDir', title: 'ES directory' },
+    { key: 'hoppieConfig', title: 'Hoppie config files' },
+    { key: 'cdmLocal', title: 'Local CDM data files' },
+    { key: 'stands', title: 'GRP stands' },
+    { key: 'eseSid', title: 'ESE SIDs / COPX' },
+    { key: 'eseAirspace', title: 'ESE airspace' },
+    { key: 'topskyAirspace', title: 'TopSkyAirspace' },
+  ]
+  return rows.map(({ key, title }) => {
+    const item = f?.[key] ?? miss
+    return { key, title, ok: item.ok, detail: item.detail }
+  })
+})
+
 const fullscreen = ref(window.innerHeight == screen.height)
 const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
 const configMenuOpen = ref(false)
+const mainMenuOpen = ref(false)
 
 /** Display / picker order: CD → GND-* → TWR-E, TWR-W */
 const ESSA_ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W'] as const
@@ -285,10 +579,106 @@ const draftEssaRwyId = ref<string | null>(null)
 /** Minute tick so night/day letter auto-switch updates without ES change */
 const essaRwyNowTick = ref(Date.now())
 let essaRwyTickTimer: ReturnType<typeof setInterval> | null = null
-const essaRwyBtnEl = ref<HTMLButtonElement | null>(null)
 const essaRwyQuickrefVisible = ref(false)
 const essaRwyQuickrefPos = ref({ top: 0, left: 0 })
 let essaRwyHoverShowTimer: ReturnType<typeof setTimeout> | null = null
+
+const connStatusOpen = ref(false)
+const connBtnHover = ref(false)
+const connBtnWrap = ref<HTMLElement | null>(null)
+const connStatusPos = ref({ top: 0, left: 0 })
+let connStatusHideTimer: ReturnType<typeof setTimeout> | null = null
+
+const showConnReloadIcon = computed(() => connBtnHover.value || connStatusOpen.value)
+
+const connStatusStyle = computed(() => ({
+  top: `${connStatusPos.value.top}px`,
+  left: `${connStatusPos.value.left}px`,
+}))
+
+function placeConnStatus() {
+  const el = connBtnWrap.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const width = Math.min(560, window.innerWidth - 8)
+  let left = r.right - width
+  if (left < 4) left = 4
+  connStatusPos.value = { top: r.bottom + 6, left }
+}
+
+function openConnStatus() {
+  if (connStatusHideTimer) {
+    clearTimeout(connStatusHideTimer)
+    connStatusHideTimer = null
+  }
+  placeConnStatus()
+  connStatusOpen.value = true
+}
+
+function scheduleCloseConnStatus() {
+  if (connStatusHideTimer) clearTimeout(connStatusHideTimer)
+  connStatusHideTimer = setTimeout(() => {
+    connStatusHideTimer = null
+    connStatusOpen.value = false
+  }, 120)
+}
+
+function onConnBtnEnter() {
+  connBtnHover.value = true
+  openConnStatus()
+}
+
+function onConnBtnLeave() {
+  connBtnHover.value = false
+  scheduleCloseConnStatus()
+}
+
+function onConnStatusEnter() {
+  openConnStatus()
+}
+
+function onConnStatusLeave() {
+  scheduleCloseConnStatus()
+}
+
+function onConnReload() {
+  efs.refresh()
+}
+
+const menuAirportsLabel = computed(() => {
+  const configured = efs.myAirports.length ? efs.myAirports.join(', ') : '-'
+  const es = efs.esAirports.length ? efs.esAirports.join(', ') : null
+  if (es && es !== configured) return `${configured} · ES: ${es}`
+  return configured
+})
+
+const menuEsRwysLabel = computed(() => {
+  const airports =
+    efs.esAirports.length > 0
+      ? efs.esAirports
+      : efs.myAirports.length > 0
+        ? efs.myAirports
+        : efs.atisInfo.map((a) => a.airport)
+  if (airports.length === 0) return '-'
+  const parts = airports.map((apt) => {
+    const info = efs.atisInfo.find((a) => a.airport === apt)
+    if (!info) return `${apt}: -`
+    const arr = info.arrRunways?.length ? info.arrRunways.join('/') : '-'
+    const dep = info.depRunways?.length ? info.depRunways.join('/') : '-'
+    return `${apt} ARR ${arr} / DEP ${dep}`
+  })
+  return parts.join(' · ')
+})
+
+function onMainMenuEssaRwy() {
+  mainMenuOpen.value = false
+  essaRwyDialog.value = true
+}
+
+function onMainMenuEssaRoles() {
+  mainMenuOpen.value = false
+  essaRolesDialog.value = true
+}
 
 function sortEssaRolesDisplay(roles: string[]): string[] {
   const order = new Map(ESSA_ROLE_ORDER.map((r, i) => [r, i]))
@@ -298,6 +688,17 @@ function sortEssaRolesDisplay(roles: string[]): string[] {
 const essaRolesLabel = computed(() => {
   const roles = sortEssaRolesDisplay(efs.essaRoles)
   return roles.length > 0 ? roles.join(', ') : '(none)'
+})
+
+const essaRwyStatusTitle = computed(() => {
+  const label = essaRwyLabel.value || 'Select RWY config'
+  return efs.essaRwyConfigManual ? `${label} (manual override)` : label
+})
+
+const essaRolesStatusTitle = computed(() => {
+  return efs.essaRolesManual
+    ? `ESSA roles (manual override): ${essaRolesLabel.value}`
+    : 'ESSA roles (auto)'
 })
 
 /** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
@@ -326,7 +727,7 @@ const essaRwyEsHint = computed(() => {
 const essaRwyAutoId = computed(() => {
   void essaRwyNowTick.value
   const { arr, dep } = essaEsRunways.value
-  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value), { preferConfigId: efs.essaRwyAutoPreferId })
 })
 
 const essaRwyOptions = computed(() => {
@@ -347,7 +748,7 @@ const essaRwyConfigIdResolved = computed(() => {
   void essaRwyNowTick.value
   if (efs.essaRwyConfigManual && efs.essaRwyConfigId) return efs.essaRwyConfigId
   const { arr, dep } = essaEsRunways.value
-  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+  return resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value), { preferConfigId: efs.essaRwyAutoPreferId })
 })
 
 /** ESSA RWY config indicator from Appendix A/B + ES runways (+ manual / night auto) */
@@ -355,7 +756,11 @@ const essaRwyLabel = computed(() => {
   const { arr, dep } = essaEsRunways.value
   if (arr.length === 0 && dep.length === 0 && !efs.essaRwyConfigManual) return null
   return formatEssaRwyConfigLabel(arr, dep, {
-    configId: efs.essaRwyConfigManual ? efs.essaRwyConfigId : undefined,
+    configId: efs.essaRwyConfigManual
+      ? efs.essaRwyConfigId
+      : efs.essaRwyAutoPreferId
+        ? essaRwyConfigIdResolved.value
+        : undefined,
     now: new Date(essaRwyNowTick.value),
   })
 })
@@ -376,14 +781,15 @@ const essaRwyQuickrefStyle = computed(() => {
   }
 })
 
-function onEssaRwyHoverEnter() {
-  if (!essaRwyQuickrefUrl.value || !essaRwyBtnEl.value) return
+function onEssaRwyHoverEnter(event: MouseEvent) {
+  if (!essaRwyQuickrefUrl.value) return
+  const el = event.currentTarget as HTMLElement | null
+  if (!el) return
   if (essaRwyHoverShowTimer) clearTimeout(essaRwyHoverShowTimer)
   essaRwyHoverShowTimer = setTimeout(() => {
     essaRwyHoverShowTimer = null
-    if (!essaRwyBtnEl.value || !essaRwyQuickrefUrl.value) return
-    const rect = essaRwyBtnEl.value.getBoundingClientRect()
-    // Top-left of image anchored at the config text
+    if (!essaRwyQuickrefUrl.value) return
+    const rect = el.getBoundingClientRect()
     essaRwyQuickrefPos.value = { top: rect.top, left: rect.left }
     essaRwyQuickrefVisible.value = true
   }, 500)
@@ -396,6 +802,10 @@ function onEssaRwyHoverLeave() {
   }
   essaRwyQuickrefVisible.value = false
 }
+
+watch(mainMenuOpen, (open) => {
+  if (!open) onEssaRwyHoverLeave()
+})
 
 watch(essaRolesDialog, (open) => {
   if (open) {
@@ -414,7 +824,7 @@ watch(essaRwyDialog, (open) => {
     draftEssaRwyId.value =
       efs.essaRwyConfigManual && efs.essaRwyConfigId
         ? efs.essaRwyConfigId
-        : resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value))
+        : resolveEssaRwyConfigId(arr, dep, new Date(essaRwyNowTick.value), { preferConfigId: efs.essaRwyAutoPreferId })
   }
 })
 
@@ -521,23 +931,88 @@ const activeConfigName = computed(() => {
   return active?.name ?? efs.activeConfig
 })
 
-/** ESSA ATIS letters + QNH for the right-side bar (left of config selector) */
-const essaAtisBar = computed(() => {
-  if (!efs.essaRolesMode) return null
-  const info = efs.atisInfo.find(a => a.airport === 'ESSA')
-  if (!info) return null
-  const arrAtis = info.arrAtis
-  const depAtis = info.depAtis
-  const atis = info.atis
-  const qnh = info.qnh != null ? String(info.qnh) : undefined
-  if (!arrAtis && !depAtis && !atis && !qnh) return null
-  const parts: string[] = []
-  if (arrAtis) parts.push(`ARR ATIS ${arrAtis}`)
-  if (depAtis) parts.push(`DEP ATIS ${depAtis}`)
-  if (atis && !arrAtis && !depAtis) parts.push(`ATIS ${atis}`)
-  if (qnh) parts.push(`QNH ${qnh}`)
-  return { arrAtis, depAtis, atis, qnh, title: parts.join(' · ') }
+/** Primary airport for right-bar ATIS / QNH */
+const topMetAirport = computed(() => {
+  if (efs.essaRolesMode) return 'ESSA'
+  return efs.myAirports[0] || efs.atisInfo[0]?.airport || ''
 })
+
+const topMetInfo = computed(() => {
+  const apt = topMetAirport.value
+  if (!apt) return null
+  return efs.atisInfo.find((a) => a.airport === apt) ?? null
+})
+
+/** TWR role → show ARR+DEP ATIS; otherwise DEP only */
+const hasTwrRole = computed(() => {
+  if (efs.essaRolesMode) {
+    return efs.essaRoles.some((r) => r === 'TWR-E' || r === 'TWR-W' || r.startsWith('TWR'))
+  }
+  return efs.myRole === 'TWR'
+})
+
+type TopAtisEntry = { letter: string; kind: 'arr' | 'dep' | 'single' }
+
+const topAtisEntries = computed((): TopAtisEntry[] => {
+  const info = topMetInfo.value
+  if (!info) return []
+  const arr = (info.arrAtis || '').trim().toUpperCase()
+  const dep = (info.depAtis || '').trim().toUpperCase()
+  const single = (info.atis || '').trim().toUpperCase()
+
+  if (hasTwrRole.value) {
+    // TWR: colour ARR/DEP only when both letters are present
+    if (arr && dep) return [{ letter: arr, kind: 'arr' }, { letter: dep, kind: 'dep' }]
+    if (arr) return [{ letter: arr, kind: 'single' }]
+    if (dep) return [{ letter: dep, kind: 'single' }]
+    return single ? [{ letter: single, kind: 'single' }] : []
+  }
+
+  // No TWR: DEP ATIS only — uncoloured
+  if (dep) return [{ letter: dep, kind: 'single' }]
+  return single ? [{ letter: single, kind: 'single' }] : []
+})
+
+const topAtisTitle = computed(() => {
+  const info = topMetInfo.value
+  if (!info) return 'ATIS'
+  if (hasTwrRole.value) {
+    const parts: string[] = []
+    if (info.arrAtis) parts.push(`ARR ${info.arrAtis}`)
+    if (info.depAtis) parts.push(`DEP ${info.depAtis}`)
+    if (!parts.length && info.atis) parts.push(info.atis)
+    return parts.length ? `ATIS ${parts.join(' · ')}` : 'ATIS'
+  }
+  return `DEP ATIS ${info.depAtis || info.atis || '-'}`
+})
+
+const topQnh = computed(() => {
+  const q = topMetInfo.value?.qnh
+  return q != null && Number.isFinite(q) ? String(q) : null
+})
+
+const topAtisChanged = computed(() => {
+  const apt = topMetAirport.value
+  return apt ? efs.isAtisLetterChanged(apt) : false
+})
+
+const topQnhChanged = computed(() => {
+  const apt = topMetAirport.value
+  return apt ? efs.isQnhChanged(apt) : false
+})
+
+function onTopQnhClick() {
+  const apt = topMetAirport.value
+  if (!apt || !efs.isQnhChanged(apt)) return
+  efs.acknowledgeQnh(apt)
+}
+
+/** Placeholder separation cells (SAAB-style) until live values are wired */
+const sepIndicators = computed(() => ({
+  sep: '2.5 nm',
+  dlv: '2.5 nm',
+  depGap: '',
+}))
 
 function isRtcConfig(config: ConfigInfo): boolean {
   return config.name === 'RTC' || config.file.toLowerCase().includes('multiairport')
@@ -555,12 +1030,25 @@ function onConfigClick(file: string) {
   }
 }
 
+/** ESSA: CD in selected roles; other airports: DEL position */
+const hasCdRole = computed(() => {
+  if (efs.essaRolesMode) return efs.essaRoles.includes('CD')
+  return efs.myRole === 'DEL'
+})
+
+const dclConnected = computed(() => efs.dclStatus === 'connected')
+
+/** DCL chrome only for the CD / DEL controller */
+const showDclControls = computed(() => hasCdRole.value)
+
 const dclTooltip = computed(() => {
+  if (!hasCdRole.value) return ''
   switch (efs.dclStatus) {
-    case 'available': return 'Click to connect DCL'
+    case 'available': return 'Voice clearance - click to connect DCL'
     case 'connected': return 'DCL connected - click to disconnect'
     case 'error': return `DCL error: ${efs.dclError ?? 'unknown'} - click to retry`
-    default: return 'DCL unavailable'
+    case 'unavailable': return 'DCL unavailable - voice clearance'
+    default: return 'DCL: Voice'
   }
 })
 
@@ -584,9 +1072,10 @@ function onAirportClick(info: AtisDisplayItem) {
 }
 
 function onDclClick() {
+  if (!hasCdRole.value) return
   if (efs.dclStatus === 'connected') {
     efs.dclLogout()
-  } else {
+  } else if (efs.dclStatus === 'available' || efs.dclStatus === 'error') {
     efs.dclLogin()
   }
 }
@@ -636,29 +1125,334 @@ onUnmounted(() => {
     clearTimeout(essaRwyHoverShowTimer)
     essaRwyHoverShowTimer = null
   }
+  if (connStatusHideTimer) {
+    clearTimeout(connStatusHideTimer)
+    connStatusHideTimer = null
+  }
 })
 </script>
 
 <style scoped>
-.efs-top-bar-host {
+.efs-top-bar {
+  --tb: var(--efs-chrome-scale, var(--efs-scale, 1));
+  /* Same in-flow width / padding model as bottom bar */
+  width: 100%;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  height: var(--efs-bottom-bar-h, var(--efs-top-bar-h, 40px));
+  background: #000000;
+  border-bottom: 1px solid #3a3e42;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: calc(2px * var(--tb));
+  padding: 0 calc(6px * var(--tb));
+  font-size: calc(13px * var(--tb)) !important;
+  overflow: hidden;
+}
+
+/* Prefer chrome-scale compression over flex-squashing text/controls */
+.efs-top-bar > :not(.v-spacer) {
   flex-shrink: 0;
 }
 
-.efs-top-bar {
-  font-size: calc(13px * var(--efs-scale, 1));
+.top-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: calc(28px * var(--tb));
+  height: calc(28px * var(--tb));
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: calc(4px * var(--tb));
+  background: var(--efs-bay-bg, #3b3c41);
+  color: #d1d5db;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.essa-atis-bar {
-  font-size: calc(13px * var(--efs-scale, 1));
-  font-weight: 600;
-  letter-spacing: 0.3px;
+
+.top-menu-btn:hover {
+  filter: brightness(1.15);
+  color: #fff;
+}
+
+.top-menu-tri {
+  display: block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* Point right when closed */
+  border-width: calc(5px * var(--tb)) 0 calc(5px * var(--tb)) calc(7px * var(--tb));
+  border-color: transparent transparent transparent currentColor;
+}
+
+.top-menu-btn.is-open .top-menu-tri {
+  /* Point down when open */
+  border-width: calc(7px * var(--tb)) calc(5px * var(--tb)) 0 calc(5px * var(--tb));
+  border-color: currentColor transparent transparent transparent;
+}
+
+/* Same chrome as menu arrow — fullscreen icon */
+.top-fs-btn :deep(.v-icon) {
+  color: inherit;
+}
+
+/* Match .top-menu-btn hit box / icon scale */
+.efs-top-bar :deep(.top-settings-btn.v-btn) {
+  --v-btn-height: calc(28px * var(--tb));
+  width: calc(28px * var(--tb));
+  height: calc(28px * var(--tb));
+  min-width: calc(28px * var(--tb));
+}
+
+.efs-top-bar :deep(.top-settings-btn .v-icon) {
+  font-size: calc(22px * var(--tb)) !important;
+}
+
+.essa-status-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: #ccc;
+  cursor: pointer;
+  font: inherit;
+  font-size: calc(16px * var(--tb));
+  letter-spacing: 0.02em;
+  padding: 0 calc(4px * var(--tb));
   white-space: nowrap;
-  user-select: none;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
+
+.essa-status-btn:hover {
+  color: #fff;
+}
+
+/* Manual lock — amber text only (no fill/border box) */
+.essa-status-btn.is-manual {
+  color: #f59e0b;
+}
+
+.essa-status-btn.is-manual:hover {
+  color: #fbbf24;
+}
+
+/* Vuetify buttons in the bar follow chrome scale */
+.efs-top-bar :deep(.v-btn) {
+  --v-btn-height: calc(24px * var(--tb));
+  font-size: calc(12px * var(--tb)) !important;
+  letter-spacing: inherit;
+}
+
+.efs-top-bar :deep(.v-btn--icon) {
+  width: calc(28px * var(--tb));
+  height: calc(28px * var(--tb));
+}
+
+.efs-top-bar :deep(.v-btn--size-x-small) {
+  --v-btn-height: calc(20px * var(--tb));
+  width: calc(22px * var(--tb));
+  height: calc(22px * var(--tb));
+}
+
+.efs-top-bar :deep(.v-icon) {
+  font-size: calc(18px * var(--tb)) !important;
+  width: 1em;
+  height: 1em;
+}
+
+.efs-top-bar :deep(.v-btn--size-x-small .v-icon) {
+  font-size: calc(14px * var(--tb)) !important;
+}
+.top-right-chrome {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--tb));
+  margin-left: calc(4px * var(--tb));
+  flex-shrink: 0;
+}
+
+.top-sep-group {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid #4a4e54;
+  background: #1a1c20;
+}
+
+.top-sep-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: calc(44px * var(--tb));
+  padding: calc(2px * var(--tb)) calc(4px * var(--tb));
+  border-right: 1px solid #4a4e54;
+  box-sizing: border-box;
+}
+
+.top-sep-cell:last-child {
+  border-right: none;
+}
+
+.top-sep-lbl {
+  font-size: calc(8px * var(--tb));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.top-sep-val {
+  font-size: calc(12px * var(--tb));
+  font-weight: 600;
+  color: #e5e7eb;
+  line-height: 1.2;
+  white-space: nowrap;
+  min-height: 1.2em;
+}
+
+.top-atis {
+  display: flex;
+  align-items: baseline;
+  gap: calc(5px * var(--tb));
+  margin: 0 calc(2px * var(--tb));
+  padding: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.top-atis-lbl {
+  font-size: calc(10px * var(--tb));
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #9ca3af;
+}
+
+.top-atis-letter {
+  font-size: calc(24px * var(--tb));
+  font-weight: 700;
+  line-height: 1;
+  color: #f5f5f5;
+  letter-spacing: 0.02em;
+}
+
+.top-atis-letter.is-arr {
+  color: #daa520; /* arrival strip */
+}
+
+.top-atis-letter.is-dep {
+  color: #3a72d4; /* departure strip */
+}
+
+.top-atis-letter.is-changed {
+  color: #f59e0b;
+}
+
+.top-qnh {
+  display: flex;
+  align-items: baseline;
+  margin: 0 calc(2px * var(--tb));
+  padding: 0;
+  border: none;
+  background: transparent;
+  white-space: nowrap;
+  color: #e5e7eb;
+  flex-shrink: 0;
+  cursor: default;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.top-qnh.is-changed {
+  color: #f59e0b;
+  cursor: pointer;
+}
+
+.top-qnh.is-changed .top-qnh-unit {
+  color: #f59e0b;
+}
+
+.top-qnh-val {
+  font-size: calc(18px * var(--tb));
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.top-qnh-unit {
+  font-size: calc(13px * var(--tb));
+  font-weight: 400;
+  color: #9ca3af;
+}
+
+.top-conn-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.top-conn-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Near-square; fixed so icon swap doesn’t resize */
+  width: calc(32px * var(--tb));
+  min-width: calc(32px * var(--tb));
+  height: calc(28px * var(--tb));
+  margin: 0;
+  padding: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 0;
+  background: transparent;
+  color: #f5f5f5;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+}
+
+.top-conn-label {
+  font-size: calc(14px * var(--tb));
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.top-conn-btn :deep(.v-icon) {
+  color: inherit;
+}
+
+.top-conn-btn.is-ok:hover,
+.top-conn-btn.is-ok.is-icon {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.top-conn-btn.is-off {
+  border-color: #b91c1c;
+  background: #b91c1c;
+  color: #fff;
+}
+
+.top-conn-btn.is-off:hover,
+.top-conn-btn.is-off.is-icon {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.efs-top-bar :deep(.dcl-btn.v-btn) {
+  font-size: calc(16px * var(--tb)) !important;
+  font-weight: 600;
+}
+
 .dcl-mode-btn {
   min-width: 0 !important;
-  padding: 0 calc(4px * var(--efs-scale, 1)) !important;
-  margin-left: calc(-4px * var(--efs-scale, 1)) !important;
-  font-size: calc(11px * var(--efs-scale, 1)) !important;
+  padding: 0 calc(4px * var(--efs-chrome-scale, var(--efs-scale, 1))) !important;
+  margin-left: calc(-4px * var(--efs-chrome-scale, var(--efs-scale, 1))) !important;
+  font-size: calc(14px * var(--efs-chrome-scale, var(--efs-scale, 1))) !important;
   letter-spacing: 0.5px;
 }
 
@@ -715,55 +1509,40 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 0;
-  margin-left: calc(8px * var(--efs-scale, 1));
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 3px;
-  height: max(28px, calc(22px * var(--efs-scale, 1)));
+  margin-left: auto;
+  border: 1px solid #666;
+  height: calc(22px * var(--efs-scale, 1));
   padding: 0 calc(2px * var(--efs-scale, 1));
+  background: #c8c8c8;
+}
+
+.column-count-btn {
+  margin: 0;
+  padding: 0 calc(4px * var(--efs-scale, 1));
+  border: none;
+  background: transparent;
+  color: #000;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.column-count-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .column-count-label {
   min-width: calc(14px * var(--efs-scale, 1));
   text-align: center;
-  font-size: calc(13px * var(--efs-scale, 1));
-  font-weight: 600;
-  color: #ccc;
+  font-size: calc(12px * var(--efs-scale, 1));
+  font-weight: 700;
+  color: #000;
   letter-spacing: 0.04em;
 }
 
-.config-menu {
-  min-width: calc(160px * var(--efs-scale, 1));
-}
-
-.essa-roles-btn {
-  background: transparent;
-  border: none;
-  color: #9e9e9e;
-  cursor: pointer;
-  font: inherit;
-  padding: 0 calc(4px * var(--efs-scale, 1));
-}
-
-.essa-roles-btn:hover {
-  color: #ccc;
-}
-
-.essa-rwy-btn {
-  background: transparent;
-  border: none;
-  color: #ccc;
-  cursor: pointer;
-  font: inherit;
-  letter-spacing: 0.02em;
-  padding: 0 calc(4px * var(--efs-scale, 1));
-  white-space: nowrap;
-}
-
-.essa-rwy-btn:hover {
-  color: #fff;
-}
-
-/* VatIRIS quickref — top-left at config text; does not block UI underneath */
+/* VatIRIS quickref — anchored at RWY menu row; does not block UI underneath */
 .essa-rwy-quickref {
   position: fixed;
   z-index: 2000;
@@ -851,7 +1630,7 @@ onUnmounted(() => {
   text-align: left;
   cursor: pointer;
   line-height: 1.15;
-  min-height: max(28px, calc(28px * var(--efs-scale, 1)));
+  min-height: calc(28px * var(--efs-scale, 1));
 }
 
 .essa-rwy-auto-tag {
@@ -894,6 +1673,8 @@ onUnmounted(() => {
 }
 
 .essa-rwy-detail {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   opacity: 0.9;
   white-space: nowrap;
@@ -954,7 +1735,7 @@ onUnmounted(() => {
   cursor: pointer;
   line-height: 1.1;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  min-height: max(32px, calc(32px * var(--efs-scale, 1)));
+  min-height: calc(32px * var(--efs-scale, 1));
 }
 
 .essa-rwy-action:last-child {
@@ -968,34 +1749,108 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 2px #000;
 }
 
-.essa-role-rows {
-  display: flex;
-  flex-direction: column;
-  gap: calc(10px * var(--efs-scale, 1));
+.essa-role-check {
+  margin: 0 calc(8px * var(--efs-scale, 1)) 0 0;
+  accent-color: #1a3a6e;
 }
 
-.essa-role-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: calc(8px * var(--efs-scale, 1)) calc(16px * var(--efs-scale, 1));
+.essa-roles-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-top: 3px solid #333;
 }
 
-.essa-role-option {
-  display: flex;
-  align-items: center;
-  gap: calc(8px * var(--efs-scale, 1));
-  cursor: pointer;
-  user-select: none;
-  font-size: calc(13px * var(--efs-scale, 1));
-  min-height: max(28px, calc(28px * var(--efs-scale, 1)));
+.essa-roles-action {
+  border-top: none;
+  border-right: 1px solid #777;
+  min-height: calc(32px * var(--efs-scale, 1));
+}
+
+.essa-roles-action:last-child {
+  border-right: none;
 }
 </style>
 
 <style>
 /* Teleported dialog chrome — content-class is outside scoped tree */
-.essa-rwy-dialog-wrap {
+.essa-rwy-dialog-wrap,
+.essa-roles-dialog-wrap {
   box-shadow: none !important;
   background: transparent !important;
   overflow: visible !important;
+}
+
+.top-conn-status {
+  --s: var(--efs-chrome-scale, var(--efs-scale, 1));
+  position: fixed;
+  z-index: 3000;
+  min-width: calc(480px * var(--s));
+  max-width: min(96vw, calc(560px * var(--s)));
+  max-height: none;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.top-conn-status .efs-popup-list {
+  max-height: none;
+  overflow: visible;
+}
+
+.top-conn-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+  background: #d8d8d8;
+}
+
+.top-conn-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.top-conn-col + .top-conn-col {
+  border-left: 2px solid #555;
+}
+
+.top-conn-col .efs-popup-section:first-child {
+  border-top: none;
+}
+
+.top-conn-status .efs-popup-item--stack {
+  padding: calc(4px * var(--s)) calc(8px * var(--s));
+  min-height: 0;
+}
+
+.top-conn-status .efs-popup-item-sub {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.top-conn-status .efs-popup-item-sub.conn-path {
+  font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: calc(9px * var(--s));
+  text-transform: none;
+}
+
+.top-conn-reload-btn {
+  border-top: 2px solid #555 !important;
+  background: #c0c0c0 !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.06em !important;
+}
+
+.top-conn-reload-btn:hover:not(:disabled) {
+  background: #1a3a6e !important;
+}
+
+.top-conn-reload-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.top-conn-status .conn-err {
+  color: #dc2626;
 }
 </style>

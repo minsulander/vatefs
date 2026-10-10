@@ -6,7 +6,6 @@
           <v-icon class="breakout-plane plane-up" icon="mdi-airplane" />
           <v-icon class="breakout-plane plane-ne" icon="mdi-airplane" />
         </div>
-        <span class="breakout-notch" />
       </div>
       <div class="breakout-rwy">{{ variant.runway }}</div>
       <div class="breakout-text">
@@ -42,15 +41,28 @@ const { variant, visible, dismiss, kind } = useBreakoutInfoStrip()
 .breakout-icon {
   position: relative;
   flex: 0 0 auto;
-  width: var(--strip-body-h, 50px);
+  /* Extra width for the tip; clip-path draws box + triangle as one fill (no seam) */
+  width: calc(var(--strip-body-h, 50px) + 5px * var(--strip-scale, 1));
   height: 100%;
   background: #39b54a;
-  overflow: visible;
+  overflow: hidden;
+  clip-path: polygon(
+    0 0,
+    calc(100% - 5px * var(--strip-scale, 1)) 0,
+    calc(100% - 5px * var(--strip-scale, 1)) calc(50% - 5px * var(--strip-scale, 1)),
+    100% 50%,
+    calc(100% - 5px * var(--strip-scale, 1)) calc(50% + 5px * var(--strip-scale, 1)),
+    calc(100% - 5px * var(--strip-scale, 1)) 100%,
+    0 100%
+  );
 }
 
 .breakout-planes {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--strip-body-h, 50px);
   overflow: hidden;
 }
 
@@ -82,24 +94,9 @@ const { variant, visible, dismiss, kind } = useBreakoutInfoStrip()
   transform: rotate(0deg);
 }
 
-/* Small triangular tip on the right of the green block */
-.breakout-notch {
-  position: absolute;
-  right: calc(-5px * var(--strip-scale, 1));
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-top: calc(5px * var(--strip-scale, 1)) solid transparent;
-  border-bottom: calc(5px * var(--strip-scale, 1)) solid transparent;
-  border-left: calc(5px * var(--strip-scale, 1)) solid #39b54a;
-  z-index: 1;
-  pointer-events: none;
-}
-
 .breakout-rwy {
   flex: 0 0 auto;
-  padding: 0 calc(10px * var(--strip-scale, 1)) 0 calc(12px * var(--strip-scale, 1));
+  padding: 0 calc(10px * var(--strip-scale, 1)) 0 calc(7px * var(--strip-scale, 1));
   font-size: calc(28px * var(--strip-scale, 1));
   font-weight: 700;
   color: #000;

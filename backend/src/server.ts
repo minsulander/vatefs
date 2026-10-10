@@ -25,6 +25,8 @@ import type {
     SectionMessage,
     RefreshMessage,
     StatusMessage,
+    FeedsStatus,
+    FeedStatusItem,
     DclStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
@@ -33,6 +35,7 @@ import type {
     ControllerInfo,
     UserSettingsMessage,
     NotifyMessage,
+    RwyFlagsMessage,
     ServerMessage,
     ClientMessage,
     AirportAtisInfo,
@@ -41,7 +44,7 @@ import type {
 import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
-import { flightStore } from "./flightStore.js"
+import { flightStore, hasValidAssignedSquawk } from "./flightStore.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
 import type { EuroscopeCommand, EssaPositionRole } from "./config.js"
 import {
@@ -58,36 +61,53 @@ import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
 import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
-import { loadStands, hasStandData } from "./stand-data.js"
-import { loadSidData, getSidsForRunway, resolveSidAltitude } from "./sid-data.js"
+import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
+import { loadSidData, getSidDataHealth, getSidsForRunway, resolveSidAltitude } from "./sid-data.js"
 import { isSlowAircraft } from "./slow-aircraft.js"
-import { hasSlowRemark, isIfrSidEligible, isTrackSidName, withSlowRemark } from "@vatefs/common"
-import { loadEseAirspace } from "./ese-airspace.js"
-import { startAfvTransceiverPolling } from "./afv-transceivers.js"
+import { standRequiresStartupInsteadOfPush } from "./essa-push-stands.js"
+import {
+    hasForcedSidInRoute,
+    hasSlowRemark,
+    hasVectRemark,
+    isIfrSidEligible,
+    isTrackSidName,
+    sidsMatch,
+    withSlowRemark,
+    withVectRemark,
+} from "@vatefs/common"
+import { loadEseAirspace, getEseAirspaceHealth } from "./ese-airspace.js"
+import { startAfvTransceiverPolling, getAfvHealth, refreshAfvTransceivers } from "./afv-transceivers.js"
 import {
     isEssaStripVisibleForRoles,
     resolveEssaNextSi,
     resolveAppDepTransfer,
     resolveEssaXferCallsign,
     setForceIdealAppDepFrequency,
+    filterEssaRunwayPlacementsForMyAor,
+    essaAorLayoutKey,
+    getMyEssaCoveredRunways,
 } from "./essa-next-si.js"
 import {
     loadEssaSidPrefs,
     resolvePreferredSid,
     resolveMapDelivery,
+    resolveEssaDepInfoStrip,
     collectSidsForTmaExit,
     appDepSectorToSi,
+    type AppDepSector,
 } from "./essa-sid-prefs.js"
 import { getEsePositionBySi } from "./ese-airspace.js"
 import { resolveEsmsPreferredSid, isEkchRwy30Active, collectEsmsSidsForTmaExit } from "./esms-sid.js"
 import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
-import { loadCtrData, checkCtrAtPosition } from "./ctr-data.js"
+import { loadCtrData, checkCtrAtPosition, getCtrHealth } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
-import { loadTopSkyAirspace, getAppClrTypes } from "./topsky-airspace.js"
+import { loadTopSkyAirspace, getAppClrTypes, getTopSkyAirspaceHealth } from "./topsky-airspace.js"
 import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
+import { startAupR16Service, getAupR16Status, getAupR16StatusFresh, checkAupR16Change } from "./aup/service.js"
+import type { AupR16Status } from "./aup/types.js"
 import type { DclStatus } from "./hoppie-service.js"
 import { ViffService } from "./viff-service.js"
 import type { ViffPollResult } from "./viff-service.js"
@@ -223,10 +243,41 @@ function findEuroscopeDir(): string | undefined {
 // TODO: make configurable — only load data files from this EuroScope package directory
 const EUROSCOPE_PACKAGE = 'ESAA'
 const EUROSCOPE_DIR = findEuroscopeDir()
+
+/** Startup parse results for status popup (updated as files load) */
+const localFeedState = {
+    euroscopeDir: {
+        ok: !!EUROSCOPE_DIR,
+        detail: EUROSCOPE_DIR ? path.resolve(EUROSCOPE_DIR) : "Not found",
+    } as FeedStatusItem,
+    hoppieConfig: { ok: false, detail: "Not loaded" } as FeedStatusItem,
+    cdmLocal: { ok: false, detail: "Not found" } as FeedStatusItem,
+}
+
+function updateHoppieConfigFeedState(euroscopeDir: string) {
+    const hoppie = loadHoppieConfig(euroscopeDir)
+    const codeOk = !!hoppie.logonCode
+    const tmplOk = hoppie.dclTemplates.size > 0
+    if (codeOk && tmplOk) {
+        localFeedState.hoppieConfig = {
+            ok: true,
+            detail: `Code + ${hoppie.dclTemplates.size} DCL template(s)`,
+        }
+    } else if (codeOk || tmplOk) {
+        localFeedState.hoppieConfig = {
+            ok: false,
+            detail: codeOk ? "Code OK, templates missing" : "Templates OK, code missing",
+        }
+    } else {
+        localFeedState.hoppieConfig = { ok: false, detail: "Not found" }
+    }
+}
+
 if (EUROSCOPE_DIR) {
     console.log(`EuroScope directory: ${EUROSCOPE_DIR}`)
     try {
-        loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+        const n = loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+        if (n <= 0) console.warn("Stand file loaded 0 stands")
     } catch (err) {
         console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
     }
@@ -248,7 +299,7 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load ICAO airlines: ${err instanceof Error ? err.message : err}`)
     }
     // Load Hoppie config (logon code + DCL templates)
-    loadHoppieConfig(EUROSCOPE_DIR)
+    updateHoppieConfigFeedState(EUROSCOPE_DIR)
     try {
         loadTopSkyAirspace(EUROSCOPE_DIR)
     } catch (err) {
@@ -385,10 +436,16 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
  */
 function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight: Flight) {
     switch (command.type) {
-        case "setGroundstate":
-            sendUdp(JSON.stringify({ type: "setGroundState", callsign, state: command.value }))
-            flightStore.applyOptimisticGroundstate(callsign, command.value)
+        case "setGroundstate": {
+            let state = command.value
+            // ESSA stand exceptions: drag-to-push_start should set STUP, not PUSH
+            if (state === "PUSH" && standRequiresStartupInsteadOfPush(flight.stand, flight.engineType)) {
+                state = "STUP"
+            }
+            sendUdp(JSON.stringify({ type: "setGroundState", callsign, state }))
+            flightStore.applyOptimisticGroundstate(callsign, state)
             break
+        }
 
         case "setClearance":
             // Plugin ToggleClearanceFlag always flips — never UDP when already at desired
@@ -447,7 +504,11 @@ function reevaluateAndBroadcast(callsign: string) {
         )
     }
 
-    store.updateStripFromFlight(result.strip)
+    // Same-slot: pin appearance order (TAXIWAY ARR TXIN/TAXI etc.). Section moves: allow new pos.
+    const applied = store.updateStripFromFlight(
+        result.strip,
+        result.sectionChanged ? { allowPositionChange: true } : undefined
+    )
 
     // Broadcast shifted strips and gaps BEFORE the auto-moved strip so positions are settled
     // by the time the frontend mounts the moved strip and measures its target position
@@ -455,13 +516,15 @@ function reevaluateAndBroadcast(callsign: string) {
         for (const shifted of result.shiftedCallsigns) {
             const shiftedStrip = flightStore.regenerateStrip(shifted)
             if (shiftedStrip) {
-                store.updateStripFromFlight(shiftedStrip)
-                broadcastStrip(shiftedStrip)
+                const shiftedApplied = store.updateStripFromFlight(shiftedStrip, {
+                    allowPositionChange: true,
+                })
+                broadcastStrip(shiftedApplied)
             }
         }
 
         // Shift gap indices to match the shifted strip positions
-        const gapResult = store.shiftGapsDown(result.strip.bayId, result.strip.sectionId)
+        const gapResult = store.shiftGapsDown(applied.bayId, applied.sectionId)
         for (const key of gapResult.deletedGapKeys) {
             const parsed = parseGapKey(key)
             if (parsed) {
@@ -473,7 +536,7 @@ function reevaluateAndBroadcast(callsign: string) {
         }
     }
 
-    broadcastStrip(result.strip, result.sectionChanged ? { autoMoved: true } : undefined)
+    broadcastStrip(applied, result.sectionChanged ? { autoMoved: true } : undefined)
 }
 
 flightStore.setRofRequestExpireHandler((callsign) => reevaluateAndBroadcast(callsign))
@@ -627,14 +690,19 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
 
 // ATIS polling service (declared early to avoid temporal dead zone in mock init)
 let atisService: AtisService | null = null
+/** Set after ATIS starts; declared early so mock init's startAtisService() can assign it. */
+let getAtisHealth: () => FeedStatusItem = () => ({ ok: false, detail: "Not started" })
 
 // Initialize store (with mock data if --mock flag is set)
 if (cliArgs.mock) {
-    // Apply mock myselfUpdate to set callsign and airports
-    setMyCallsign(mockMyselfUpdate.callsign)
-    const mockAirports = Object.keys(mockMyselfUpdate.rwyconfig).filter((a) => getAirportByIcao(a))
-    if (mockAirports.length > 0) {
-        setMyAirports(mockAirports)
+    // Apply mock myselfUpdate for callsign/frequency/runways.
+    // Do not override airports when --airport was given (e.g. ESSA + mock traffic).
+    setMyCallsign(cliArgs.callsign ?? mockMyselfUpdate.callsign)
+    if (!cliArgs.airports?.length) {
+        const mockAirports = Object.keys(mockMyselfUpdate.rwyconfig).filter((a) => getAirportByIcao(a))
+        if (mockAirports.length > 0) {
+            setMyAirports(mockAirports)
+        }
     }
     setIsController(mockMyselfUpdate.controller)
     setMyFrequency(mockMyselfUpdate.frequency)
@@ -649,7 +717,9 @@ if (cliArgs.mock) {
     // Set controller role from mock callsign (or CLI override)
     const mockRole = parseControllerRole(cliArgs.callsign ?? mockMyselfUpdate.callsign, staticConfig.myAirports)
     setMyRole(mockRole)
-    console.log(`Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${mockAirports.join(", ")})`)
+    console.log(
+        `Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${staticConfig.myAirports.join(", ")})`,
+    )
 
     // Start ATIS polling for mock mode
     startAtisService()
@@ -681,7 +751,7 @@ function stripForClient(strip: FlightStrip): FlightStrip | null {
     if (!isEssaRolesConfig(staticConfig)) return strip
 
     const roles = staticConfig.essaRoles ?? []
-    if (roles.length > 0 && strip.stripType !== "note") {
+    if (roles.length > 0 && strip.stripType !== "note" && strip.stripType !== "vehicle") {
         const flight = flightStore.getFlight(strip.callsign)
         const next = flight
             ? resolveEssaNextSi(flight, strip, {
@@ -756,42 +826,153 @@ function broadcastRefresh(reason?: string) {
     console.log(`Broadcast refresh to all clients: ${reason ?? "no reason"}`)
 }
 
-// Send status (callsign + airports + role) to a client
-function sendStatus(socket: WebSocket) {
-    const message: StatusMessage = {
-        type: "status",
-        callsign: staticConfig.myCallsign ?? "",
-        airports: staticConfig.myAirports,
-        role: staticConfig.myRole,
-        isController: staticConfig.isController,
-        multiAirport: isMultiAirportConfig(staticConfig) || undefined,
-        activeAirports: staticConfig.activeAirports,
-        esAirports: isMultiAirportConfig(staticConfig) ? esRwySelectAirports : undefined,
-        columnAirports: staticConfig.columnAirports,
-        columnCount: staticConfig.columnCount,
+/** Last UDP from EuroScope plugin; myselfUpdate is ~every 5s while loaded */
+let lastPluginUdpAt = 0
+let pluginConnected = false
+/** Version string pushed by the loaded plugin via myselfUpdate (not from disk). */
+let reportedPluginVersion: string | undefined
+const PLUGIN_STALE_MS = 15_000
+let lastStatusFeedsFp = ""
+/** Set after services are constructed (avoids TDZ in buildFeedsStatus). */
+let getViffHealth: () => FeedStatusItem = () => ({ ok: false, detail: "Not started" })
+let forceViffPoll: () => void = () => {}
+
+function notePluginUdp() {
+    lastPluginUdpAt = Date.now()
+    if (!pluginConnected) {
+        pluginConnected = true
+        console.log("EuroScope plugin connected (UDP)")
+        broadcastStatus()
     }
-    sendMessage(socket, message)
 }
 
-// Broadcast status to all clients
-function broadcastStatus() {
+function setPluginDisconnected(reason: string) {
+    if (!pluginConnected && !reportedPluginVersion) return
+    pluginConnected = false
+    reportedPluginVersion = undefined
+    console.log(`EuroScope plugin disconnected: ${reason}`)
+    broadcastStatus()
+}
+
+/** Set when DCL status vars exist (avoids TDZ in buildFeedsStatus). */
+let getHoppieFeed: () => FeedStatusItem = () => ({ ok: false, detail: "Unavailable" })
+
+function standsFeedStatus(): FeedStatusItem {
+    const apts = airportsWithStands()
+    if (apts.length === 0) return { ok: false, detail: "Not loaded" }
+    return { ok: true, detail: `Loaded (${apts.length} airports)` }
+}
+
+/** UDP 17771 bind failure (dual ES / second VatEFS → WSAEADDRINUSE/10048). */
+let udpInBound = false
+let udpBindError: string | undefined
+let udpRebindTimer: ReturnType<typeof setTimeout> | undefined
+
+function pluginFeedStatus(): FeedStatusItem {
+    if (udpBindError) {
+        return { ok: false, detail: udpBindError }
+    }
+    if (cliArgs.mock || pluginConnected) {
+        return { ok: true, detail: "Connected" }
+    }
+    return { ok: false, detail: "Not connected" }
+}
+
+function buildFeedsStatus(): FeedsStatus {
+    return {
+        plugin: pluginFeedStatus(),
+        hoppie: getHoppieFeed(),
+        viff: getViffHealth(),
+        atis: getAtisHealth(),
+        afv: getAfvHealth(),
+        ctr: getCtrHealth(),
+        euroscopeDir: localFeedState.euroscopeDir,
+        hoppieConfig: localFeedState.hoppieConfig,
+        cdmLocal: localFeedState.cdmLocal,
+        stands: standsFeedStatus(),
+        eseSid: getSidDataHealth(),
+        eseAirspace: getEseAirspaceHealth(),
+        topskyAirspace: getTopSkyAirspaceHealth(),
+    }
+}
+
+function checkPluginStale() {
+    if (cliArgs.mock) {
+        if (!pluginConnected) {
+            pluginConnected = true
+            reportedPluginVersion = reportedPluginVersion || "mock"
+            broadcastStatus()
+        }
+        maybeBroadcastStatusIfFeedsChanged()
+        return
+    }
+    if (pluginConnected && Date.now() - lastPluginUdpAt > PLUGIN_STALE_MS) {
+        setPluginDisconnected("UDP stale (plugin unloaded or ES idle)")
+        return
+    }
+    maybeBroadcastStatusIfFeedsChanged()
+}
+
+/** Re-broadcast status when network feed health changes (ATIS/AFV/vIFF/etc.). */
+function maybeBroadcastStatusIfFeedsChanged() {
+    const fp = JSON.stringify({
+        feeds: buildFeedsStatus(),
+        pluginVersion: reportedPluginVersion,
+        dcl: currentDclStatus,
+    })
+    if (fp === lastStatusFeedsFp) return
+    lastStatusFeedsFp = fp
+    broadcastStatus()
+}
+
+if (cliArgs.mock) {
+    pluginConnected = true
+    reportedPluginVersion = "mock"
+}
+setInterval(checkPluginStale, 2000)
+
+// Send status (callsign + airports + role) to a client
+function buildStatusMessage(): StatusMessage {
     const essaMode = isEssaRolesConfig(staticConfig)
-    const message: StatusMessage = {
+    const feeds = buildFeedsStatus()
+    lastStatusFeedsFp = JSON.stringify({
+        feeds,
+        pluginVersion: reportedPluginVersion,
+        dcl: currentDclStatus,
+    })
+    return {
         type: "status",
         callsign: staticConfig.myCallsign ?? "",
         airports: staticConfig.myAirports,
         role: staticConfig.myRole,
+        positionId: staticConfig.myPositionId || undefined,
+        pluginConnected: cliArgs.mock ? true : pluginConnected,
+        feeds,
+        backendVersion: constants.version,
+        pluginVersion: reportedPluginVersion,
+        frequency: staticConfig.myFrequency,
         isController: staticConfig.isController,
         multiAirport: isMultiAirportConfig(staticConfig) || undefined,
         activeAirports: staticConfig.activeAirports,
-        esAirports: isMultiAirportConfig(staticConfig) ? esRwySelectAirports : undefined,
+        esAirports: isMultiAirportConfig(staticConfig)
+            ? esRwySelectAirports
+            : (staticConfig.myAirports.length ? [...staticConfig.myAirports] : undefined),
         columnAirports: staticConfig.columnAirports,
         columnCount: staticConfig.columnCount,
         essaRolesMode: essaMode || undefined,
         essaRoles: essaMode ? (staticConfig.essaRoles ?? []) : undefined,
         essaRolesManual: essaMode ? !!staticConfig.essaRolesManual : undefined,
+        essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
     }
-    broadcast(message)
+}
+
+function sendStatus(socket: WebSocket) {
+    sendMessage(socket, buildStatusMessage())
+}
+
+// Broadcast status to all clients
+function broadcastStatus() {
+    broadcast(buildStatusMessage())
 }
 
 /**
@@ -828,26 +1009,21 @@ function buildAtisInfo(): AirportAtisInfo[] {
     for (const airport of airports) {
         const rwy = runways[airport] ?? { arr: [], dep: [] }
         if (airport === "ESSA") {
-            // TEMP TEST: force-spoof ESSA ATIS/QNH (remove after top-bar / QNH-chip check)
-            // Change SPOOF_ESSA_QNH to simulate a QNH update after acknowledging on a strip.
-            const SPOOF_ESSA_ARR = "B"
-            const SPOOF_ESSA_DEP = "C"
-            const SPOOF_ESSA_QNH = 1013
+            const essa = atisService?.getEssaAtis() ?? {}
             result.push({
                 airport,
-                arrAtis: SPOOF_ESSA_ARR,
-                depAtis: SPOOF_ESSA_DEP,
-                qnh: SPOOF_ESSA_QNH,
+                arrAtis: essa.arrLetter,
+                depAtis: essa.depLetter,
+                qnh: essa.qnh,
                 arrRunways: rwy.arr,
                 depRunways: rwy.dep,
             })
         } else {
             const atis = atisService?.getAtis(airport) ?? {}
-            // TEMP TEST: ensure letter/QNH present for strip QNH chip testing
             result.push({
                 airport,
-                atis: atis.letter || "A",
-                qnh: atis.qnh ?? 1015,
+                atis: atis.letter,
+                qnh: atis.qnh,
                 arrRunways: rwy.arr,
                 depRunways: rwy.dep,
             })
@@ -1046,8 +1222,29 @@ function startAtisService() {
     atisService = new AtisService({
         onUpdate: () => broadcastAtisUpdate(),
     })
+    getAtisHealth = () => atisService?.getHealth() ?? { ok: false, detail: "Not started" }
     atisService.start(staticConfig.myAirports)
     console.log(`ATIS polling started for: ${staticConfig.myAirports.join(", ")}`)
+    ensureAupR16Service()
+}
+
+/** Current ESSA ARR/DEP runways from EuroScope rwyconfig (null when unknown). */
+function getEssaOps(): { arr: string[]; dep: string[] } | null {
+    const essa = staticConfig.activeRunways?.["ESSA"]
+    if (!essa) return null
+    return { arr: essa.arr ?? [], dep: essa.dep ?? [] }
+}
+
+/**
+ * AUP R16 ("R16 utökad") polling — only when ESSA is a configured airport.
+ * Broadcasts `aupR16` on change; never switches RWY config itself (see backend/src/aup/service.ts).
+ */
+function ensureAupR16Service() {
+    if (!staticConfig.myAirports.includes("ESSA")) return
+    startAupR16Service({
+        getEssaOps,
+        onChange: (status: AupR16Status) => broadcast({ type: "aupR16", ...status }),
+    })
 }
 
 // Hoppie DCL service state
@@ -1055,6 +1252,20 @@ let hoppieService: HoppieService | null = null
 let currentDclStatus: DclStatus = "unavailable"
 let currentDclError: string | undefined
 let currentDclMode: import("@vatefs/common").DclMode = loadUserSettings().dclMode ?? "manual"
+
+getHoppieFeed = () => {
+    switch (currentDclStatus) {
+        case "connected":
+            return { ok: true, detail: "Connected" }
+        case "available":
+            return { ok: true, detail: "Available" }
+        case "error":
+            return { ok: false, detail: currentDclError || "Error" }
+        case "unavailable":
+        default:
+            return { ok: false, detail: "Unavailable" }
+    }
+}
 
 /**
  * Determine the DCL callsign based on configured airports.
@@ -1209,12 +1420,34 @@ function canAutoSendDcl(flight: Flight): boolean {
     return sidValid && cflValid && squawkValid
 }
 
+/** Pending preferred-SID-after-RWY timers — cancelled when AHD/VECT starts */
+const preferredSidAfterDepRwyTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function cancelPreferredSidAfterDepRwy(stripId: string) {
+    const t = preferredSidAfterDepRwyTimers.get(stripId)
+    if (t) {
+        clearTimeout(t)
+        preferredSidAfterDepRwyTimers.delete(stripId)
+    }
+}
+
+function isVectorDeparture(flight: Flight, strip?: FlightStrip): boolean {
+    if ((flight.ahdg ?? 0) > 0) return true
+    if (strip?.assignedHeading) return true
+    if (hasVectRemark(flight.remarks)) return true
+    if (strip && hasVectRemark(strip.remarks)) return true
+    return false
+}
+
 /**
  * After a manual DEP RWY assign (ADEP/rwy at FPL start), pick preferred SID for the new runway
  * and amend FPL once the runway command has been processed by the plugin.
+ * Skipped for vector (AHD/VECT) departures.
  */
 function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, runway: string) {
     if (strip.clearance || !strip.canEditClearance) return
+    // Vector departure: never auto-force preferred SID into FPL
+    if (isVectorDeparture(flight, strip)) return
     // V / Z: no preferred SID / SLOW SID auto-assign
     if (!isIfrSidEligible(strip.flightRules)) return
     if (strip.stripType !== "departure" && strip.stripType !== "local") return
@@ -1230,7 +1463,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
     const slow =
         !!strip.isSlow ||
         hasSlowRemark(flight.remarks) ||
-        isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "")
+        isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType)
 
     let preferred: string | null = null
     if (airport === "ESMS") {
@@ -1258,26 +1491,40 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
     const sid = preferred
     console.log(`[ASSIGN] Preferred SID ${sid} after DEP RWY ${runway} for ${callsign}`)
 
-    setTimeout(() => {
+    cancelPreferredSidAfterDepRwy(stripId)
+    const timer = setTimeout(() => {
+        preferredSidAfterDepRwyTimers.delete(stripId)
         const liveStrip = store.getStrip(stripId)
         if (!liveStrip || liveStrip.clearance || !liveStrip.canEditClearance) return
         const f = flightStore.getFlight(callsign)
         if (!f) return
+        // AHD/VECT may have been set after schedule — do not overwrite with preferred SID
+        if (isVectorDeparture(f, liveStrip)) {
+            console.log(`[ASSIGN] Skip preferred SID for ${callsign} — vector departure (AHD/VECT)`)
+            return
+        }
 
         f.depRwy = runway
-        f.sidDisplayOverride = sid
-        f.sid = sid
-
-        sendUdp(JSON.stringify({ type: "assignSid", callsign, sid } satisfies OutboundPluginCommand))
+        const esSid = f.sid
+        const needForce = !sidsMatch(esSid, sid)
+        if (needForce) {
+            f.sidDisplayOverride = sid
+            f.sid = sid
+            sendUdp(JSON.stringify({ type: "assignSid", callsign, sid } satisfies OutboundPluginCommand))
+            console.log(`[ASSIGN] Force SID ${sid} (ES had ${esSid || "(none)"}) for ${callsign}`)
+        } else {
+            f.sidDisplayOverride = undefined
+            console.log(`[ASSIGN] ES SID ${esSid} already matches preferred — not forcing FPL`)
+        }
 
         const sidAlt = resolveSidAltitude(airport, sid, slow || isTrackSidName(sid))
-        if (sidAlt !== undefined) {
+        if (sidAlt !== undefined && (!f.cfl || f.cfl <= 2)) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign, altitude: sidAlt } satisfies OutboundPluginCommand))
             f.cfl = sidAlt
             console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${sid} at ${airport}`)
         }
 
-        if (isTrackSidName(sid) && isIfrSidEligible(liveStrip.flightRules)) {
+        if (needForce && isTrackSidName(sid) && isIfrSidEligible(liveStrip.flightRules)) {
             if (!hasSlowRemark(f.remarks)) {
                 f.remarks = withSlowRemark(f.remarks, true) || undefined
                 console.log(`[REMARKS] ${callsign}: set SLOW (track SID ${sid})`)
@@ -1294,64 +1541,328 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             broadcastStrip(updatedStrip)
         }
     }, 300)
+    preferredSidAfterDepRwyTimers.set(stripId, timer)
 }
 
 /**
- * Attempt to automatically assign CFL and squawk for a flight (AUTO mode).
- * Replicates the same logic as the clearance dialog's applyDefaultCfl + applyDefaultSquawk.
+ * Resolve preferred SID for ESSA/ESMS (config / LOA), else undefined.
  */
-function autoAssignCflAndSquawk(flight: Flight) {
+function resolvePreferredSidForFlight(flight: Flight): string | undefined {
+    const airport = (flight.origin || "").toUpperCase()
+    const runway = flight.depRwy
+    if (!airport || !runway) return undefined
+    if (airport !== "ESSA" && airport !== "ESMS") return undefined
+
+    const tokens = (flight.route || "").trim().split(/\s+/).filter(Boolean)
+    if (tokens[0]?.includes("/")) tokens.shift()
+    const routeForPref = tokens.join(" ")
+    const slow =
+        isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType) ||
+        hasSlowRemark(flight.remarks) ||
+        isTrackSidName(flight.sid)
+
+    if (airport === "ESMS") {
+        const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
+        return resolveEsmsPreferredSid({ runway, route: routeForPref, ekch30 }).sid ?? undefined
+    }
+
+    const essa = staticConfig.activeRunways?.["ESSA"]
+    const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
+    if (!configId) return undefined
+    return (
+        resolvePreferredSid({
+            airport,
+            runway,
+            configId,
+            route: routeForPref,
+            slow,
+        }).sid ?? undefined
+    )
+}
+
+/** Pending TopSky ROF → EFS-native fallback timers (callsign → timeout). */
+const topSkyRofFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const TOPSKY_ROF_TIMEOUT_MS = 3500
+
+function clearTopSkyRofFallback(callsign: string) {
+    const key = callsign.toUpperCase()
+    const t = topSkyRofFallbackTimers.get(key)
+    if (t) {
+        clearTimeout(t)
+        topSkyRofFallbackTimers.delete(key)
+    }
+}
+
+/**
+ * EFS-native ROF: mark pending request on the shared strip so the owner sees
+ * pink ROF / ASSUME without TopSky scratch coordination.
+ */
+function applyEfsNativeRof(callsign: string, reason?: string) {
+    const key = callsign.toUpperCase()
+    const flight = flightStore.getFlight(key)
+    const me = (staticConfig.myCallsign || "").trim().toUpperCase()
+    if (!flight || !me) {
+        flightStore.clearRofCooldown(key)
+        reevaluateAndBroadcast(key)
+        const notify: NotifyMessage = {
+            type: "notify",
+            level: "error",
+            text: `ROF failed for ${key}${reason ? `: ${reason}` : ""}`,
+        }
+        broadcast(notify)
+        return
+    }
+    flightStore.setRofRequest(flight, me)
+    // Keep outbound pink flash on requester side
+    flightStore.startRofCooldown(key, () => reevaluateAndBroadcast(key))
+    reevaluateAndBroadcast(key)
+    const notify: NotifyMessage = {
+        type: "notify",
+        level: "info",
+        text: `ROF (EFS) for ${key}${reason ? ` — TopSky: ${reason}` : ""}`,
+    }
+    broadcast(notify)
+    console.log(`[ROF] EFS-native request from ${me} for ${key}`)
+}
+
+function scheduleTopSkyRofFallback(callsign: string) {
+    const key = callsign.toUpperCase()
+    clearTopSkyRofFallback(key)
+    const t = setTimeout(() => {
+        topSkyRofFallbackTimers.delete(key)
+        console.log(`[ROF] TopSky timeout for ${key} — EFS-native fallback`)
+        applyEfsNativeRof(key, "no response")
+    }, TOPSKY_ROF_TIMEOUT_MS)
+    topSkyRofFallbackTimers.set(key, t)
+}
+
+/**
+ * Attempt to automatically assign CFL and squawk for a flight (DCL AUTO / new-dep setting).
+ * Replicates the clearance dialog's applyDefaultCfl + applyDefaultSquawk.
+ *
+ * Squawk allocate is gated on controllerAssignedSeen so reload/refresh cannot fire
+ * TopSky AllocateSSR while ASSR is still unknown (FPD+radar often precede CAD).
+ */
+function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferredSquawk?: boolean } {
+    const slow =
+        isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType) ||
+        hasSlowRemark(flight.remarks) ||
+        isTrackSidName(flight.sid)
+    const preferred = resolvePreferredSidForFlight(flight)
+    const sidForCfl = preferred || flight.sid
+
     // Auto-assign CFL from SID altitude if not already set
-    if (flight.sid && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
-        const slow =
-            isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "") ||
-            hasSlowRemark(flight.remarks) ||
-            isTrackSidName(flight.sid)
-        const sidAlt = resolveSidAltitude(flight.origin, flight.sid, slow)
+    if (sidForCfl && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
+        const sidAlt = resolveSidAltitude(
+            flight.origin,
+            sidForCfl,
+            slow || isTrackSidName(sidForCfl),
+        )
         if (sidAlt !== undefined) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
-            console.log(`[DCL AUTO] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${flight.sid})`)
+            console.log(`[${logTag}] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${sidForCfl})`)
             if (cliArgs.mock) {
                 flight.cfl = sidAlt
             }
         }
     }
 
-    // Trigger TopSky SSR allocation if unset — never invent a code (not even in --mock)
-    if (!flight.squawk || flight.squawk === "0000") {
-        if (requestTopskySquawkReset(flight.callsign)) {
-            console.log(`[DCL AUTO] Requested TopSky squawk for ${flight.callsign}`)
-            flight.squawk = undefined
-        }
+    // Never invent a code (not even in --mock). Never re-allocate when ASSR already known.
+    if (hasValidAssignedSquawk(flight.squawk)) {
+        return {}
     }
+    // Wait until EuroScope has reported assigned data at least once (Refresh CAD includes squawk).
+    if (!flight.controllerAssignedSeen) {
+        console.log(`[${logTag}] Deferring TopSky squawk for ${flight.callsign} — waiting for ES assigned data`)
+        return { deferredSquawk: true }
+    }
+    if (requestTopskySquawkReset(flight.callsign)) {
+        console.log(`[${logTag}] Requested TopSky squawk for ${flight.callsign}`)
+        flight.squawk = undefined
+    }
+    return {}
+}
+
+/** True when we are CD / DEL (auto squawk+CFL prep is CD-only — not TWR covering DEL). */
+function isCdOrDelRole(): boolean {
+    if (staticConfig.layoutMode === "essaRoles") {
+        const roles = staticConfig.essaRoles ?? []
+        return roles.some((r) => r === "CD")
+    }
+    return staticConfig.myRole === "DEL"
 }
 
 /**
- * Attempt to automatically send a DCL clearance for a flight.
- * Called after a DCL request is received (in auto/semi mode) and when
- * flight data updates in semi mode.
- *
- * Returns true if the clearance was sent automatically.
+ * Session-level prep memory — survives store.clear() on reconnect/AoR change so we do not
+ * treat every re-ingested strip as a brand-new departure needing TopSky SSR.
+ * Cleared on full ES disconnect (connectionType 0).
  */
-function tryAutoSendDcl(flight: Flight): boolean {
-    if (!hoppieService || flight.dclStatus !== "REQUEST") return false
-    if (!canAutoSendDcl(flight)) return false
+const autoDepPrepDoneCallsigns = new Set<string>()
+/** Callsigns waiting for first CAD/ASSR before DEP PREP may allocate SSR. */
+const pendingAutoDepPrepCallsigns = new Set<string>()
+const pendingAutoDepPrepTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** Retry window while waiting for CAD after a new strip (log-only if still missing). */
+const AUTO_DEP_PREP_SETTLE_MS = 2500
+
+function clearAutoDepPrepSession() {
+    for (const t of pendingAutoDepPrepTimers.values()) clearTimeout(t)
+    pendingAutoDepPrepTimers.clear()
+    pendingAutoDepPrepCallsigns.clear()
+    autoDepPrepDoneCallsigns.clear()
+}
+
+function isAutoDepPrepEligible(strip: FlightStrip, flight: Flight): boolean {
+    if (!currentUiSettings.autoDepSquawkCfl) return false
+    if (!isCdOrDelRole()) return false
+    if (strip.stripType !== "departure" && strip.stripType !== "local") return false
+    if (!isIfrSidEligible(strip.flightRules)) return false
+    const origin = (flight.origin || strip.adep || "").toUpperCase()
+    if (!staticConfig.myAirports.some((a) => a.toUpperCase() === origin)) return false
+    if (strip.clearance) return false
+    return true
+}
+
+function findStripForCallsign(callsign: string): FlightStrip | undefined {
+    const key = callsign.toUpperCase()
+    return (
+        store.getStrip(key) ||
+        store.getAllStrips().find((s) => s.callsign.toUpperCase() === key)
+    )
+}
+
+/**
+ * Run DEP PREP once CAD/ASSR state is trustworthy.
+ * Returns true when prep completed (including skip because ASSR already present).
+ */
+function runAutoDepPrep(callsign: string, logTag = "DEP PREP"): boolean {
+    const key = callsign.toUpperCase()
+    const flight = flightStore.getFlight(key)
+    if (!flight) return false
+    if (flight.autoDepPrepDone || autoDepPrepDoneCallsigns.has(key)) {
+        flight.autoDepPrepDone = true
+        pendingAutoDepPrepCallsigns.delete(key)
+        return true
+    }
+
+    const strip = findStripForCallsign(key)
+    if (!strip || !isAutoDepPrepEligible(strip, flight)) {
+        pendingAutoDepPrepCallsigns.delete(key)
+        return false
+    }
+
+    // Still waiting for first CAD — keep pending; never AllocateSSR while ASSR unknown
+    if (!flight.controllerAssignedSeen && !hasValidAssignedSquawk(flight.squawk)) {
+        pendingAutoDepPrepCallsigns.add(key)
+        return false
+    }
+
+    pendingAutoDepPrepCallsigns.delete(key)
+    const existingTimer = pendingAutoDepPrepTimers.get(key)
+    if (existingTimer) {
+        clearTimeout(existingTimer)
+        pendingAutoDepPrepTimers.delete(key)
+    }
+
+    flight.autoDepPrepDone = true
+    autoDepPrepDoneCallsigns.add(key)
+    console.log(
+        `[${logTag}] Auto squawk/CFL for departure ${flight.callsign}` +
+            (hasValidAssignedSquawk(flight.squawk)
+                ? ` (ASSR ${flight.squawk} already set — skip allocate)`
+                : ""),
+    )
+    autoAssignCflAndSquawk(flight, logTag)
+
+    const updated = flightStore.regenerateStrip(strip.id)
+    if (updated) {
+        store.updateStripFromFlight(updated)
+        broadcastStrip(updated)
+    }
+    return true
+}
+
+function scheduleDeferredAutoDepPrep(callsign: string) {
+    const key = callsign.toUpperCase()
+    pendingAutoDepPrepCallsigns.add(key)
+    if (pendingAutoDepPrepTimers.has(key)) return
+    const t = setTimeout(() => {
+        pendingAutoDepPrepTimers.delete(key)
+        if (!pendingAutoDepPrepCallsigns.has(key)) return
+        if (runAutoDepPrep(key)) return
+        // Still no CAD — do not allocate; CAD flush will retry. Avoid marking done.
+        console.log(
+            `[DEP PREP] Still waiting for ES assigned data for ${key} after ${AUTO_DEP_PREP_SETTLE_MS}ms`,
+        )
+    }, AUTO_DEP_PREP_SETTLE_MS)
+    pendingAutoDepPrepTimers.set(key, t)
+}
+
+/** Flush deferred DEP PREP as soon as CAD/ASSR arrives. */
+function flushDeferredAutoDepPrep(callsign: string) {
+    const key = callsign.toUpperCase()
+    if (!pendingAutoDepPrepCallsigns.has(key)) return
+    const pending = pendingAutoDepPrepTimers.get(key)
+    if (pending) {
+        clearTimeout(pending)
+        pendingAutoDepPrepTimers.delete(key)
+    }
+    runAutoDepPrep(key)
+}
+
+/**
+ * When autoDepSquawkCfl is on, prep squawk + CFL for a newly created departure strip.
+ * CD / DEL role only — GND/TWR do not auto-prep.
+ * Defers TopSky SSR until ES assigned data is seen so reload cannot re-allocate existing ASSR.
+ * Does not force SID into the FPL (CLR window / RWY change still handle force-if-wrong).
+ */
+function maybeAutoPrepNewDeparture(strip: FlightStrip, flight: Flight) {
+    if (!isAutoDepPrepEligible(strip, flight)) return
+    const key = flight.callsign.toUpperCase()
+    if (flight.autoDepPrepDone || autoDepPrepDoneCallsigns.has(key)) {
+        flight.autoDepPrepDone = true
+        return
+    }
+    // Already have ASSR or CAD — safe to run immediately
+    if (flight.controllerAssignedSeen || hasValidAssignedSquawk(flight.squawk)) {
+        runAutoDepPrep(key)
+        return
+    }
+    // Strip appeared before CAD (common on cold start / .efs refresh / store.clear+reingest)
+    console.log(`[DEP PREP] Deferring prep for ${key} until ES assigned data`)
+    scheduleDeferredAutoDepPrep(key)
+}
+
+/**
+ * Send a DCL clearance CPDLC (CLD / WU) to the pilot.
+ * Used for REQUEST→Send, auto/semi auto-send, and controller-initiated (proactive) DCL.
+ * Does NOT send the RCD RECEIVED / STANDBY FSM (that is only for pilot REQUEST ack).
+ *
+ * Returns true if the clearance was sent.
+ */
+function sendDclClearance(
+    flight: Flight,
+    remarks: string,
+    reason: "auto" | "manual" | "proactive",
+): boolean {
+    if (!hoppieService) return false
 
     const dclAirport = staticConfig.myAirports.find((a) => a === flight.origin)
     if (!dclAirport) return false
 
-    // Build template data (no remarks for auto-DCL)
-    const templateData = buildDclTemplateData(flight, "")
+    const templateData = buildDclTemplateData(flight, remarks)
     let markerClearance: string | undefined
     let plainClearance: string | undefined
     try {
         markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
         plainClearance = fillDclTemplate(dclAirport, templateData)
     } catch (err) {
-        console.error(`[DCL AUTO] Template error for ${flight.callsign}: ${err instanceof Error ? err.message : err}`)
+        console.error(
+            `[DCL] Template error for ${flight.callsign}: ${err instanceof Error ? err.message : err}`,
+        )
         return false
     }
     if (!markerClearance) return false
+
     const dclCallsign = getDclCallsign()
     const { time, date } = formatTimestamp()
     const seq = hoppieService.getNextSeq()
@@ -1369,10 +1880,16 @@ function tryAutoSendDcl(flight: Flight): boolean {
     flight.dclPdcNumber = pdc
     flight.dclClearance = plainClearance
     flight.dclSentAt = Date.now()
+    // Proactive has no REQUEST; clear request timestamp so REQUEST timeout does not apply
+    if (reason === "proactive") {
+        flight.dclRequestedAt = undefined
+        flight.dclMessage = undefined
+    }
 
-    console.log(`[DCL AUTO] Sent clearance to ${flight.callsign} (seq=${seq}, pdc=${pdcStr}, mode=${currentDclMode})`)
+    console.log(
+        `[DCL] Sent clearance to ${flight.callsign} (seq=${seq}, pdc=${pdcStr}, reason=${reason}, mode=${currentDclMode})`,
+    )
 
-    // Regenerate and broadcast strip
     const strip = flightStore.regenerateStrip(flight.callsign)
     if (strip) {
         store.updateStripFromFlight(strip)
@@ -1380,6 +1897,19 @@ function tryAutoSendDcl(flight: Flight): boolean {
     }
 
     return true
+}
+
+/**
+ * Attempt to automatically send a DCL clearance for a flight.
+ * Called after a DCL request is received (in auto/semi mode) and when
+ * flight data updates in semi mode.
+ *
+ * Returns true if the clearance was sent automatically.
+ */
+function tryAutoSendDcl(flight: Flight): boolean {
+    if (!hoppieService || flight.dclStatus !== "REQUEST") return false
+    if (!canAutoSendDcl(flight)) return false
+    return sendDclClearance(flight, "", "auto")
 }
 
 /**
@@ -1475,7 +2005,16 @@ function handleDclRequest(from: string, packet: string) {
     // Attempt automatic DCL processing based on mode
     if (currentDclMode === "auto") {
         // AUTO mode: assign CFL + squawk if needed, then try to send
-        autoAssignCflAndSquawk(flight)
+        const assignResult = autoAssignCflAndSquawk(flight)
+        // If ASSR was deferred (CAD not seen yet), retry once after settle before auto-send
+        if (assignResult.deferredSquawk && !cliArgs.mock) {
+            setTimeout(() => {
+                const f = flightStore.getFlight(callsign!)
+                if (f && f.dclStatus === "REQUEST" && !hasValidAssignedSquawk(f.squawk)) {
+                    autoAssignCflAndSquawk(f, "DCL AUTO")
+                }
+            }, AUTO_DEP_PREP_SETTLE_MS)
+        }
 
         // In non-mock mode, assignments are processed asynchronously via the plugin roundtrip.
         // Wait a short delay to allow the plugin to process the squawk/CFL assignments
@@ -1613,17 +2152,20 @@ function broadcastLayout() {
 function maybeRefreshEssaRunwayHeaders(): boolean {
     if (!isEssaRolesConfig(staticConfig)) return false
     setEssaAssignedRunways(flightStore.getEssaAssignedRunways())
-    const placements = collectEssaRunwayPairs(
-        staticConfig.activeRunways,
-        staticConfig.myAirports,
-        staticConfig.essaAssignedRunways
+    const placements = filterEssaRunwayPlacementsForMyAor(
+        collectEssaRunwayPairs(
+            staticConfig.activeRunways,
+            staticConfig.myAirports,
+            staticConfig.essaAssignedRunways
+        )
     )
-    const fp = essaRunwayPairsFingerprint(placements)
+    const fp = `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
     if (fp === staticConfig.essaRunwayLayoutFingerprint) return false
     console.log(
-        `[ESSA] RWY headers: ${placements.map(p => p.title).join(", ") || "(none)"}`
+        `[ESSA] RWY headers: ${placements.map(p => p.title).join(", ") || "(none)"} (AOR ${essaAorLayoutKey()})`
     )
     broadcastLayout()
+    broadcastStatus()
     store.reprocessAllFlights()
     broadcastRefresh("ESSA RWY headers changed")
     return true
@@ -1657,6 +2199,22 @@ function sendGaps(socket: WebSocket) {
         sendMessage(socket, message)
     })
     console.log(`Sent ${gaps.length} gaps to client`)
+}
+
+function sendRwyFlags(socket: WebSocket) {
+    const message: RwyFlagsMessage = {
+        type: "rwyFlags",
+        active: store.getActiveRwyFlags(),
+    }
+    sendMessage(socket, message)
+}
+
+function broadcastRwyFlags(exclude?: WebSocket) {
+    const message: RwyFlagsMessage = {
+        type: "rwyFlags",
+        active: store.getActiveRwyFlags(),
+    }
+    broadcast(message, exclude)
 }
 
 /** Serialize async WS handlers per socket so Ready TOBT (TOBT+REA) cannot race */
@@ -1706,6 +2264,76 @@ function applyEfsTobt(flight: Flight, tobt: string) {
     }
 }
 
+/**
+ * Re-parse local data files and refresh network feeds (status popup button).
+ */
+async function reloadParsedAndNetworkFeeds(): Promise<void> {
+    console.log("Reloading parsed files and network feeds…")
+
+    if (fs.existsSync(airportsFile)) {
+        try { loadAirports(airportsFile) } catch (err) {
+            console.warn(`Reload airports.csv failed: ${err instanceof Error ? err.message : err}`)
+        }
+    }
+    if (fs.existsSync(runwaysFile)) {
+        try { loadRunways(runwaysFile) } catch (err) {
+            console.warn(`Reload runways.csv failed: ${err instanceof Error ? err.message : err}`)
+        }
+    }
+    if (fs.existsSync(icaoAirportsFile)) {
+        try { loadIcaoAirports(icaoAirportsFile) } catch (err) {
+            console.warn(`Reload ICAO airports failed: ${err instanceof Error ? err.message : err}`)
+        }
+    }
+
+    if (EUROSCOPE_DIR) {
+        localFeedState.euroscopeDir = { ok: true, detail: path.resolve(EUROSCOPE_DIR) }
+        try { loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
+            console.warn(`Reload stands failed: ${err instanceof Error ? err.message : err}`)
+        }
+        try { loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
+            console.warn(`Reload SID data failed: ${err instanceof Error ? err.message : err}`)
+        }
+        try { loadEseAirspace(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
+            console.warn(`Reload ESE airspace failed: ${err instanceof Error ? err.message : err}`)
+        }
+        try {
+            updateHoppieConfigFeedState(EUROSCOPE_DIR)
+        } catch (err) {
+            console.warn(`Reload Hoppie config failed: ${err instanceof Error ? err.message : err}`)
+            localFeedState.hoppieConfig = { ok: false, detail: "Reload failed" }
+        }
+        try { loadTopSkyAirspace(EUROSCOPE_DIR) } catch (err) {
+            console.warn(`Reload TopSkyAirspace failed: ${err instanceof Error ? err.message : err}`)
+        }
+        try {
+            loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
+        } catch (err) {
+            console.warn(`Reload ICAO airlines failed: ${err instanceof Error ? err.message : err}`)
+        }
+        const cdmDir = findCdmDataDir()
+        localFeedState.cdmLocal = cdmDir
+            ? { ok: true, detail: path.resolve(cdmDir) }
+            : { ok: false, detail: "Not found" }
+        if (cdmDir) pollLocalCdmDataFiles()
+    } else {
+        localFeedState.euroscopeDir = { ok: false, detail: "Not found" }
+        localFeedState.hoppieConfig = { ok: false, detail: "Not loaded" }
+        localFeedState.cdmLocal = { ok: false, detail: "Not found" }
+    }
+
+    await Promise.allSettled([
+        refreshAfvTransceivers(),
+        loadCtrData(),
+    ])
+    startAtisService()
+    forceViffPoll()
+    recalculateDclAvailability()
+    broadcastStatus()
+    broadcastUserSettings()
+    console.log("Feed reload complete")
+}
+
 // Handle typed client messages
 async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
     switch (message.type) {
@@ -1720,6 +2348,23 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             break
 
+        case "reloadFeeds":
+            await reloadParsedAndNetworkFeeds()
+            break
+
+        case "reorderStrips": {
+            // Freeze client visual order into store + flightStore (MAN sort / sticky drag prep)
+            const reordered = store.reorderTopStrips(
+                message.bayId,
+                message.sectionId,
+                message.stripIds,
+            )
+            for (const strip of reordered) {
+                broadcastStrip(strip, { exclude: socket })
+            }
+            break
+        }
+
         case "moveStrip": {
             // Get the strip before moving to capture source section
             const stripBefore = store.getStrip(message.stripId)
@@ -1732,7 +2377,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 message.position,
                 message.isBottom,
             )
-            if (result) {
+            if (!result) {
+                // Revert optimistic client move (e.g. other-owned strip)
+                if (stripBefore) {
+                    const clientStrip = stripForClient(stripBefore)
+                    if (clientStrip) {
+                        sendMessage(socket, { type: "strip", strip: clientStrip })
+                    }
+                }
+                break
+            }
+            {
                 // Broadcast the moved strip
                 broadcastStrip(result.strip, { exclude: socket })
 
@@ -1804,6 +2459,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "setRwyFlag": {
+            const result = store.setRwyFlag(message.flagId, message.active)
+            if (result.changed) {
+                broadcastRwyFlags(socket)
+                console.log(`[RWY FLAG] ${result.flagId} → ${result.active ? "on" : "off"}`)
+            }
+            break
+        }
+
         case "setSectionHeight": {
             const result = store.setSectionHeight(message.bayId, message.sectionId, message.height)
             if (result && result.changed) {
@@ -1868,10 +2532,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "CTL_GS") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
                     sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
-                // ROF: TopSky request-on-frequency; pink key 2 min (re-press resets), stay pressable
+                // ROF: try TopSky first; on failure/timeout → EFS-native (set pending ROF on strip)
                 } else if (message.action === "ROF") {
                     sendUdp(JSON.stringify({ type: "rof", callsign: strip.callsign } satisfies OutboundPluginCommand))
                     flightStore.startRofCooldown(strip.callsign, () => reevaluateAndBroadcast(strip.callsign))
+                    scheduleTopSkyRofFallback(strip.callsign)
                     reevaluateAndBroadcast(strip.callsign)
                 } else if (message.action === "toggleClearanceFlag") {
                     const clrFlight = flightStore.getFlight(strip.callsign)
@@ -1960,6 +2625,33 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 const flight = flightStore.getFlight(strip.callsign)
 
+                // HP clears on CFTO; HS clears on LINE UP or CFTO (match EFS 0.0.17)
+                if (flight && (message.action === "LU" || message.action === "CTO")) {
+                    const clearHp = message.action === "CTO"
+                    const clearHs = true
+                    if (clearHp && flight.hp) {
+                        flight.hp = undefined
+                        const scratchValue = buildCombinedScratch(flight.remarks, undefined)
+                        sendUdp(
+                            JSON.stringify({
+                                type: "setScratch",
+                                callsign: strip.callsign,
+                                value: scratchValue,
+                            } satisfies OutboundPluginCommand),
+                        )
+                    }
+                    if (clearHs && flight.hs) {
+                        flight.hs = undefined
+                        sendUdp(
+                            JSON.stringify({
+                                type: "setHs",
+                                callsign: strip.callsign,
+                                value: "",
+                            } satisfies OutboundPluginCommand),
+                        )
+                    }
+                }
+
                 // Optimistic GS for live mode (hold against runway ARR echo after TXI/TXO/…)
                 const optimisticGs: Record<string, string> = {
                     PUSH: "PUSH",
@@ -2022,9 +2714,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         case "LU":
                             flight.groundstate = "LINEUP"
+                            flight.hs = undefined
                             break
                         case "CTO":
                             flight.groundstate = "DEPA"
+                            flight.hs = undefined
+                            flight.hp = undefined
                             break
                         case "TXO":
                             flight.groundstate = "TAXI"
@@ -2144,15 +2839,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     case "assignSid":
                         pluginCommand = { type: "assignSid", callsign: strip.callsign, sid: message.value }
                         if (message.value) {
-                            const slow =
-                                !!strip.isSlow ||
-                                hasSlowRemark(strip.remarks) ||
-                                isTrackSidName(message.value)
-                            const sidAlt = resolveSidAltitude(strip.adep, message.value, slow)
-                            if (sidAlt !== undefined) {
-                                sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
-                                console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
-                                mockCflAuto = sidAlt
+                            const flightForSid = flightStore.getFlight(strip.callsign)
+                            // Keep custom CFL when already assigned (cfl > 2); same guard as preferred-SID path
+                            const hasCustomCfl =
+                                flightForSid?.cfl != null && flightForSid.cfl > 2
+                            if (!hasCustomCfl) {
+                                const slow =
+                                    !!strip.isSlow ||
+                                    hasSlowRemark(strip.remarks) ||
+                                    isTrackSidName(message.value)
+                                const sidAlt = resolveSidAltitude(strip.adep, message.value, slow)
+                                if (sidAlt !== undefined) {
+                                    sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
+                                    console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
+                                    mockCflAuto = sidAlt
+                                }
                             }
                         }
                         break
@@ -2266,6 +2967,55 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 if (flightForAssign && message.assignType === "assignArrivalRunway") {
                     flightForAssign.arrRwy = message.value || undefined
                 }
+                if (flightForAssign && message.assignType === "assignHeading") {
+                    const hdg = parseInt(message.value, 10) || 0
+                    flightForAssign.ahdg = hdg
+                    if (hdg > 0) {
+                        // Kill any pending preferred-SID-after-RWY (must not undo VECT)
+                        cancelPreferredSidAfterDepRwy(strip.id)
+                        // AHD: clear SID (preferred + assigned) and ensure VECT flag
+                        flightForAssign.sidDisplayOverride = undefined
+                        flightForAssign.sid = undefined
+                        if (!hasVectRemark(flightForAssign.remarks)) {
+                            flightForAssign.remarks = withVectRemark(flightForAssign.remarks, true) || undefined
+                            console.log(`[REMARKS] ${strip.callsign}: set VECT (AHD ${String(hdg).padStart(3, "0")})`)
+                        }
+                        flightStore.holdScratchFields(flightForAssign, 3000)
+                        const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
+                        sendUdp(JSON.stringify({
+                            type: "setScratch",
+                            callsign: strip.callsign,
+                            value: scratchValue,
+                        } satisfies OutboundPluginCommand))
+                        // Vector: only drop a forced SID/rwy (or bare SID) prefix — never inject ADEP/rwy
+                        const route = flightForAssign.route || ""
+                        if (hasForcedSidInRoute(route)) {
+                            const tokens = route.trim().split(/\s+/).filter(Boolean)
+                            tokens.shift()
+                            flightForAssign.route = tokens.join(" ")
+                            // Empty runway = drop SID/rwy prefix only (plugin); no ADEP/rwy write
+                            sendUdp(JSON.stringify({
+                                type: "assignDepartureRunway",
+                                callsign: strip.callsign,
+                                runway: "",
+                            } satisfies OutboundPluginCommand))
+                            console.log(`[ASSIGN] AHD: dropped forced SID from FPL for ${strip.callsign}`)
+                        } else {
+                            console.log(`[ASSIGN] AHD: FPL unchanged (no forced SID) for ${strip.callsign}`)
+                        }
+                    } else if (hasVectRemark(flightForAssign.remarks)) {
+                        // Clearing AHD removes auto VECT
+                        flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
+                        console.log(`[REMARKS] ${strip.callsign}: clear VECT (AHD cleared)`)
+                        flightStore.holdScratchFields(flightForAssign, 3000)
+                        const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
+                        sendUdp(JSON.stringify({
+                            type: "setScratch",
+                            callsign: strip.callsign,
+                            value: scratchValue,
+                        } satisfies OutboundPluginCommand))
+                    }
+                }
 
                 // In mock mode, apply assignments locally since there's no ES plugin roundtrip
                 if (cliArgs.mock) {
@@ -2331,12 +3081,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 } else if (
                     message.assignType === "assignSid" ||
+                    message.assignType === "assignHeading" ||
                     message.assignType === "assignDepartureRunway" ||
                     message.assignType === "assignArrivalRunway" ||
                     message.assignType === "assignCfl" ||
                     message.assignType === "assignAppClr"
                 ) {
-                    // Optimistic strip SID/RWY/CFL display before EuroScope roundtrip
+                    // Optimistic strip SID/RWY/CFL/AHD display before EuroScope roundtrip
                     const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                     if (updatedStrip) {
                         store.updateStripFromFlight(updatedStrip)
@@ -2537,61 +3288,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const flight = flightStore.getFlight(strip.callsign)
             if (!flight) break
 
-            // Determine the airport for the template
-            const dclAirport = staticConfig.myAirports.find(
-                (a) => a === flight.origin,
-            )
-            if (!dclAirport) {
-                console.log(`[DCL] No DCL airport found for ${strip.callsign}`)
-                break
-            }
-
-            // Build template data
-            const templateData = buildDclTemplateData(flight, message.remarks)
-
-            // Fill template with @ markers for CPDLC
-            let markerClearance: string | undefined
-            let plainClearance: string | undefined
-            try {
-                markerClearance = fillDclTemplateWithMarkers(dclAirport, templateData)
-                plainClearance = fillDclTemplate(dclAirport, templateData)
-            } catch (err) {
-                console.error(`[DCL] Template error for ${strip.callsign}: ${err instanceof Error ? err.message : err}`)
-                break
-            }
-            if (!markerClearance) {
-                console.log(`[DCL] No template found for ${dclAirport}`)
-                break
-            }
-
-            // Send CPDLC
-            if (hoppieService) {
-                const dclCallsign = getDclCallsign()
-                const { time, date } = formatTimestamp()
-                const seq = hoppieService.getNextSeq()
-                const pdc = hoppieService.getNextPdc()
-                const pdcStr = String(pdc).padStart(3, "0")
-
-                hoppieService.sendMessage(
-                    strip.callsign,
-                    "cpdlc",
-                    `/data2/${seq}//WU/CLD ${time} ${date} ${dclCallsign} PDC ${pdcStr} ${markerClearance}`,
-                )
-
-                flight.dclStatus = "SENT"
-                flight.dclSeqNumber = seq
-                flight.dclPdcNumber = pdc
-                flight.dclClearance = plainClearance
-                flight.dclSentAt = Date.now()
-
-                console.log(`[DCL] Sent clearance to ${strip.callsign} (seq=${seq}, pdc=${pdcStr})`)
-            }
-
-            // Regenerate and broadcast strip
-            const sendStrip = flightStore.regenerateStrip(strip.callsign)
-            if (sendStrip) {
-                store.updateStripFromFlight(sendStrip)
-                broadcastStrip(sendStrip)
+            // Proactive = controller-initiated (no prior REQUEST). Same CLD CPDLC as
+            // REQUEST→Send; never sends RCD RECEIVED / STANDBY (that is handleDclRequest only).
+            const reason =
+                message.proactive && flight.dclStatus !== "REQUEST" ? "proactive" : "manual"
+            if (!sendDclClearance(flight, message.remarks, reason)) {
+                console.log(`[DCL] Could not send clearance for ${strip.callsign} (reason=${reason})`)
             }
             break
         }
@@ -2642,6 +3344,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.autoParkEnabled = incoming.autoParkEnabled
                 update.autoParkEnabled = incoming.autoParkEnabled
             }
+            if (typeof incoming.autoDepSquawkCfl === "boolean") {
+                currentUiSettings.autoDepSquawkCfl = incoming.autoDepSquawkCfl
+                update.autoDepSquawkCfl = incoming.autoDepSquawkCfl
+            }
+            if (typeof incoming.equalBayColumns === "boolean") {
+                currentUiSettings.equalBayColumns = incoming.equalBayColumns
+                update.equalBayColumns = incoming.equalBayColumns
+            }
+            if (typeof incoming.showTobtSetByA === "boolean") {
+                currentUiSettings.showTobtSetByA = incoming.showTobtSetByA
+                update.showTobtSetByA = incoming.showTobtSetByA
+            }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
                 console.log(`[SETTINGS] Updated: ${JSON.stringify(update)}`)
@@ -2679,6 +3393,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 )
                 store.reprocessAllFlights()
                 broadcastStatus()
+                broadcastLayout()
                 broadcastRefresh("ESSA roles changed")
             }
             break
@@ -2738,6 +3453,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     console.log(`[CREATE] Note strip ${strip.id} created`)
                     broadcastStrip(strip)
                 }
+            } else if (message.stripType === "vehicle") {
+                const strip = store.createVehicleStrip(
+                    message.targetBayId,
+                    message.targetSectionId,
+                    message.position,
+                    message.isBottom,
+                    message.airport,
+                )
+                if (strip) {
+                    console.log(`[CREATE] Vehicle strip ${strip.id} created`)
+                    broadcastStrip(strip)
+                }
             } else {
                 // VFR DEP / VFR ARR / CROSS
                 if (!message.callsign) {
@@ -2755,9 +3482,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.isBottom,
                 )
                 if (result) {
-                    store.updateStripFromFlight(result.strip)
-                    broadcastStrip(result.strip)
-                    console.log(`[CREATE] ${message.stripType} strip for ${message.callsign} -> ${result.strip.sectionId}`)
+                    const created = store.updateStripFromFlight(result.strip, {
+                        allowPositionChange: true,
+                    })
+                    broadcastStrip(created)
+                    console.log(`[CREATE] ${message.stripType} strip for ${message.callsign} -> ${created.sectionId}`)
 
                     // Send createFlightPlan command to EuroScope plugin to create/amend flight plan
                     if (message.stripType === "vfrDep") {
@@ -2797,8 +3526,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         for (const cs of result.shiftedCallsigns) {
                             const shifted = flightStore.regenerateStrip(cs)
                             if (shifted) {
-                                store.updateStripFromFlight(shifted)
-                                broadcastStrip(shifted)
+                                const applied = store.updateStripFromFlight(shifted, {
+                                    allowPositionChange: true,
+                                })
+                                broadcastStrip(applied)
                             }
                         }
                     }
@@ -2820,7 +3551,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         text = split[1]!.trim()
                         hpFromText = split[2]!.trim().toUpperCase()
                     }
+                    const prevSlow = hasSlowRemark(flight.remarks)
                     const nextRemarks = text || undefined
+                    const nextSlow = hasSlowRemark(nextRemarks)
                     flightStore.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
                     flight.remarks = nextRemarks
                     if (hpFromText) flight.hp = hpFromText
@@ -2829,6 +3562,23 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flightStore.holdScratchFields(flight, 3000)
                     const scratchValue = buildCombinedScratch(flight.remarks, flight.hp)
                     sendUdp(JSON.stringify({ type: "setScratch", callsign: remarkStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
+                    // Clearing SLOW: re-sync CFL to non-slow climb (fixes 3.0 stuck after SLOW off)
+                    if (prevSlow && !nextSlow && flight.origin && (!flight.cfl || flight.cfl === 3000)) {
+                        const preferred = resolvePreferredSidForFlight(flight)
+                        const sidForCfl = preferred || flight.sid
+                        if (sidForCfl) {
+                            const sidAlt = resolveSidAltitude(flight.origin, sidForCfl, false)
+                            if (sidAlt !== undefined) {
+                                sendUdp(JSON.stringify({
+                                    type: "assignCfl",
+                                    callsign: flight.callsign,
+                                    altitude: sidAlt,
+                                } satisfies OutboundPluginCommand))
+                                flight.cfl = sidAlt
+                                console.log(`[REMARKS] ${flight.callsign}: SLOW cleared → CFL ${sidAlt}`)
+                            }
+                        }
+                    }
                     const updatedStrip = flightStore.regenerateStrip(remarkStrip.callsign)
                     if (updatedStrip) {
                         store.updateStripFromFlight(updatedStrip)
@@ -2887,6 +3637,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 // even if local optimistic updates race with strip insertions/re-renders.
                 broadcastStrip(updatedStrip)
                 console.log(`[NOTE] Updated note ${message.stripId}: "${message.text.substring(0, 30)}"`)
+            }
+            break
+        }
+
+        case "updateVehicleStrip": {
+            const updatedStrip = store.updateVehicleStripField(message.stripId, message.field, message.text)
+            if (updatedStrip) {
+                broadcastStrip(updatedStrip)
+                console.log(`[VEHICLE] ${message.stripId} ${message.field}="${message.text.substring(0, 40)}"`)
             }
             break
         }
@@ -2990,6 +3749,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case "viffReadyTobt": {
+            // Ready TOBT: always TOBT=now (UTC HHMM), then always REA.
+            // Never gated on CTOT / TOBT≠EOBT; client `tobt` is ignored (Ready means now).
             const readyStrip = store.getStrip(message.stripId)
             if (!readyStrip) break
             if (readyStrip.stripType !== "departure") break
@@ -3002,7 +3763,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 String(now.getUTCHours()).padStart(2, "0") +
                 String(now.getUTCMinutes()).padStart(2, "0")
             const taxi = flight.taxiMinutes && flight.taxiMinutes > 0 ? flight.taxiMinutes : 15
-            // ES-first TOBT, then REA on network
+            // ES-first TOBT=now, then always REA on network (CTOT irrelevant)
             sendUdp(JSON.stringify({
                 type: "setTobt",
                 callsign: readyStrip.callsign,
@@ -3023,7 +3784,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const reaOk = await viffService.setRea(readyStrip.callsign, true)
             if (reaOk) {
                 flight.cdmSts = "REA"
-                console.log(`[VIFF] Ready REA set ${readyStrip.callsign}`)
+                console.log(`[VIFF] Ready REA set ${readyStrip.callsign} (CTOT=${flight.ctot ?? "none"})`)
             } else {
                 console.error(`[VIFF] Ready REA failed for ${readyStrip.callsign}`)
             }
@@ -3164,12 +3925,14 @@ wsServer.on("connection", (socket) => {
     sendLayout(socket)
     sendStrips(socket)
     sendGaps(socket)
+    sendRwyFlags(socket)
     sendStatus(socket)
     sendDclStatus(socket)
     sendUserSettings(socket)
     sendAtisUpdate(socket)
     sendConfigList(socket)
     sendControllers(socket)
+    sendMessage(socket, { type: "aupR16", ...getAupR16Status() })
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -3347,6 +4110,60 @@ app.get("/api/essa-map-freq", (req, res) => {
     })
 })
 
+/** Resolve live (or ESE / default) frequency + covering login for an APP/DEP sector. */
+function resolveSectorDisplay(
+    sector: AppDepSector,
+    fallback: string
+): { frequency: string; callsign: string | null } {
+    const transfer = resolveAppDepTransfer(sector)
+    if (transfer && transfer.displayFrequency > 0) {
+        return {
+            frequency: transfer.displayFrequency.toFixed(3),
+            callsign: transfer.transferCallsign || null,
+        }
+    }
+    const eseFreq = getEsePositionBySi(appDepSectorToSi(sector))?.frequency
+    return {
+        frequency: eseFreq && eseFreq > 0 ? eseFreq.toFixed(3) : fallback,
+        callsign: null,
+    }
+}
+
+/**
+ * ESSA DEP RWY info strip (VatIRIS-style): runway, turn, hold phraseology,
+ * east / LÅGFART exit groups with live transfer freqs.
+ * Query: config=<id>
+ */
+app.get("/api/essa-dep-info", (req, res) => {
+    const configId = String(req.query.config || "").trim()
+    if (!configId) {
+        res.status(400).json({
+            error: "Missing parameters",
+            usage: "/api/essa-dep-info?config=1",
+        })
+        return
+    }
+    const info = resolveEssaDepInfoStrip(configId)
+    if (!info) {
+        res.status(404).json({ error: `Unknown ESSA config: ${configId}` })
+        return
+    }
+    const primary = resolveSectorDisplay(info.primarySector, info.primaryDefaultFreq)
+    res.json({
+        ...info,
+        primaryFreq: primary.frequency,
+        primaryCallsign: primary.callsign,
+        rows: info.rows.map((row) => {
+            const resolved = resolveSectorDisplay(row.sector, row.defaultFreq)
+            return {
+                ...row,
+                frequency: resolved.frequency,
+                callsign: resolved.callsign,
+            }
+        }),
+    })
+})
+
 app.get("/api/preferred-sid", (req, res) => {
     const airport = ((req.query.airport as string) || "").toUpperCase()
     const runway = req.query.runway as string
@@ -3447,8 +4264,68 @@ app.get("/api/airport-name", (req, res) => {
     res.json({ name: info?.name ?? getIcaoAirportName(icao) ?? null, country: info?.country ?? null })
 })
 
+/**
+ * AUP R16 status (LFV daily use plan, cached ~1 h like VatIRIS).
+ * { active, topAltitudeFt, from, to, suggestConfigId } — active = R16/ESR16 active now AND upper limit > 1600 ft.
+ * suggestConfigId ('9C' | '15C' | null) is only a hint for clients in AUTO RWY mode; manual config locks are client-side.
+ */
+function handleAupR16(req: express.Request, res: express.Response) {
+    ensureAupR16Service()
+    getAupR16StatusFresh(getEssaOps())
+        .then((status) => res.json(status))
+        .catch((err) => {
+            console.warn("aup r16 status failed:", err)
+            res.status(502).json({ error: "AUP unavailable" })
+        })
+}
+app.get("/api/aup/r16", handleAupR16)
+
 app.get("/api/dcl/status", (req, res) => {
     res.json({ status: currentDclStatus, error: currentDclError })
+})
+
+/**
+ * Check whether a pilot callsign is online on Hoppie (for proactive DCL from CLR).
+ * Only meaningful when Hoppie/DCL is connected. Optionally returns a clearance preview.
+ */
+app.get("/api/hoppie/online/:callsign", async (req, res) => {
+    const callsign = String(req.params.callsign ?? "")
+        .trim()
+        .toUpperCase()
+    if (!callsign) {
+        res.status(400).json({ error: "Missing callsign", online: false })
+        return
+    }
+    if (!hoppieService?.isConnected()) {
+        res.json({ online: false })
+        return
+    }
+
+    try {
+        const online = await hoppieService.checkCallsignOnline(callsign)
+        let clearancePreview: string | undefined
+        if (online) {
+            const flight = flightStore.getFlight(callsign)
+            const dclAirport = flight
+                ? staticConfig.myAirports.find((a) => a === flight.origin)
+                : undefined
+            if (flight && dclAirport) {
+                try {
+                    clearancePreview = fillDclTemplate(dclAirport, buildDclTemplateData(flight, ""))
+                } catch (err) {
+                    console.warn(
+                        `[DCL] Preview error for ${callsign}: ${err instanceof Error ? err.message : err}`,
+                    )
+                }
+            }
+        }
+        res.json({ online, clearancePreview })
+    } catch (err) {
+        console.warn(
+            `[HOPPIE] Online API failed for ${callsign}: ${err instanceof Error ? err.message : err}`,
+        )
+        res.json({ online: false })
+    }
 })
 
 let publicDir = path.resolve(__dirname, "../public")
@@ -3502,14 +4379,19 @@ udpIn.on("message", (msg, rinfo) => {
     recordMessage(text)
     try {
         const data = JSON.parse(text)
+        // connectionType 0 = logged off — do not treat as plugin-alive heartbeat
+        if (!(data.type === "connectionTypeUpdate" && data.connectionType === 0)) {
+            notePluginUdp()
+        }
 
-        // Plugin ROF send result — clear optimistic cooldown on failure and toast in EFS
+        // Plugin ROF send result — success clears fallback; failure → EFS-native ROF
         if (data.type === "rofResult") {
             const callsign = typeof data.callsign === "string" ? data.callsign.toUpperCase() : ""
             const ok = data.ok === true
             const error = typeof data.error === "string" ? data.error : "Failed to send ROF"
             if (!callsign) return
             if (ok) {
+                clearTopSkyRofFallback(callsign)
                 console.log(`[ROF] sent ok for ${callsign}`)
                 // Clear /ROF/… left on the scratch vehicle (TopSky often does not)
                 const vehicle = typeof data.vehicle === "string" ? data.vehicle.toUpperCase() : ""
@@ -3521,15 +4403,9 @@ udpIn.on("message", (msg, rinfo) => {
                 }
                 return
             }
-            console.log(`[ROF] send failed for ${callsign}: ${error}`)
-            flightStore.clearRofCooldown(callsign)
-            reevaluateAndBroadcast(callsign)
-            const notify: NotifyMessage = {
-                type: "notify",
-                level: "error",
-                text: `ROF failed for ${callsign}: ${error}`,
-            }
-            broadcast(notify)
+            console.log(`[ROF] TopSky failed for ${callsign}: ${error} — EFS-native fallback`)
+            clearTopSkyRofFallback(callsign)
+            applyEfsNativeRof(callsign, error)
             return
         }
 
@@ -3537,6 +4413,7 @@ udpIn.on("message", (msg, rinfo) => {
         if (data.type === "connectionTypeUpdate" && data.connectionType === 0) {
             console.log("Connection lost (connectionType 0), clearing stores")
             store.clear()
+            clearAutoDepPrepSession()
             setMyCallsign("")
             setMyAirports([])
             setIsController(false)
@@ -3544,6 +4421,9 @@ udpIn.on("message", (msg, rinfo) => {
             setMyPositionId(undefined)
             clearOnlineControllers()
             pendingPluginRefreshAfterReconnect = true
+            pluginConnected = false
+            lastPluginUdpAt = 0
+            reportedPluginVersion = undefined
             broadcastStatus()
             broadcastRefresh("Connection lost")
 
@@ -3594,6 +4474,9 @@ udpIn.on("message", (msg, rinfo) => {
                         : 'unknown'
                     console.log(`Online controllers changed - effective roles: ${rolesLog}`)
                     reprocessAllStripsForRoleChange("Online controllers changed")
+                } else if (isEssaRolesConfig(staticConfig)) {
+                    // TWR AOR columns can change without physical ESSA roles changing
+                    maybeRefreshEssaRunwayHeaders()
                 }
             }
             return
@@ -3611,6 +4494,8 @@ udpIn.on("message", (msg, rinfo) => {
                     : 'unknown'
                 console.log(`Controller disconnected: ${msg.callsign} - effective roles: ${rolesLog}`)
                 reprocessAllStripsForRoleChange(`Controller disconnected: ${msg.callsign}`)
+            } else if (isEssaRolesConfig(staticConfig)) {
+                maybeRefreshEssaRunwayHeaders()
             }
             return
         }
@@ -3620,6 +4505,15 @@ udpIn.on("message", (msg, rinfo) => {
             const msg = data as MyselfUpdateMessage
             const previousCallsign = staticConfig.myCallsign
             const callsignChanged = previousCallsign !== msg.callsign
+
+            // Plugin reports its own compiled version — only trust UDP, never a DLL on disk
+            if (typeof msg.pluginVersion === "string" && msg.pluginVersion.trim()) {
+                const v = msg.pluginVersion.trim()
+                if (reportedPluginVersion !== v) {
+                    console.log(`EuroScope plugin version: ${v}`)
+                }
+                reportedPluginVersion = v
+            }
 
             if (callsignChanged) {
                 // Drop previous (and current) self from onlineControllers to avoid ghost roles
@@ -3733,12 +4627,15 @@ udpIn.on("message", (msg, rinfo) => {
                         broadcastLayout()
                     }
                     broadcastAtisUpdate()
+                    // ARR/DEP changed → R16 suggestConfigId may change
+                    checkAupR16Change()
                 }
 
                 // Start ATIS polling if not already running
                 if (!atisService) {
                     startAtisService()
                 }
+                ensureAupR16Service()
             }
 
             // Broadcast updated status to all clients
@@ -3841,11 +4738,26 @@ udpIn.on("message", (msg, rinfo) => {
                     broadcastStrip(strip)
                 }
                 console.log(`Strips updated: ${result.strips.map(s => s.id).join(", ")}`)
+                if (result.multiUpdates) {
+                    for (const u of result.multiUpdates) {
+                        if (u.isNew && u.strip) {
+                            const f = flightStore.getFlight(u.strip.callsign)
+                            if (f) maybeAutoPrepNewDeparture(u.strip, f)
+                        }
+                    }
+                }
                 if (result.setScratchValue !== undefined && result.strip) {
                     sendUdp(JSON.stringify({
                         type: "setScratch",
                         callsign: result.strip.callsign,
                         value: result.setScratchValue
+                    } satisfies OutboundPluginCommand))
+                }
+                if (result.clearHs && result.strip) {
+                    sendUdp(JSON.stringify({
+                        type: "setHs",
+                        callsign: result.strip.callsign,
+                        value: "",
                     } satisfies OutboundPluginCommand))
                 }
             } else if (result.strip) {
@@ -3881,6 +4793,8 @@ udpIn.on("message", (msg, rinfo) => {
                     console.log(`Strip ${result.strip.callsign} restored -> ${result.strip.sectionId}`)
                 } else if (result.isNew) {
                     console.log(`Strip ${result.strip.callsign} created -> ${result.strip.sectionId}`)
+                    const newFlight = flightStore.getFlight(result.strip.callsign)
+                    if (newFlight) maybeAutoPrepNewDeparture(result.strip, newFlight)
                 } else if (result.sectionChanged) {
                     console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
                 } else {
@@ -3892,6 +4806,20 @@ udpIn.on("message", (msg, rinfo) => {
                         type: "setScratch",
                         callsign: result.strip.callsign,
                         value: result.setScratchValue
+                    } satisfies OutboundPluginCommand))
+                }
+                if (result.clearHs) {
+                    sendUdp(JSON.stringify({
+                        type: "setHs",
+                        callsign: result.strip.callsign,
+                        value: "",
+                    } satisfies OutboundPluginCommand))
+                }
+                if (result.assignDepRwy) {
+                    sendUdp(JSON.stringify({
+                        type: "assignDepartureRunway",
+                        callsign: result.strip.callsign,
+                        runway: result.assignDepRwy,
                     } satisfies OutboundPluginCommand))
                 }
 
@@ -3927,6 +4855,12 @@ udpIn.on("message", (msg, rinfo) => {
                 }
             }
 
+            // CAD (incl. Refresh bulk) may arrive after strip create — finish deferred DEP PREP.
+            // Also runs when CAD has no strip yet (ASSR stored; strip create will see it).
+            if (data.type === "controllerAssignedDataUpdate" && typeof data.callsign === "string") {
+                flushDeferredAutoDepPrep(data.callsign)
+            }
+
             // ESSA: add RWY headers for FPL-assigned runways not already in RWY config
             if (result.strip || (result.strips && result.strips.length > 0)) {
                 maybeRefreshEssaRunwayHeaders()
@@ -3946,12 +4880,64 @@ udpIn.on("message", (msg, rinfo) => {
         console.error("Raw message:", msg.toString("utf8"))
     }
 })
-udpIn.on("error", (err) => {
+function scheduleUdpRebind(delayMs = 5000) {
+    if (udpRebindTimer) return
+    udpRebindTimer = setTimeout(() => {
+        udpRebindTimer = undefined
+        if (udpInBound) return
+        try {
+            udpIn.bind(udpInPort)
+        } catch (e) {
+            console.error(`[UDP] Rebind ${udpInPort} failed:`, e)
+            scheduleUdpRebind(delayMs)
+        }
+    }, delayMs)
+}
+
+function noteUdpBound() {
+    const wasError = !!udpBindError
+    udpInBound = true
+    udpBindError = undefined
+    if (udpRebindTimer) {
+        clearTimeout(udpRebindTimer)
+        udpRebindTimer = undefined
+    }
+    console.log(`UDP listener bound to port ${udpInPort}`)
+    if (wasError) broadcastStatus()
+}
+
+function noteUdpBindConflict() {
+    udpInBound = false
+    const detail =
+        `UDP ${udpInPort} in use (another VatEFS/ES?) - retrying; EFS↔plugin half-duplex until free`
+    if (udpBindError !== detail) {
+        udpBindError = detail
+        console.error(
+            `[UDP] Port ${udpInPort} already in use (WSAEADDRINUSE/10048). ` +
+                `Another VatEFS / EuroScope bridge may be running - EFS↔plugin will be half-dead until the port is free.`,
+        )
+        broadcastStatus()
+    }
+    scheduleUdpRebind(5000)
+}
+
+udpIn.on("listening", () => {
+    noteUdpBound()
+})
+udpIn.on("error", (err: NodeJS.ErrnoException) => {
+    const code = err.code || ""
+    if (code === "EADDRINUSE" || code === "10048") {
+        noteUdpBindConflict()
+        return
+    }
     console.error("UDP receive error:", err)
 })
-udpIn.bind(udpInPort, () => {
-    console.log(`UDP listener bound to port ${udpInPort}`)
-})
+try {
+    udpIn.bind(udpInPort)
+} catch (e) {
+    console.error(`[UDP] Initial bind ${udpInPort} failed:`, e)
+    noteUdpBindConflict()
+}
 
 // DCL timeout check - cancel clearances that haven't received WILCO/UNABLE within 10 minutes,
 // and auto-reject DCL requests that haven't been handled within 10 minutes.
@@ -4074,18 +5060,21 @@ function applyViffPoll(result: ViffPollResult) {
             const newCtot = ctotEntry?.ctot ?? cdmEntry?.ctot
             const newReason = ctotEntry?.reason
             const newSts = stsByCs.get(cs) ?? cdmEntry?.cdmSts
-            // TOBT/TSAT from CDM airport feed (ESSA), but prefer recent local CDM_data from ES
+            // TOBT/TSAT/TTOT from CDM airport feed (ESSA), but prefer recent local CDM_data from ES
             const LOCAL_CDM_PREFER_MS = 120_000
             const localFresh = flight.localCdmAt != null && (Date.now() - flight.localCdmAt) < LOCAL_CDM_PREFER_MS
             let newTobt = cdmEntry?.tobt
             let newTsat = cdmEntry?.tsat
+            let newTtot = cdmEntry?.ttot
             if (localFresh) {
                 if (flight.localCdmTobt !== undefined) newTobt = flight.localCdmTobt
                 if (flight.localCdmTsat !== undefined) newTsat = flight.localCdmTsat
+                if (flight.localCdmTtot !== undefined) newTtot = flight.localCdmTtot
             } else if (flight.localCdmAt != null) {
                 // Local pin expired — fall back to HTTP
                 flight.localCdmTobt = undefined
                 flight.localCdmTsat = undefined
+                flight.localCdmTtot = undefined
                 flight.localCdmAt = undefined
             }
             // HTTP caught up to local ES values — drop the pin
@@ -4093,10 +5082,12 @@ function applyViffPoll(result: ViffPollResult) {
                 flight.localCdmAt != null &&
                 cdmEntry &&
                 cdmEntry.tobt === flight.localCdmTobt &&
-                cdmEntry.tsat === flight.localCdmTsat
+                cdmEntry.tsat === flight.localCdmTsat &&
+                (flight.localCdmTtot === undefined || cdmEntry.ttot === flight.localCdmTtot)
             ) {
                 flight.localCdmTobt = undefined
                 flight.localCdmTsat = undefined
+                flight.localCdmTtot = undefined
                 flight.localCdmAt = undefined
             }
             const newTobtSetBy = cdmEntry?.tobtSetBy
@@ -4151,13 +5142,17 @@ function applyViffPoll(result: ViffPollResult) {
                 flight.cdmSts = newSts
                 changed = true
             }
-            // Do not clear TOBT/TSAT when HTTP omits the flight
+            // Do not clear TOBT/TSAT/TTOT when HTTP omits the flight
             if (newTobt !== undefined && flight.tobt !== newTobt) {
                 flight.tobt = newTobt
                 changed = true
             }
             if (newTsat !== undefined && flight.tsat !== newTsat) {
                 flight.tsat = newTsat
+                changed = true
+            }
+            if (newTtot !== undefined && flight.ttot !== newTtot) {
+                flight.ttot = newTtot
                 changed = true
             }
             // Sync set-by:
@@ -4190,6 +5185,7 @@ function applyViffPoll(result: ViffPollResult) {
             flight.ctotReason ||
             flight.tobt ||
             flight.tsat ||
+            flight.ttot ||
             flight.tobtSetBy
         ) {
             flight.ctot = undefined
@@ -4199,9 +5195,11 @@ function applyViffPoll(result: ViffPollResult) {
             flight.ctotReason = undefined
             flight.tobt = undefined
             flight.tsat = undefined
+            flight.ttot = undefined
             flight.tobtSetBy = undefined
             flight.localCdmTobt = undefined
             flight.localCdmTsat = undefined
+            flight.localCdmTtot = undefined
             flight.localCdmAt = undefined
             changed = true
         }
@@ -4221,6 +5219,8 @@ const viffService = new ViffService(
     () => staticConfig.myAirports,
     cliArgs.viffBaseUrl,
 )
+getViffHealth = () => viffService.getHealth()
+forceViffPoll = () => viffService.forcePoll()
 viffService.start()
 
 // ─── Local CDM_data_*.txt (written by CDM plugin next to CDM.dll) ───────────
@@ -4327,7 +5327,7 @@ function pollLocalCdmDataFiles() {
     if (result?.strips) {
         for (const strip of result.strips) {
             broadcastStrip(strip)
-            console.log(`[CDM] Local file update ${strip.callsign} TOBT=${strip.tobt || "-"} TSAT=${strip.tsat || "-"}`)
+            console.log(`[CDM] Local file update ${strip.callsign} TOBT=${strip.tobt || "-"} TSAT=${strip.tsat || "-"} TTOT=${strip.ttot || "-"}`)
         }
     }
 }
@@ -4335,8 +5335,10 @@ function pollLocalCdmDataFiles() {
 const cdmDataDir = findCdmDataDir()
 if (cdmDataDir) {
     console.log(`CDM_data directory: ${cdmDataDir}`)
+    localFeedState.cdmLocal = { ok: true, detail: path.resolve(cdmDataDir) }
     setInterval(pollLocalCdmDataFiles, CDM_DATA_POLL_MS)
     pollLocalCdmDataFiles()
 } else {
     console.warn("CDM_data directory not found under EuroScope package Plugins")
+    localFeedState.cdmLocal = { ok: false, detail: "Not found" }
 }
