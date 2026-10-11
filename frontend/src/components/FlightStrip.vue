@@ -26,9 +26,14 @@
     <div class="efs-popup-menu" @click.stop>
       <div class="efs-popup-header">{{ strip.callsign }}</div>
       <div class="efs-popup-list">
-        <button v-if="isDeparture && canEditAssignedData" type="button" class="efs-popup-item" @click="onClncMenuClick">Clearance</button>
+        <button v-if="isDeparture && canEditAssignedData && !isPaperEmptyFlightHolder" type="button" class="efs-popup-item" @click="onClncMenuClick">Clearance</button>
         <button v-if="!isLocalOnlyStrip" type="button" class="efs-popup-item" @click="onFplClick">Flightplan</button>
-        <button v-if="strip.transferPending === 'out' && !isLocalOnlyStrip && store.isController" type="button" class="efs-popup-item" @click="onAssumeClick">Assume</button>
+        <button
+          v-if="canAssumeFromMenu"
+          type="button"
+          class="efs-popup-item"
+          @click="onAssumeClick"
+        >Assume</button>
         <button v-if="strip.transferPending === 'in' && !isLocalOnlyStrip && store.isController" type="button" class="efs-popup-item" @click="onRefuseClick">Refuse</button>
         <button v-if="strip.isAssumed && !isLocalOnlyStrip" type="button" class="efs-popup-item" @click="onReleaseClick">Release</button>
         <button
@@ -137,11 +142,20 @@
     :class="[stripTypeClass, {
       dragging: isDragging,
       'is-bottom': strip.bottom,
-      'strip-note-layout': isNote,
+      'strip-note-layout': isNote && !isPaperEmptyFlightHolder,
       'strip-vehicle-layout': isVehicle,
+      'look-paper': store.isPaperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'paper-info-holder': store.isPaperLook && isPaperInfoHolder,
+      'paper-empty-frame': store.isPaperLook && paperInfoKind === 'empty_frame',
+      'paper-empty-arr': store.isPaperLook && paperInfoKind === 'empty_arr',
+      'paper-empty-dep': store.isPaperLook && paperInfoKind === 'empty_dep',
       'auto-move-hidden': isAutoMoving,
+      'print-anim-hidden': isPrinting,
       'layout-arr': isArrLayout,
-      'layout-dep': !isNote && !isVehicle && !isArrLayout,
+      'layout-dep':
+        (!isNote && !isVehicle && !isArrLayout) ||
+        paperInfoKind === 'empty_dep' ||
+        paperInfoKind === 'empty_frame',
       'top-expanded': topExpanded,
       'bottom-expanded': bottomExpanded,
       'is-large-view': isLargeView,
@@ -150,7 +164,7 @@
       'no-drag': !canDragStrip && !isLargeView,
     }]"
     :data-strip-id="strip.id"
-    :draggable="canDragStrip"
+    :draggable="canDragStrip ? true : false"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart"
@@ -160,8 +174,60 @@
     @contextmenu.prevent="onContextMenu"
     @click="onStripClick">
 
-    <!-- NOTE STRIP (scribble-only — tap opens zoom pen) -->
-    <template v-if="isNote">
+    <!-- PAPER INFO / plain empty (red-black, no grid) — framed blanks use flight grid below -->
+    <template v-if="isNote && paperInfoKind && !isPaperEmptyFlightHolder">
+      <div
+        class="paper-info-body"
+        :class="`paper-info-${paperInfoKind}`"
+        @click.stop="onNoteClick"
+        @touchend="onNoteTouch"
+      >
+        <div v-if="paperInfoKind === 'hinder'" class="paper-info-full fit-font">HINDER</div>
+        <div v-else-if="paperInfoKind === 'bogsering'" class="paper-info-panel paper-info-bogsering-text fit-font">Bogsering</div>
+        <div v-else-if="paperInfoKind === 'snorojning'" class="paper-info-panel paper-info-panel-2 fit-font">
+          <span>Snöröjning</span>
+          <span>Pågår -&gt;</span>
+        </div>
+        <div v-else-if="paperInfoKind === 'prel_rojning'" class="paper-info-panel paper-info-panel-2 fit-font">
+          <span>Prel nästa</span>
+          <span>röjning -&gt;</span>
+        </div>
+        <!-- empty: blank paper body for scribbles -->
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('body')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'pi' + i"
+            class="strip-scribble-stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
+      </div>
+      <!-- Paper: delete via drag to trash — no X -->
+      <div v-if="!isLargeView && !store.isPaperLook" class="note-actions">
+        <StripCloseButton @click="onNoteClose" />
+      </div>
+    </template>
+
+    <!-- NOTE STRIP (scribble-only — tap opens zoom pen; ARR/DEP blanks use paper grid below) -->
+    <template v-else-if="isNote && !isPaperEmptyFlightHolder">
       <div class="note-content" @click.stop="onNoteClick" @touchend="onNoteTouch">
         <svg
           v-if="showStripScribbles"
@@ -173,7 +239,8 @@
             v-for="(stroke, i) in stripScribbles"
             :key="'n' + i"
             class="strip-scribble-stroke"
-            :points="stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -182,6 +249,7 @@
             v-if="activeScribbleStroke"
             class="strip-scribble-stroke"
             :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -189,7 +257,7 @@
         </svg>
         <span v-else class="note-display note-empty">Click to scribble...</span>
       </div>
-      <div v-if="!isLargeView" class="note-actions">
+      <div v-if="!isLargeView && !store.isPaperLook" class="note-actions">
         <StripCloseButton @click="onNoteClose" />
       </div>
     </template>
@@ -207,7 +275,8 @@
             v-for="(stroke, i) in stripScribbles"
             :key="'v' + i"
             class="strip-scribble-stroke"
-            :points="stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -216,6 +285,7 @@
             v-if="activeScribbleStroke"
             class="strip-scribble-stroke"
             :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -281,6 +351,419 @@
       </div>
     </template>
 
+    <!-- Paper FPS strip (ESGG) — VatFSP field grid in SAAB outer size -->
+    <template v-else-if="store.isPaperLook || isPaperEmptyFlightHolder">
+      <div
+        class="paper-flight"
+        :class="isArrLayout ? 'paper-flight-arr' : 'paper-flight-dep'"
+        @click.stop="isPaperEmptyFlightHolder ? onNoteClick() : undefined"
+        @touchend="isPaperEmptyFlightHolder ? onNoteTouch($event) : undefined"
+      >
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('body')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'p' + i"
+            class="strip-scribble-stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
+
+        <div class="paper-grid">
+          <!-- Left: 4 equal rows — C/S · TAS (empty ARR) · FRUL+ATYP+WTC · ASSR -->
+          <div class="pg-left pg-vline" :class="isArrLayout ? 'pg-left-arr' : 'pg-left-dep'">
+            <div
+              class="pg-cs"
+              :title="callsignBoxTitle"
+              @click.stop="onCallsignClick"
+              @contextmenu.stop.prevent="onContextMenu"
+              @touchend="onCallsignTouch"
+            >
+              <span
+                class="pg-cs-text"
+                :class="{
+                  'callsign-no-match': strip.hasMatchingFlight === false,
+                  'callsign-transfer-pending': isTransferIn || isTransferOut,
+                }"
+              >{{ strip.callsign }}<span v-if="strip.communicationSuffix" class="comm-suffix">{{ strip.communicationSuffix }}</span></span>
+            </div>
+            <div
+              class="pg-tas"
+              :class="{ ghost: !paperTas, 'pg-tas-empty': isArrLayout }"
+              :title="isArrLayout ? undefined : paperTip('TAS', 'Filed TAS')"
+            >{{ isArrLayout ? '' : paperTas }}</div>
+            <div class="pg-meta">
+              <span class="pg-frul">{{ isPaperEmptyFlightHolder ? '' : (strip.flightRules || 'I') }}</span>
+              <span class="pg-atyp-wtc">{{ strip.aircraftType }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence"> <span
+                  class="pg-wtc"
+                  :class="{ 'pg-wtc-circled': wtcHighlight }"
+                ><svg
+                    v-if="wtcHighlight"
+                    class="pg-wtc-scribble"
+                    viewBox="0 0 32 32"
+                    aria-hidden="true"
+                  >
+                    <!-- Red kulspetspenna: single wobbly pass, slightly open -->
+                    <path
+                      class="pg-wtc-pen"
+                      d="M17.1 5.4
+                         C22.6 4.6 27.2 8.1 27.9 13.2
+                         C28.8 18.9 25.1 24.8 19.6 26.6
+                         C14.8 28.2 9.2 26.4 6.1 22.3
+                         C3.2 18.5 3.4 12.9 6.8 9.4
+                         C9.8 6.3 14.2 5.1 17.8 5.8
+                         C20.4 6.4 22.8 8.2 24.1 10.6"
+                      fill="none"
+                    />
+                  </svg>{{ strip.wakeTurbulence }}</span></template></span>
+            </div>
+            <!-- Bottom cell of col 1 (ASSR); left half = rising / clickzone -->
+            <div
+              class="pg-assr"
+              :class="{ ghost: !strip.squawk }"
+              :title="paperAssrTitle"
+            >
+              <button
+                v-if="paperShowXferDiagClickspot"
+                type="button"
+                class="pg-xfer-diag-hit"
+                :title="paperXferDiagTitle"
+                @click.stop="onPaperXferDiagClick"
+              />
+              <span class="pg-assr-val">{{ strip.squawk || '' }}</span>
+            </div>
+          </div>
+
+          <!-- Time col 2: EOBT/ETA top · DEP bottom: CTO | ATD -->
+          <div class="pg-time pg-mid-rule pg-vline">
+            <div
+              class="pg-time-eobt"
+              :class="{ ghost: !paperPrimaryTime }"
+              :title="isArrLayout ? 'ETA' : 'EOBT'"
+            >{{ paperPrimaryTime }}</div>
+            <div
+              v-if="!isArrLayout"
+              class="pg-time-bot"
+              :class="{ 'pg-time-bot--ctot': !!paperCtotSlotMm }"
+            >
+              <!-- CTOT present: left = CTOT−5 (mm, red); red scribble on col midline; right = CFTO|ATD -->
+              <div
+                v-if="paperCtotSlotMm"
+                class="pg-ctot-slot"
+                :title="paperTip('CTOT−5', 'CTOT minus 5 minutes')"
+              >
+                <span class="pg-atd-val pg-ctot-slot-val">{{ paperCtotSlotMm }}</span>
+              </div>
+              <svg
+                v-if="paperCtotSlotMm"
+                class="pg-ctot-split"
+                viewBox="0 0 8 28"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <!-- Scribbled red vertical split — centered on column 2 mid -->
+                <path
+                  class="pg-wtc-pen pg-ctot-split-pen"
+                  d="M4.2 1.5
+                     C3.4 5.5 4.8 9.2 3.9 13.5
+                     C3.2 17.2 4.6 21.5 3.8 26.5"
+                  fill="none"
+                />
+              </svg>
+              <div class="pg-time-bot-cfto">
+                <button
+                  type="button"
+                  class="pg-cto-check"
+                  data-paper-flag="cfto"
+                  :class="{ checked: paperCto, disabled: !canUsePaperClickspots }"
+                  :disabled="!canUsePaperClickspots"
+                  :title="paperTip('CTO', 'Cleared for takeoff')"
+                  @click.stop="onPaperCtoClick"
+                >
+                  <svg
+                    v-if="paperCto && !hasShapeMatchedCtoScribble"
+                    class="pg-cto-line pg-cfto-line"
+                    viewBox="0 0 32 16"
+                    aria-hidden="true"
+                  >
+                    <!-- CFTO: short horizontal kulspetspenna (same weight as WTC) -->
+                    <path
+                      class="pg-wtc-pen pg-wtc-pen-blue pg-cfto-pen"
+                      d="M2 8.3
+                         C10 7.7 18 8.5 28 8"
+                      fill="none"
+                    />
+                  </svg>
+                </button>
+                <div class="pg-atd-cell" :title="paperTip('ATD', 'Actual time of departure')">
+                  <span v-if="paperShowAtd" class="pg-atd-val">{{ paperAtd }}</span>
+                </div>
+              </div>
+            </div>
+            <!-- ARR col 2 bottom: CTL (left) | ATA (right, same style as ATD) -->
+            <div v-else class="pg-time-bot">
+              <button
+                type="button"
+                class="pg-cto-check"
+                data-paper-flag="ctl"
+                :class="{ checked: paperCtl, disabled: !canUsePaperClickspots }"
+                :disabled="!canUsePaperClickspots"
+                :title="paperTip('CTL', 'Cleared to land')"
+                @click.stop="onPaperCtlClick"
+              >
+                <svg
+                  v-if="paperCtl && !hasShapeMatchedCtlScribble"
+                  class="pg-ctl-l"
+                  viewBox="0 0 24 28"
+                  aria-hidden="true"
+                >
+                  <!-- CTL: scribbled L (same pen weight as red WTC) -->
+                  <path
+                    class="pg-wtc-pen pg-wtc-pen-blue pg-ctl-pen"
+                    d="M8 3.5
+                       C7.4 8.5 8.6 14.5 7.9 21.5
+                       C8.1 23.2 9.5 23.8 12 23.6
+                       C15.5 23.3 18.5 24.1 21 23.5"
+                    fill="none"
+                  />
+                </svg>
+              </button>
+              <div class="pg-atd-cell" :title="paperTip('ATA', 'Actual time of arrival')">
+                <span v-if="paperShowAta" class="pg-atd-val">{{ paperAta }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- DEP: SID in bottom half · ARR: empty col 3 (stand only via GRP scribble) -->
+          <div
+            v-if="!isArrLayout"
+            class="pg-sid pg-vline"
+            :class="{ ghost: !store.displaySidForStrip(strip), editable: canEditAssignedData }"
+            :title="paperTip('SID', 'Departure route / SID')"
+            @click.stop="onSidClick"
+          >
+            <span class="pg-sid-val">{{ store.displaySidForStrip(strip) || '' }}</span>
+          </div>
+          <div v-else class="pg-sid pg-vline pg-sid-arr-empty">
+            <!-- ARR col 3 bottom: go-around arrow (soft GA / MISAP) -->
+            <div
+              class="pg-goa-zone"
+              data-paper-flag="goa"
+              :class="{ 'pg-goa-hit': hasGoaScribble }"
+              :title="paperTip('G/A', 'Go-around')"
+              @click.stop="hasGoaScribble ? onPaperGoaScribbleClear() : undefined"
+            >
+              <svg
+                v-if="paperShowGoaArrow && !hasGoaScribble"
+                class="pg-goa-arrow"
+                viewBox="0 0 56 28"
+                aria-hidden="true"
+              >
+                <!-- Blue kulspetspenna go-around: shallow symmetric U; chevron along exit ↗ -->
+                <path
+                  class="pg-wtc-pen pg-wtc-pen-blue pg-goa-pen"
+                  d="M5 15
+                     C15 22.5 22 24 28 24
+                     C34 24 41 22.5 51 15
+                     M47.5 12.8 L55 11.2 L52 18.2"
+                  fill="none"
+                />
+              </svg>
+            </div>
+          </div>
+
+          <!-- ADEP / ADES — cols 4–5 mid rule; DEP top: clearance read / readback (CLR) -->
+          <div class="pg-adep pg-mid-rule" :class="{ 'pg-adep-dep': !isArrLayout }">
+            <button
+              v-if="!isArrLayout"
+              type="button"
+              class="pg-clr-check"
+              :class="{
+                checked: paperClearanceRead || paperShowDclRead,
+                disabled: !canUsePaperClickspots,
+                'pg-clr-dcl': paperShowDclRead,
+              }"
+              :disabled="!canUsePaperClickspots"
+              :title="paperShowDclRead ? paperTip('DCL', 'DCL sent') : paperTip('CLR read', 'CLR read')"
+              @click.stop="onPaperClearanceReadClick"
+            >
+              <span v-if="paperShowDclRead" class="pg-dcl-mark">DCL</span>
+              <svg
+                v-else-if="paperClearanceRead && !hasClrReadScribble"
+                class="pg-clr-mark"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M4 13.5 L10 19.5 L20.5 5.5" />
+              </svg>
+            </button>
+            <!-- ARR: keep top half empty so ICAO+RWY stay on bottom row -->
+            <div v-else class="pg-ad-top" aria-hidden="true" />
+            <!-- Bottom row: non-std DEP RWY top-justified + ADEP -->
+            <div class="pg-ad-bot">
+              <span
+                v-if="paperNonStdRwyAboveAdep"
+                class="pg-rwy-scribble"
+                :title="rwyCellTitle"
+              >{{ paperNonStdRwyAboveAdep }}</span>
+              <div
+                class="pg-ad-code"
+                :class="{ ghost: !strip.adep || strip.adep === '????' || strip.adep === 'ZZZZ' }"
+                :title="paperTip('ADEP', strip.adepName || 'ADEP')"
+              >{{ strip.adep && strip.adep !== '????' ? strip.adep : '' }}</div>
+            </div>
+          </div>
+          <div class="pg-ades pg-mid-rule pg-vline" :class="{ 'pg-ades-dep': !isArrLayout }">
+            <button
+              v-if="!isArrLayout"
+              type="button"
+              class="pg-clr-check"
+              :class="{ checked: paperClearanceReadback, disabled: !canUsePaperClickspots }"
+              :disabled="!canUsePaperClickspots"
+              :title="paperTip('CLR correct', 'CLR correct (readback)')"
+              @click.stop="onPaperClearanceReadbackClick"
+            >
+              <svg
+                v-if="paperClearanceReadback && !hasClrCorrectScribble"
+                class="pg-clr-mark"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="M4 13.5 L10 19.5 L20.5 5.5" />
+              </svg>
+            </button>
+            <div v-else class="pg-ad-top" aria-hidden="true" />
+            <!-- Bottom row: non-std ARR RWY top-justified + ADES -->
+            <div class="pg-ad-bot">
+              <span
+                v-if="paperNonStdRwyAboveAdes"
+                class="pg-rwy-scribble"
+                :title="rwyCellTitle"
+              >{{ paperNonStdRwyAboveAdes }}</span>
+              <div
+                class="pg-ad-code"
+                :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
+                :title="paperTip('ADES', strip.adesName || 'ADES')"
+              >{{ strip.ades && strip.ades !== '????' ? strip.ades : '' }}</div>
+            </div>
+          </div>
+
+          <!--
+            DEP cols 6–7 as 4 equal bands (mid-line between 2|3):
+            1–2 REA (col6, auto on ready) / CTOT (col7) · 3 FPL · 4 ATIS+QNH / CRZ
+          -->
+          <div v-if="!isArrLayout" class="pg-rte-rfl pg-mid-rule">
+            <div class="pg-rea-zone" title="REA">
+              <span v-if="paperShowRea" class="pg-rea">
+                <svg class="pg-rea-scribble" viewBox="0 0 32 32" aria-hidden="true">
+                  <path
+                    class="pg-wtc-pen"
+                    d="M17.1 5.4
+                       C22.6 4.6 27.2 8.1 27.9 13.2
+                       C28.8 18.9 25.1 24.8 19.6 26.6
+                       C14.8 28.2 9.2 26.4 6.1 22.3
+                       C3.2 18.5 3.4 12.9 6.8 9.4
+                       C9.8 6.3 14.2 5.1 17.8 5.8
+                       C20.4 6.4 22.8 8.2 24.1 10.6"
+                    fill="none"
+                  />
+                </svg>
+                Rea
+              </span>
+            </div>
+            <div
+              class="pg-fpl"
+              :class="{ ghost: !paperFplRoute }"
+              :title="paperTip('FPL', strip.route || 'FPL')"
+            >{{ paperFplRoute }}</div>
+            <button
+              type="button"
+              class="pg-atis-qnh"
+              :class="{ 'has-stamp': !!paperAtisQnhStamp, stale: paperAtisQnhStale }"
+              :title="paperTip('ATIS/QNH', 'Stamp ATIS + QNH')"
+              :disabled="!canStampAtisQnh && !paperAtisQnhStamp"
+              @click.stop="onPaperAtisQnhClick"
+            >
+              <span v-if="paperAtisQnhStamp" class="pg-atis-qnh-val">
+                <svg class="pg-atis-qnh-scribble" viewBox="0 0 48 32" aria-hidden="true">
+                  <path
+                    class="pg-wtc-pen"
+                    d="M10.5 6.2
+                       C18.2 3.8 30.5 3.6 38.2 6.5
+                       C44.1 8.8 46.2 14.2 45.4 19.1
+                       C44.4 25.2 38.1 28.8 30.2 29.4
+                       C21.8 30.0 12.6 28.2 7.4 23.6
+                       C3.2 19.9 2.8 13.8 6.6 9.6
+                       C9.4 6.5 14.8 5.2 20.2 5.8
+                       C26.8 6.6 33.4 9.2 37.6 12.8"
+                    fill="none"
+                  />
+                </svg>
+                {{ paperAtisQnhStamp }}
+              </span>
+            </button>
+          </div>
+          <div v-else class="pg-rte-rfl pg-rte-rfl-arr pg-mid-rule" />
+
+          <div v-if="!isArrLayout" class="pg-ctot">
+            <div class="pg-ctot-top" :class="{ ghost: !paperCtot }" title="CTOT">
+              <span v-if="paperCtot" class="pg-ctot-val">
+                <svg class="pg-ctot-scribble" viewBox="0 0 48 32" aria-hidden="true">
+                  <path
+                    class="pg-wtc-pen"
+                    d="M10.5 6.2
+                       C18.2 3.8 30.5 3.6 38.2 6.5
+                       C44.1 8.8 46.2 14.2 45.4 19.1
+                       C44.4 25.2 38.1 28.8 30.2 29.4
+                       C21.8 30.0 12.6 28.2 7.4 23.6
+                       C3.2 19.9 2.8 13.8 6.6 9.6
+                       C9.4 6.5 14.8 5.2 20.2 5.8
+                       C26.8 6.6 33.4 9.2 37.6 12.8"
+                    fill="none"
+                  />
+                </svg>
+                {{ paperCtot }}
+              </span>
+            </div>
+            <div class="pg-band" />
+            <div
+              class="pg-crz"
+              :class="{ ghost: !paperCrz }"
+              :title="paperTip('CRZ', 'Cruise level')"
+            >{{ paperCrz }}</div>
+          </div>
+          <div v-else class="pg-ctot pg-arr-eobt" :class="{ ghost: !paperEobt }" title="EOBT">
+            {{ paperEobt }}
+          </div>
+        </div>
+
+        <!-- GRP stand — felt-tip annotation, far right middle (stand only here on paper) -->
+        <div
+          v-if="strip.stand"
+          class="pg-grp-stand"
+          :class="{ 'pg-grp-stand--dep': !isArrLayout }"
+          :title="paperTip('Stand', 'GRP stand')"
+        >{{ strip.stand }}</div>
+      </div>
+    </template>
+
     <!-- SAAB-style strip -->
     <template v-else>
       <!-- Top menu: fully hidden until ▲ opens it; collapse arrow lives here when open -->
@@ -337,7 +820,8 @@
             v-for="(stroke, i) in stripScribbles"
             :key="'t' + i"
             class="strip-scribble-stroke"
-            :points="stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -346,6 +830,7 @@
             v-if="activeScribbleStroke"
             class="strip-scribble-stroke"
             :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -365,7 +850,8 @@
             v-for="(stroke, i) in stripScribbles"
             :key="'b' + i"
             class="strip-scribble-stroke"
-            :points="stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -374,6 +860,7 @@
             v-if="activeScribbleStroke"
             class="strip-scribble-stroke"
             :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -721,7 +1208,8 @@
             v-for="(stroke, i) in stripScribbles"
             :key="'bot' + i"
             class="strip-scribble-stroke"
-            :points="stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -730,6 +1218,7 @@
             v-if="activeScribbleStroke"
             class="strip-scribble-stroke"
             :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
             fill="none"
             vector-effect="non-scaling-stroke"
             :stroke-width="bayScribbleStrokeWidth"
@@ -743,7 +1232,9 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } from 'vue'
 import {
+  DEFAULT_TRANSITION_ALTITUDE_FT,
   extractTmaExitPoint,
+  formatPaperCruiseLevel,
   formatTrackSidDisplay,
   getEssaRwyCombination,
   hasSlowRemark,
@@ -757,12 +1248,22 @@ import {
 } from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
-import { STRIP_FLIP_DURATION_MS } from '@/composables/useStripOrderFlip'
+import { STRIP_FLIP_DURATION_MS, markStripDragEnded } from '@/composables/useStripOrderFlip'
+import {
+  claimStripContextMenu,
+  releaseStripContextMenu,
+} from '@/composables/stripContextMenuShared'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 import {
+  SCRIBBLE_INK_HEX,
+  hasClrScribble,
+  hasShapeMatchedPaperScribble,
+  pushRisingDiagonalLeftCol,
+  removeClrScribbles,
   scribbleBandViewBox,
   scribbleStrokeWidthCss,
   useStripScribbles,
+  type ScribbleInk,
 } from '@/composables/useStripScribbles'
 import {
   applySpawnExpanderDefaults,
@@ -770,6 +1271,7 @@ import {
   collapseStripExpanders,
   useStripExpanders,
 } from '@/composables/useStripExpanders'
+import { useZoomStripScalePercent } from '@/composables/useStripZoomScale'
 import ClearanceDialog from './ClearanceDialog.vue'
 import FlightplanDialog from './FlightplanDialog.vue'
 import SidRouteMenu from './SidRouteMenu.vue'
@@ -789,8 +1291,10 @@ const props = withDefaults(
     isLargeView?: boolean
     /** Live stroke while drawing in zoom overlay (canonical points) */
     activeScribbleStroke?: string | null
+    /** Ink colour for the live zoom stroke */
+    activeScribbleColor?: ScribbleInk
   }>(),
-  { isLargeView: false, activeScribbleStroke: null },
+  { isLargeView: false, activeScribbleStroke: null, activeScribbleColor: 'blue' },
 )
 
 const emit = defineEmits<{
@@ -798,10 +1302,19 @@ const emit = defineEmits<{
 }>()
 
 const store = useEfsStore()
+const zoomStripScalePercent = useZoomStripScalePercent()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
 const stripIdRef = computed(() => props.strip.id)
-const { strokes: stripScribbles } = useStripScribbles(stripIdRef)
+const {
+  strokes: stripScribbles,
+  hasClrReadScribble,
+  hasClrCorrectScribble,
+  hasCtoScribble,
+  hasCtlScribble,
+  hasGoaScribble,
+  atdScribbleCount,
+} = useStripScribbles(stripIdRef)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripIdRef)
 // IFR DEP spawn: both expanders open (once per strip id)
 applySpawnExpanderDefaults(props.strip.id, {
@@ -814,21 +1327,42 @@ const showStripScribbles = computed(
   () => stripScribbles.value.length > 0 || !!props.activeScribbleStroke,
 )
 
+/** SAAB look always draws black; paper uses per-stroke blue/red. */
+function scribbleStrokeHex(color: ScribbleInk | undefined): string {
+  if (!store.isPaperLook) return SCRIBBLE_INK_HEX.black
+  return SCRIBBLE_INK_HEX[color ?? 'blue']
+}
+
 // Fly-across animation for auto-moved strips (duration shared with section FLIP)
 const AUTO_MOVE_DURATION = STRIP_FLIP_DURATION_MS
 
 // Reactive: store marks the id before the strip map update so the destination
 // instance is hidden on first paint (and stays hidden if the instance is reused).
 const isAutoMoving = computed(() => store.autoMovingStripIds.has(props.strip.id))
+const isPrinting = computed(() => store.printingStripIds.has(props.strip.id))
 
 /** True while this instance owns the body-level fly-clone (not the origin unmount). */
 let autoMoveCloneOwned = false
 let autoMoveCloneEl: HTMLElement | null = null
 
+/** Paper print: BR-corner reveal then fly to bay slot. */
+let printAnimOwned = false
+let printAnimCloneEl: HTMLElement | null = null
+let printAnimSlotEl: HTMLElement | null = null
+
 function finishAutoMove() {
   autoMoveCloneOwned = false
   autoMoveCloneEl = null
   store.endAutoMove(props.strip.id)
+}
+
+function finishPrintAnim() {
+  printAnimOwned = false
+  printAnimCloneEl?.remove()
+  printAnimSlotEl?.remove()
+  printAnimCloneEl = null
+  printAnimSlotEl = null
+  store.endPrintAnim(props.strip.id)
 }
 
 function tryAutoMoveAnimation() {
@@ -900,9 +1434,122 @@ function tryAutoMoveAnimation() {
   })
 }
 
+function tryPrintAnimation() {
+  if (props.isLargeView) return
+  if (printAnimOwned) return
+  if (!store.printingStripIds.has(props.strip.id)) return
+
+  const el = stripElement.value
+  if (!el) return
+
+  printAnimOwned = true
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (!printAnimOwned || !stripElement.value) {
+        finishPrintAnim()
+        return
+      }
+
+      const destEl = stripElement.value
+      const destRect = destEl.getBoundingClientRect()
+      const w = destRect.width
+      const h = destRect.height
+      if (w < 2 || h < 2) {
+        finishPrintAnim()
+        return
+      }
+
+      const clone = destEl.cloneNode(true) as HTMLElement
+      clone.classList.remove('print-anim-hidden', 'auto-move-hidden')
+      clone.removeAttribute('data-strip-id')
+      clone.style.opacity = '1'
+      clone.style.visibility = 'visible'
+      clone.style.pointerEvents = 'none'
+      clone.style.margin = '0'
+      clone.style.transition = 'none'
+      clone.style.boxSizing = 'border-box'
+
+      const pad = 12
+      const bar = document.querySelector('.efs-bottom-bar') as HTMLElement | null
+      const barTop = bar?.getBoundingClientRect().top ?? window.innerHeight
+      const startLeft = Math.max(pad, window.innerWidth - w - pad)
+      const startTop = Math.max(pad, barTop - h - pad)
+
+      const slot = document.createElement('div')
+      slot.style.cssText = [
+        'position:fixed',
+        `left:${startLeft}px`,
+        `top:${startTop}px`,
+        `width:${w}px`,
+        `height:${h}px`,
+        'overflow:hidden',
+        'z-index:9999',
+        'pointer-events:none',
+      ].join(';')
+
+      clone.style.position = 'absolute'
+      clone.style.left = '0'
+      clone.style.top = '0'
+      clone.style.width = `${w}px`
+      clone.style.height = `${h}px`
+      /* Feed out along strip length (from printer on the right) */
+      clone.style.transform = 'translateX(100%)'
+
+      slot.appendChild(clone)
+      document.body.appendChild(slot)
+      printAnimCloneEl = clone
+      printAnimSlotEl = slot
+
+      const printMs = store.getPrintAnimDurationMs(props.strip.id)
+
+      const printAnim = clone.animate(
+        [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }],
+        { duration: printMs, easing: 'linear', fill: 'forwards' },
+      )
+
+      printAnim.onfinish = () => {
+        if (!printAnimOwned) return
+
+        // Lift clone to body at printer position, then fly to bay slot
+        clone.style.position = 'fixed'
+        clone.style.left = `${startLeft}px`
+        clone.style.top = `${startTop}px`
+        clone.style.transform = ''
+        clone.style.zIndex = '9999'
+        document.body.appendChild(clone)
+        slot.remove()
+        printAnimSlotEl = null
+
+        const live = stripElement.value?.getBoundingClientRect()
+        const toLeft = live?.left ?? destRect.left
+        const toTop = live?.top ?? destRect.top
+
+        const fly = clone.animate(
+          [
+            { left: `${startLeft}px`, top: `${startTop}px` },
+            { left: `${toLeft}px`, top: `${toTop}px` },
+          ],
+          { duration: AUTO_MOVE_DURATION, easing: 'ease-in-out', fill: 'forwards' },
+        )
+
+        fly.onfinish = () => {
+          finishPrintAnim()
+        }
+      }
+    })
+  })
+}
+
 // Strip may be remounted (new parent section) or updated in place
-onMounted(tryAutoMoveAnimation)
-onUpdated(tryAutoMoveAnimation)
+onMounted(() => {
+  tryAutoMoveAnimation()
+  tryPrintAnimation()
+})
+onUpdated(() => {
+  tryAutoMoveAnimation()
+  tryPrintAnimation()
+})
 
 // Context menu state
 const menuOpen = ref(false)
@@ -918,6 +1565,19 @@ const groundStateMenuOpen = ref(false)
 const ctotMenuOpen = ref(false)
 const tsacMenuOpen = ref(false)
 const reaMenuOpen = ref(false)
+
+function closeStripContextMenu() {
+  menuOpen.value = false
+}
+
+watch(menuOpen, (open) => {
+  if (open) claimStripContextMenu(closeStripContextMenu)
+  else releaseStripContextMenu(closeStripContextMenu)
+})
+
+onUnmounted(() => {
+  releaseStripContextMenu(closeStripContextMenu)
+})
 
 // Ground state options: code (shown in menu), label, action (sent to backend), groundstate (for highlighting current)
 const groundStateOptions = [
@@ -1082,6 +1742,33 @@ const SCROLLBAR_WIDTH_DEADBAND_PX = 18
 function updateStripScale(force = false) {
   const el = stripElement.value
   if (!el) return
+
+  // Zoom overlay: use deterministic --zoom-strip-scale from panel width (no RO dither)
+  if (props.isLargeView) {
+    const fromPanel = parseFloat(
+      getComputedStyle(el).getPropertyValue('--zoom-strip-scale').trim(),
+    )
+    const w = el.clientWidth
+    const raw =
+      Number.isFinite(fromPanel) && fromPanel > 0
+        ? fromPanel
+        : w > 0
+          ? w / STRIP_REF_WIDTH_PX
+          : 0
+    if (raw <= 0) return
+    const s = quantizeStripScale(raw, 5)
+    if (!force && s === stripScale.value) {
+      if (w > 0) lastStripScaleWidth = w
+      return
+    }
+    if (w > 0) lastStripScaleWidth = w
+    stripScale.value = s
+    el.style.setProperty('--strip-scale', String(s))
+    // Paper flight strips have no .fit-font; info holders (HINDER/…) do — fit those
+    fitAllBoxFonts()
+    return
+  }
+
   const w = el.clientWidth
   if (w <= 0) return
   // Height-only resize (font fit / expanders) must not re-run scale+fit loop
@@ -1090,7 +1777,6 @@ function updateStripScale(force = false) {
   // Scrollbar toggle: keep prior design width (do not retune --strip-scale)
   if (
     !force &&
-    !props.isLargeView &&
     lastStripScaleWidth > 0 &&
     Math.abs(w - lastStripScaleWidth) <= SCROLLBAR_WIDTH_DEADBAND_PX
   ) {
@@ -1098,9 +1784,7 @@ function updateStripScale(force = false) {
   }
 
   const raw = w / STRIP_REF_WIDTH_PX
-  // Bay: keep modest. Zoomed view: let scale track width so height grows with Size %.
-  const max = props.isLargeView ? 5 : 2.2
-  const s = quantizeStripScale(raw, max)
+  const s = quantizeStripScale(raw, 2.2)
   // Width moved but quantized scale unchanged — update baseline only (skip font-fit churn)
   if (!force && s === stripScale.value) {
     lastStripScaleWidth = w
@@ -1127,6 +1811,8 @@ function attachStripScaleObserver() {
   const el = stripElement.value
   if (!el || typeof ResizeObserver === 'undefined') return
   stripResizeObs = new ResizeObserver((entries) => {
+    // Zoomed strip scale is driven by --zoom-strip-scale / Size %, not RO width
+    if (props.isLargeView) return
     const entry = entries[0]
     const w =
       entry?.contentBoxSize?.[0]?.inlineSize ??
@@ -1136,7 +1822,6 @@ function attachStripScaleObserver() {
     // Only react to real width changes — height chatter from font-fit caused flicker
     if (Math.abs(w - lastStripScaleWidth) < 1) return
     if (
-      !props.isLargeView &&
       lastStripScaleWidth > 0 &&
       Math.abs(w - lastStripScaleWidth) <= SCROLLBAR_WIDTH_DEADBAND_PX
     ) {
@@ -1149,7 +1834,325 @@ function attachStripScaleObserver() {
 
 // Note / vehicle strip state (local-only — not EuroScope-linked)
 const isNote = computed(() => props.strip.stripType === 'note')
+const paperInfoKind = computed(() => props.strip.paperInfoKind)
+/** Plain empty + HINDER / Bogsering / Snöröjning (+ prel) — red/black rails, no flight grid */
+const isPaperInfoHolder = computed(() => {
+  const k = paperInfoKind.value
+  return (
+    k === 'empty' ||
+    k === 'hinder' ||
+    k === 'bogsering' ||
+    k === 'snorojning' ||
+    k === 'prel_rojning'
+  )
+})
+/** Framed blanks with FPS box/grid (`empty` plain cream is NOT included) */
+const isPaperEmptyFlightHolder = computed(() => {
+  const k = paperInfoKind.value
+  return k === 'empty_frame' || k === 'empty_arr' || k === 'empty_dep'
+})
 const isVehicle = computed(() => props.strip.stripType === 'vehicle')
+
+/** HHmm digits for paper FPS print style (no colon). */
+function formatPaperHhmm(hhmm: string | undefined): string {
+  if (!hhmm) return ''
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return ''
+  return digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+}
+
+const paperEobt = computed(() => formatPaperHhmm(props.strip.eobt))
+const paperPrimaryTime = computed(() =>
+  isArrLayout.value ? formatPaperHhmm(props.strip.eta) : formatPaperHhmm(props.strip.eobt),
+)
+/** DEP col 2 bottom-left: cleared for takeoff (DEPA; paper keeps it after ATD) */
+const paperCto = computed(() => !!props.strip.clearedForTakeoff)
+/** ARR col 2 bottom-left: cleared to land */
+const paperCtl = computed(() => !!props.strip.clearedToLand)
+/** Hide generated mark only when freehand ink matched the shape (mismatched ink must not hide the flag). */
+const hasShapeMatchedCtoScribble = computed(() =>
+  hasShapeMatchedPaperScribble(props.strip.id, 'cto'),
+)
+const hasShapeMatchedCtlScribble = computed(() =>
+  hasShapeMatchedPaperScribble(props.strip.id, 'ctl'),
+)
+/** Paper ATD/ATA: minutes only (mm), not hhmm */
+function formatPaperMm(hhmm: string | undefined): string {
+  if (!hhmm) return ''
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 2) return ''
+  return digits.slice(-2)
+}
+const paperAtd = computed(() => formatPaperMm(props.strip.atd))
+const paperAta = computed(() => formatPaperMm(props.strip.ata))
+/**
+ * CTOT−5 minutes as mm (e.g. CTOT 2229 → 24). Shown left of CFTO/ATD when CTOT set.
+ */
+function formatCtotMinus5Mm(hhmm: string | undefined): string {
+  if (!hhmm) return ''
+  const digits = hhmm.replace(/\D/g, '')
+  if (digits.length < 3) return ''
+  const padded = digits.length === 3 ? digits.padStart(4, '0') : digits.slice(0, 4)
+  let h = parseInt(padded.slice(0, 2), 10)
+  let m = parseInt(padded.slice(2, 4), 10)
+  if (!Number.isFinite(h) || !Number.isFinite(m) || h > 23 || m > 59) return ''
+  m -= 5
+  if (m < 0) {
+    m += 60
+    h = (h + 23) % 24
+  }
+  return String(m).padStart(2, '0')
+}
+const paperCtotSlotMm = computed(() =>
+  isArrLayout.value ? '' : formatCtotMinus5Mm(props.strip.ctot),
+)
+/** Hide EFS auto ATD/ATA when the cell already has freehand ink */
+const paperShowAtd = computed(
+  () => !!paperAtd.value && atdScribbleCount.value === 0,
+)
+const paperShowAta = computed(
+  () => !!paperAta.value && atdScribbleCount.value === 0,
+)
+
+/** IFR ARR go-around: show col-3 arrow when MA / soft GA (hide if freehand ink) */
+const paperShowGoaArrow = computed(
+  () =>
+    isArrLayout.value &&
+    !!props.strip.missedApproach &&
+    isIfrSidEligible(props.strip.flightRules),
+)
+
+/** Paper ESGG: CLR / CTL / CTO / ATIS clickspots — locked when another controller owns. */
+const canUsePaperClickspots = computed(
+  () =>
+    store.isPaperLook &&
+    store.isController &&
+    !isPaperEmptyFlightHolder.value &&
+    store.allowMoveOwnedStrip(props.strip),
+)
+
+function onPaperCtoClick() {
+  if (isArrLayout.value || isPaperEmptyFlightHolder.value) return
+  if (!canUsePaperClickspots.value) return
+  // Ink present: always clear scribble; only revert CTO if the flag was actually set
+  if (hasCtoScribble.value) {
+    removeClrScribbles(props.strip.id, 'cto')
+    if (paperCto.value) store.sendStripAction(props.strip.id, 'LU')
+    return
+  }
+  // Toggle: off → CTO (DEPA), on → LU (LINEUP) — line follows clearedForTakeoff
+  store.sendStripAction(props.strip.id, paperCto.value ? 'LU' : 'CTO')
+}
+
+function onPaperCtlClick() {
+  if (!isArrLayout.value || isPaperEmptyFlightHolder.value) return
+  if (!canUsePaperClickspots.value) return
+  // Ink present: always clear scribble; only unset CTL if the flag was actually set
+  if (hasCtlScribble.value) {
+    removeClrScribbles(props.strip.id, 'ctl')
+    if (paperCtl.value) store.sendStripAction(props.strip.id, 'unsetCTL')
+    return
+  }
+  store.sendStripAction(props.strip.id, paperCtl.value ? 'unsetCTL' : 'CTL')
+}
+
+/** Clear G/A hotspot ink (mismatched shapes never set softGA; click still erases). */
+function onPaperGoaScribbleClear() {
+  if (!hasGoaScribble.value) return
+  removeClrScribbles(props.strip.id, 'goa')
+}
+
+/** UTFLYGNING / soft G/A — same conditions as zoom rising-/ tag */
+const paperCanXferAppDiag = computed(() => {
+  if (!store.isPaperLook || isPaperEmptyFlightHolder.value) return false
+  if (!store.isController || !store.allowMoveOwnedStrip(props.strip)) return false
+  if (isTransferIn.value) return false
+  const sec = props.sectionId || props.strip.sectionId
+  return (
+    !!props.strip.missedApproach ||
+    sec === 'ctr_dep' ||
+    sec.endsWith('_ctr_dep')
+  )
+})
+
+/** Bottom cell left-half clickspot: refuse inbound, XFER APP, cancel outbound, or clear ink */
+const paperShowXferDiagClickspot = computed(() => {
+  if (!store.isPaperLook || isPaperEmptyFlightHolder.value || !store.isController) return false
+  const id = props.strip.id
+  // Keep clickzone while tagged ink is present so mismatched shapes can still be cleared
+  if (hasClrScribble(id, 'xfer-app') || hasClrScribble(id, 'xfer-refuse')) return true
+  if (isTransferIn.value) return true
+  return paperCanXferAppDiag.value
+})
+
+const paperXferDiagTitle = computed(() => {
+  if (isTransferIn.value) return paperTip('REFUSE', 'Refuse inbound transfer')
+  if (isTransferOut.value && hasClrScribble(props.strip.id, 'xfer-app')) {
+    return paperTip('ASSUME', 'Cancel outbound transfer')
+  }
+  return paperTip('XFER', 'Transfer to APP')
+})
+
+/** Click left half of bottom col-1 cell — rising diagonal / (refuse, XFER APP, or re-assume) */
+function onPaperXferDiagClick() {
+  if (!store.isPaperLook || isPaperEmptyFlightHolder.value || !store.isController) return
+  const id = props.strip.id
+
+  // Ink present: always clear; re-assume only if outbound was pending
+  if (hasClrScribble(id, 'xfer-app')) {
+    removeClrScribbles(id, 'xfer-app')
+    if (isTransferOut.value) store.sendStripAction(id, 'ASSUME')
+    return
+  }
+  if (hasClrScribble(id, 'xfer-refuse')) {
+    removeClrScribbles(id, 'xfer-refuse')
+    return
+  }
+
+  if (isTransferIn.value) {
+    pushRisingDiagonalLeftCol(id, 'blue', 'xfer-refuse')
+    store.sendStripAction(id, 'REFUSE')
+    return
+  }
+
+  if (!paperCanXferAppDiag.value) return
+  pushRisingDiagonalLeftCol(id, 'blue', 'xfer-app')
+  store.sendStripAction(id, 'XFER')
+}
+const paperCtot = computed(() => {
+  if (showCtotCancelled.value) return 'SCL'
+  if (!props.strip.ctot) return ''
+  return formatPaperHhmm(props.strip.ctot)
+})
+/** DEP col 6 bottom: filed FPL route (may overflow into CTOT column) */
+const paperFplRoute = computed(() => {
+  if (isArrLayout.value) return ''
+  return (props.strip.route || '').trim().toUpperCase()
+})
+/** DEP col 7 bottom: cruise level — Axxx ≤ TA, Fxxx > TA */
+const paperCrz = computed(() => {
+  if (isArrLayout.value) return ''
+  return formatPaperCruiseLevel(props.strip.rfl, DEFAULT_TRANSITION_ALTITUDE_FT)
+})
+/** Filed TAS (N0448) for paper DEP — from strip.tas or FPL route (incl. FIX/N0446F390) */
+const paperTas = computed(() => {
+  if (isArrLayout.value) return ''
+  if (props.strip.tas) return props.strip.tas
+  const m = (props.strip.route || '')
+    .toUpperCase()
+    .match(/(?:^|[\s/])([NKM]\d{3,4})[FASM]\d{3,4}\b/)
+  return m?.[1] || ''
+})
+
+/** Paper tooltips: short field names in ESGG / paper mode */
+function paperTip(shortLabel: string, longLabel: string): string {
+  return store.isPaperLook ? shortLabel : longLabel
+}
+
+/** Paper col 4 — CLR read (also on when readback or ES CLR; unsetting in CLEARED clears ES CLR) */
+const paperClearanceRead = computed(
+  () => !!(props.strip.clearance || props.strip.clearanceReadback || props.strip.clearanceRead),
+)
+/** Paper col 5 — CLR correct (sets ES CLR; also on when ES CLR) */
+const paperClearanceReadback = computed(
+  () => !!(props.strip.clearance || props.strip.clearanceReadback),
+)
+/**
+ * ESGG paper: after DCL send (and while DONE/WILCO), show felt "DCL" in CLR read
+ * instead of the checkmark. Freehand clr-read ink wins if present.
+ */
+const paperShowDclRead = computed(() => {
+  if (isArrLayout.value || hasClrReadScribble.value) return false
+  const s = props.strip.dclStatus
+  return s === 'SENT' || s === 'DONE' || s === 'WILCO'
+})
+
+/** True while we auto-opened CLR for a paper DCL REQUEST (dismiss on auto/semi send). */
+const dclDialogAutoOpened = ref(false)
+
+/**
+ * Paper has no CLNC action key — on DCL REQUEST, open Clearance so manual/semi
+ * can Send. Auto/semi that auto-sends → SENT closes the flash dialog.
+ */
+watch(
+  () => props.strip.dclStatus,
+  (status, prev) => {
+    if (!store.isPaperLook || isArrLayout.value || isPaperEmptyFlightHolder.value) return
+    if (!canEditAssignedData.value || props.strip.ownedByOther) return
+
+    if (status === 'REQUEST' && prev !== 'REQUEST') {
+      clncDialogOpen.value = true
+      dclDialogAutoOpened.value = true
+      return
+    }
+    // Auto/semi auto-send succeeded — don't leave a SENT dialog flash open
+    if (
+      status === 'SENT' &&
+      dclDialogAutoOpened.value &&
+      (store.dclMode === 'auto' || store.dclMode === 'semi')
+    ) {
+      clncDialogOpen.value = false
+      dclDialogAutoOpened.value = false
+      return
+    }
+    if (status !== 'REQUEST') {
+      dclDialogAutoOpened.value = false
+    }
+  },
+)
+
+function onPaperClearanceReadClick() {
+  if (isArrLayout.value || isPaperEmptyFlightHolder.value) return
+  if (!canUsePaperClickspots.value) return
+  // Ink present: click clears scribble; clear local read only (don't nuke ES CLR)
+  if (hasClrReadScribble.value) {
+    removeClrScribbles(props.strip.id, 'clr-read')
+    const localReadOnly =
+      !!props.strip.clearanceRead && !props.strip.clearance && !props.strip.clearanceReadback
+    if (localReadOnly) {
+      store.sendStripAction(props.strip.id, 'toggleClearanceRead')
+    }
+    return
+  }
+  store.sendStripAction(props.strip.id, 'toggleClearanceRead')
+}
+
+function onPaperClearanceReadbackClick() {
+  if (isArrLayout.value || isPaperEmptyFlightHolder.value) return
+  if (!canUsePaperClickspots.value) return
+  if (hasClrCorrectScribble.value) {
+    removeClrScribbles(props.strip.id, 'clr-correct')
+    if (paperClearanceReadback.value) {
+      store.sendStripAction(props.strip.id, 'toggleClearanceReadback')
+    }
+    return
+  }
+  store.sendStripAction(props.strip.id, 'toggleClearanceReadback')
+}
+
+/** Drop tagged CLR / CTO / CTL / G/A ink when flags clear elsewhere (drag / SID-SSR / ES). */
+watch(
+  () =>
+    [
+      props.strip.id,
+      !!(props.strip.clearance || props.strip.clearanceReadback || props.strip.clearanceRead),
+      !!(props.strip.clearance || props.strip.clearanceReadback),
+      !!props.strip.clearedForTakeoff,
+      !!props.strip.clearedToLand,
+      !!props.strip.missedApproach,
+    ] as const,
+  ([id, readOn, correctOn, ctoOn, ctlOn, goaOn], prev) => {
+    if (!prev) return
+    const [prevId, prevRead, prevCorrect, prevCto, prevCtl, prevGoa] = prev
+    if (id !== prevId) return
+    if (prevRead && !readOn) removeClrScribbles(id, 'clr-read')
+    if (prevCorrect && !correctOn) removeClrScribbles(id, 'clr-correct')
+    if (prevCto && !ctoOn) removeClrScribbles(id, 'cto')
+    if (prevCtl && !ctlOn) removeClrScribbles(id, 'ctl')
+    if (prevGoa && !goaOn) removeClrScribbles(id, 'goa')
+  },
+)
+
 const isLocalOnlyStrip = computed(() => isNote.value || isVehicle.value)
 const isTransferIn = computed(() => !isLocalOnlyStrip.value && props.strip.transferPending === 'in')
 const isTransferOut = computed(() => !isLocalOnlyStrip.value && props.strip.transferPending === 'out')
@@ -1216,12 +2219,24 @@ const dimOtherOwned = computed(
 const canEditAssignedData = computed(
   () => store.isController && !props.strip.ownedByOther,
 )
-/** Drag allowed for notes and own/untracked strips — never other-owned flights. */
-const canDragStrip = computed(
+/** Context menu ASSUME — untracked / mine / inbound handoff; hide if other owns */
+const canAssumeFromMenu = computed(
   () =>
-    !props.isLargeView &&
-    (isLocalOnlyStrip.value || !props.strip.ownedByOther),
+    store.isController &&
+    !isLocalOnlyStrip.value &&
+    !store.isStripOwnedByOther(props.strip),
 )
+
+/**
+ * Drag: notes/vehicles always; own/untracked flights when controller.
+ * Other-assumed flights locked — paper exception: incoming transfer to me only.
+ */
+const canDragStrip = computed(() => {
+  if (props.isLargeView) return false
+  if (isLocalOnlyStrip.value) return true
+  if (!store.isController) return false
+  return store.allowMoveOwnedStrip(props.strip)
+})
 
 /** Uncleared dep fields (XFL/CFL/AHD/SID) — amber when a value is present */
 const unclearedFieldHighlight = computed(() => !props.strip.clearance)
@@ -1356,8 +2371,15 @@ const ownerSiTitle = computed(() => {
   const owner = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
   return owner ? `Tracked by ${owner}` : undefined
 })
-const isDeparture = computed(() => props.strip.stripType === 'departure' || props.strip.stripType === 'local')
-const isArrLayout = computed(() => props.strip.stripType === 'arrival')
+const isDeparture = computed(
+  () =>
+    props.strip.stripType === 'departure' ||
+    props.strip.stripType === 'local' ||
+    paperInfoKind.value === 'empty_dep',
+)
+const isArrLayout = computed(
+  () => props.strip.stripType === 'arrival' || paperInfoKind.value === 'empty_arr',
+)
 /** Arrival on ground: hide CFL/AHD cells (cleared to land / taxi-in). */
 const hideArrGroundAssignFields = computed(() => {
   if (!isArrLayout.value) return false
@@ -1398,6 +2420,23 @@ const rwyNonStandard = computed(() => {
 
   return !matchesEs || !matchesConfig
 })
+
+/**
+ * Paper: assigned RWY not in ES selected dep/arr list → blue felt label.
+ * DEP/local → above ADEP; ARR → above ADES.
+ */
+const paperNonStdRwyLabel = computed(() => {
+  if (!store.isPaperLook || isPaperEmptyFlightHolder.value) return ''
+  if (!rwyNonStandard.value) return ''
+  const rwy = (props.strip.runway || '').trim()
+  return rwy || ''
+})
+const paperNonStdRwyAboveAdep = computed(() =>
+  !isArrLayout.value && paperNonStdRwyLabel.value ? paperNonStdRwyLabel.value : '',
+)
+const paperNonStdRwyAboveAdes = computed(() =>
+  isArrLayout.value && paperNonStdRwyLabel.value ? paperNonStdRwyLabel.value : '',
+)
 
 const rwyCellTitle = computed(() => {
   const base = isArrLayout.value ? 'Arrival runway' : 'Departure runway'
@@ -1445,6 +2484,17 @@ const currentQnh = computed(() => {
   return store.atisInfo.find((a) => a.airport === apt)?.qnh
 })
 
+/** Current ATIS letter for stamp (prefer DEP, then single, then ARR) */
+/** ESGG paper: single ATIS only (no ARR/DEP fallback) */
+const currentAtisLetter = computed(() => {
+  const apt = qnhAirport.value
+  if (!apt) return undefined
+  const info = store.atisInfo.find((a) => a.airport === apt)
+  if (!info) return undefined
+  const letter = (info.atis || '').trim().toUpperCase()
+  return letter || undefined
+})
+
 const qnhStale = computed(() => {
   const given = props.strip.qnhGiven
   const cur = currentQnh.value
@@ -1460,6 +2510,37 @@ const qnhGivenMatches = computed(() => {
 const canSetQnh = computed(() =>
   canEditAssignedData.value && currentQnh.value != null
 )
+
+/** Paper col 6 bottom: ATIS letter + QNH stamp */
+const paperAtisQnhStamp = computed(() => {
+  const qnh = props.strip.qnhGiven
+  if (qnh == null) return ''
+  const letter = (props.strip.atisGiven || '').trim().toUpperCase()
+  return letter ? `${letter}${qnh}` : String(qnh)
+})
+
+const paperAtisQnhStale = computed(() => qnhStale.value)
+
+const canStampAtisQnh = computed(
+  () =>
+    canEditAssignedData.value &&
+    currentQnh.value != null &&
+    !!currentAtisLetter.value,
+)
+
+function onPaperAtisQnhClick() {
+  if (isArrLayout.value || isPaperEmptyFlightHolder.value) return
+  if (!canUsePaperClickspots.value || !canEditAssignedData.value) return
+  const curQnh = currentQnh.value
+  const curAtis = currentAtisLetter.value
+  const given = props.strip.qnhGiven
+  if (given != null && curQnh != null && given === curQnh) {
+    store.setQnhGiven(props.strip.id, null)
+    return
+  }
+  if (curQnh == null || !curAtis) return
+  store.setQnhGiven(props.strip.id, curQnh, curAtis)
+}
 
 /** Top ▲: QNH stale (orange) overrides REA (green) */
 const topArrowClass = computed(() => {
@@ -1914,6 +2995,12 @@ const cdmStatus = computed(() =>
 const isFls = computed(() => cdmStatus.value?.kind === 'fls')
 const isRea = computed(() => cdmStatus.value?.kind === 'rea')
 
+/**
+ * Paper col 6 top: scribbled "Rea" only when vIFF REA is set (same as ESSA CDM path).
+ * Display-only — no clickspot. Not tied to DE-ICE / READY / GS menu.
+ */
+const paperShowRea = computed(() => !isArrLayout.value && isRea.value)
+
 /** Badge above CTOT (or primary time if no CTOT). FLS uses primary label instead. */
 const networkStatusBadge = computed(() => {
   const sts = cdmStatus.value
@@ -2116,6 +3203,9 @@ const assrTitle = computed(() => {
   return `ASSR ${props.strip.squawk} - double-click for new code`
 })
 
+/** Paper FPS: short ASSR tooltip only */
+const paperAssrTitle = computed(() => (store.isPaperLook ? 'ASSR' : assrTitle.value))
+
 function onAssrClick() {
   if (!props.strip.canResetSquawk) return
   if (!props.strip.squawk) onResetSquawk()
@@ -2265,6 +3355,12 @@ watch(
   },
 )
 
+/** Zoom Size % → panel width / --zoom-strip-scale (RO disabled in large view) */
+watch(zoomStripScalePercent, () => {
+  if (!props.isLargeView) return
+  nextTick(() => scheduleStripScale(true))
+})
+
 /** Collapse expanders when transfer is initiated or peer assumes. */
 watch(
   () => [props.strip.transferPending, props.strip.ownedByOther] as const,
@@ -2304,11 +3400,16 @@ watch(
   },
 )
 onUnmounted(() => {
+  // Don't clearHtml5DragImage here — drop unmounts the source before dragend;
+  // removing the drag image early makes Edge show a blank strip ghost again.
   // Only the destination instance that started the clone should clear — never the origin
   // unmount (that would unhide the destination mid-flight).
   if (autoMoveCloneOwned) {
     autoMoveCloneEl?.remove()
     finishAutoMove()
+  }
+  if (printAnimOwned) {
+    finishPrintAnim()
   }
   if (tsatWindowTimer) clearInterval(tsatWindowTimer)
   if (tobtChangedTimer) clearTimeout(tobtChangedTimer)
@@ -2796,6 +3897,7 @@ function onDragStart(event: DragEvent) {
 
 function onDragEnd() {
   isDragging.value = false
+  markStripDragEnded()
 }
 
 // Touch drag handlers for drag areas (strip-left)
@@ -2813,6 +3915,9 @@ function onDragAreaTouchStart(event: TouchEvent) {
     target.closest('.vehicle-term-actions') ||
     target.closest('.exp-chip') ||
     target.closest('.ctrl-arrow') ||
+    target.closest('.pg-clr-check') ||
+    target.closest('.pg-cto-check') ||
+    target.closest('.pg-atis-qnh') ||
     target.closest('.remarks-input') ||
     target.closest('.eobt-edit-input') ||
     target.closest('.hp-edit-input') ||
@@ -2869,6 +3974,7 @@ function onDragAreaTouchEnd(event: TouchEvent) {
     if (result.isTrashDrop && result.data) {
       store.deleteStrip(result.data.stripId)
       isDragging.value = false
+      markStripDragEnded()
       touchStarted = false
       return
     }
@@ -2907,6 +4013,7 @@ function onDragAreaTouchEnd(event: TouchEvent) {
     }
 
     isDragging.value = false
+    markStripDragEnded()
   }
 
   touchStarted = false
@@ -3189,6 +4296,7 @@ function onContextMenu(event: MouseEvent) {
   sidRouteMenuOpen.value = false
   rwyMenuOpen.value = false
   cflMenuOpen.value = false
+  claimStripContextMenu(closeStripContextMenu)
   menuOpen.value = true
 }
 
@@ -3232,7 +4340,7 @@ function closeAssignmentMenus() {
 }
 
 function onSidClick(event: MouseEvent) {
-  if (!canEditAssignedData.value || isArrLayout.value) return
+  if (!canEditAssignedData.value || isArrLayout.value || isPaperEmptyFlightHolder.value) return
   menuPosition.value = menuCoordsFromEvent(event)
   closeAssignmentMenus()
   sidRouteMenuOpen.value = true
@@ -3307,7 +4415,7 @@ function onReleaseClick() {
   store.releaseStrip(props.strip.id)
 }
 
-/** Cancel pending outbound handoff by re-assuming */
+/** ASSUME (untracked / inbound handoff) or re-assume to cancel outbound handoff */
 function onAssumeClick() {
   menuOpen.value = false
   store.sendStripAction(props.strip.id, 'ASSUME')
@@ -3414,6 +4522,1088 @@ function onGroundStateClick(action: string) {
   border-color: #9a9a9a;
 }
 
+/* ── Paper FPS flight strips (ESGG) — cream body, VatFSP grid in SAAB size ── */
+.flight-strip.look-paper {
+  /*
+   * Same 400×50 design ratio as SAAB. Height follows --bay-scale (bay width) so
+   * strips match paper section headers; --strip-scale alone is a bit smaller
+   * (margins/padding) and made strips shorter than headers.
+   */
+  --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+  background: #fff;
+  font-family: "Microsoft Sans Serif", "Segoe UI", Arial, Helvetica, sans-serif;
+  /* Let WTC scribble circle paint past the letter box (bay + zoom) */
+  overflow: visible;
+  /* Side inset unchanged; vertical gap from bay flex `gap` / padding */
+  margin: 0 calc(4px * var(--strip-scale));
+  /* Soft drop under strip onto tan bay floor */
+  box-shadow:
+    0 calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) rgba(0, 0, 0, 0.28),
+    0 calc(2px * var(--strip-scale)) calc(3px * var(--strip-scale)) rgba(0, 0, 0, 0.2);
+}
+
+/*
+ * Paper cells: hover must not paint a fill (borders are background-image gradients —
+ * resetting `background` on :hover would erase them). Cursor may still change.
+ */
+.flight-strip.look-paper .paper-flight button:hover,
+.flight-strip.look-paper .paper-flight button:focus,
+.flight-strip.look-paper .paper-flight button:active {
+  background-color: transparent;
+  filter: none;
+  opacity: 1;
+  outline: none;
+  box-shadow: none;
+}
+.flight-strip.look-paper .paper-flight button,
+.flight-strip.look-paper .paper-flight [class^="pg-"],
+.flight-strip.look-paper .paper-flight [class*=" pg-"] {
+  -webkit-tap-highlight-color: transparent;
+}
+.flight-strip.look-paper .pg-clr-check:hover {
+  background-color: transparent;
+}
+.flight-strip.look-paper.is-large-view {
+  /* Zoom has no --bay-scale — height from panel width / --strip-scale (SAAB ratio) */
+  --strip-body-h: calc(50px * var(--strip-scale));
+  overflow: visible;
+  /* Beat .look-paper side margins so zoom fills the panel */
+  margin: 0;
+  width: 100%;
+}
+
+/* Flight holders: blue DEP, yellow ARR (bay headers = black; info strips = red/black) */
+.flight-strip.look-paper.strip-departure,
+.flight-strip.look-paper.strip-vfr,
+.flight-strip.look-paper.paper-empty-dep {
+  --strip-type: #3a72d4;
+  border-color: #3a72d4;
+}
+.flight-strip.look-paper.strip-arrival,
+.flight-strip.look-paper.paper-empty-arr {
+  --strip-type: #daa520;
+  border-color: #daa520;
+}
+
+/* Blank ARR/DEP note holders: yellow/blue type frame + paper flight grid */
+.flight-strip.look-paper.paper-empty-arr,
+.flight-strip.look-paper.paper-empty-dep {
+  --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+  /* Override .strip-note thin edge — use full type frame */
+  border-width: var(--frame-tb) var(--frame-side);
+  background: #fff;
+  margin: 0 calc(4px * var(--strip-scale));
+  box-shadow:
+    0 calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) rgba(0, 0, 0, 0.28),
+    0 calc(2px * var(--strip-scale)) calc(3px * var(--strip-scale)) rgba(0, 0, 0, 0.2);
+}
+
+/*
+ * Empty / empty_frame / HINDER / Bogsering / Snöröjning holder,
+ * plus paper local / cross (no purple — red rails + black TB):
+ * red rails full height (incl. corners); black top/bottom only between the rails
+ * so they meet on a vertical edge (no CSS border corner miter / join line).
+ * empty_frame also gets look-paper + paper flight grid inside.
+ */
+.flight-strip.paper-info-holder,
+.flight-strip.look-paper.paper-empty-frame,
+.flight-strip.look-paper.strip-local,
+.flight-strip.look-paper.strip-cross {
+  --strip-type: #c62828;
+  --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+  border-style: solid;
+  border-width: var(--frame-tb) var(--frame-side);
+  border-color: transparent;
+  background-color: #fff;
+  margin: 0 calc(4px * var(--strip-scale));
+  box-shadow:
+    0 calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) rgba(0, 0, 0, 0.28),
+    0 calc(2px * var(--strip-scale)) calc(3px * var(--strip-scale)) rgba(0, 0, 0, 0.2);
+  background-image:
+    linear-gradient(#c62828, #c62828),
+    linear-gradient(#c62828, #c62828),
+    linear-gradient(#111, #111),
+    linear-gradient(#111, #111);
+  background-size:
+    var(--frame-side) 100%,
+    var(--frame-side) 100%,
+    calc(100% - 2 * var(--frame-side)) var(--frame-tb),
+    calc(100% - 2 * var(--frame-side)) var(--frame-tb);
+  background-position:
+    left top,
+    right top,
+    top left var(--frame-side),
+    bottom left var(--frame-side);
+  background-repeat: no-repeat;
+  background-origin: border-box;
+  background-clip: border-box;
+}
+
+.paper-flight {
+  /* Sans with open zeros (no slash) — match prior FPS print look */
+  --pg-print: "Microsoft Sans Serif", "Segoe UI", Arial, Helvetica, sans-serif;
+  --pg-print-narrow: "Arial Narrow", "Segoe UI Condensed", "Microsoft Sans Serif", Arial, sans-serif;
+  /* Thick marker / felt-tip hand style for GRP stand */
+  --pg-felt: "Segoe Print", "Comic Sans MS", "Chalkboard SE", "Bradley Hand", cursive;
+  --pg-sub-fs: calc(10px * var(--strip-scale));
+  /* Track strip scale so bay (small) vs zoom (large) stay the same visual weight */
+  --pg-line: calc(1px * var(--strip-scale));
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  height: var(--strip-body-h);
+  min-height: var(--strip-body-h);
+  max-height: var(--strip-body-h);
+  background: #fff;
+  color: #000;
+  /* Clip FPL route (etc.) at inner edge of colour frame — may still span into CTOT col */
+  overflow: hidden;
+  font-family: var(--pg-print);
+}
+
+/* GRP stand — large felt-tip, vertically centered on the far right */
+.pg-grp-stand {
+  position: absolute;
+  right: calc(3px * var(--strip-scale));
+  top: 50%;
+  transform: translateY(-50%) rotate(-3deg);
+  z-index: 4;
+  pointer-events: none;
+  max-width: 42%;
+  overflow: visible;
+  font-family: var(--pg-felt);
+  font-size: calc(22px * var(--strip-scale));
+  font-weight: 700;
+  line-height: 0.9;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: #000;
+  /* Slight ink bleed / marker weight */
+  -webkit-text-stroke: calc(0.35px * var(--strip-scale)) #000;
+  paint-order: stroke fill;
+  text-shadow:
+    calc(0.4px * var(--strip-scale)) 0 0 #000,
+    0 calc(0.4px * var(--strip-scale)) 0 #000;
+  white-space: nowrap;
+}
+
+/* DEP: top half of last column so it clears the route string (same size as ARR) */
+.pg-grp-stand--dep {
+  top: 26%;
+}
+
+.paper-grid {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  /* Borders nudged left vs VatFSP — give cols 6–7 (RTE/RFL + CTOT/CRZ) more room */
+  grid-template-columns:
+    minmax(0, 1.9fr)
+    minmax(0, 0.9fr)
+    minmax(0, 1.9fr)
+    minmax(0, 0.9fr)
+    minmax(0, 0.9fr)
+    minmax(0, 1.0fr)
+    minmax(0, 1.75fr);
+  grid-template-rows: 1fr 1fr;
+  grid-template-areas:
+    "left time sid  adep ades rte ctot"
+    "left time sid  adep ades rte ctot";
+}
+
+.pg-left {
+  grid-area: left;
+  display: grid;
+  /* Four cells: C/S · TAS · FRUL+ATYP+WTC · ASSR (bottom = diagonal clickzone) */
+  grid-template-rows: 1.3fr 1fr 1fr 1fr;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  padding:
+    calc(1px * var(--strip-scale))
+    calc(3px * var(--strip-scale))
+    calc(1px * var(--strip-scale))
+    calc(5px * var(--strip-scale));
+}
+
+.pg-cs {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  padding-top: 0;
+  padding-left: calc(3px * var(--strip-scale));
+  margin-top: calc(-1px * var(--strip-scale));
+  cursor: pointer;
+  /* Callsign may paint over lower rows */
+  z-index: 2;
+}
+
+.pg-cs-text {
+  font-family: var(--pg-print-narrow);
+  font-weight: 600;
+  font-stretch: condensed;
+  font-size: calc(16px * var(--strip-scale));
+  letter-spacing: -0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: visible;
+  color: #000;
+  text-transform: uppercase;
+}
+
+.pg-tas,
+.pg-meta,
+.pg-assr {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  min-height: 0;
+  font-family: var(--pg-print);
+  font-size: var(--pg-sub-fs);
+  font-weight: 700;
+  line-height: 1;
+  box-sizing: border-box;
+  color: #000;
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  padding-right: calc(2px * var(--strip-scale));
+}
+
+/* Sit on bottom of row — same band as EOBT/ETA (top half, bottom-right) */
+.pg-tas {
+  align-items: flex-end;
+  padding-bottom: calc(1px * var(--strip-scale));
+  font-size: var(--pg-sub-fs);
+  letter-spacing: 0.04em;
+}
+
+.pg-meta {
+  gap: calc(5px * var(--strip-scale)); /* FRUL ↔ ATYP+WTC only */
+  overflow: visible;
+}
+
+.pg-frul {
+  font-family: "Times New Roman", Times, serif;
+  font-weight: 700;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/*
+ * Normal text flow: "A320 H" — one U+0020 between ATYP and WTC.
+ * Inline (not flex) so bay/zoom scale the space the same way.
+ */
+.pg-atyp-wtc {
+  position: relative;
+  display: inline;
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: inherit;
+  white-space: pre;
+  overflow: visible;
+  z-index: 2;
+}
+
+.pg-wtc {
+  position: relative;
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: 700;
+  line-height: 1;
+  color: #000;
+  letter-spacing: 0;
+  vertical-align: baseline;
+}
+
+.pg-wtc-scribble {
+  position: absolute;
+  /* Absolute so bay/zoom layout stay identical */
+  inset: -100%;
+  width: 300%;
+  height: 300%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+/* Ballpoint (kulspetspenna) — pronounced red scribble */
+.pg-wtc-pen {
+  stroke: #c62828;
+  stroke-width: 1.25;
+  stroke-opacity: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.pg-wtc-pen.pg-wtc-pen-blue {
+  stroke: #1565c0;
+  stroke-width: 1.35;
+  stroke-opacity: 0.9;
+}
+
+/* CFTO mark: short horizontal; stroke weight ≈ red WTC on-screen */
+.pg-cfto-line {
+  width: calc(15px * var(--strip-scale));
+  height: calc(10px * var(--strip-scale));
+}
+.pg-cfto-pen.pg-wtc-pen-blue {
+  /* 1.25 in WTC’s oversized viewBox ≈ ~2 here */
+  stroke-width: 2;
+  stroke-opacity: 1;
+}
+
+/* CTL mark: scribbled L — larger + bolder than CFTO dash */
+.pg-ctl-l {
+  width: calc(14px * var(--strip-scale));
+  height: calc(17px * var(--strip-scale));
+  overflow: visible;
+}
+.pg-ctl-pen.pg-wtc-pen-blue {
+  stroke-width: 2.6;
+  stroke-opacity: 1;
+}
+
+.pg-assr {
+  position: relative;
+  letter-spacing: 0.06em;
+}
+
+.pg-assr-val {
+  position: relative;
+  z-index: 0;
+}
+
+/* Left half of bottom col-1 cell — rising / (refuse or APP XFER) */
+.pg-xfer-diag-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/*
+ * All cell lines — same linear-gradient paint + --pg-line in the thin axis
+ * (solid height/width bars rasterize differently from gradient vlines).
+ */
+.pg-vline {
+  background-image: linear-gradient(#000, #000);
+  background-size: var(--pg-line) 100%;
+  background-position: 100% 0;
+  background-repeat: no-repeat;
+}
+
+/* Mid horizontal (cols 2, 4, 5, 6) — full-cell overlay, line at true 50% */
+.pg-mid-rule {
+  position: relative;
+}
+.pg-mid-rule::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(#000, #000);
+  background-size: 100% var(--pg-line);
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Mid + full-height right edge */
+.pg-mid-rule.pg-vline {
+  background-image: linear-gradient(#000, #000);
+  background-size: var(--pg-line) 100%;
+  background-position: 100% 0;
+  background-repeat: no-repeat;
+}
+
+.pg-time {
+  grid-area: time;
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  /* Symmetric vertical pad so mid-line matches cols 4–5 */
+  padding: 0;
+  font-family: var(--pg-print);
+  font-size: var(--pg-sub-fs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pg-time-eobt {
+  grid-row: 1;
+  align-self: end;
+  justify-self: end;
+  padding: 0 calc(5px * var(--strip-scale)) calc(1px * var(--strip-scale))
+    calc(2px * var(--strip-scale));
+  color: #000;
+  position: relative;
+  z-index: 2;
+}
+
+/*
+ * Col 2 bottom: always two equal halves.
+ * ARR: CTL | ATA · DEP: .pg-time-bot-cfto spans full (CFTO|ATD) · DEP+CTOT: slot | CFTO|ATD
+ */
+.pg-time-bot {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  z-index: 2;
+  align-items: stretch;
+  column-gap: 0;
+}
+
+/* DEP without CTOT: CFTO|ATD wrapper is the only child — span both halves */
+.pg-time-bot:not(.pg-time-bot--ctot) > .pg-time-bot-cfto {
+  grid-column: 1 / -1;
+}
+
+/* DEP+CTOT: narrower CTOT−5 slot → more room for CFTO|ATD */
+.pg-time-bot--ctot {
+  grid-template-columns: minmax(0, 0.4fr) minmax(0, 0.6fr);
+}
+
+.pg-time-bot-cfto {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pg-ctot-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  /* Tight to black col edge (left) and mid scribble (right) */
+  padding: 0 calc(2px * var(--strip-scale)) 0 calc(1px * var(--strip-scale));
+  box-sizing: border-box;
+}
+
+/* Beat .pg-atd-val blue — CTOT−5 is red felt like the split line */
+.pg-atd-val.pg-ctot-slot-val {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  color: #c62828;
+  -webkit-text-stroke: calc(0.15px * var(--strip-scale)) #c62828;
+  transform: rotate(-4deg);
+  transform-origin: center center;
+}
+
+.pg-ctot-split {
+  position: absolute;
+  /* Align with CTOT−5 | CFTO boundary (.pg-time-bot--ctot 0.4fr / 0.6fr) */
+  left: 40%;
+  top: 0;
+  bottom: 0;
+  width: calc(5px * var(--strip-scale));
+  height: 100%;
+  min-height: calc(12px * var(--strip-scale));
+  transform: translateX(-50%);
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pg-ctot-split-pen {
+  stroke: #c62828;
+  stroke-width: 1.85;
+  stroke-opacity: 1;
+}
+
+/* Tight fit when CTOT split takes half the column */
+.pg-time-bot--ctot .pg-atd-val {
+  font-size: calc(11px * var(--strip-scale));
+}
+.pg-time-bot--ctot .pg-cto-check {
+  /* Reach left toward CTOT split; leave a hair of gap */
+  justify-content: flex-start;
+  padding: 0 0 0 calc(1px * var(--strip-scale));
+}
+.pg-time-bot--ctot .pg-atd-cell {
+  padding: 0;
+}
+/* Mid-length dash toward the red split; ATD keeps the right half */
+.pg-time-bot--ctot .pg-cfto-line {
+  width: calc(10px * var(--strip-scale));
+  height: calc(8px * var(--strip-scale));
+}
+/*
+ * Wider box raises stroke scale; keep on-screen weight ≈ .pg-ctot-split-pen.
+ */
+.pg-time-bot--ctot .pg-cfto-pen.pg-wtc-pen-blue {
+  stroke-width: 3.7;
+}
+
+.pg-cto-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 calc(2px * var(--strip-scale));
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #000;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.pg-cto-check:disabled,
+.pg-cto-check.disabled,
+.pg-clr-check:disabled,
+.pg-clr-check.disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+.pg-cto-line {
+  width: calc(22px * var(--strip-scale));
+  height: calc(10px * var(--strip-scale));
+  overflow: visible;
+}
+
+.pg-atd-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 calc(2px * var(--strip-scale)) 0 0;
+  box-sizing: border-box;
+}
+
+.pg-atd-val {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  /* Same hand/scribble face as GRP stand — blue kulspetspenna */
+  font-family: var(--pg-felt);
+  font-size: calc(14px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 0.9;
+  color: #1565c0;
+  transform: rotate(-4deg);
+  -webkit-text-stroke: calc(0.2px * var(--strip-scale)) #1565c0;
+  paint-order: stroke fill;
+}
+
+.pg-sid {
+  grid-area: sid;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  align-items: center;
+  justify-items: center;
+  padding: 0 calc(2px * var(--strip-scale));
+  cursor: pointer;
+}
+
+.pg-sid-val {
+  grid-row: 2;
+  min-width: 0;
+  max-width: 100%;
+  /* Match .pg-cs-text */
+  font-family: var(--pg-print-narrow);
+  font-weight: 600;
+  font-stretch: condensed;
+  font-size: calc(16px * var(--strip-scale));
+  letter-spacing: -0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #000;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.pg-sid-arr-empty {
+  /* ARR col 3 — G/A arrow zone at bottom; stand via GRP scribble on far right */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  pointer-events: none;
+}
+
+.pg-goa-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 50%;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.pg-goa-zone.pg-goa-hit {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pg-goa-arrow {
+  width: calc(36px * var(--strip-scale));
+  height: calc(18px * var(--strip-scale));
+  overflow: visible;
+}
+
+.pg-goa-pen.pg-wtc-pen-blue {
+  stroke-width: 2.4;
+  stroke-opacity: 1;
+}
+
+.pg-adep,
+.pg-ades {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: stretch;
+  min-width: 0;
+  min-height: 0;
+  font-family: var(--pg-print);
+  font-size: calc(10px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.pg-adep { grid-area: adep; }
+.pg-ades { grid-area: ades; }
+
+.pg-clr-check {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #000;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* Blå kulspetspenna check */
+.pg-clr-mark {
+  width: calc(20px * var(--strip-scale));
+  height: calc(20px * var(--strip-scale));
+  overflow: visible;
+}
+
+.pg-clr-mark path {
+  fill: none;
+  stroke: #1565c0;
+  stroke-width: 1.15;
+  stroke-opacity: 0.95;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* DCL send — felt "DCL" in CLR read (same hand as ATD / GRP stand) */
+.pg-dcl-mark {
+  display: block;
+  font-family: var(--pg-felt);
+  font-size: calc(13px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #1565c0;
+  transform: rotate(-6deg);
+  -webkit-text-stroke: calc(0.2px * var(--strip-scale)) #1565c0;
+  paint-order: stroke fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ARR top half spacer (DEP uses .pg-clr-check) — keeps ICAO on bottom row */
+.pg-ad-top {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Bottom row of ADEP/ADES: RWY top-justified, ICAO bottom */
+.pg-ad-bot {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.pg-ad-code {
+  flex: 1 1 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 0;
+  padding-bottom: calc(1px * var(--strip-scale));
+}
+
+/* Non-active RWY — blue felt, same bottom row as ADEP/ADES, top of that row */
+.pg-rwy-scribble {
+  flex: 0 0 auto;
+  align-self: center;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+  margin-top: calc(1px * var(--strip-scale));
+  font-family: var(--pg-felt);
+  font-size: calc(11px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: #1565c0;
+  text-transform: uppercase;
+  transform: rotate(-5deg);
+  -webkit-text-stroke: calc(0.2px * var(--strip-scale)) #1565c0;
+  paint-order: stroke fill;
+  white-space: nowrap;
+}
+/* Half-height right edge (cols 4 & 6) — same gradient paint as full vlines */
+.pg-adep::after,
+.pg-rte-rfl::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--pg-line);
+  height: 50%;
+  background-image: linear-gradient(#000, #000);
+  background-size: var(--pg-line) 100%;
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+.pg-rte-rfl {
+  grid-area: rte;
+  position: relative;
+  display: grid;
+  /* 4 bands: mid-line sits between 2 and 3 */
+  grid-template-rows: 1fr 1fr 1fr 1fr;
+  min-width: 0;
+  overflow: visible;
+  z-index: 2;
+}
+
+.pg-band {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Col 6 bands 1–2: REA scribble (display-only; auto on ready) */
+.pg-rea-zone {
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 0;
+  min-width: 0;
+  padding: calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) 0;
+  pointer-events: none;
+}
+
+.pg-fpl {
+  /* Band 3 — upper part of lower half; may spill into col 7 */
+  display: flex;
+  align-items: flex-end;
+  min-height: 0;
+  padding: 0 calc(2px * var(--strip-scale)) 0;
+  font-family: var(--pg-print);
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: visible;
+  text-transform: uppercase;
+  line-height: 1;
+  position: relative;
+  z-index: 2;
+}
+
+/* Col 6 band 4: ATIS + QNH stamp clickspot */
+.pg-atis-qnh {
+  grid-row: 4;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0 calc(2px * var(--strip-scale)) calc(1px * var(--strip-scale));
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #000;
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  text-align: left;
+}
+
+.pg-atis-qnh:disabled {
+  cursor: default;
+}
+
+.pg-atis-qnh-val {
+  position: relative;
+  display: inline-block;
+  font-family: var(--pg-print);
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+  color: #000;
+}
+
+.pg-atis-qnh-scribble {
+  position: absolute;
+  inset: -80% -40%;
+  width: 180%;
+  height: 260%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+.pg-atis-qnh.stale .pg-atis-qnh-val {
+  color: #b06a00;
+}
+
+.pg-ctot {
+  grid-area: ctot;
+  display: grid;
+  grid-template-rows: 1fr 1fr 1fr 1fr;
+  min-width: 0;
+  min-height: 0;
+  font-family: var(--pg-print);
+  font-size: calc(11px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  position: relative;
+  z-index: 3;
+  overflow: visible;
+}
+
+.pg-ctot-top {
+  /* Bands 1–2 (upper half) — plain print, no click */
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: calc(2px * var(--strip-scale)) calc(2px * var(--strip-scale)) 0;
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.pg-ctot-val {
+  position: relative;
+  display: inline-block;
+  line-height: 1;
+}
+
+.pg-ctot-scribble {
+  position: absolute;
+  inset: -55% -35%;
+  width: 170%;
+  height: 210%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+.pg-crz {
+  /* Band 4 — bottom row; same type size as FPL route */
+  grid-row: 4;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  min-height: 0;
+  padding: 0 calc(2px * var(--strip-scale)) calc(1px * var(--strip-scale));
+  font-family: var(--pg-print);
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+/* ARR: EOBT in lower half */
+.pg-arr-eobt {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0 calc(2px * var(--strip-scale)) calc(1px * var(--strip-scale));
+}
+
+.pg-rea {
+  position: relative;
+  display: inline-block;
+  font-family: var(--pg-print);
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  color: #000;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.pg-rea-scribble {
+  position: absolute;
+  inset: -100%;
+  width: 300%;
+  height: 300%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 3;
+}
+
+.paper-flight .ghost {
+  color: #bbb;
+  font-weight: 500;
+}
+
+/* Paper FPS blank / info strips */
+.paper-info-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: var(--strip-body-h);
+  min-height: var(--strip-body-h);
+  max-height: var(--strip-body-h);
+  display: flex;
+  align-items: stretch;
+  background: #f7f4ee;
+  overflow: hidden;
+}
+
+.paper-info-empty {
+  background: #f7f4ee;
+}
+
+.paper-info-hinder {
+  background: #d32f2f;
+}
+
+.paper-info-full {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: #fff;
+  font-weight: 800;
+  /* Cap below full-box fit — HINDER reads better a notch smaller */
+  font-size: calc(26px * var(--strip-scale));
+  letter-spacing: 0.06em;
+  line-height: 1;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.paper-info-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  width: 42%;
+  max-width: 42%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0 calc(4px * var(--strip-scale));
+  overflow: hidden;
+  color: #fff;
+  font-weight: 700;
+  /* Start large; .fit-font shrinks to the panel (two-line strips) */
+  font-size: calc(36px * var(--strip-scale));
+  line-height: 1.05;
+  font-family: Arial, Helvetica, sans-serif;
+  box-sizing: border-box;
+}
+
+.paper-info-bogsering-text {
+  font-size: calc(25px * var(--strip-scale));
+}
+
+.paper-info-panel-2 {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  font-size: calc(22px * var(--strip-scale));
+  line-height: 1.1;
+}
+
+.paper-info-bogsering .paper-info-panel {
+  background: #d32f2f;
+}
+
+.paper-info-snorojning .paper-info-panel {
+  background: #d32f2f;
+}
+
+.paper-info-prel_rojning .paper-info-panel {
+  background: #2e5a3c;
+}
+
+.paper-info-bogsering,
+.paper-info-snorojning,
+.paper-info-prel_rojning {
+  background: #fff;
+}
+
 /* Vehicle strips: dark grey type frame */
 .strip-vehicle {
   --strip-type: #4a4a4a;
@@ -3426,6 +5616,8 @@ function onGroundStateClick(action: string) {
 
 .flight-strip.no-drag {
   cursor: default;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .flight-strip.is-large-view {
@@ -3445,7 +5637,7 @@ function onGroundStateClick(action: string) {
 }
 
 .strip-scribble-stroke {
-  stroke: #1a1a1a;
+  /* stroke colour set per-polyline (blue/red kulspetspenna) */
   stroke-linecap: round;
   stroke-linejoin: round;
   /* Thickness in CSS px — avoids X/Y stretch from non-square strip viewBox */
@@ -3453,7 +5645,8 @@ function onGroundStateClick(action: string) {
 }
 
 /* Destination placeholder while fly-clone is in flight — must not paint */
-.flight-strip.auto-move-hidden {
+.flight-strip.auto-move-hidden,
+.flight-strip.print-anim-hidden {
   opacity: 0;
   visibility: hidden;
 }

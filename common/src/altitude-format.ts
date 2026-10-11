@@ -132,3 +132,18 @@ export function formatStripAltitude(
   }
   return String(Math.round(feet / 100))
 }
+
+/**
+ * Paper FPS cruise level: Axxx at/below TA, Fxxx above TA (e.g. A050 / F350).
+ */
+export function formatPaperCruiseLevel(
+  input: string | number | null | undefined,
+  transitionAltitudeFt: number = DEFAULT_TRANSITION_ALTITUDE_FT,
+): string {
+  const feet = parseAltitudeToFeet(input)
+  if (feet == null) return ''
+  const hundreds = Math.round(feet / 100)
+  if (hundreds < 1) return ''
+  const body = String(hundreds).padStart(3, '0')
+  return feet <= transitionAltitudeFt ? `A${body}` : `F${body}`
+}

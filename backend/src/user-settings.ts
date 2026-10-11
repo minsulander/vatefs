@@ -4,8 +4,16 @@
 
 import fs from "fs"
 import path from "path"
-import type { DclMode, UiSettings } from "@vatefs/common"
+import type { DclMode, StripPrintMode, StripPrintSound, UiSettings } from "@vatefs/common"
 import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
+
+function isStripPrintSound(value: unknown): value is StripPrintSound {
+    return value === "off" || value === "short" || value === "long"
+}
+
+function isStripPrintMode(value: unknown): value is StripPrintMode {
+    return value === "auto" || value === "manual"
+}
 
 export interface UserSettings {
     activeConfig?: string
@@ -22,11 +30,15 @@ export interface UserSettings {
     showAppDepXcFrequency?: boolean
     autoParkEnabled?: boolean
     autoDepSquawkCfl?: boolean
-    equalBayColumns?: boolean
     showTobtSetByA?: boolean
+    stripPrintSound?: StripPrintSound
+    stripPrintMode?: StripPrintMode
     /** Manual ESSA role selection (physical positions) */
     essaRoles?: string[]
     essaRolesManual?: boolean
+    /** Manual ESGG paper role selection (CD / GND / TWR) */
+    esggRoles?: string[]
+    esggRolesManual?: boolean
 }
 
 let settingsPath: string | undefined
@@ -66,7 +78,9 @@ export function loadUserSettings(): UserSettings {
 export function saveUserSettings(update: Partial<UserSettings>) {
     if (!settingsPath) return
     const current = loadUserSettings()
-    const merged = { ...current, ...update }
+    const merged = { ...current, ...update } as UserSettings & { equalBayColumns?: boolean }
+    // Drop removed preference if still present in older settings files
+    delete merged.equalBayColumns
     try {
         fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2), "utf-8")
     } catch (err) {
@@ -111,13 +125,15 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.autoDepSquawkCfl === "boolean"
                 ? saved.autoDepSquawkCfl
                 : DEFAULT_UI_SETTINGS.autoDepSquawkCfl,
-        equalBayColumns:
-            typeof saved.equalBayColumns === "boolean"
-                ? saved.equalBayColumns
-                : DEFAULT_UI_SETTINGS.equalBayColumns,
         showTobtSetByA:
             typeof saved.showTobtSetByA === "boolean"
                 ? saved.showTobtSetByA
                 : DEFAULT_UI_SETTINGS.showTobtSetByA,
+        stripPrintSound: isStripPrintSound(saved.stripPrintSound)
+            ? saved.stripPrintSound
+            : DEFAULT_UI_SETTINGS.stripPrintSound,
+        stripPrintMode: isStripPrintMode(saved.stripPrintMode)
+            ? saved.stripPrintMode
+            : DEFAULT_UI_SETTINGS.stripPrintMode,
     }
 }

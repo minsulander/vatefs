@@ -21,6 +21,7 @@
               :section-id="sectionId"
               is-large-view
               :active-scribble-stroke="activeStroke"
+              :active-scribble-color="drawInk"
               @close-large-view="close"
             />
 
@@ -39,16 +40,42 @@
           </div>
 
           <div class="strip-zoom-keys" :style="{ width: keyColWidth + 'px' }">
+            <!-- Paper + toggle: off → blue → red → off -->
             <button
-              v-if="scribbleMode === 'toggle' && !isNote"
+              v-if="useMergedPenTool && isPaperLook"
               type="button"
-              class="zoom-key"
-              :class="{ active: penMode }"
-              :title="penMode ? 'Pen on - tap to use strip controls' : 'Enable scribble'"
-              @click="togglePen"
+              class="zoom-key zoom-key-ink"
+              :class="penToolInkClass"
+              :title="penToolTitle"
+              @click="cyclePenTool"
             >
-              <v-icon :size="toolIconSize" class="zoom-key-icon">{{ penMode ? 'mdi-check' : 'mdi-pencil' }}</v-icon>
+              <v-icon :size="toolIconSize" class="zoom-key-icon zoom-ink-icon">{{ penToolIcon }}</v-icon>
             </button>
+            <!-- SAAB + toggle: off ↔ black only -->
+            <button
+              v-else-if="useMergedPenTool"
+              type="button"
+              class="zoom-key zoom-key-ink"
+              :class="penMode ? 'ink-black' : 'ink-off'"
+              :title="penMode ? 'Pen on - tap to turn off' : 'Pen off - tap to scribble'"
+              @click="togglePenBlack"
+            >
+              <v-icon :size="toolIconSize" class="zoom-key-icon zoom-ink-icon">{{
+                penMode ? 'mdi-pencil' : 'mdi-pencil-off'
+              }}</v-icon>
+            </button>
+            <!-- Paper always-on / notes: blue ↔ red -->
+            <button
+              v-else-if="isPaperLook"
+              type="button"
+              class="zoom-key zoom-key-ink"
+              :class="penColor === 'blue' ? 'ink-blue' : 'ink-red'"
+              :title="penColor === 'blue' ? 'Blue pen - tap for red' : 'Red pen - tap for blue'"
+              @click="togglePenColor"
+            >
+              <v-icon :size="toolIconSize" class="zoom-key-icon zoom-ink-icon">mdi-pencil</v-icon>
+            </button>
+            <!-- SAAB always-on: no colour control (always black) -->
             <button
               type="button"
               class="zoom-key"
@@ -111,14 +138,24 @@ import {
   useZoomStripScalePercent,
 } from '@/composables/useStripZoomScale'
 import {
+  type PaperScribbleTag,
   type ScribbleBandScreen,
+  type ScribbleInk,
+  type ScribbleRect,
   clearStripScribbles,
   clientToScribble,
+  getClrScribbleTags,
+  getStripScribbles,
+  hasClrScribble,
+  hasShapeMatchedPaperScribble,
   measureScribbleBands,
   pushStripScribble,
+  strokeMatchesClrBox,
+  strokeMatchesRisingDiagonal,
   undoStripScribble,
   useStripScribbles,
 } from '@/composables/useStripScribbles'
+import { useEfsStore } from '@/store/efs'
 import FlightStrip from './FlightStrip.vue'
 
 export interface StripZoomAnchor {
@@ -152,6 +189,7 @@ const overlayEl = ref<HTMLElement | null>(null)
 const stageEl = ref<HTMLElement | null>(null)
 const drawEl = ref<SVGSVGElement | null>(null)
 
+const store = useEfsStore()
 const efsScale = useEfsScaleValue()
 const zoomScalePercent = useZoomStripScalePercent()
 /** Draft while dragging — strip size applies only on release (`change`). */
@@ -160,13 +198,40 @@ const scribbleMode = useStripScribbleMode()
 const stripId = computed(() => props.strip.id)
 /** Notes always draw in zoom (no pen toggle). Vehicles match aircraft (pen toggle). */
 const isNote = computed(() => props.strip.stripType === 'note')
+const isPaperLook = computed(() => store.isPaperLook)
 const { hasScribbles } = useStripScribbles(stripId)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripId)
 
 const penMode = ref(false)
+/** Paper ink; reset to blue every time zoom opens. SAAB always draws black. */
+const penColor = ref<ScribbleInk>('blue')
 const activeStroke = ref<string | null>(null)
 const drawing = ref(false)
+
+/** Effective ink for new strokes */
+const drawInk = computed<ScribbleInk>(() =>
+  isPaperLook.value ? penColor.value : 'black',
+)
+
+/** Settings “pen button” (toggle) — merge enable + colour into one control */
+const useMergedPenTool = computed(
+  () => scribbleMode.value === 'toggle' && !isNote.value,
+)
+
+const penToolIcon = computed(() => (penMode.value ? 'mdi-pencil' : 'mdi-pencil-off'))
+const penToolInkClass = computed(() => {
+  if (!penMode.value) return 'ink-off'
+  return penColor.value === 'blue' ? 'ink-blue' : 'ink-red'
+})
+const penToolTitle = computed(() => {
+  if (!penMode.value) return 'Pen off - tap for blue'
+  if (penColor.value === 'blue') return 'Blue pen - tap for red'
+  return 'Red pen - tap to turn off'
+})
 const stageHeight = ref(0)
+/** Locked shell position — avoid recentering on every strip-height RO tick (zoom twitch). */
+const shellLeft = ref(0)
+const shellTop = ref(0)
 const bands = ref<ScribbleBandScreen[]>([])
 
 let pointerPending = false
@@ -178,18 +243,21 @@ let stageResizeObs: ResizeObserver | null = null
 
 const zoomFactor = computed(() => zoomScalePercent.value / 100)
 
+const keyColWidth = computed(() =>
+  Math.max(44, Math.round(KEY_COL_REF_PX * zoomFactor.value)),
+)
+
 const panelWidth = computed(() => {
-  const scaled = Math.round(ZOOM_REF_WIDTH_PX * zoomFactor.value)
+  // Wide paper bays can exceed ZOOM_REF — size from the bay strip so zoom is never narrower
+  const anchorW = Math.round(props.anchorRect?.width ?? 0)
+  const refW = Math.max(ZOOM_REF_WIDTH_PX, Math.round(anchorW * 1.15))
+  const scaled = Math.round(refW * zoomFactor.value)
   const max =
     typeof window !== 'undefined'
       ? Math.floor(window.innerWidth * 0.94 - keyColWidth.value)
       : scaled
-  return Math.max(280, Math.min(scaled, max))
+  return Math.max(280, anchorW, Math.min(scaled, max))
 })
-
-const keyColWidth = computed(() =>
-  Math.max(44, Math.round(KEY_COL_REF_PX * zoomFactor.value)),
-)
 
 /** Compact bottom-right slider chrome — Settings UI scale only. */
 const scaleBarHeight = computed(() =>
@@ -208,11 +276,26 @@ const penActive = computed(
 const shellStyle = computed(() => {
   const pw = panelWidth.value
   const totalW = pw + keyColWidth.value
+  return {
+    left: `${shellLeft.value}px`,
+    top: `${shellTop.value}px`,
+    width: `${totalW}px`,
+    '--zoom-panel-w': `${pw}px`,
+    /** Deterministic strip scale for zoom (avoids RO width dither → --strip-scale twitch) */
+    '--zoom-strip-scale': String(Math.round((pw / 400) * 50) / 50),
+    '--zoom-scale-bar-h': `${scaleBarHeight.value}px`,
+    '--zoom-scale-bar-w': `${scaleBarWidth.value}px`,
+  }
+})
+
+/** Place shell from anchor / viewport. Call on open + Size % commit — not on height RO. */
+function placeShell() {
+  const pw = panelWidth.value
+  const totalW = pw + keyColWidth.value
   const barH = scaleBarHeight.value
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280
   const anchor = props.anchorRect
-
   const stageH =
     stageHeight.value > 0
       ? stageHeight.value
@@ -233,17 +316,9 @@ const shellStyle = computed(() => {
     top = Math.max(16, (vh - estH) / 3)
   }
 
-  left = Math.max(4, Math.min(left, vw - totalW - 4))
-  top = Math.max(4, Math.min(top, vh - estH - 4))
-  return {
-    left: `${Math.round(left)}px`,
-    top: `${Math.round(top)}px`,
-    width: `${totalW}px`,
-    '--zoom-panel-w': `${pw}px`,
-    '--zoom-scale-bar-h': `${barH}px`,
-    '--zoom-scale-bar-w': `${scaleBarWidth.value}px`,
-  }
-})
+  shellLeft.value = Math.round(Math.max(4, Math.min(left, vw - totalW - 4)))
+  shellTop.value = Math.round(Math.max(4, Math.min(top, vh - estH - 4)))
+}
 
 function onZoomScaleDrag(event: Event) {
   const el = event.target as HTMLInputElement
@@ -261,17 +336,40 @@ watch(zoomScalePercent, (v) => {
   sliderPercent.value = v
 })
 
-function measureStage() {
+const STAGE_HEIGHT_DEADBAND_PX = 3
+
+function measureStage(opts?: { relocate?: boolean }) {
   const stage = stageEl.value
   if (!stage) {
     bands.value = []
     return
   }
-  if (stage.clientHeight > 0) stageHeight.value = stage.clientHeight
+  const h = stage.clientHeight
+  if (h > 0 && Math.abs(h - stageHeight.value) >= STAGE_HEIGHT_DEADBAND_PX) {
+    stageHeight.value = h
+  }
   bands.value = measureScribbleBands(stage)
+  if (opts?.relocate) placeShell()
 }
 
-function togglePen() {
+/** Paper toggle mode: off → blue → red → off */
+function cyclePenTool() {
+  if (!penMode.value) {
+    penMode.value = true
+    penColor.value = 'blue'
+    return
+  }
+  if (penColor.value === 'blue') {
+    penColor.value = 'red'
+    return
+  }
+  penMode.value = false
+  penColor.value = 'blue'
+  resetDrawPointerState()
+}
+
+/** SAAB toggle mode: off ↔ on (black ink only) */
+function togglePenBlack() {
   penMode.value = !penMode.value
   if (!penMode.value) resetDrawPointerState()
 }
@@ -292,7 +390,7 @@ function clickThroughToStrip(clientX: number, clientY: number) {
   if (!el) return
   const target =
     (el.closest(
-      'button, a, input, select, textarea, [role="button"], .action-button, .callsign-box, .cell, .vehicle-cell, .exp-chip, .ctrl-arrow, .exp-assr, .exp-rmk, .strip-time',
+      'button, a, input, select, textarea, [role="button"], .action-button, .callsign-box, .cell, .vehicle-cell, .exp-chip, .ctrl-arrow, .exp-assr, .exp-rmk, .strip-time, .pg-clr-check, .pg-cto-check, .pg-atis-qnh',
     ) as HTMLElement | null) ?? el
   target.focus?.({ preventScroll: true })
   target.dispatchEvent(
@@ -308,12 +406,40 @@ function clickThroughToStrip(clientX: number, clientY: number) {
     }),
   )
   nextTick(() => {
-    requestAnimationFrame(measureStage)
+    requestAnimationFrame(() => measureStage())
   })
 }
 
+function togglePenColor() {
+  penColor.value = penColor.value === 'blue' ? 'red' : 'blue'
+}
+
+function onEscapePenOff() {
+  if (useMergedPenTool.value && penMode.value) {
+    penMode.value = false
+    penColor.value = 'blue'
+    resetDrawPointerState()
+    return true
+  }
+  return false
+}
+
 function undoStroke() {
-  undoStripScribble(props.strip.id)
+  const id = props.strip.id
+  const strokes = getStripScribbles(id)
+  const last = strokes[strokes.length - 1]
+  undoStripScribble(id)
+  // Diagonal / that triggered UTFLYGNING→APP XFER: undo cancels the pending outbound (re-assume)
+  if (
+    last?.tag === 'xfer-app' &&
+    store.isPaperLook &&
+    !hasClrScribble(id, 'xfer-app')
+  ) {
+    const s = store.strips.get(id) ?? props.strip
+    if (s.transferPending === 'out') {
+      store.sendStripAction(id, 'ASSUME')
+    }
+  }
 }
 
 function clearStrokes() {
@@ -321,18 +447,84 @@ function clearStrokes() {
   clearStripScribbles(props.strip.id)
 }
 
+/**
+ * Apply CLR / CTO / transfer-refuse from tagged scribbles only when zoom closes —
+ * avoids auto-move while still zoomed.
+ * Flag is set only when freehand ink roughly matches the generated mark;
+ * mismatched ink stays tagged so clickzones can still clear it.
+ */
+function flushHotspotFlagsFromScribbles() {
+  const id = props.strip.id
+  const tags = getClrScribbleTags(id)
+  if (
+    !tags.read &&
+    !tags.correct &&
+    !tags.cto &&
+    !tags.ctl &&
+    !tags.goa &&
+    !tags.xferRefuse &&
+    !tags.xferApp
+  ) {
+    return
+  }
+  const s = store.strips.get(id) ?? props.strip
+  // Other-owned: only allow refuse scribble on inbound transfer (same as drag/clickspots)
+  const canToggleClrCto = store.allowMoveOwnedStrip(s)
+  if (canToggleClrCto) {
+    if (tags.read && hasShapeMatchedPaperScribble(id, 'clr-read')) {
+      const alreadyOn = !!(s.clearance || s.clearanceReadback || s.clearanceRead)
+      if (!alreadyOn) store.sendStripAction(id, 'toggleClearanceRead')
+    }
+    if (tags.correct && hasShapeMatchedPaperScribble(id, 'clr-correct')) {
+      const alreadyOn = !!(s.clearance || s.clearanceReadback)
+      if (!alreadyOn) store.sendStripAction(id, 'toggleClearanceReadback')
+    }
+    if (tags.cto && !s.clearedForTakeoff && hasShapeMatchedPaperScribble(id, 'cto')) {
+      store.sendStripAction(id, 'CTO')
+    }
+    if (tags.ctl && !s.clearedToLand && hasShapeMatchedPaperScribble(id, 'ctl')) {
+      store.sendStripAction(id, 'CTL')
+    }
+    // ARR go-around arrow → soft GA (EFSGA, not TopSky MISAP_)
+    if (tags.goa && !s.missedApproach && hasShapeMatchedPaperScribble(id, 'goa')) {
+      store.sendStripAction(id, 'softGA')
+    }
+  }
+  // ESGG paper: rising diagonal in leftmost col refuses pending inbound transfer
+  if (
+    tags.xferRefuse &&
+    store.isPaperLook &&
+    s.transferPending === 'in' &&
+    hasShapeMatchedPaperScribble(id, 'xfer-refuse')
+  ) {
+    store.sendStripAction(id, 'REFUSE')
+  }
+  // ESGG paper: rising diagonal in UTFLYGNING / G/A → XFER to APP (pin bottom)
+  // Skip if already pending out (e.g. bay/zoom clickspot already fired)
+  if (
+    tags.xferApp &&
+    store.isPaperLook &&
+    canToggleClrCto &&
+    s.transferPending !== 'in' &&
+    s.transferPending !== 'out' &&
+    hasShapeMatchedPaperScribble(id, 'xfer-app') &&
+    (s.missedApproach ||
+      s.sectionId === 'ctr_dep' ||
+      s.sectionId.endsWith('_ctr_dep'))
+  ) {
+    store.sendStripAction(id, 'XFER')
+  }
+}
+
 function close() {
   penMode.value = false
   resetDrawPointerState()
+  flushHotspotFlagsFromScribbles()
   emit('update:modelValue', false)
 }
 
 function onEscape() {
-  if (scribbleMode.value === 'toggle' && penMode.value) {
-    penMode.value = false
-    resetDrawPointerState()
-    return
-  }
+  if (onEscapePenOff()) return
   close()
 }
 
@@ -392,6 +584,92 @@ function onDrawPointerMove(event: PointerEvent) {
   activeStroke.value += ` ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`
 }
 
+/** Map a hotspot element into canonical scribble space. */
+function hotspotScribbleRect(el: Element | null): ScribbleRect | null {
+  if (!el || bands.value.length === 0) return null
+  const r = el.getBoundingClientRect()
+  if (r.width <= 0 || r.height <= 0) return null
+  const corners = [
+    clientToScribble(r.left, r.top, bands.value),
+    clientToScribble(r.right, r.top, bands.value),
+    clientToScribble(r.left, r.bottom, bands.value),
+    clientToScribble(r.right, r.bottom, bands.value),
+  ]
+  if (corners.some((c) => !c)) return null
+  const xs = corners.map((c) => c!.x)
+  const ys = corners.map((c) => c!.y)
+  return {
+    x0: Math.min(...xs),
+    y0: Math.min(...ys),
+    x1: Math.max(...xs),
+    y1: Math.max(...ys),
+  }
+}
+
+/** Tag stroke if mostly in a paper hotspot (flags applied on zoom close). */
+function commitStrokeMaybeClr(points: string) {
+  const root = stageEl.value
+  if (!root) {
+    pushStripScribble(props.strip.id, points, drawInk.value)
+    return
+  }
+
+  // ESGG: rising / in leftmost column → refuse inbound, or UTFLYGNING/G/A → APP XFER
+  const leftRect = hotspotScribbleRect(root.querySelector('.pg-left'))
+  const live = store.strips.get(props.strip.id) ?? props.strip
+  const pendingIn = store.isPaperLook && live.transferPending === 'in'
+  if (pendingIn && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
+    pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-refuse')
+    return
+  }
+  const utflygningOrGoa =
+    store.isPaperLook &&
+    live.transferPending !== 'in' &&
+    store.allowMoveOwnedStrip(live) &&
+    (!!live.missedApproach ||
+      live.sectionId === 'ctr_dep' ||
+      live.sectionId.endsWith('_ctr_dep'))
+  if (utflygningOrGoa && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
+    pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-app')
+    return
+  }
+
+  // ARR: CTL (col 2) / go-around arrow (col 3 bottom) — same box test as CLR
+  if (props.strip.stripType === 'arrival') {
+    const ctlRect = hotspotScribbleRect(
+      root.querySelector('[data-paper-flag="ctl"]') ?? root.querySelector('.pg-cto-check'),
+    )
+    const goaRect = hotspotScribbleRect(root.querySelector('[data-paper-flag="goa"]'))
+    if (ctlRect && strokeMatchesClrBox(points, ctlRect)) {
+      pushStripScribble(props.strip.id, points, drawInk.value, 'ctl')
+      return
+    }
+    if (goaRect && strokeMatchesClrBox(points, goaRect)) {
+      pushStripScribble(props.strip.id, points, drawInk.value, 'goa')
+      return
+    }
+    pushStripScribble(props.strip.id, points, drawInk.value)
+    return
+  }
+
+  // DEP: CLR / CFTO / ATD hotspots
+  const readRect = hotspotScribbleRect(root.querySelector('.pg-adep .pg-clr-check'))
+  const correctRect = hotspotScribbleRect(root.querySelector('.pg-ades .pg-clr-check'))
+  const ctoRect = hotspotScribbleRect(
+    root.querySelector('[data-paper-flag="cfto"]') ?? root.querySelector('.pg-cto-check'),
+  )
+  const atdRect = hotspotScribbleRect(root.querySelector('.pg-atd-cell'))
+
+  let tag: PaperScribbleTag | undefined
+  // Prefer correct (col 5) / CFTO over neighbours when stroke straddles a divider.
+  if (correctRect && strokeMatchesClrBox(points, correctRect)) tag = 'clr-correct'
+  else if (readRect && strokeMatchesClrBox(points, readRect)) tag = 'clr-read'
+  else if (ctoRect && strokeMatchesClrBox(points, ctoRect)) tag = 'cto'
+  else if (atdRect && strokeMatchesClrBox(points, atdRect)) tag = 'atd'
+
+  pushStripScribble(props.strip.id, points, drawInk.value, tag)
+}
+
 function onDrawPointerUp(event: PointerEvent) {
   if (pendingPointerId != null && event.pointerId !== pendingPointerId && !drawing.value) {
     return
@@ -404,7 +682,7 @@ function onDrawPointerUp(event: PointerEvent) {
 
   if (drawing.value) {
     if (activeStroke.value && activeStroke.value.includes(' ')) {
-      pushStripScribble(props.strip.id, activeStroke.value)
+      commitStrokeMaybeClr(activeStroke.value)
     }
     resetDrawPointerState()
     return
@@ -433,16 +711,18 @@ function onDrawPointerCancel(event: PointerEvent) {
 async function afterOpenMeasure() {
   await nextTick()
   overlayEl.value?.focus()
-  measureStage()
+  placeShell()
+  measureStage({ relocate: true })
   requestAnimationFrame(() => {
-    measureStage()
-    requestAnimationFrame(measureStage)
+    measureStage({ relocate: true })
+    requestAnimationFrame(() => measureStage({ relocate: true }))
   })
   if (stageEl.value && typeof ResizeObserver !== 'undefined') {
     stageResizeObs?.disconnect()
     stageResizeObs = new ResizeObserver(() => {
       // Remeasuring mid-stroke causes scribble shake at high zoom
       if (drawing.value || pointerPending) return
+      // Height-only: update bands / stageHeight deadband — do not relocate shell
       measureStage()
     })
     stageResizeObs.observe(stageEl.value)
@@ -456,9 +736,11 @@ watch(
       stageResizeObs?.disconnect()
       stageResizeObs = null
       bands.value = []
+      stageHeight.value = 0
       return
     }
     penMode.value = false
+    penColor.value = 'blue'
     resetDrawPointerState()
     await afterOpenMeasure()
   },
@@ -467,13 +749,14 @@ watch(
 watch([topExpanded, bottomExpanded], async () => {
   if (!props.modelValue) return
   await nextTick()
+  // Expanders change height; keep top locked so shell doesn't jump
   measureStage()
 })
 
 watch(zoomScalePercent, async () => {
   if (!props.modelValue) return
   await nextTick()
-  measureStage()
+  measureStage({ relocate: true })
 })
 
 watch(scribbleMode, (mode) => {
@@ -525,6 +808,8 @@ onUnmounted(() => {
   border-right: none;
   background: #12151a;
   touch-action: none;
+  /* Paper WTC scribble / type frame may paint slightly outside the strip box */
+  overflow: visible;
 }
 
 .strip-zoom-scale {
@@ -653,5 +938,21 @@ onUnmounted(() => {
 
 .zoom-key-close:hover:not(:disabled) {
   background: #e8e8e8;
+}
+
+.zoom-key-ink.ink-off .zoom-ink-icon {
+  color: #666;
+}
+
+.zoom-key-ink.ink-blue .zoom-ink-icon {
+  color: #1565c0;
+}
+
+.zoom-key-ink.ink-red .zoom-ink-icon {
+  color: #c62828;
+}
+
+.zoom-key-ink.ink-black .zoom-ink-icon {
+  color: #1a1a1a;
 }
 </style>

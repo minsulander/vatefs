@@ -1,4 +1,10 @@
-import type { FlightStrip, StripType, WakeCategory, FlightRules, Section } from "@vatefs/common"
+import type { FlightStrip, StripType, WakeCategory, FlightRules, Section, PendingPrintFlightInfo, StripPrintMode } from "@vatefs/common"
+import {
+    lookupVatsimPilot,
+    normalizeVatsimDeptime,
+    parseVatsimAltitude,
+    type VatsimPilot,
+} from "./vatsim-flights.js"
 import type {
     Flight,
     PluginMessage,
@@ -10,7 +16,7 @@ import type {
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign, getControllerCallsign, parseControllerRole } from "./config.js"
+import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign, getControllerCallsign, getCallsignForPositionId, parseControllerRole } from "./config.js"
 import {
     formatEsggAppSi,
     resolveEsggDepApp,
@@ -45,7 +51,12 @@ import {
 import { getRtfCallsign } from "./icao-airlines.js"
 import { getIcaoAirportName } from "./icao-airports.js"
 import { hasSidInEse, getSidInfo, getSidsForRunway } from "./sid-data.js"
-import { parseCombinedScratch, buildCombinedScratch, isProtocolScratch } from "./scratchpad.js"
+import {
+    parseCombinedScratch,
+    buildCombinedScratch,
+    isProtocolScratch,
+} from "./scratchpad.js"
+import { resolveIncomingGroundstate } from "./groundstate.js"
 import {
     getRelevantActiveAirports,
     isMultiAirportConfig,
@@ -116,6 +127,12 @@ export interface ProcessMessageResult {
     /** Callsigns/strip IDs of strips whose positions were shifted (for add-from-top) */
     shiftedCallsigns?: string[]
 
+    /**
+     * Same bay/section but appearance position must change (e.g. APP transfer
+     * sticky-top bump). Without this, store pins the old same-slot position.
+     */
+    allowPositionChange?: boolean
+
     /** Scratchpad value to push to EuroScope (e.g. auto-SLOW remark) */
     setScratchValue?: string
 
@@ -134,6 +151,18 @@ export interface ProcessMessageResult {
     /** Transfer sound to play (handoff request / accept / refuse) */
     transferSound?: 'request' | 'accept' | 'refuse'
 
+    /** Clear EFS soft G/A annotation (ann 5) in EuroScope */
+    unsetEfsGoAround?: boolean
+
+    /** Clear VCH CTL in EuroScope */
+    unsetClearedToLand?: boolean
+
+    /**
+     * Clean reprint after APP assumed G/A: frontend clears scribbles + print anim;
+     * strip deletes in the same result should not fly to trash.
+     */
+    cleanReprint?: boolean
+
     /** Per-strip update details in multi-airport mode */
     multiUpdates?: Array<{
         strip?: FlightStrip
@@ -144,6 +173,7 @@ export interface ProcessMessageResult {
         restored?: boolean
         shiftedCallsigns?: string[]
         isNew?: boolean
+        allowPositionChange?: boolean
     }>
 }
 
@@ -191,6 +221,44 @@ function detectTransferSound(
  */
 function isIcaoSpeedLevelGroup(token: string): boolean {
     return /^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(token)
+}
+
+/**
+ * Filed TAS from ICAO speed/level group in route, e.g. N0450F350 → N0450.
+ * Also matches mid-route forms like MAG/N0446F390.
+ */
+function extractFiledTasFromRoute(route: string | undefined): string | undefined {
+    if (!route) return undefined
+    const m = route.toUpperCase().match(/(?:^|[\s/])([NKM]\d{3,4})[FASM]\d{3,4}\b/)
+    return m?.[1]
+}
+
+/** Format EuroScope GetTrueAirspeed (knots) as N0430 */
+function formatTasKnots(knots: number | undefined): string | undefined {
+    if (knots === undefined || !Number.isFinite(knots) || knots <= 0 || knots >= 1000) {
+        return undefined
+    }
+    return `N${String(Math.round(knots)).padStart(4, "0")}`
+}
+
+/** Normalize VATSIM cruise_tas ("448", "N448", "N0448") → N0448 / M078 */
+function normalizeCruiseTas(raw: string | undefined): string | undefined {
+    if (!raw) return undefined
+    const s = String(raw).trim().toUpperCase()
+    if (!s) return undefined
+    if (/^[NKM]\d{3,4}$/.test(s)) {
+        const letter = s[0]!
+        const digits = s.slice(1).padStart(letter === "M" ? 3 : 4, "0")
+        return `${letter}${digits}`
+    }
+    if (/^\d{2,4}$/.test(s)) {
+        return `N${s.padStart(4, "0")}`
+    }
+    // Full speed/level group
+    if (isIcaoSpeedLevelGroup(s)) {
+        return extractFiledTasFromRoute(s)
+    }
+    return undefined
 }
 
 /**
@@ -389,6 +457,42 @@ class FlightStore {
     /** User setting: Auto PARK for assumed arrivals at stands (default on). */
     private getAutoParkEnabled: () => boolean = () => true
 
+    /** Paper-look print mode (auto default). Only gates when config.look === 'paper'. */
+    private getStripPrintMode: () => StripPrintMode = () => 'auto'
+
+    /** Callsigns explicitly printed (or auto-printed); required before strip create in manual mode. */
+    private printedCallsigns: Set<string> = new Set()
+
+    /**
+     * ESGG paper: active APP→me inbound transfer pin session (in or leaving pin tray).
+     * Cleared when the handoff ends.
+     */
+    private appTransferPinSession: Set<string> = new Set()
+
+    /**
+     * User dragged out of the pin tray during the current handoff (assume/refuse path).
+     * Cleared when the handoff ends so a later transfer can pin again.
+     */
+    private appTransferDragReleased: Set<string> = new Set()
+
+    /**
+     * ESGG paper: TWR→GND inbound taxi transfer pin session (PÅ TAXI stick-top).
+     * Cleared when the handoff ends or the strip leaves taxi.
+     */
+    private gndTaxiPinSession: Set<string> = new Set()
+
+    /** User dragged out of the PÅ TAXI pin tray during the current GND handoff. */
+    private gndTaxiDragReleased: Set<string> = new Set()
+
+    /**
+     * ESGG paper: UTFLYGNING (ctr_dep) pin session — G/A or DEP airborne APP handoff.
+     * Cleared when handoff ends or strip leaves UTFLYGNING.
+     */
+    private utflygningPinSession: Set<string> = new Set()
+
+    /** User dragged out of the UTFLYGNING pin tray during the current APP handoff. */
+    private utflygningDragReleased: Set<string> = new Set()
+
     /** Notify host to send PARK (+ release) to EuroScope when Auto PARK fires. */
     private autoParkCommandHandler?: (callsign: string) => void
 
@@ -403,8 +507,34 @@ class FlightStore {
         this.getAutoParkEnabled = getter
     }
 
+    setStripPrintModeGetter(getter: () => StripPrintMode): void {
+        this.getStripPrintMode = getter
+    }
+
     setAutoParkCommandHandler(handler: (callsign: string) => void): void {
         this.autoParkCommandHandler = handler
+    }
+
+    /** True when paper look + manual print — new strips must be printed explicitly. */
+    isManualPaperPrint(): boolean {
+        return this.config.look === 'paper' && this.getStripPrintMode() === 'manual'
+    }
+
+    markStripPrinted(callsign: string): void {
+        this.printedCallsigns.add(callsign.toUpperCase())
+    }
+
+    clearStripPrinted(callsign: string): void {
+        this.printedCallsigns.delete(callsign.toUpperCase())
+    }
+
+    /**
+     * Gate auto-creation of a brand-new strip placement.
+     * Existing assignments always continue to update.
+     */
+    private shouldGateNewStrip(callsign: string): boolean {
+        if (!this.isManualPaperPrint()) return false
+        return !this.printedCallsigns.has(callsign.toUpperCase())
     }
 
     setRofRequestExpireHandler(handler: (callsign: string) => void): void {
@@ -575,6 +705,49 @@ class FlightStore {
             flight.groundstateClearedUntil = undefined
             flight.groundstateHoldUntil = Date.now() + 12000
         }
+        flight.lastUpdate = Date.now()
+    }
+
+    /**
+     * Apply clearance from EFS (CLR correct / voice CLR / drag) and hold against
+     * stale CAD echoes that would briefly flip the flag back.
+     * Clearing CLR correct also clears CLR read (drag / voice / paper col 5).
+     */
+    applyOptimisticClearance(callsign: string, desired: boolean): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.clearance = desired
+        flight.clearanceReadback = desired
+        if (desired) {
+            flight.clearanceRead = true
+        } else {
+            flight.clearanceRead = false
+        }
+        flight.clearanceHoldUntil = Date.now() + 12000
+        flight.lastUpdate = Date.now()
+    }
+
+    /**
+     * ESGG paper soft go-around: local optimistic state (UDP setEfsGoAround syncs via ann 5).
+     * Does not set TopSky MISAP_. Keeps CTL + ATA until APP assumes the G/A XFER.
+     */
+    applySoftMissedApproach(callsign: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.efsGoAround = true
+        flight.missedApproach = true
+        flight.missedApproachHoldUntil = Date.now() + 12000
+        flight.lastUpdate = Date.now()
+    }
+
+    /** Clear EFS soft G/A optimistic state (pair with UDP unsetEfsGoAround). */
+    clearSoftMissedApproach(callsign: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.efsGoAround = false
+        flight.missedApproachHoldUntil = undefined
+        // Optimistic clear; TopSky MISAP_ CAD will restore missedApproach if still set
+        flight.missedApproach = false
         flight.lastUpdate = Date.now()
     }
 
@@ -795,7 +968,108 @@ class FlightStore {
             this.config.myCallsign
         )
         if (sound) result.transferSound = sound
+
+        // ESGG paper: APP assumed our outbound G/A XFER → retire strip, reprint clean ARR in INBOUND
+        if (
+            sound === 'accept' &&
+            this.config.look === 'paper' &&
+            (flight.efsGoAround || flight.missedApproach)
+        ) {
+            return this.reprintCleanArrivalAfterGoAroundAssume(flight, sound)
+        }
         return result
+    }
+
+    /**
+     * After APP assumes a G/A handoff: clear CTL/ATA/G/A flags, remove the old strip,
+     * and print a clean ARR strip in pending ARR (INBOUND).
+     */
+    private reprintCleanArrivalAfterGoAroundAssume(
+        flight: Flight,
+        transferSound: 'accept',
+    ): ProcessMessageResult {
+        const callsign = flight.callsign
+        const prevAssignment = this.stripAssignments.get(callsign)
+        const hadTopSkyMisap = !!flight.missedApproach && !flight.efsGoAround
+        const hadEfsGa = !!flight.efsGoAround
+        const hadCtl = !!flight.clearedToLand
+
+        flight.efsGoAround = false
+        flight.missedApproach = false
+        flight.missedApproachHoldUntil = undefined
+        flight.clearedToLand = false
+        flight.ata = undefined
+        flight.lastUpdate = Date.now()
+
+        this.clearUtflygningPinned(callsign)
+        this.stripAssignments.delete(callsign)
+        this.markStripPrinted(callsign)
+        // Soft-delete reason for trash (old G/A strip kept for recovery)
+        flight.lastDeleteRule = 'goa_app_assume'
+
+        const inboundBayId = this.config.sectionToBay.get('inbound')
+        let strip: FlightStrip | undefined
+        let shiftedCallsigns: string[] | undefined
+
+        if (inboundBayId) {
+            const position = this.getNewStripPosition(inboundBayId, 'inbound', flight)
+            this.stripAssignments.set(callsign, {
+                bayId: inboundBayId,
+                sectionId: 'inbound',
+                position,
+                bottom: false,
+            })
+            flight.lastSectionRule = 'goa_reprint_inbound'
+            flight.deleted = false
+            flight.noSectionFound = false
+            strip = this.createStrip(flight, inboundBayId, 'inbound', position, false)
+            const shifted = this.getLastShiftedCallsigns()
+            shiftedCallsigns = shifted.length > 0 ? shifted : undefined
+            console.log(
+                `[G/A] ${callsign}: APP assumed → trash G/A strip, clean reprint in INBOUND (was ${prevAssignment?.sectionId ?? 'none'})`,
+            )
+        } else {
+            const created = this.finalizeFlightStrips(callsign, flight, true)
+            strip = created.strip
+            shiftedCallsigns = created.shiftedCallsigns
+            console.log(`[G/A] ${callsign}: APP assumed → trash G/A strip, clean reprint (no inbound section)`)
+        }
+
+        if (!strip) {
+            return {
+                flight,
+                deleteStripId: callsign,
+                softDeleted: true,
+                transferSound,
+                cleanReprint: true,
+                unsetEfsGoAround: hadEfsGa,
+                unsetClearedToLand: hadCtl,
+                clearScratchpadCallsign: hadTopSkyMisap ? callsign : undefined,
+            }
+        }
+
+        return {
+            flight,
+            transferSound,
+            cleanReprint: true,
+            unsetEfsGoAround: hadEfsGa,
+            unsetClearedToLand: hadCtl,
+            clearScratchpadCallsign: hadTopSkyMisap ? callsign : undefined,
+            multiUpdates: [
+                // Soft-delete so the G/A strip lands in the trashcan (snapshot before reprint)
+                { deleteStripId: callsign, softDeleted: true },
+                {
+                    strip,
+                    isNew: true,
+                    sectionChanged: true,
+                    previousSection: prevAssignment
+                        ? { bayId: prevAssignment.bayId, sectionId: prevAssignment.sectionId }
+                        : undefined,
+                    shiftedCallsigns,
+                    allowPositionChange: true,
+                },
+            ],
+        }
     }
 
     private finalizeFlightStrips(
@@ -900,16 +1174,53 @@ class FlightStore {
 
             const currentAssignment = this.stripAssignments.get(stripId)
             const isNewStrip = !currentAssignment
-            const sectionChanged = !!(currentAssignment &&
+            if (isNewStrip && this.shouldGateNewStrip(flight.callsign)) {
+                continue
+            }
+            const ruleWantsDifferentSection = !!(
+                currentAssignment &&
                 (currentAssignment.bayId !== targetSection.bayId ||
-                 currentAssignment.sectionId !== targetSection.sectionId))
+                    currentAssignment.sectionId !== targetSection.sectionId)
+            )
+            const holdRwySequence =
+                !!currentAssignment &&
+                ruleWantsDifferentSection &&
+                this.shouldHoldInRwySequenceBay(flight, currentAssignment)
+            const holdLandedArrOnRunway =
+                !!currentAssignment &&
+                ruleWantsDifferentSection &&
+                this.shouldHoldLandedArrOnRunway(flight, currentAssignment)
+            const holdUtflygning =
+                !!currentAssignment &&
+                ruleWantsDifferentSection &&
+                this.shouldHoldInUtflygning(flight, currentAssignment)
+            const holdAbovePush =
+                !!currentAssignment &&
+                ruleWantsDifferentSection &&
+                this.shouldHoldInAbovePush(flight, currentAssignment)
+            const holdVfrAirborne =
+                !!currentAssignment &&
+                ruleWantsDifferentSection &&
+                this.shouldHoldVfrAirbornePlacement(
+                    flight,
+                    currentAssignment,
+                    targetSection.sectionId,
+                )
+            const holdSection =
+                holdRwySequence ||
+                holdLandedArrOnRunway ||
+                holdUtflygning ||
+                holdAbovePush ||
+                holdVfrAirborne
+            const sectionChanged = ruleWantsDifferentSection && !holdSection
 
             let position: number
             let bottom: boolean
             let previousSection: { bayId: string; sectionId: string } | undefined
 
             if (isNewStrip) {
-                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                this.markStripPrinted(flight.callsign)
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
                 bottom = false
                 this.stripAssignments.set(stripId, {
                     bayId: targetSection.bayId,
@@ -918,12 +1229,15 @@ class FlightStore {
                     bottom
                 })
                 console.log(`[RULE] ${stripId} -> ${targetSection.sectionId} (rule: ${targetSection.ruleId ?? 'default'}, new)`)
+            } else if (holdSection && currentAssignment) {
+                position = currentAssignment.position
+                bottom = currentAssignment.bottom
             } else if (sectionChanged && currentAssignment) {
                 previousSection = {
                     bayId: currentAssignment.bayId,
                     sectionId: currentAssignment.sectionId
                 }
-                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
                 bottom = false
                 this.stripAssignments.set(stripId, {
                     bayId: targetSection.bayId,
@@ -936,7 +1250,7 @@ class FlightStore {
                 position = currentAssignment.position
                 bottom = currentAssignment.bottom
             } else {
-                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+                position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
                 bottom = false
                 this.stripAssignments.set(stripId, {
                     bayId: targetSection.bayId,
@@ -945,6 +1259,43 @@ class FlightStore {
                     bottom
                 })
             }
+
+            const placeBayId =
+                holdSection && currentAssignment ? currentAssignment.bayId : targetSection.bayId
+            const placeSectionId =
+                holdSection && currentAssignment
+                    ? currentAssignment.sectionId
+                    : targetSection.sectionId
+            const appTransferTop = this.applyAppTransferCtrArrTop(
+                stripId,
+                flight,
+                placeBayId,
+                placeSectionId,
+                position,
+                bottom,
+            )
+            position = appTransferTop.position
+            bottom = appTransferTop.bottom
+            const gndTaxiPin = this.applyGndTaxiPin(
+                stripId,
+                flight,
+                placeBayId,
+                placeSectionId,
+                position,
+                bottom,
+            )
+            position = gndTaxiPin.position
+            bottom = gndTaxiPin.bottom
+            const utflygningPin = this.applyUtflygningPin(
+                stripId,
+                flight,
+                placeBayId,
+                placeSectionId,
+                position,
+                bottom,
+            )
+            position = utflygningPin.position
+            bottom = utflygningPin.bottom
 
             // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
             if (!setScratchValue && this.tryClearAutoSlowRemark(flight)) {
@@ -957,8 +1308,8 @@ class FlightStore {
 
             const strip = this.createStrip(
                 flight,
-                targetSection.bayId,
-                targetSection.sectionId,
+                placeBayId,
+                placeSectionId,
                 position,
                 bottom,
                 airport,
@@ -971,7 +1322,12 @@ class FlightStore {
                 isNew: isNewStrip,
                 sectionChanged,
                 previousSection,
-                shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
+                shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined,
+                allowPositionChange:
+                    appTransferTop.bumped ||
+                    gndTaxiPin.bumped ||
+                    utflygningPin.bumped ||
+                    undefined,
             })
         }
 
@@ -1007,7 +1363,7 @@ class FlightStore {
 
             if (bayId === assignment.bayId && sectionId === assignment.sectionId) continue
 
-            const position = this.getNewStripPosition(bayId, sectionId)
+            const position = this.getNewStripPosition(bayId, sectionId, flight)
             const bottom = assignment.bottom
             this.stripAssignments.set(stripId, { bayId, sectionId, position, bottom })
 
@@ -1122,14 +1478,52 @@ class FlightStore {
             return this.handleNoSectionFound(flight)
         }
 
+        // Manual paper print: do not place a new strip until explicitly printed
+        if (!currentAssignment && this.shouldGateNewStrip(callsign)) {
+            return { flight }
+        }
+
         if (flight.noSectionFound) {
             flight.noSectionFound = false
             flight.deleted = false
         }
 
-        const sectionChanged = currentAssignment &&
+        const ruleWantsDifferentSection = !!(
+            currentAssignment &&
             (currentAssignment.bayId !== targetSection.bayId ||
-             currentAssignment.sectionId !== targetSection.sectionId)
+                currentAssignment.sectionId !== targetSection.sectionId)
+        )
+        const holdRwySequence =
+            !!currentAssignment &&
+            ruleWantsDifferentSection &&
+            this.shouldHoldInRwySequenceBay(flight, currentAssignment)
+        const holdLandedArrOnRunway =
+            !!currentAssignment &&
+            ruleWantsDifferentSection &&
+            this.shouldHoldLandedArrOnRunway(flight, currentAssignment)
+        const holdUtflygning =
+            !!currentAssignment &&
+            ruleWantsDifferentSection &&
+            this.shouldHoldInUtflygning(flight, currentAssignment)
+        const holdAbovePush =
+            !!currentAssignment &&
+            ruleWantsDifferentSection &&
+            this.shouldHoldInAbovePush(flight, currentAssignment)
+        const holdVfrAirborne =
+            !!currentAssignment &&
+            ruleWantsDifferentSection &&
+            this.shouldHoldVfrAirbornePlacement(
+                flight,
+                currentAssignment,
+                targetSection.sectionId,
+            )
+        const holdSection =
+            holdRwySequence ||
+            holdLandedArrOnRunway ||
+            holdUtflygning ||
+            holdAbovePush ||
+            holdVfrAirborne
+        const sectionChanged = ruleWantsDifferentSection && !holdSection
 
         let position: number
         let bottom: boolean
@@ -1138,8 +1532,12 @@ class FlightStore {
         const ruleSource = targetSection.ruleId ?? 'default'
         let setScratchValue: string | undefined
 
+        if (isNewStrip || !currentAssignment) {
+            this.markStripPrinted(callsign)
+        }
+
         if (isNewStrip) {
-            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -1149,12 +1547,16 @@ class FlightStore {
             })
             flight.lastSectionRule = ruleSource
             console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, new strip)`)
+        } else if (holdSection && currentAssignment) {
+            // Manual RWY sequence bay, or landed ARR held on PÅ BANAN until drag to taxi
+            position = currentAssignment.position
+            bottom = currentAssignment.bottom
         } else if (sectionChanged && currentAssignment) {
             previousSection = {
                 bayId: currentAssignment.bayId,
                 sectionId: currentAssignment.sectionId
             }
-            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -1169,7 +1571,7 @@ class FlightStore {
             position = currentAssignment.position
             bottom = currentAssignment.bottom
         } else {
-            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -1181,6 +1583,43 @@ class FlightStore {
             console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, recovered assignment)`)
         }
 
+        const placeBayId =
+            holdSection && currentAssignment ? currentAssignment.bayId : targetSection.bayId
+        const placeSectionId =
+            holdSection && currentAssignment
+                ? currentAssignment.sectionId
+                : targetSection.sectionId
+        const appTransferTop = this.applyAppTransferCtrArrTop(
+            callsign,
+            flight,
+            placeBayId,
+            placeSectionId,
+            position,
+            bottom,
+        )
+        position = appTransferTop.position
+        bottom = appTransferTop.bottom
+        const gndTaxiPin = this.applyGndTaxiPin(
+            callsign,
+            flight,
+            placeBayId,
+            placeSectionId,
+            position,
+            bottom,
+        )
+        position = gndTaxiPin.position
+        bottom = gndTaxiPin.bottom
+        const utflygningPin = this.applyUtflygningPin(
+            callsign,
+            flight,
+            placeBayId,
+            placeSectionId,
+            position,
+            bottom,
+        )
+        position = utflygningPin.position
+        bottom = utflygningPin.bottom
+
         // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
         if (this.tryClearAutoSlowRemark(flight)) {
             setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
@@ -1190,7 +1629,7 @@ class FlightStore {
             this.holdScratchFields(flight)
         }
 
-        const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const strip = this.createStrip(flight, placeBayId, placeSectionId, position, bottom)
         const shiftedCallsigns = this.getLastShiftedCallsigns()
 
         return {
@@ -1200,7 +1639,9 @@ class FlightStore {
             previousSection,
             restored,
             setScratchValue,
-            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined
+            shiftedCallsigns: shiftedCallsigns.length > 0 ? shiftedCallsigns : undefined,
+            allowPositionChange:
+                appTransferTop.bumped || gndTaxiPin.bumped || utflygningPin.bumped || undefined,
         }
     }
 
@@ -1561,18 +2002,52 @@ class FlightStore {
         if (message.handoffTargetController !== undefined && message.handoffTargetController !== flight.handoffTargetController)
             console.log(`[${logTag}] ${callsign} handoff: ${flight.handoffTargetController ?? '-'} -> ${message.handoffTargetController || '(cleared)'}`)
 
+        const myCs = (this.config.myCallsign || '').toUpperCase()
+        const mySi = (this.config.myPositionId || '').toUpperCase()
+        // Protect EFS ASSUME from brief empty ES echoes after StartTracking
+        const ownershipOptimistic =
+            flight.ownershipOptimisticUntil !== undefined &&
+            Date.now() < flight.ownershipOptimisticUntil
+
         if (message.controller !== undefined) {
-            flight.controller = message.controller
-            if (!message.controller) flight.controllerId = undefined
-            // Someone else (or nobody) tracking — optimistic outbound handoff is done
-            if (message.controller !== this.config.myCallsign) {
-                flight.handoffOptimisticUntil = undefined
-                // Incoming ROF is only relevant while we own the strip
-                if (flight.rofRequestFrom) this.clearRofRequest(flight)
+            const incoming = (message.controller || '').toUpperCase()
+            const isMe = !!myCs && incoming === myCs
+            const clearing = !incoming
+            if (ownershipOptimistic && !isMe) {
+                // Keep EFS owner through empty clears during optimistic window
+            } else {
+                flight.controller = message.controller
+                if (isMe) {
+                    flight.ownershipOptimisticUntil = undefined
+                } else if (clearing || (incoming && incoming !== myCs)) {
+                    flight.handoffOptimisticUntil = undefined
+                    flight.ownershipOptimisticUntil = undefined
+                    if (flight.rofRequestFrom) this.clearRofRequest(flight)
+                }
             }
         }
+        // Apply SI even when callsign is empty (ES often omits tracking callsign at TWR).
         if (message.controllerId !== undefined) {
-            flight.controllerId = message.controllerId || undefined
+            const incomingSi = (message.controllerId || '').toUpperCase()
+            const siIsMe = !!mySi && incomingSi === mySi
+            if (ownershipOptimistic && !siIsMe && !incomingSi) {
+                // keep optimistic SI through empty echo
+            } else if (ownershipOptimistic && incomingSi && !siIsMe) {
+                // Other SI = StartTracking did not take the track; adopt ES ownership
+                flight.controllerId = message.controllerId || undefined
+                if (message.controller !== undefined) flight.controller = message.controller
+                else if (myCs && (flight.controller || '').toUpperCase() === myCs) flight.controller = ''
+                flight.ownershipOptimisticUntil = undefined
+            } else {
+                flight.controllerId = message.controllerId || undefined
+                if (siIsMe) flight.ownershipOptimisticUntil = undefined
+            }
+        } else if (
+            message.controller !== undefined &&
+            !message.controller &&
+            !ownershipOptimistic
+        ) {
+            flight.controllerId = undefined
         }
         if (message.handoffTargetController !== undefined) {
             const clearing = !message.handoffTargetController
@@ -1620,9 +2095,23 @@ class FlightStore {
         const prevRoute = flight.route
         const prevSid = flight.sid
         if (message.route !== undefined) flight.route = message.route
+        if (message.tas !== undefined) {
+            // Plugin sends knots (number); VATSIM/tests may send "N0430"
+            if (typeof message.tas === "number") {
+                flight.tas = formatTasKnots(message.tas)
+            } else {
+                flight.tas = normalizeCruiseTas(message.tas) || undefined
+            }
+        }
         if (message.eobt !== undefined) flight.eobt = message.eobt
         if (message.ete !== undefined) flight.ete = message.ete
-        if (message.rfl !== undefined) flight.rfl = message.rfl
+        // Filed FPL cruise altitude → RFL; explicit positive RFL (CAD) wins if present
+        if (message.altitude !== undefined && message.altitude > 0) {
+            flight.rfl = message.altitude
+        }
+        if (message.rfl !== undefined && message.rfl > 0) {
+            flight.rfl = message.rfl
+        }
         if (message.xfl !== undefined) {
             flight.xfl = message.xfl > 0 ? message.xfl : undefined
         }
@@ -1694,14 +2183,24 @@ class FlightStore {
         const prevHandoff = flight.handoffTargetController
         this.applyOwnershipFromPlugin(flight, message, 'OWN')
 
-        // trackedByMe=false is authoritative when callsign fields lag after a remote accept
-        if (message.trackedByMe === false && flight.controller === this.config.myCallsign) {
+        // trackedByMe=false is authoritative when callsign fields lag after a remote accept.
+        // Skip during ASSUME optimistic window (StartTracking echo may lag a tick).
+        const ownershipOptimistic =
+            flight.ownershipOptimisticUntil !== undefined &&
+            Date.now() < flight.ownershipOptimisticUntil
+        if (
+            message.trackedByMe === false &&
+            !ownershipOptimistic &&
+            !!this.config.myCallsign &&
+            (flight.controller || '').toUpperCase() === this.config.myCallsign.toUpperCase()
+        ) {
             console.log(`[OWN] ${callsign} trackedByMe=false while controller still me — clearing ownership (remote accept)`)
             flight.controller = ''
             flight.controllerId = undefined
             flight.handoffTargetController = ''
             flight.handoffTargetControllerId = undefined
             flight.handoffOptimisticUntil = undefined
+            flight.ownershipOptimisticUntil = undefined
         }
 
         flight.lastUpdate = Date.now()
@@ -1742,9 +2241,12 @@ class FlightStore {
         if (message.squawk !== undefined) {
             // ASSR must be ICAO octal (0–7). Ignore junk like "9875" from interim ES updates.
             const next = normalizeAssignedSquawk(message.squawk)
-            if (next !== undefined) flight.squawk = next || undefined
+            if (next !== undefined) {
+                flight.squawk = next || undefined
+            }
         }
-        if (message.rfl !== undefined) flight.rfl = message.rfl
+        // Ignore CAD final=0 (unset override) so FPL altitude RFL is not wiped
+        if (message.rfl !== undefined && message.rfl > 0) flight.rfl = message.rfl
         if (message.cfl !== undefined) {
             flight.cfl = message.cfl
             // Real altitude clears approach-type label
@@ -1753,8 +2255,15 @@ class FlightStore {
         if (message.xfl !== undefined) {
             flight.xfl = message.xfl > 0 ? message.xfl : undefined
         }
-        // Ground state: NOSTATE / empty clears; hold briefly against stale ES GetGroundState
-        if (message.scratch === 'NOSTATE' || message.groundstate === '') {
+        // Ground state — GRP xLU often only in scratch while GetGroundState()
+        // stays coarse "TAXI" (SDK). Precise scratch/ES tokens win; never let
+        // coarse TAXI wipe LINEUP on reload.
+        const incomingGs = resolveIncomingGroundstate({
+            scratch: message.scratch,
+            groundstate: message.groundstate,
+            current: flight.groundstate,
+        })
+        if (incomingGs === '') {
             // Don't let empty wipe an EFS-held TXIN/TAXI (runway ARR echo often clears first)
             const holdingEfsGs =
                 flight.groundstateHoldUntil !== undefined &&
@@ -1765,7 +2274,7 @@ class FlightStore {
                 flight.groundstateClearedUntil = Date.now() + 3000
                 flight.groundstateHoldUntil = undefined
             }
-        } else if (message.groundstate !== undefined) {
+        } else if (incomingGs !== undefined && incomingGs !== '') {
             const holdingClear =
                 flight.groundstateClearedUntil !== undefined &&
                 Date.now() < flight.groundstateClearedUntil
@@ -1773,30 +2282,95 @@ class FlightStore {
             const holdingEfsGs =
                 flight.groundstateHoldUntil !== undefined &&
                 Date.now() < flight.groundstateHoldUntil &&
-                message.groundstate !== flight.groundstate
-            if (holdingClear && message.groundstate) {
+                incomingGs !== flight.groundstate
+            if (holdingClear) {
                 // keep cleared
             } else if (holdingEfsGs) {
                 // keep EFS-set groundstate
             } else {
-                flight.groundstate = message.groundstate
-                if (message.groundstate) flight.groundstateClearedUntil = undefined
+                flight.groundstate = incomingGs
+                flight.groundstateClearedUntil = undefined
                 flight.groundstateHoldUntil = undefined
             }
         }
-        if (message.clearance !== undefined) flight.clearance = message.clearance
-        if (message.clearedToLand !== undefined) flight.clearedToLand = message.clearedToLand
+        if (message.clearance !== undefined) {
+            const holdingClr =
+                flight.clearanceHoldUntil !== undefined &&
+                Date.now() < flight.clearanceHoldUntil &&
+                !!flight.clearance !== !!message.clearance
+            if (holdingClr) {
+                // Keep EFS-set CLR until EuroScope catches up
+            } else {
+                if (
+                    flight.clearanceHoldUntil !== undefined &&
+                    !!flight.clearance === !!message.clearance
+                ) {
+                    flight.clearanceHoldUntil = undefined
+                }
+                flight.clearance = message.clearance
+                // Keep paper col 4/5 in lockstep with ES CLR
+                if (message.clearance) {
+                    flight.clearanceRead = true
+                    flight.clearanceReadback = true
+                } else {
+                    flight.clearanceRead = false
+                    flight.clearanceReadback = false
+                }
+            }
+        }
+        // Soft G/A must not wipe CTL that was already set before/when G/A was applied.
+        // Paper: once CTL is on the strip, ignore VCH clearing it (landing / ATA / list).
+        // Explicit EFS unsetCTL / move rules set flight.clearedToLand = false locally first.
+        if (message.clearedToLand !== undefined) {
+            const softGaKeepCtl =
+                message.clearedToLand === false &&
+                !!flight.clearedToLand &&
+                (message.efsGoAround === true || !!flight.efsGoAround)
+            const paperKeepCtl =
+                message.clearedToLand === false &&
+                !!flight.clearedToLand &&
+                this.config.look === 'paper'
+            if (!softGaKeepCtl && !paperKeepCtl) {
+                flight.clearedToLand = message.clearedToLand
+            }
+        }
         if (message.communicationType !== undefined) {
             flight.communicationType = message.communicationType || undefined
         }
-        // Process scratchpad-based missedApproach flag:
-        // Plugin sends scratch: "MISAP_" when on missed approach, scratch: "" when cleared
+        // EFS soft G/A (annotation 5) — syncs across EFS users; not TopSky MISAP_
+        if (message.efsGoAround !== undefined) {
+            flight.efsGoAround = message.efsGoAround
+        }
+        // TopSky G/A: scratch MISAP_
         if (message.scratch === 'MISAP_') {
             flight.missedApproach = true
-            flight.clearedToLand = false  // GOA also clears cleared-to-land
-            flight.ata = undefined // go-around: drop ATA + green landing frame
+            flight.clearedToLand = false
+            flight.missedApproachHoldUntil = undefined
+            flight.ata = undefined
         } else if (message.scratch === '') {
-            flight.missedApproach = false
+            const holdingSoftMa =
+                flight.missedApproachHoldUntil !== undefined &&
+                Date.now() < flight.missedApproachHoldUntil
+            // Empty scratch drops TopSky MA; EFSGA may still keep MA below
+            if (!holdingSoftMa && !flight.efsGoAround) {
+                flight.missedApproach = false
+                flight.missedApproachHoldUntil = undefined
+            }
+        }
+        // Combine EFS soft G/A + TopSky: EFSGA on ⇒ MA (keep CTL if already set)
+        if (flight.efsGoAround) {
+            flight.missedApproach = true
+            if (message.efsGoAround === true) {
+                flight.missedApproachHoldUntil = undefined
+            }
+        } else if (message.efsGoAround === false && message.scratch !== 'MISAP_') {
+            const holdingSoftMa =
+                flight.missedApproachHoldUntil !== undefined &&
+                Date.now() < flight.missedApproachHoldUntil
+            if (!holdingSoftMa) {
+                flight.missedApproach = false
+                flight.missedApproachHoldUntil = undefined
+            }
         }
         // TopSky ROF: consume then clear scratch (TopSky often leaves /LAM/ROF/ and /ROF/ set)
         let clearScratchpadCallsign: string | undefined
@@ -1903,6 +2477,7 @@ class FlightStore {
         console.log(`[DISCONNECT] ${callsign}`)
 
         this.flights.delete(callsign)
+        this.clearStripPrinted(callsign)
 
         if (isMultiAirportConfig(this.config)) {
             const deletedStripIds: string[] = []
@@ -2052,16 +2627,704 @@ class FlightStore {
         return bay?.sections.find(s => s.id === sectionId)
     }
 
+    /** TAXI / PÅ TAXI (and multi-airport *_taxi). */
+    private isTaxiSectionId(sectionId: string): boolean {
+        return sectionId === 'taxi' || sectionId.endsWith('_taxi')
+    }
+
+    /** Headerless bay above PÅ BANAN (CTR ARR / manual RWY sequence). */
+    private isRwySequenceBaySectionId(sectionId: string): boolean {
+        return sectionId === 'ctr_arr' || sectionId.endsWith('_ctr_arr')
+    }
+
+    /**
+     * TWR (or higher) with no dedicated GND online — covers GND “below”.
+     * Used for the manual RWY occupation sequence bay above PÅ BANAN.
+     */
+    private isTwrWithoutGndBelow(): boolean {
+        const myRole = this.config.myRole
+        if (myRole !== 'TWR' && myRole !== 'APP' && myRole !== 'CTR') return false
+        return !getControllerCallsign('GND')
+    }
+
+    /**
+     * Keep a strip in the bay above PÅ BANAN while still taxiing (TXO/TXIN).
+     * Rules would otherwise snap it back to PÅ TAXI / PÅ BANAN on every update.
+     * - Solo TWR (no GND): any taxiing strip placed here
+     * - Paper: DEP/local sequence (manual / after undo L/U·CTO) — sticky until dragged out
+     */
+    private shouldHoldInRwySequenceBay(
+        flight: Flight,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean },
+    ): boolean {
+        if (!this.isRwySequenceBaySectionId(assignment.sectionId)) return false
+        if (flight.airborne) return false
+        if (flight.clearedToLand) return false
+        const gs = (flight.groundstate || '').toUpperCase()
+        if (gs !== 'TAXI' && gs !== 'TXIN') return false
+        if (this.isTwrWithoutGndBelow()) return true
+        if (this.config.look === 'paper') {
+            const type = this.determineStripType(flight)
+            // Manual rwy-seq is sticky for taxiing DEP/local (ownership optional —
+            // SI/callsign lag must not bounce them back to PÅ BANAN / PÅ TAXI).
+            return type === 'departure' || type === 'local'
+        }
+        return false
+    }
+
+    /** GND-owned taxiing DEP/local with pending handoff to TWR (pin tray). */
+    private isPendingOutboundGndDepTransfer(flight: Flight): boolean {
+        if (this.config.look !== 'paper') return false
+        if (!this.isControlledByMe(flight)) return false
+        if (flight.airborne) return false
+        const gs = (flight.groundstate || '').toUpperCase()
+        if (gs !== 'TAXI' && gs !== 'TXIN') return false
+        const type = this.determineStripType(flight)
+        if (type !== 'departure' && type !== 'local') return false
+        const target =
+            flight.handoffTargetController ||
+            getCallsignForPositionId(flight.handoffTargetControllerId)
+        if (!target) return false
+        return parseControllerRole(target, this.config.myAirports) === 'TWR'
+    }
+
+    /** PÅ BANAN / runway section id. */
+    private isRunwaySectionId(sectionId: string): boolean {
+        return sectionId === 'runway' || sectionId.includes('runway')
+    }
+
+    /**
+     * ESGG paper: keep landed ARR/local on PÅ BANAN after vacating — do not auto-pull
+     * to PÅ TAXI (taxi_arr). Manual drag to taxi releases the hold.
+     */
+    private shouldHoldLandedArrOnRunway(
+        flight: Flight,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean },
+    ): boolean {
+        if (this.config.look !== 'paper') return false
+        if (!this.isRunwaySectionId(assignment.sectionId)) return false
+        if (flight.airborne) return false
+        const type = this.determineStripType(flight)
+        if (type !== 'arrival' && type !== 'local') return false
+        const gs = (flight.groundstate || '').toUpperCase()
+        return gs === '' || gs === 'NSTS' || gs === 'ARR'
+    }
+
+    /**
+     * ESGG CD→GND: keep strips in the headerless bay above START-UP/PUSH until
+     * push/taxi (rules would otherwise snap them back under KLARERING).
+     */
+    private shouldHoldInAbovePush(
+        flight: Flight,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean },
+    ): boolean {
+        if (this.config.look !== 'paper') return false
+        if (assignment.sectionId !== 'above_push') return false
+        if (flight.airborne) return false
+        const gs = (flight.groundstate || '').toUpperCase()
+        if (gs === 'PUSH' || gs === 'STUP' || gs === 'TAXI' || gs === 'LINEUP' || gs === 'DEPA') {
+            return false
+        }
+        const type = this.determineStripType(flight)
+        return type === 'departure' || type === 'local'
+    }
+
+    private isCtrDepSectionId(sectionId: string): boolean {
+        return sectionId === 'ctr_dep' || sectionId.endsWith('_ctr_dep')
+    }
+
+    /**
+     * ESGG paper: keep soft G/A / UTFLYGNING pin strips in ctr_dep (rules would
+     * otherwise snap ARR back to ctr_arr when TopSky MISAP_ is absent).
+     */
+    private shouldHoldInUtflygning(
+        flight: Flight,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean },
+    ): boolean {
+        if (this.config.look !== 'paper') return false
+        if (!this.isCtrDepSectionId(assignment.sectionId)) return false
+        if (!flight.airborne) return false
+        if (flight.missedApproach) return true
+        if (this.isUtflygningPinned(flight.callsign)) return true
+        const target =
+            flight.handoffTargetController ||
+            getCallsignForPositionId(flight.handoffTargetControllerId)
+        if (target && parseControllerRole(target, this.config.myAirports) === 'APP') {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * ESGG paper: VFR airborne — do not auto-snap (CTR ARR / UTFLYGNING / fallbacks).
+     * Pending APP→TWR inbound transfer may still place on the sequence pin (ctr_arr).
+     */
+    private shouldHoldVfrAirbornePlacement(
+        flight: Flight,
+        assignment: { bayId: string; sectionId: string; position: number; bottom: boolean },
+        targetSectionId: string,
+    ): boolean {
+        if (this.config.look !== 'paper') return false
+        if (!flight.airborne) return false
+        if (isIfrSidEligible(flight.flightRules)) return false
+        // Allow auto-move onto pending inbound transfer pin (above PÅ BANAN)
+        if (this.isHandoffToMe(flight) && this.isRwySequenceBaySectionId(targetSectionId)) {
+            return false
+        }
+        void assignment
+        return true
+    }
+
+    /** Pending inbound handoff target is me (callsign or SI). Ignores CFL / approach clearance. */
+    private isHandoffToMe(flight: Flight): boolean {
+        const my = this.config.myCallsign
+        const mySi = this.config.myPositionId?.toUpperCase()
+        return (
+            (!!flight.handoffTargetController &&
+                !!my &&
+                flight.handoffTargetController.toUpperCase() === my.toUpperCase()) ||
+            (!!mySi &&
+                !!flight.handoffTargetControllerId &&
+                flight.handoffTargetControllerId.toUpperCase() === mySi)
+        )
+    }
+
+    /** Pending inbound handoff to me (any owner — APP/CTR/…). */
+    private isPendingInboundTransferToMe(flight: Flight): boolean {
+        return this.isHandoffToMe(flight) && !this.isControlledByMe(flight)
+    }
+
+    /** True when flight is assumed / owned by me (EuroScope accept — callsign or SI). */
+    private isControlledByMe(flight: Flight): boolean {
+        const my = this.config.myCallsign
+        if (my && flight.controller && flight.controller.toUpperCase() === my.toUpperCase()) {
+            return true
+        }
+        const mySi = (this.config.myPositionId || '').toUpperCase()
+        const ownerSi = (flight.controllerId || '').toUpperCase()
+        return !!mySi && !!ownerSi && mySi === ownerSi
+    }
+
+    /**
+     * Pin to the paper stick-top tray (`bottom: true`).
+     * New pins insert at position 0 (top of tray); earlier pins keep higher positions
+     * (first transfer stays at the bottom of the pin bar — same as other bays).
+     * Already-pinned strips keep a stable position (do not re-force to 0 every update).
+     */
+    private pinAssignmentToStickTop(
+        bayId: string,
+        sectionId: string,
+        callsign: string,
+    ): { position: number; bottom: boolean; bumped: boolean } {
+        let mine = this.stripAssignments.get(callsign)
+        // Already in this section's pin tray — keep order stable
+        if (mine && mine.bayId === bayId && mine.sectionId === sectionId && mine.bottom) {
+            this.lastShiftedCallsigns = []
+            return { position: mine.position, bottom: true, bumped: false }
+        }
+
+        // Entering pin tray: insert at top (0), bump existing pins down (older → bottom)
+        const shifted: string[] = []
+        this.stripAssignments.forEach((assignment, id) => {
+            if (id === callsign) return
+            if (assignment.bayId !== bayId || assignment.sectionId !== sectionId || !assignment.bottom) {
+                return
+            }
+            const f = this.flights.get(id)
+            if (f?.deleted) return
+            assignment.position += 1
+            shifted.push(id)
+        })
+        if (!mine || mine.bayId !== bayId || mine.sectionId !== sectionId) {
+            mine = { bayId, sectionId, position: 0, bottom: true }
+            this.stripAssignments.set(callsign, mine)
+        } else {
+            mine.bottom = true
+            mine.position = 0
+        }
+        this.lastShiftedCallsigns = shifted
+        return { position: 0, bottom: true, bumped: true }
+    }
+
+    /**
+     * Leave the pin tray for the main stack. Compacts remaining pins first.
+     * `toTop`: insert at top of main zone (shift others down); else append at bottom.
+     */
+    private unpinAssignmentToMainStack(
+        bayId: string,
+        sectionId: string,
+        callsign: string,
+        toTop = false,
+    ): { position: number; bottom: boolean; bumped: boolean } {
+        const mine = this.stripAssignments.get(callsign)
+        if (!mine || mine.bayId !== bayId || mine.sectionId !== sectionId) {
+            this.lastShiftedCallsigns = []
+            return { position: 0, bottom: false, bumped: false }
+        }
+        if (!mine.bottom) {
+            this.lastShiftedCallsigns = []
+            return { position: mine.position, bottom: false, bumped: false }
+        }
+        // Compact other pins above the one we remove
+        const pinShifted: string[] = []
+        const leavingPos = mine.position
+        this.stripAssignments.forEach((assignment, id) => {
+            if (id === callsign) return
+            if (assignment.bayId !== bayId || assignment.sectionId !== sectionId || !assignment.bottom) {
+                return
+            }
+            const f = this.flights.get(id)
+            if (f?.deleted) return
+            if (assignment.position > leavingPos) {
+                assignment.position -= 1
+                pinShifted.push(id)
+            }
+        })
+        mine.bottom = false
+        if (toTop) {
+            this.shiftPositionsDown(bayId, sectionId)
+            mine.position = 0
+            // shiftPositionsDown already set lastShiftedCallsigns (main zone)
+            for (const id of pinShifted) {
+                if (!this.lastShiftedCallsigns.includes(id)) this.lastShiftedCallsigns.push(id)
+            }
+        } else {
+            const pos = this.getNextPosition(bayId, sectionId)
+            mine.position = pos
+            this.lastShiftedCallsigns = pinShifted
+        }
+        return { position: mine.position, bottom: false, bumped: true }
+    }
+
+    /**
+     * GND assumed TWR→GND taxi transfer while strip still in pin tray →
+     * move to top of main PÅ TAXI stack. No-op if already unpinned or left taxi
+     * (manual drag elsewhere).
+     */
+    releaseGndTaxiPinToMainTop(callsign: string): {
+        didUnpin: boolean
+        bayId?: string
+        sectionId?: string
+        position?: number
+        shiftedCallsigns: string[]
+    } {
+        const mine = this.stripAssignments.get(callsign)
+        if (!mine || !this.isTaxiSectionId(mine.sectionId) || !mine.bottom) {
+            this.clearGndTaxiPinned(callsign)
+            return { didUnpin: false, shiftedCallsigns: [] }
+        }
+        const { bayId, sectionId } = mine
+        const unpinned = this.unpinAssignmentToMainStack(bayId, sectionId, callsign, true)
+        this.clearGndTaxiPinned(callsign)
+        console.log(
+            `[RULE] ${callsign} → top of main ${sectionId} (GND assumed taxi transfer, pos ${unpinned.position})`,
+        )
+        return {
+            didUnpin: true,
+            bayId,
+            sectionId,
+            position: unpinned.position,
+            shiftedCallsigns: [...this.lastShiftedCallsigns],
+        }
+    }
+
+    /**
+     * ESGG paper look only (not CFL / approach clearance):
+     * - Pending inbound transfer to me → pin tray (stable order: first at bottom)
+     * - Explicit drag-out this handoff → do not re-pin
+     * - EuroScope accept → main stack just above PÅ BANAN
+     *
+     * Important: section enter sets bottom=false before this runs — that must NOT
+     * be treated as “user released” (that bug skipped the pin on the 2nd transfer).
+     */
+    private applyAppTransferCtrArrTop(
+        callsign: string,
+        flight: Flight,
+        bayId: string,
+        sectionId: string,
+        currentPosition: number,
+        currentBottom: boolean,
+    ): { position: number; bottom: boolean; bumped: boolean } {
+        // Paper look is ESGG-only today — do not change ESSA / other configs
+        if (this.config.look !== 'paper') {
+            this.clearAppTransferPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+        if (!this.isRwySequenceBaySectionId(sectionId)) {
+            this.clearAppTransferPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+
+        const assumedByMe = this.isControlledByMe(flight)
+        const pending =
+            this.isPendingInboundTransferToMe(flight) ||
+            this.isPendingOutboundGndDepTransfer(flight) ||
+            (!assumedByMe &&
+                this.appTransferPinSession.has(callsign) &&
+                this.isHandoffToMe(flight))
+
+        if (pending) {
+            // New handoff session → always allow pin again
+            if (!this.appTransferPinSession.has(callsign)) {
+                this.appTransferDragReleased.delete(callsign)
+            }
+            if (this.appTransferDragReleased.has(callsign)) {
+                return { position: currentPosition, bottom: currentBottom, bumped: false }
+            }
+            const pinned = this.pinAssignmentToStickTop(bayId, sectionId, callsign)
+            if (!this.appTransferPinSession.has(callsign)) {
+                this.appTransferPinSession.add(callsign)
+                const kind = this.isPendingOutboundGndDepTransfer(flight)
+                    ? 'GND→TWR DEP transfer'
+                    : 'inbound transfer'
+                console.log(
+                    `[RULE] ${callsign} → pinned top of ${sectionId} (${kind}, pos ${pinned.position})`,
+                )
+            }
+            return {
+                position: pinned.position,
+                bottom: true,
+                bumped: pinned.bumped || !currentBottom,
+            }
+        }
+
+        // Handoff ended
+        const hadSession =
+            this.appTransferPinSession.has(callsign) || this.appTransferDragReleased.has(callsign)
+        const wasDragReleased = this.appTransferDragReleased.has(callsign)
+        this.clearAppTransferPinned(callsign)
+
+        if (hadSession && (assumedByMe || wasDragReleased)) {
+            const mine = this.stripAssignments.get(callsign)
+            if (mine?.bottom) {
+                const unpinned = this.unpinAssignmentToMainStack(bayId, sectionId, callsign)
+                console.log(`[RULE] ${callsign} → main stack of ${sectionId} (transfer accepted)`)
+                return unpinned
+            }
+            return {
+                position: currentPosition,
+                bottom: false,
+                bumped: !!currentBottom,
+            }
+        }
+
+        return { position: currentPosition, bottom: currentBottom, bumped: false }
+    }
+
+    /** Clear APP-transfer pin session (handoff ended / config leave). */
+    clearAppTransferPinned(callsign: string): void {
+        this.appTransferPinSession.delete(callsign)
+        this.appTransferDragReleased.delete(callsign)
+    }
+
+    /** Mark that the user dragged out of the pin tray for this handoff. */
+    markAppTransferDragReleased(callsign: string): void {
+        this.appTransferDragReleased.add(callsign)
+        this.appTransferPinSession.add(callsign)
+    }
+
+    /**
+     * Force pin in RWY sequence stick-top tray (e.g. GND dropped DEP on main stack).
+     * Returns regenerated strip when assignment was updated.
+     */
+    pinRwySequenceTray(callsign: string): {
+        strip: FlightStrip
+        shiftedCallsigns: string[]
+    } | null {
+        const assignment = this.stripAssignments.get(callsign)
+        if (!assignment || !this.isRwySequenceBaySectionId(assignment.sectionId)) return null
+        this.appTransferDragReleased.delete(callsign)
+        this.appTransferPinSession.add(callsign)
+        const pinned = this.pinAssignmentToStickTop(
+            assignment.bayId,
+            assignment.sectionId,
+            callsign,
+        )
+        const strip = this.regenerateStrip(callsign)
+        if (!strip) return null
+        return {
+            strip: { ...strip, position: pinned.position, bottom: true },
+            shiftedCallsigns: this.getLastShiftedCallsigns(),
+        }
+    }
+
+    /**
+     * Start / refresh ESGG paper PÅ TAXI pin for TWR→GND inbound transfer.
+     * Call when TWR moves ARR to taxi with GND online (or GND sees pending in).
+     */
+    startGndTaxiPin(callsign: string): void {
+        this.gndTaxiDragReleased.delete(callsign)
+        this.gndTaxiPinSession.add(callsign)
+    }
+
+    /** Clear GND-taxi pin session. */
+    clearGndTaxiPinned(callsign: string): void {
+        this.gndTaxiPinSession.delete(callsign)
+        this.gndTaxiDragReleased.delete(callsign)
+    }
+
+    /** User dragged out of the PÅ TAXI pin tray for this GND handoff. */
+    markGndTaxiDragReleased(callsign: string): void {
+        this.gndTaxiDragReleased.add(callsign)
+        this.gndTaxiPinSession.add(callsign)
+    }
+
+    /** True while strip is in an active GND taxi pin session (not yet drag-released). */
+    isGndTaxiPinned(callsign: string): boolean {
+        return this.gndTaxiPinSession.has(callsign) && !this.gndTaxiDragReleased.has(callsign)
+    }
+
+    /** Start / refresh ESGG paper UTFLYGNING pin for APP handoff (G/A or DEP). */
+    startUtflygningPin(callsign: string): void {
+        this.utflygningDragReleased.delete(callsign)
+        this.utflygningPinSession.add(callsign)
+    }
+
+    clearUtflygningPinned(callsign: string): void {
+        this.utflygningPinSession.delete(callsign)
+        this.utflygningDragReleased.delete(callsign)
+    }
+
+    markUtflygningDragReleased(callsign: string): void {
+        this.utflygningDragReleased.add(callsign)
+        this.utflygningPinSession.add(callsign)
+    }
+
+    isUtflygningPinned(callsign: string): boolean {
+        return this.utflygningPinSession.has(callsign) && !this.utflygningDragReleased.has(callsign)
+    }
+
+    /**
+     * Force pin at bottom of UTFLYGNING (ctr_dep pin tray).
+     * Returns regenerated strip when assignment was updated.
+     */
+    pinUtflygningTray(callsign: string): {
+        strip: FlightStrip
+        shiftedCallsigns: string[]
+    } | null {
+        const assignment = this.stripAssignments.get(callsign)
+        if (!assignment || !this.isCtrDepSectionId(assignment.sectionId)) return null
+        this.utflygningDragReleased.delete(callsign)
+        this.utflygningPinSession.add(callsign)
+        const pinned = this.pinAssignmentToStickTop(
+            assignment.bayId,
+            assignment.sectionId,
+            callsign,
+        )
+        const strip = this.regenerateStrip(callsign)
+        if (!strip) return null
+        return {
+            strip: { ...strip, position: pinned.position, bottom: true },
+            shiftedCallsigns: this.getLastShiftedCallsigns(),
+        }
+    }
+
+    /**
+     * Keep UTFLYGNING pin tray while TWR→APP handoff is pending (G/A or DEP).
+     */
+    private applyUtflygningPin(
+        callsign: string,
+        flight: Flight,
+        bayId: string,
+        sectionId: string,
+        currentPosition: number,
+        currentBottom: boolean,
+    ): { position: number; bottom: boolean; bumped: boolean } {
+        if (this.config.look !== 'paper') {
+            this.clearUtflygningPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+        if (!this.isCtrDepSectionId(sectionId)) {
+            this.clearUtflygningPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+
+        const wasDragReleased = this.utflygningDragReleased.has(callsign)
+        const inPinSession = this.utflygningPinSession.has(callsign) && !wasDragReleased
+        const target =
+            flight.handoffTargetController ||
+            getCallsignForPositionId(flight.handoffTargetControllerId)
+        const pendingOutToApp =
+            this.isControlledByMe(flight) &&
+            !!target &&
+            parseControllerRole(target, this.config.myAirports) === 'APP'
+
+        if (inPinSession || (pendingOutToApp && this.utflygningPinSession.has(callsign))) {
+            if (wasDragReleased) {
+                return { position: currentPosition, bottom: currentBottom, bumped: false }
+            }
+            const pinned = this.pinAssignmentToStickTop(bayId, sectionId, callsign)
+            if (pinned.bumped) {
+                console.log(
+                    `[RULE] ${callsign} → pinned bottom of ${sectionId} (UTFLYGNING APP xfer, pos ${pinned.position})`,
+                )
+            }
+            return {
+                position: pinned.position,
+                bottom: true,
+                bumped: pinned.bumped || !currentBottom,
+            }
+        }
+
+        const hadSession =
+            this.utflygningPinSession.has(callsign) || this.utflygningDragReleased.has(callsign)
+        if (hadSession && (wasDragReleased || !pendingOutToApp)) {
+            this.clearUtflygningPinned(callsign)
+            const mine = this.stripAssignments.get(callsign)
+            if (mine?.bottom) {
+                const unpinned = this.unpinAssignmentToMainStack(bayId, sectionId, callsign, false)
+                console.log(`[RULE] ${callsign} → main stack of ${sectionId} (UTFLYGNING pin released)`)
+                return unpinned
+            }
+            return {
+                position: currentPosition,
+                bottom: false,
+                bumped: !!currentBottom,
+            }
+        }
+
+        return { position: currentPosition, bottom: currentBottom, bumped: false }
+    }
+
+    /**
+     * Pin on PÅ TAXI stick-top during TWR→GND transfer (ARR vacate or DEP from seq/RWY).
+     * Session starts via startGndTaxiPin (TWR move) or pending inbound to me (GND).
+     * Stays pinned until drag-out / clear; then drops to main stack.
+     */
+    private applyGndTaxiPin(
+        callsign: string,
+        flight: Flight,
+        bayId: string,
+        sectionId: string,
+        currentPosition: number,
+        currentBottom: boolean,
+    ): { position: number; bottom: boolean; bumped: boolean } {
+        if (this.config.look !== 'paper') {
+            this.clearGndTaxiPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+        if (!this.isTaxiSectionId(sectionId)) {
+            this.clearGndTaxiPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+        const type = this.determineStripType(flight)
+        if (type !== 'arrival' && type !== 'local' && type !== 'departure') {
+            this.clearGndTaxiPinned(callsign)
+            return { position: currentPosition, bottom: currentBottom, bumped: false }
+        }
+
+        const assumedByMe = this.isControlledByMe(flight)
+        const ownerRole = parseControllerRole(flight.controller, this.config.myAirports)
+        const pendingInFromTwr =
+            this.isHandoffToMe(flight) &&
+            !assumedByMe &&
+            (ownerRole === 'TWR' || ownerRole === 'APP' || ownerRole === 'CTR')
+        const wasDragReleased = this.gndTaxiDragReleased.has(callsign)
+        const inPinSession =
+            this.gndTaxiPinSession.has(callsign) && !wasDragReleased
+
+        // GND receiving: start pin session on first sight of inbound handoff
+        if (pendingInFromTwr && !this.gndTaxiPinSession.has(callsign)) {
+            this.gndTaxiDragReleased.delete(callsign)
+            this.gndTaxiPinSession.add(callsign)
+        }
+
+        // Assumed by me while still in pin tray (EFS ASSUME or ES Accept) → top of main.
+        // Must run before the pin branch — otherwise we keep re-pinning after assume.
+        if (assumedByMe && inPinSession) {
+            const mine = this.stripAssignments.get(callsign)
+            if (mine?.bottom) {
+                const unpinned = this.unpinAssignmentToMainStack(bayId, sectionId, callsign, true)
+                this.clearGndTaxiPinned(callsign)
+                console.log(
+                    `[RULE] ${callsign} → top of main ${sectionId} (GND assumed taxi transfer, pos ${unpinned.position})`,
+                )
+                return unpinned
+            }
+            this.clearGndTaxiPinned(callsign)
+            return {
+                position: currentPosition,
+                bottom: false,
+                bumped: !!currentBottom,
+            }
+        }
+
+        // Pending inbound (not yet assumed) → keep / place in pin tray
+        if (
+            (pendingInFromTwr || this.gndTaxiPinSession.has(callsign)) &&
+            !wasDragReleased &&
+            !assumedByMe
+        ) {
+            const pinned = this.pinAssignmentToStickTop(bayId, sectionId, callsign)
+            if (!this.gndTaxiPinSession.has(callsign)) {
+                this.gndTaxiPinSession.add(callsign)
+            }
+            if (pinned.bumped) {
+                console.log(
+                    `[RULE] ${callsign} → pinned top of ${sectionId} (GND taxi transfer, pos ${pinned.position})`,
+                )
+            }
+            return {
+                position: pinned.position,
+                bottom: true,
+                bumped: pinned.bumped || !currentBottom,
+            }
+        }
+
+        // Pin session ended without assume path above (e.g. drag-release / handoff cancelled)
+        const hadSession =
+            this.gndTaxiPinSession.has(callsign) || this.gndTaxiDragReleased.has(callsign)
+        if (hadSession && (wasDragReleased || !pendingInFromTwr)) {
+            this.clearGndTaxiPinned(callsign)
+            const mine = this.stripAssignments.get(callsign)
+            if (mine?.bottom) {
+                // Drag-release: keep placement if already unpinned; else drop to main (not forced top)
+                const unpinned = this.unpinAssignmentToMainStack(bayId, sectionId, callsign, false)
+                console.log(`[RULE] ${callsign} → main stack of ${sectionId} (GND taxi pin released)`)
+                return unpinned
+            }
+            return {
+                position: currentPosition,
+                bottom: false,
+                bumped: !!currentBottom,
+            }
+        }
+
+        return { position: currentPosition, bottom: currentBottom, bumped: false }
+    }
+
+    /**
+     * PÅ TAXI insert side on first entry into the section:
+     * arrivals (and taxi-in locals) → top; departures (and taxi-out locals) → bottom.
+     * After that, appearance `position` sticks (manual drag / same-slot updates).
+     */
+    private taxiStripAddFromTop(flight: Flight): boolean {
+        const type = this.determineStripType(flight)
+        if (type === 'arrival') return true
+        if (type === 'departure') return false
+        if (type === 'local') {
+            const gs = (flight.groundstate || '').toUpperCase()
+            if (gs === 'ARR' || gs === 'TXIN' || gs === 'PARK') return true
+            if (flight.clearedToLand) return true
+            return false
+        }
+        return false
+    }
+
     /**
      * Get the position for a new strip in a section
      * Handles both "add from top" and "add from bottom" modes
      * Call getLastShiftedCallsigns() after this to get affected strips
      */
-    private getNewStripPosition(bayId: string, sectionId: string): number {
+    private getNewStripPosition(bayId: string, sectionId: string, flight?: Flight): number {
         const section = this.findSectionConfig(bayId, sectionId)
         // Default: add from top. Runway L/U flow always appends (first cleared toward top).
         let addFromTop = section?.addFromTop ?? true
         if (isRunwayOrderSectionId(sectionId)) addFromTop = false
+        // TAXI: arr top / dep bottom (mixed stack); ignores section addFromTop
+        if (flight && this.isTaxiSectionId(sectionId)) {
+            addFromTop = this.taxiStripAddFromTop(flight)
+        }
 
         // Clear previous shifted callsigns
         this.lastShiftedCallsigns = []
@@ -2121,13 +3384,25 @@ class FlightStore {
     }
 
     /**
-     * Get next position in a section (for add from bottom mode)
+     * Get next position in a section (for add from bottom mode).
+     * Always append after the highest live assignment so DEP→TAXI lands under
+     * existing ARR/DEP strips even if the counter drifted after reorders.
      */
     private getNextPosition(bayId: string, sectionId: string): number {
+        let maxPos = -1
+        this.stripAssignments.forEach((assignment, id) => {
+            if (assignment.bayId !== bayId || assignment.sectionId !== sectionId || assignment.bottom) {
+                return
+            }
+            const flight = this.flights.get(id)
+            if (flight?.deleted) return
+            if (assignment.position > maxPos) maxPos = assignment.position
+        })
+        const pos = maxPos + 1
         const key = `${bayId}:${sectionId}`
         const current = this.positionCounters.get(key) ?? 0
-        this.positionCounters.set(key, current + 1)
-        return current
+        this.positionCounters.set(key, Math.max(current, pos + 1))
+        return pos
     }
 
     /**
@@ -2178,23 +3453,34 @@ class FlightStore {
             return undefined
         })()
 
-        // Cleared for takeoff: departure with DEPA groundstate, not yet airborne
-        const clearedForTakeoff = stripType === 'departure' &&
+        // Cleared for takeoff: departure with DEPA groundstate, not yet airborne.
+        // Paper: keep CFTO after ATD/airborne — ATD must not clear the CFTO mark.
+        const clearedForTakeoff =
+            stripType === 'departure' &&
             flight.groundstate === 'DEPA' &&
-            !flight.airborne
+            (!flight.airborne || this.config.look === 'paper')
 
-        // Cleared to land: arrival with clearedToLand flag set, still airborne
-        const clearedToLand = (stripType === 'arrival' || stripType === 'local') &&
+        // Cleared to land: arrival with clearedToLand flag set, still airborne.
+        // Paper: keep CTL after landing/ATA (and vacate to PÅ TAXI) — same idea as CFTO+ATD.
+        const clearedToLand =
+            (stripType === 'arrival' || stripType === 'local') &&
             flight.clearedToLand === true &&
-            flight.airborne !== false
+            (flight.airborne !== false || this.config.look === 'paper')
 
         // Determine actions based on controller status
         let actions: string[] | undefined
         const myCallsign = actionConfig.myCallsign
         const csEq = (a: string | undefined, b: string | undefined) =>
             !!a && !!b && a.toUpperCase() === b.toUpperCase()
-        const isTrackedByMe = csEq(flight.controller, myCallsign)
-        const isUntracked = !flight.controller || flight.controller === ''
+        const mySi = (actionConfig.myPositionId || '').toUpperCase()
+        const ownerSiRaw = (flight.controllerId || '').toUpperCase()
+        const isTrackedByMe =
+            csEq(flight.controller, myCallsign) ||
+            (!!mySi && !!ownerSiRaw && mySi === ownerSiRaw)
+        // Owned if ES reports tracking callsign OR SI (callsign is often blank at TWR)
+        const isUntracked =
+            (!flight.controller || flight.controller === '') &&
+            (!flight.controllerId || flight.controllerId === '')
         const isHandoffToMe =
             csEq(flight.handoffTargetController, myCallsign) ||
             (!!actionConfig.myPositionId &&
@@ -2572,6 +3858,13 @@ class FlightStore {
             adepName: flight.origin ? getIcaoAirportName(flight.origin) : undefined,
             adesName: flight.destination ? getIcaoAirportName(flight.destination) : undefined,
             route: flight.route,
+            // Prefer ES filed TAS (flight.tas); fall back to route speed/level group
+            tas:
+                stripType === "departure" || stripType === "local"
+                    ? normalizeCruiseTas(flight.tas) ||
+                      extractFiledTasFromRoute(flight.route) ||
+                      undefined
+                    : undefined,
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
             sid: displaySid,
@@ -2602,6 +3895,9 @@ class FlightStore {
             canResetSquawk: canResetSquawk || undefined,
             direct: flight.direct || undefined,
             clearance: flight.clearance ?? undefined,
+            clearanceRead:
+                flight.clearance || flight.clearanceReadback || flight.clearanceRead || undefined,
+            clearanceReadback: flight.clearance || flight.clearanceReadback || undefined,
             clearedForTakeoff,
             clearedToLand,
             airborne: flight.airborne,
@@ -2626,6 +3922,7 @@ class FlightStore {
             tsac: cdmEligible ? flight.tsac : undefined,
             ctoc: cdmEligible ? flight.ctoc : undefined,
             qnhGiven: flight.qnhGiven,
+            atisGiven: flight.atisGiven,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
             ctot: ifrDeparture ? flight.ctot : undefined,
             ctotCancelled: ifrDeparture && flight.ctotCancelled ? true : undefined,
@@ -2639,6 +3936,7 @@ class FlightStore {
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
             isAssumed: isTrackedByMe || undefined,
             ownerSi,
+            // True whenever someone else tracks (by callsign and/or SI)
             ownedByOther: (!isTrackedByMe && !isUntracked) || undefined,
             // Dimming: INBOUND dimmed unless assumed / pending transfer;
             // TWR pending+cleared when DEL/GND online.
@@ -2672,7 +3970,10 @@ class FlightStore {
             })(),
             transferPending,
             transferSi: transferSi || undefined,
-            ownerCallsign: (!isUntracked && flight.controller) || undefined,
+            ownerCallsign:
+                (!isUntracked &&
+                    (flight.controller || getCallsignForPositionId(flight.controllerId))) ||
+                undefined,
             ownerFrequency,
             transferCallsign: hasHandoff ? handoffTarget : undefined,
             transferFrequency,
@@ -2801,6 +4102,13 @@ class FlightStore {
         this.flights.clear()
         this.stripAssignments.clear()
         this.positionCounters.clear()
+        this.printedCallsigns.clear()
+        this.appTransferPinSession.clear()
+        this.appTransferDragReleased.clear()
+        this.gndTaxiPinSession.clear()
+        this.gndTaxiDragReleased.clear()
+        this.utflygningPinSession.clear()
+        this.utflygningDragReleased.clear()
     }
 
     /**
@@ -2810,11 +4118,140 @@ class FlightStore {
     clearAssignments() {
         this.stripAssignments.clear()
         this.positionCounters.clear()
+        this.printedCallsigns.clear()
+        this.appTransferPinSession.clear()
+        this.appTransferDragReleased.clear()
+        this.gndTaxiPinSession.clear()
+        this.gndTaxiDragReleased.clear()
+        this.utflygningPinSession.clear()
+        this.utflygningDragReleased.clear()
         // Reset per-flight rule tracking so rules re-evaluate cleanly
         for (const flight of this.flights.values()) {
             flight.lastSectionRule = undefined
             flight.noSectionFound = false
         }
+    }
+
+    /**
+     * Flights eligible for a strip but not yet printed (manual paper mode).
+     */
+    listPendingPrint(): PendingPrintFlightInfo[] {
+        if (!this.isManualPaperPrint()) return []
+        const out: PendingPrintFlightInfo[] = []
+        for (const flight of this.flights.values()) {
+            if (flight.deleted || flight.manuallyDeleted) continue
+            if (!flightHasRequiredData(flight) || !this.isEligibleForStrip(flight)) continue
+            if (this.stripAssignments.has(flight.callsign)) continue
+            if (this.printedCallsigns.has(flight.callsign.toUpperCase())) continue
+            const deleteResult = shouldDeleteFlight(flight, this.config)
+            if (deleteResult.shouldDelete) continue
+            const targetSection = determineSectionForFlight(flight, this.config)
+            if (!targetSection) continue
+            out.push({
+                callsign: flight.callsign,
+                stripType: this.determineStripType(flight),
+                adep: flight.origin ?? '',
+                ades: flight.destination ?? '',
+                aircraftType: flight.aircraftType ?? '',
+                eobt: flight.eobt,
+                ctot: flight.ctot,
+                assr: hasValidAssignedSquawk(flight.squawk) ? flight.squawk : undefined,
+            })
+        }
+        out.sort((a, b) => {
+            const ae = a.eobt || a.ctot || '9999'
+            const be = b.eobt || b.ctot || '9999'
+            if (ae !== be) return ae.localeCompare(be)
+            return a.callsign.localeCompare(b.callsign)
+        })
+        return out
+    }
+
+    /**
+     * Merge VATSIM network FPL / position into a Flight (for manual print).
+     * Does not overwrite richer EuroScope fields when already present.
+     */
+    ingestVatsimPilot(pilot: VatsimPilot): Flight {
+        const cs = pilot.callsign.toUpperCase()
+        const flight = this.getOrCreateFlight(cs)
+        const fp = pilot.flight_plan
+        const fromEs = !flight.synthetic && !!(flight.origin && flight.destination)
+
+        if (fp) {
+            if (!fromEs || !flight.origin) flight.origin = (fp.departure || "").toUpperCase() || flight.origin
+            if (!fromEs || !flight.destination) {
+                flight.destination = (fp.arrival || "").toUpperCase() || flight.destination
+            }
+            if (!fromEs || !flight.alternate) {
+                flight.alternate = (fp.alternate || "").toUpperCase() || flight.alternate
+            }
+            if (!fromEs || !flight.aircraftType) {
+                flight.aircraftType = (fp.aircraft_short || fp.aircraft || "").toUpperCase() || flight.aircraftType
+            }
+            if (!fromEs || !flight.flightRules) {
+                const fr = (fp.flight_rules || "").toUpperCase()
+                if (fr === "I" || fr === "V" || fr === "Y" || fr === "Z") flight.flightRules = fr
+            }
+            if (!fromEs || !flight.route) flight.route = fp.route || flight.route
+            if (!fromEs || !flight.tas) {
+                flight.tas =
+                    extractFiledTasFromRoute(fp.route) ||
+                    normalizeCruiseTas(fp.cruise_tas) ||
+                    flight.tas
+            }
+            if (!fromEs || !flight.eobt) flight.eobt = normalizeVatsimDeptime(fp.deptime) || flight.eobt
+            if (!fromEs || flight.rfl === undefined) {
+                const rfl = parseVatsimAltitude(fp.altitude)
+                if (rfl !== undefined) flight.rfl = rfl
+            }
+            if (!fromEs || !flight.fplRemarks) flight.fplRemarks = fp.remarks || flight.fplRemarks
+            const xpdr = fp.assigned_transponder || pilot.transponder
+            if ((!fromEs || !flight.squawk) && xpdr && xpdr !== "0000") {
+                const n = normalizeAssignedSquawk(xpdr)
+                if (n) flight.squawk = n
+            }
+        }
+
+        if (pilot.latitude !== undefined) flight.latitude = pilot.latitude
+        if (pilot.longitude !== undefined) flight.longitude = pilot.longitude
+        if (pilot.altitude !== undefined) flight.currentAltitude = pilot.altitude
+        if (pilot.groundspeed !== undefined) flight.groundSpeed = pilot.groundspeed
+
+        if (!fromEs) flight.synthetic = true
+        flight.lastUpdate = Date.now()
+        if (!flight.firstSeen) flight.firstSeen = Date.now()
+        return flight
+    }
+
+    /**
+     * Explicitly print a strip (paper look). Creates from local flight or VATSIM FPL.
+     * Forces placement even when outside normal eligibility range.
+     */
+    async printStrip(callsign: string): Promise<ProcessMessageResult> {
+        const cs = callsign.trim().toUpperCase()
+        if (!cs) return {}
+
+        let flight = this.flights.get(cs)
+        if (!flight || !flightHasRequiredData(flight)) {
+            const pilot = await lookupVatsimPilot(cs)
+            if (pilot?.flight_plan?.departure && pilot.flight_plan.arrival) {
+                flight = this.ingestVatsimPilot(pilot)
+            }
+        }
+        if (!flight || !flightHasRequiredData(flight)) return {}
+
+        flight.deleted = false
+        flight.manuallyDeleted = false
+        flight.deletedByBeyondRange = false
+        flight.noSectionFound = false
+        this.markStripPrinted(flight.callsign)
+
+        let result = this.finalizeFlightStrips(flight.callsign, flight, true)
+        if (!result.strip && !result.softDeleted) {
+            // User-requested print: place even when outside radar-range filter
+            result = this.resolveStripResult(flight.callsign, flight, true)
+        }
+        return result
     }
 
     /**
@@ -2850,6 +4287,9 @@ class FlightStore {
             flight.deleted = false
             flight.lastDeleteRule = undefined
 
+            // Manual paper: skip unprinted flights on bulk reprocess
+            if (this.shouldGateNewStrip(flight.callsign)) continue
+
             // Determine section for flight
             const targetSection = determineSectionForFlight(flight, this.config)
             if (!targetSection) {
@@ -2858,8 +4298,9 @@ class FlightStore {
                 continue
             }
 
-            const position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            const position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             const bottom = false
+            this.markStripPrinted(flight.callsign)
             this.stripAssignments.set(flight.callsign, {
                 bayId: targetSection.bayId,
                 sectionId: targetSection.sectionId,
@@ -2936,7 +4377,7 @@ class FlightStore {
         const ruleSource = targetSection.ruleId ?? 'default'
 
         if (!currentAssignment) {
-            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -2951,7 +4392,7 @@ class FlightStore {
                 bayId: currentAssignment.bayId,
                 sectionId: currentAssignment.sectionId
             }
-            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId)
+            position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
             this.stripAssignments.set(callsign, {
                 bayId: targetSection.bayId,
@@ -3053,7 +4494,7 @@ class FlightStore {
         if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
-            pos = position ?? this.getNewStripPosition(bayId, sectionId)
+            pos = position ?? this.getNewStripPosition(bayId, sectionId, flight)
         } else if (multi && stripAirport) {
             const scoped = withAirportScope(this.config, stripAirport)
             const targetSection = determineSectionForFlight(flight, scoped)
@@ -3065,7 +4506,7 @@ class FlightStore {
             } else {
                 sectionId = prefixedSectionId(bayId, 'app')
             }
-            pos = this.getNewStripPosition(bayId, sectionId)
+            pos = this.getNewStripPosition(bayId, sectionId, flight)
         } else {
             const targetSection = determineSectionForFlight(flight, this.config)
             if (!targetSection) {
@@ -3081,13 +4522,16 @@ class FlightStore {
                 } else {
                     return undefined
                 }
-                pos = this.getNewStripPosition(bayId, sectionId)
+                pos = this.getNewStripPosition(bayId, sectionId, flight)
             } else {
                 bayId = targetSection.bayId
                 sectionId = targetSection.sectionId
-                pos = this.getNewStripPosition(bayId, sectionId)
+                pos = this.getNewStripPosition(bayId, sectionId, flight)
             }
         }
+
+        // User-initiated create counts as a print
+        this.markStripPrinted(callsign)
 
         // Record the assignment (multi-airport: key by callsign@ICAO)
         const assignmentKey = stripAirport ? stripIdForAirport(callsign, stripAirport) : callsign

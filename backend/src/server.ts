@@ -45,8 +45,8 @@ import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
 import type { FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
 import { flightStore, hasValidAssignedSquawk } from "./flightStore.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings } from "./config.js"
-import type { EuroscopeCommand, EssaPositionRole } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
+import type { EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
     normalizeEssaRoles,
     remapBayIdsToLayout,
@@ -54,6 +54,7 @@ import {
     collectEssaRunwayPairs,
     essaRunwayPairsFingerprint,
 } from "./essa-roles.js"
+import { normalizeEsggRoles } from "./esgg-roles.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
@@ -63,7 +64,7 @@ import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import { loadSidData, getSidDataHealth, getSidsForRunway, resolveSidAltitude } from "./sid-data.js"
-import { isSlowAircraft } from "./slow-aircraft.js"
+import { isSlowAircraft, isPropellerEngine } from "./slow-aircraft.js"
 import { standRequiresStartupInsteadOfPush } from "./essa-push-stands.js"
 import {
     hasForcedSidInRoute,
@@ -98,6 +99,7 @@ import {
 } from "./essa-sid-prefs.js"
 import { getEsePositionBySi } from "./ese-airspace.js"
 import { resolveEsmsPreferredSid, isEkchRwy30Active, collectEsmsSidsForTmaExit } from "./esms-sid.js"
+import { resolveEsggPreferredSid, collectEsggSidsForTmaExit } from "./esgg-sid.js"
 import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
 import { loadCtrData, checkCtrAtPosition, getCtrHealth } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
@@ -161,6 +163,27 @@ const cliArgs = parseArgs()
 const configDir = path.join(dataDir, "config")
 let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
 let activeConfigFile = path.basename(cliArgs.config ?? getDefaultConfigPath(dataDir))
+
+/**
+ * One-shot airport→config pick after first primed myselfUpdate.
+ * Disabled when `--config` was passed, or after the user switches manually.
+ */
+let configAutoSelectPending = !cliArgs.config
+let configManuallySelected = false
+
+/** EuroScope "not primed" primary frequency */
+function isPrimedFrequency(frequency: number | undefined | null): boolean {
+    if (frequency == null || !(frequency > 0)) return false
+    return Math.abs(frequency - 199.998) > 0.001
+}
+
+/** ESSA wins over ESGG when both appear in rwyconfig. */
+function configFileForDiscoveredAirports(airports: string[]): string | undefined {
+    const set = new Set(airports.map((a) => a.toUpperCase()))
+    if (set.has("ESSA")) return "essa.yml"
+    if (set.has("ESGG")) return "esgg.yml"
+    return undefined
+}
 
 // Load initial configuration from YAML file
 const initialConfigPath = cliArgs.config ?? getDefaultConfigPath(dataDir)
@@ -319,6 +342,10 @@ if (EUROSCOPE_DIR) {
                 const config = loadConfig(configInfo.fullPath)
                 applyConfig(config)
                 activeConfigFile = savedSettings.activeConfig
+                // RTC stays; ESSA/ESGG may still be corrected on first primed myselfUpdate
+                if (isMultiAirportConfig(staticConfig) || /multi/i.test(activeConfigFile)) {
+                    configAutoSelectPending = false
+                }
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
@@ -348,6 +375,13 @@ if (EUROSCOPE_DIR) {
             console.log(`Restoring manual ESSA roles: ${(roles ?? []).join(", ")}`)
         }
     }
+    if (isEsggRolesConfig(staticConfig)) {
+        const roles = normalizeEsggRoles(savedSettings.esggRoles)
+        restoreEsggRolesFromSettings(roles, savedSettings.esggRolesManual)
+        if (savedSettings.esggRolesManual) {
+            console.log(`Restoring manual ESGG roles: ${(roles ?? []).join(", ")}`)
+        }
+    }
 } else {
     console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
     // Still persist UI settings under %APPDATA%\EuroScope when possible (mock/dev)
@@ -367,6 +401,7 @@ let currentUiSettings: UiSettings = { ...DEFAULT_UI_SETTINGS }
     setForceIdealAppDepFrequency(currentUiSettings.showAppDepXcFrequency)
 }
 flightStore.setAutoParkEnabledGetter(() => currentUiSettings.autoParkEnabled)
+flightStore.setStripPrintModeGetter(() => currentUiSettings.stripPrintMode)
 
 function isAutoParkAvailable(): boolean {
     return staticConfig.myAirports.some((a) => hasStandData(a))
@@ -454,7 +489,7 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
                 break
             }
             sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign, desired: command.value }))
-            flight.clearance = command.value
+            flightStore.applyOptimisticClearance(callsign, command.value)
             break
 
         case "setClearedToLand":
@@ -504,15 +539,17 @@ function reevaluateAndBroadcast(callsign: string) {
         )
     }
 
-    // Same-slot: pin appearance order (TAXIWAY ARR TXIN/TAXI etc.). Section moves: allow new pos.
+    // Same-slot: pin appearance order (TAXIWAY ARR TXIN/TAXI etc.).
+    // Section moves and APP-transfer sticky-top bumps: allow new pos.
+    const allowPos = !!(result.sectionChanged || result.allowPositionChange)
     const applied = store.updateStripFromFlight(
         result.strip,
-        result.sectionChanged ? { allowPositionChange: true } : undefined
+        allowPos ? { allowPositionChange: true } : undefined
     )
 
     // Broadcast shifted strips and gaps BEFORE the auto-moved strip so positions are settled
     // by the time the frontend mounts the moved strip and measures its target position
-    if (result.sectionChanged && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+    if (allowPos && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
         for (const shifted of result.shiftedCallsigns) {
             const shiftedStrip = flightStore.regenerateStrip(shifted)
             if (shiftedStrip) {
@@ -536,7 +573,7 @@ function reevaluateAndBroadcast(callsign: string) {
         }
     }
 
-    broadcastStrip(applied, result.sectionChanged ? { autoMoved: true } : undefined)
+    broadcastStrip(applied, allowPos ? { autoMoved: true } : undefined)
 }
 
 flightStore.setRofRequestExpireHandler((callsign) => reevaluateAndBroadcast(callsign))
@@ -561,6 +598,7 @@ flightStore.setAutoParkCommandHandler((callsign) => {
 
 type OutboundPluginCommand =
     | { type: "setClearedToLand"; callsign: string }
+    | { type: "unsetClearedToLand"; callsign: string }
     | { type: "setGroundState"; callsign: string; state: string }
     | { type: "transfer"; callsign: string; targetCallsign?: string }
     | { type: "release"; callsign: string }
@@ -575,6 +613,9 @@ type OutboundPluginCommand =
     | { type: "assignCfl"; callsign: string; altitude: number }
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
+    /** EFS soft G/A — strip annotation 5 (not TopSky MISAP_) */
+    | { type: "setEfsGoAround"; callsign: string }
+    | { type: "unsetEfsGoAround"; callsign: string }
     | { type: "rof"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
     | { type: "setScratch"; callsign: string; value: string }
@@ -603,7 +644,7 @@ function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): stri
         if (essaTarget) return essaTarget
     }
 
-    const myRole = staticConfig.myRole ?? 'TWR'
+    const myRole = getActingControllerRole() ?? staticConfig.myRole ?? 'TWR'
     switch (myRole) {
         case 'DEL':
             return getControllerCallsign('GND') ?? getControllerCallsign('TWR')
@@ -612,8 +653,13 @@ function resolveXferTarget(strip: FlightStrip, flight: Flight | undefined): stri
         case 'TWR':
             if (flight && staticConfig.myAirports.some((a) => a.toUpperCase() === "ESGG")) {
                 const online = staticConfig.onlineControllers?.values()
-                if (flight.missedApproach) {
-                    // ESGG split APP: MISAP 03→W, 21→E
+                const inUtflygning =
+                    strip.sectionId === "ctr_dep" || strip.sectionId.endsWith("_ctr_dep")
+                const arrLike =
+                    strip.stripType === "arrival" || strip.stripType === "local"
+                // Soft G/A or MISAP / ARR-local already in UTFLYGNING → MISAP APP
+                // (appendix: 03→E, 21→W)
+                if (flight.missedApproach || (inUtflygning && arrLike)) {
                     const arrRwy =
                         flight.arrRwy || staticConfig.activeRunways?.["ESGG"]?.arr?.[0]
                     const app = resolveEsggMisapApp(arrRwy, online)
@@ -646,6 +692,8 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
     switch (action) {
         case "CTL":
             return { type: "setClearedToLand", callsign }
+        case "unsetCTL":
+            return { type: "unsetClearedToLand", callsign }
         case "CTO":
             return { type: "setGroundState", callsign, state: "DEPA" }
         case "PUSH":
@@ -779,7 +827,10 @@ function gapForClient(gap: Gap): Gap {
 }
 
 // Broadcast a strip update (or delete when ESSA role filter hides it)
-function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; autoMoved?: boolean }) {
+function broadcastStrip(
+    strip: FlightStrip,
+    options?: { exclude?: WebSocket; autoMoved?: boolean; cleanReprint?: boolean },
+) {
     const clientStrip = stripForClient(strip)
     if (!clientStrip) {
         broadcastStripDelete(strip.id, options?.exclude)
@@ -787,6 +838,7 @@ function broadcastStrip(strip: FlightStrip, options?: { exclude?: WebSocket; aut
     }
     const message: StripMessage = { type: "strip", strip: clientStrip }
     if (options?.autoMoved) message.autoMoved = true
+    if (options?.cleanReprint) message.cleanReprint = true
     broadcast(message, options?.exclude)
 }
 
@@ -934,6 +986,7 @@ setInterval(checkPluginStale, 2000)
 // Send status (callsign + airports + role) to a client
 function buildStatusMessage(): StatusMessage {
     const essaMode = isEssaRolesConfig(staticConfig)
+    const esggMode = isEsggRolesConfig(staticConfig)
     const feeds = buildFeedsStatus()
     lastStatusFeedsFp = JSON.stringify({
         feeds,
@@ -962,8 +1015,29 @@ function buildStatusMessage(): StatusMessage {
         essaRolesMode: essaMode || undefined,
         essaRoles: essaMode ? (staticConfig.essaRoles ?? []) : undefined,
         essaRolesManual: essaMode ? !!staticConfig.essaRolesManual : undefined,
+        esggRolesMode: esggMode || undefined,
+        esggRoles: esggMode ? (staticConfig.esggRoles ?? []) : undefined,
+        esggRolesManual: esggMode ? !!staticConfig.esggRolesManual : undefined,
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
+        look: staticConfig.look === 'paper' ? 'paper' : 'saab',
     }
+}
+
+let lastPendingPrintFp = ''
+
+function broadcastPendingPrintList() {
+    if (staticConfig.look !== 'paper' || currentUiSettings.stripPrintMode !== 'manual') {
+        if (lastPendingPrintFp !== '[]') {
+            lastPendingPrintFp = '[]'
+            broadcast({ type: 'pendingPrintList', flights: [] })
+        }
+        return
+    }
+    const flights = flightStore.listPendingPrint()
+    const fp = JSON.stringify(flights.map((f) => f.callsign).sort())
+    if (fp === lastPendingPrintFp) return
+    lastPendingPrintFp = fp
+    broadcast({ type: 'pendingPrintList', flights })
 }
 
 function sendStatus(socket: WebSocket) {
@@ -1115,11 +1189,16 @@ function broadcastControllers() {
  * Reloads config, clears the store, re-applies section rules to existing flights,
  * and broadcasts the new layout + refreshed strips to all clients.
  */
-function switchConfig(file: string) {
+function switchConfig(file: string, opts?: { manual?: boolean }) {
     const configInfo = availableConfigs.find(c => c.file === file)
     if (!configInfo) {
         console.error(`Config file not found: ${file}`)
         return
+    }
+
+    if (opts?.manual) {
+        configManuallySelected = true
+        configAutoSelectPending = false
     }
 
     console.log(`Switching config to: ${configInfo.name} (${file})`)
@@ -1135,6 +1214,11 @@ function switchConfig(file: string) {
             const roles = normalizeEssaRoles(saved.essaRoles)
             restoreEssaRolesFromSettings(roles, saved.essaRolesManual)
         }
+        if (isEsggRolesConfig(staticConfig)) {
+            const saved = loadUserSettings()
+            const roles = normalizeEsggRoles(saved.esggRoles)
+            restoreEsggRolesFromSettings(roles, saved.esggRolesManual)
+        }
 
         // Sync store layout with (possibly rebuilt) multi-airport layout
         store.reprocessAllFlights()
@@ -1145,6 +1229,45 @@ function switchConfig(file: string) {
     } catch (err) {
         console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
     }
+}
+
+/**
+ * First primed myselfUpdate with ESSA/ESGG in rwyconfig → pick matching layout once.
+ * No-op after manual switchConfig or when `--config` was used.
+ */
+function maybeAutoSelectConfigFromAirports(
+    airports: string[],
+    frequency: number | undefined,
+): void {
+    if (!configAutoSelectPending || configManuallySelected || cliArgs.config) {
+        configAutoSelectPending = false
+        return
+    }
+    // RTC / multi-airport is an intentional mode — do not yank to ESSA/ESGG
+    if (isMultiAirportConfig(staticConfig) || /multi/i.test(activeConfigFile)) {
+        configAutoSelectPending = false
+        return
+    }
+    if (!isPrimedFrequency(frequency)) return
+    if (airports.length === 0) return
+
+    const file = configFileForDiscoveredAirports(airports)
+    if (!file) return
+    if (!availableConfigs.some((c) => c.file === file)) {
+        console.warn(`[CONFIG] Auto-select skipped — ${file} not in config directory`)
+        configAutoSelectPending = false
+        return
+    }
+
+    configAutoSelectPending = false
+    if (activeConfigFile === file) {
+        console.log(`[CONFIG] Auto-select OK — already on ${file}`)
+        return
+    }
+    console.log(
+        `[CONFIG] Auto-select ${file} from airports [${airports.join(", ")}] (primed ${frequency!.toFixed(3)})`,
+    )
+    switchConfig(file)
 }
 
 /** Airports currently ARR/DEP in EuroScope rwyselect (RTC relevance) */
@@ -1453,7 +1576,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
     if (strip.stripType !== "departure" && strip.stripType !== "local") return
 
     const airport = (flight.origin || strip.adep || "").toUpperCase()
-    if (airport !== "ESSA" && airport !== "ESMS") return
+    if (airport !== "ESSA" && airport !== "ESMS" && airport !== "ESGG") return
 
     // Route for exit matching: drop leading SID/rwy or ADEP/rwy (about to be rewritten)
     const tokens = (flight.route || strip.route || "").trim().split(/\s+/).filter(Boolean)
@@ -1469,6 +1592,12 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
     if (airport === "ESMS") {
         const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
         preferred = resolveEsmsPreferredSid({ runway, route: routeForPref, ekch30 }).sid
+    } else if (airport === "ESGG") {
+        preferred = resolveEsggPreferredSid({
+            runway,
+            route: routeForPref,
+            engineType: flight.engineType,
+        }).sid
     } else {
         const essa = staticConfig.activeRunways?.["ESSA"]
         const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
@@ -1545,13 +1674,13 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
 }
 
 /**
- * Resolve preferred SID for ESSA/ESMS (config / LOA), else undefined.
+ * Resolve preferred SID for ESSA/ESMS/ESGG (config / LOA / LOP), else undefined.
  */
 function resolvePreferredSidForFlight(flight: Flight): string | undefined {
     const airport = (flight.origin || "").toUpperCase()
     const runway = flight.depRwy
     if (!airport || !runway) return undefined
-    if (airport !== "ESSA" && airport !== "ESMS") return undefined
+    if (airport !== "ESSA" && airport !== "ESMS" && airport !== "ESGG") return undefined
 
     const tokens = (flight.route || "").trim().split(/\s+/).filter(Boolean)
     if (tokens[0]?.includes("/")) tokens.shift()
@@ -1564,6 +1693,15 @@ function resolvePreferredSidForFlight(flight: Flight): string | undefined {
     if (airport === "ESMS") {
         const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
         return resolveEsmsPreferredSid({ runway, route: routeForPref, ekch30 }).sid ?? undefined
+    }
+    if (airport === "ESGG") {
+        return (
+            resolveEsggPreferredSid({
+                runway,
+                route: routeForPref,
+                engineType: flight.engineType,
+            }).sid ?? undefined
+        )
     }
 
     const essa = staticConfig.activeRunways?.["ESSA"]
@@ -1591,6 +1729,83 @@ function clearTopSkyRofFallback(callsign: string) {
         clearTimeout(t)
         topSkyRofFallbackTimers.delete(key)
     }
+}
+
+/**
+ * ESGG paper: CTL / CTL-L on a pending APP→TWR (or CTR→TWR) inbound ARR/local
+ * → ASSUME ownership so section rules place the strip on PÅ BANAN.
+ * Returns true when assume was applied.
+ */
+function assumePendingAppInboundOnCtl(strip: {
+    callsign: string
+    stripType?: string
+    transferPending?: string
+    ownerCallsign?: string
+}, flight: Flight): boolean {
+    if (staticConfig.look !== "paper") return false
+    if (strip.transferPending !== "in") return false
+    if (strip.stripType !== "arrival" && strip.stripType !== "local") return false
+    const ownerCs = (flight.controller || strip.ownerCallsign || "").trim()
+    if (!ownerCs) return false
+    const role = parseControllerRole(ownerCs, staticConfig.myAirports)
+    if (role !== "APP" && role !== "CTR") return false
+
+    sendUdp(
+        JSON.stringify({
+            type: "assume",
+            callsign: strip.callsign,
+        } satisfies OutboundPluginCommand),
+    )
+    flight.controller = staticConfig.myCallsign
+    flight.controllerId = staticConfig.myPositionId
+    flight.handoffTargetController = ""
+    flight.handoffTargetControllerId = undefined
+    flight.handoffOptimisticUntil = undefined
+    flight.ownershipOptimisticUntil = Date.now() + 5000
+    flightStore.clearAppTransferPinned(strip.callsign)
+    console.log(
+        `[ACTION] CTL ${strip.callsign}: ASSUME ${role} inbound → PÅ BANAN`,
+    )
+    return true
+}
+
+/**
+ * ESGG paper CD/DEL: assume an unowned DEP/local when entering KLARERING
+ * (CLR read / CLR correct / drag to cleared). Never called on undo — no RELEASE.
+ */
+function assumeCdDelKlareringDep(
+    flight: Flight,
+    stripType: string | undefined,
+    reason: string,
+): boolean {
+    if (staticConfig.look !== "paper") return false
+    if (!isCdOrDelRole()) return false
+    if (stripType !== "departure" && stripType !== "local") return false
+
+    const myCs = (staticConfig.myCallsign || "").toUpperCase()
+    const mySi = (staticConfig.myPositionId || "").toUpperCase()
+    const ownerCs = (flight.controller || "").toUpperCase()
+    const ownerSi = (flight.controllerId || "").toUpperCase()
+    // Already assumed by me
+    if (myCs && ownerCs === myCs) return false
+    if (mySi && ownerSi && ownerSi === mySi) return false
+    // Someone else owns — do not steal
+    if (ownerCs || ownerSi) return false
+
+    sendUdp(
+        JSON.stringify({
+            type: "assume",
+            callsign: flight.callsign,
+        } satisfies OutboundPluginCommand),
+    )
+    flight.controller = staticConfig.myCallsign
+    flight.controllerId = staticConfig.myPositionId
+    flight.handoffTargetController = ""
+    flight.handoffTargetControllerId = undefined
+    flight.handoffOptimisticUntil = undefined
+    flight.ownershipOptimisticUntil = Date.now() + 5000
+    console.log(`[KLARERING] ${flight.callsign}: ASSUME (CD/DEL, ${reason})`)
+    return true
 }
 
 /**
@@ -1637,8 +1852,8 @@ function scheduleTopSkyRofFallback(callsign: string) {
 }
 
 /**
- * Attempt to automatically assign CFL and squawk for a flight (DCL AUTO / new-dep setting).
- * Replicates the clearance dialog's applyDefaultCfl + applyDefaultSquawk.
+ * Attempt to automatically assign preferred SID, CFL and squawk (DCL AUTO / new-dep setting).
+ * Replicates the clearance dialog's applyPreferredSid + applyDefaultCfl + applyDefaultSquawk.
  *
  * Squawk allocate is gated on controllerAssignedSeen so reload/refresh cannot fire
  * TopSky AllocateSSR while ASSR is still unknown (FPD+radar often precede CAD).
@@ -1649,7 +1864,34 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
         hasSlowRemark(flight.remarks) ||
         isTrackSidName(flight.sid)
     const preferred = resolvePreferredSidForFlight(flight)
-    const sidForCfl = preferred || flight.sid
+
+    // Force SID only when ES already has a GetSid/ESE designator that mismatches preferred.
+    // Empty SID → leave for ESE prio; do not invent an assignSid.
+    if (
+        preferred &&
+        !!flight.sid &&
+        !sidsMatch(flight.sid, preferred) &&
+        !isVectorDeparture(flight) &&
+        !hasForcedSidInRoute(flight.route) &&
+        !isTrackSidName(flight.sid) &&
+        !/^VFR/i.test(flight.sid)
+    ) {
+        flight.sidDisplayOverride = preferred
+        flight.sid = preferred
+        sendUdp(
+            JSON.stringify({
+                type: "assignSid",
+                callsign: flight.callsign,
+                sid: preferred,
+            } satisfies OutboundPluginCommand),
+        )
+        console.log(
+            `[${logTag}] Force SID ${preferred} for ${flight.callsign} (ESE/GetSid mismatched)`,
+        )
+    }
+
+    // After optional force, prefer live SID; else preferred for CFL when GetSid empty
+    const sidForCfl = flight.sid || preferred
 
     // Auto-assign CFL from SID altitude if not already set
     if (sidForCfl && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
@@ -1688,6 +1930,9 @@ function isCdOrDelRole(): boolean {
     if (staticConfig.layoutMode === "essaRoles") {
         const roles = staticConfig.essaRoles ?? []
         return roles.some((r) => r === "CD")
+    }
+    if (isEsggRolesConfig(staticConfig)) {
+        return hasEsggPositionRole("CD")
     }
     return staticConfig.myRole === "DEL"
 }
@@ -1884,6 +2129,17 @@ function sendDclClearance(
     if (reason === "proactive") {
         flight.dclRequestedAt = undefined
         flight.dclMessage = undefined
+    }
+
+    // ESGG paper: DCL send → CLR read (KLARERING) + ASSUME; strip shows "DCL" ink in col 4
+    if (staticConfig.look === "paper") {
+        flight.clearanceRead = true
+        const existing = findStripForCallsign(flight.callsign)
+        assumeCdDelKlareringDep(
+            flight,
+            existing?.stripType ?? "departure",
+            "DCL send",
+        )
     }
 
     console.log(
@@ -2087,8 +2343,18 @@ function handleCpdlcResponse(from: string, packet: string) {
             )
         }
 
-        // Set clearance flag via EuroScope plugin
+        // Set clearance flag via EuroScope plugin (= CLR correct on paper)
         sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: flight.callsign, desired: true }))
+        flightStore.applyOptimisticClearance(flight.callsign, true)
+        // ESGG paper CD/DEL: confirm also assumes if not already (DCL send may have)
+        if (staticConfig.look === "paper") {
+            const existing = findStripForCallsign(flight.callsign)
+            assumeCdDelKlareringDep(
+                flight,
+                existing?.stripType ?? "departure",
+                "DCL WILCO",
+            )
+        }
 
         // Regenerate and broadcast strip
         const strip = flightStore.regenerateStrip(flight.callsign)
@@ -2118,8 +2384,8 @@ function handleCpdlcResponse(from: string, packet: string) {
 // regenerateStrip() only updates actions in place — use reprocessAllFlights so sections move too.
 function reprocessAllStripsForRoleChange(reason: string) {
     store.reprocessAllFlights()
-    // ESSA auto roles may have changed — push status + filtered layout before refresh
-    if (isEssaRolesConfig(staticConfig)) {
+    // ESSA / ESGG auto roles may have changed — push status + remapped layout before refresh
+    if (isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)) {
         broadcastStatus()
         broadcastLayout()
     }
@@ -2369,6 +2635,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             // Get the strip before moving to capture source section
             const stripBefore = store.getStrip(message.stripId)
             const fromSectionId = stripBefore?.sectionId
+            const fromBottom = !!stripBefore?.bottom
+            const wasIncomingTransfer =
+                staticConfig.look === "paper" && stripBefore?.transferPending === "in"
 
             const result = store.moveStrip(
                 message.stripId,
@@ -2404,44 +2673,736 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 })
 
+                const flight = flightStore.getFlight(result.strip.callsign)
+                let stateChanged = false
+
+                // ESGG paper: drag out of pin tray (or into another section) = ASSUME,
+                // except APP→TWR ARR → INBOUND = REFUSE,
+                // and GND→TWR DEP/local → PÅ TAXI = REFUSE.
+                // UTFLYGNING / above PÅ BANAN from pending inbound = ASSUME (not refuse).
+                const fromTaxi =
+                    !!fromSectionId &&
+                    (fromSectionId === "taxi" || fromSectionId.endsWith("_taxi"))
+                const inTaxi =
+                    message.targetSectionId === "taxi" ||
+                    message.targetSectionId.endsWith("_taxi")
+                const toCtrArr =
+                    message.targetSectionId === "ctr_arr" ||
+                    message.targetSectionId.endsWith("_ctr_arr")
+                const toInbound =
+                    message.targetSectionId === "inbound" ||
+                    message.targetSectionId.endsWith("_inbound")
+                const arrOrLocalStrip =
+                    result.strip.stripType === "arrival" ||
+                    result.strip.stripType === "local" ||
+                    stripBefore?.stripType === "arrival" ||
+                    stripBefore?.stripType === "local"
+                const depOrLocalStrip =
+                    result.strip.stripType === "departure" ||
+                    result.strip.stripType === "local" ||
+                    stripBefore?.stripType === "departure" ||
+                    stripBefore?.stripType === "local"
+                // APP / GND→TWR pin is in CTR ARR — do not treat PÅ TAXI pin as that pin
+                const leftPinTray =
+                    wasIncomingTransfer && fromBottom && !message.isBottom && !fromTaxi
+                const leftSectionWhileIncoming =
+                    wasIncomingTransfer &&
+                    !!fromSectionId &&
+                    fromSectionId !== message.targetSectionId &&
+                    !fromTaxi
+                // TWR: accept GND→TWR DEP by dragging PÅ TAXI → sequence bay
+                const assumeViaTaxiToSequence =
+                    wasIncomingTransfer &&
+                    fromTaxi &&
+                    toCtrArr &&
+                    depOrLocalStrip
+                const targetUtflygning =
+                    message.targetSectionId === "ctr_dep" ||
+                    message.targetSectionId.endsWith("_ctr_dep")
+                // Pending APP→TWR: only REFUSE is drag back to INBOUND
+                const refuseViaInbound =
+                    staticConfig.look === "paper" &&
+                    wasIncomingTransfer &&
+                    (leftSectionWhileIncoming || leftPinTray) &&
+                    toInbound &&
+                    arrOrLocalStrip
+                // TWR: pending GND→TWR DEP/local dragged back to PÅ TAXI → REFUSE
+                const refuseViaTaxi =
+                    staticConfig.look === "paper" &&
+                    wasIncomingTransfer &&
+                    leftSectionWhileIncoming &&
+                    inTaxi &&
+                    depOrLocalStrip
+                // PÅ TAXI pin exit (same section or leave taxi) → set GS + ASSUME if inbound
+                // ARR/local → TXIN; DEP → TAXI (GS deferred until GND pulls off pin)
+                const leftGndTaxiPin =
+                    staticConfig.look === "paper" &&
+                    fromTaxi &&
+                    fromBottom &&
+                    !message.isBottom &&
+                    (arrOrLocalStrip || depOrLocalStrip) &&
+                    flightStore.isGndTaxiPinned(result.strip.callsign)
+
+                if (flight && (refuseViaTaxi || refuseViaInbound)) {
+                    sendUdp(
+                        JSON.stringify({
+                            type: "refuse",
+                            callsign: result.strip.callsign,
+                        } satisfies OutboundPluginCommand),
+                    )
+                    flight.handoffTargetController = ""
+                    flight.handoffTargetControllerId = undefined
+                    flight.handoffOptimisticUntil = undefined
+                    flightStore.markAppTransferDragReleased(result.strip.callsign)
+                    flightStore.clearAppTransferPinned(result.strip.callsign)
+                    stateChanged = true
+                    const refuseReason = refuseViaInbound
+                        ? "ARR drag back to INBOUND"
+                        : "DEP/local drag back to PÅ TAXI"
+                    console.log(
+                        `[MOVE] ${result.strip.callsign}: REFUSE (${refuseReason})`,
+                    )
+                } else if (flight && leftGndTaxiPin) {
+                    // Manual drag out of pin — keep moveStrip placement (do not force top)
+                    flightStore.markGndTaxiDragReleased(result.strip.callsign)
+                    flightStore.clearGndTaxiPinned(result.strip.callsign)
+                    const pinExitGs =
+                        result.strip.stripType === "departure" ||
+                        stripBefore?.stripType === "departure"
+                            ? "TAXI"
+                            : "TXIN"
+                    if ((flight.groundstate || "").toUpperCase() !== pinExitGs) {
+                        sendUdp(
+                            JSON.stringify({
+                                type: "setGroundState",
+                                callsign: result.strip.callsign,
+                                state: pinExitGs,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flightStore.applyOptimisticGroundstate(result.strip.callsign, pinExitGs)
+                    }
+                    if (wasIncomingTransfer) {
+                        sendUdp(
+                            JSON.stringify({
+                                type: "assume",
+                                callsign: result.strip.callsign,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flight.controller = staticConfig.myCallsign
+                        flight.controllerId = staticConfig.myPositionId
+                        flight.handoffTargetController = ""
+                        flight.handoffTargetControllerId = undefined
+                        flight.handoffOptimisticUntil = undefined
+                        flight.ownershipOptimisticUntil = Date.now() + 5000
+                    }
+                    stateChanged = true
+                    console.log(
+                        `[MOVE] ${result.strip.callsign}: ${pinExitGs} (drag out of PÅ TAXI pin)`,
+                    )
+                } else if (
+                    flight &&
+                    (leftPinTray || leftSectionWhileIncoming || assumeViaTaxiToSequence)
+                ) {
+                    sendUdp(
+                        JSON.stringify({
+                            type: "assume",
+                            callsign: result.strip.callsign,
+                        } satisfies OutboundPluginCommand),
+                    )
+                    flight.controller = staticConfig.myCallsign
+                    flight.controllerId = staticConfig.myPositionId
+                    flight.handoffTargetController = ""
+                    flight.handoffTargetControllerId = undefined
+                    flight.handoffOptimisticUntil = undefined
+                    flight.ownershipOptimisticUntil = Date.now() + 5000
+                    if (assumeViaTaxiToSequence && message.isBottom) {
+                        // Accept into pin tray — stay pinned until drag to main / runway
+                        flightStore.clearAppTransferPinned(result.strip.callsign)
+                        // Re-enter pin session as assumed so hold keeps sequence placement
+                    } else {
+                        flightStore.markAppTransferDragReleased(result.strip.callsign)
+                        flightStore.clearAppTransferPinned(result.strip.callsign)
+                    }
+                    stateChanged = true
+                    console.log(
+                        `[MOVE] ${result.strip.callsign}: ASSUME (${
+                            assumeViaTaxiToSequence
+                                ? "taxi→sequence bay"
+                                : "drag out of transfer pin"
+                        })`,
+                    )
+                }
+
                 // Evaluate move rules if section changed
                 if (fromSectionId && fromSectionId !== message.targetSectionId) {
                     console.log(
                         `Strip ${message.stripId} dragged from ${fromSectionId} to ${message.targetSectionId} (bottom: ${message.isBottom})`,
                     )
 
-                    const flight = flightStore.getFlight(result.strip.callsign)
                     if (flight) {
+                        const fromCtrArr =
+                            fromSectionId === "ctr_arr" || fromSectionId.endsWith("_ctr_arr")
+                        const fromRunwayEarly =
+                            fromSectionId === "runway" || fromSectionId.includes("runway")
+                        const myRoleForGnd =
+                            getActingControllerRole() ?? staticConfig.myRole
+                        const iAmGndForTaxi = isEsggRolesConfig(staticConfig)
+                            ? hasEsggPositionRole("GND")
+                            : myRoleForGnd === "GND"
+                        const gndCsForTaxi = getControllerCallsign("GND")
+                        // Assumed DEP/local from seq/RWY → PÅ TAXI: XFER to GND (no GS yet)
+                        const willXferDepToGnd =
+                            staticConfig.look === "paper" &&
+                            (fromCtrArr || fromRunwayEarly) &&
+                            inTaxi &&
+                            depOrLocalStrip &&
+                            !!gndCsForTaxi &&
+                            !iAmGndForTaxi &&
+                            (myRoleForGnd === "TWR" ||
+                                myRoleForGnd === "APP" ||
+                                myRoleForGnd === "CTR")
+
+                        // ESGG paper: ARR/local → UTFLYGNING is soft G/A — never set DEPA,
+                        // and never unset CTL (common-rules runway_to_ctr_dep_clear_ctl).
+                        const softGoaFromRunway =
+                            staticConfig.look === "paper" &&
+                            targetUtflygning &&
+                            arrOrLocalStrip &&
+                            (fromSectionId === "runway" || fromSectionId.includes("runway"))
+                        const skipDepaForSoftGoa =
+                            staticConfig.look === "paper" &&
+                            targetUtflygning &&
+                            arrOrLocalStrip
+
                         const moveAction = determineMoveAction(flight, fromSectionId, message.targetSectionId, staticConfig)
-                        let stateChanged = false
                         if (moveAction) {
-                            const cmdLog = moveAction.commands.map(formatEuroscopeCommand).join(" + ")
-                            console.log(
-                                `[MOVE ACTION] ${result.strip.callsign}: ${cmdLog} (rule: ${moveAction.ruleId})`,
-                            )
-                            for (const cmd of moveAction.commands) {
-                                executeMoveCommand(cmd, result.strip.callsign, flight)
+                            let cmds = willXferDepToGnd
+                                ? moveAction.commands.filter((c) => c.type !== "setGroundstate")
+                                : moveAction.commands
+                            if (skipDepaForSoftGoa) {
+                                cmds = cmds.filter(
+                                    (c) =>
+                                        !(
+                                            c.type === "setGroundstate" &&
+                                            String(c.value).toUpperCase() === "DEPA"
+                                        ),
+                                )
                             }
+                            if (softGoaFromRunway) {
+                                cmds = cmds.filter(
+                                    (c) =>
+                                        !(
+                                            c.type === "setClearedToLand" &&
+                                            c.value === false
+                                        ),
+                                )
+                            }
+                            if (cmds.length) {
+                                const cmdLog = cmds.map(formatEuroscopeCommand).join(" + ")
+                                console.log(
+                                    `[MOVE ACTION] ${result.strip.callsign}: ${cmdLog} (rule: ${moveAction.ruleId})`,
+                                )
+                                for (const cmd of cmds) {
+                                    executeMoveCommand(cmd, result.strip.callsign, flight)
+                                }
+                                stateChanged = true
+                            } else if (willXferDepToGnd || skipDepaForSoftGoa || softGoaFromRunway) {
+                                console.log(
+                                    `[MOVE ACTION] ${result.strip.callsign}: skip (${
+                                        softGoaFromRunway
+                                            ? "ARR soft G/A keep CTL"
+                                            : skipDepaForSoftGoa
+                                              ? "ARR soft G/A"
+                                              : "DEP→GND XFER"
+                                    })`,
+                                )
+                            }
+                        }
+
+                        // ESGG paper: PÅ BANAN → rwy seq (DEP/local) must re-set TXO (TAXI).
+                        // Without this, LINEUP/DEPA section rules snap the strip straight back.
+                        const toCtrArrForTxo =
+                            message.targetSectionId === "ctr_arr" ||
+                            message.targetSectionId.endsWith("_ctr_arr")
+                        const fromRunwayForTxo =
+                            fromSectionId === "runway" || fromSectionId.includes("runway")
+                        const depOrLocalForTxo =
+                            result.strip.stripType === "departure" ||
+                            result.strip.stripType === "local" ||
+                            stripBefore?.stripType === "departure" ||
+                            stripBefore?.stripType === "local"
+                        const txoAlreadyByRule = moveAction?.commands.some(
+                            (c) => c.type === "setGroundstate" && c.value === "TAXI",
+                        )
+                        const gsUpper = (flight.groundstate || "").toUpperCase()
+                        if (
+                            staticConfig.look === "paper" &&
+                            fromRunwayForTxo &&
+                            toCtrArrForTxo &&
+                            depOrLocalForTxo &&
+                            !txoAlreadyByRule &&
+                            gsUpper !== "TAXI" &&
+                            gsUpper !== "TXIN"
+                        ) {
+                            executeMoveCommand(
+                                { type: "setGroundstate", value: "TAXI" },
+                                result.strip.callsign,
+                                flight,
+                            )
+                            if (flight.clearedToLand) {
+                                executeMoveCommand(
+                                    { type: "setClearedToLand", value: false },
+                                    result.strip.callsign,
+                                    flight,
+                                )
+                            }
+                            stateChanged = true
+                            console.log(
+                                `[MOVE] ${result.strip.callsign}: TXO (drag DEP/local PÅ BANAN → rwy seq)`,
+                            )
+                        }
+
+                        // ESGG paper CD-only: drop above START-UP/PUSH → READY-style handoff to GND
+                        // (cleared strips stay under KLARERING; this zone is transfer-only)
+                        const toAbovePush = message.targetSectionId === "above_push"
+                        const depOrLocalForCd =
+                            result.strip.stripType === "departure" ||
+                            result.strip.stripType === "local" ||
+                            stripBefore?.stripType === "departure" ||
+                            stripBefore?.stripType === "local"
+                        if (
+                            isEsggRolesConfig(staticConfig) &&
+                            hasEsggPositionRole("CD") &&
+                            !hasEsggPositionRole("GND") &&
+                            toAbovePush &&
+                            depOrLocalForCd
+                        ) {
+                            const gndCs =
+                                getControllerCallsign("GND") ??
+                                resolveXferTarget(result.strip, flight)
+                            if (gndCs) {
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "setGroundState",
+                                        callsign: result.strip.callsign,
+                                        state: "DE-ICE",
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: gndCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.groundstate = "DE-ICE"
+                                flight.handoffTargetController = gndCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: CD→GND READY+XFER (drop above START-UP/PUSH) → ${gndCs}`,
+                                )
+                            }
+                        }
+
+                        // ESGG paper: ARR/local under PÅ BANAN → set CTL (cleared to land / T&G / low app)
+                        const toPabanan =
+                            message.targetSectionId === "runway" ||
+                            message.targetSectionId.includes("runway")
+                        const arrOrLocal =
+                            result.strip.stripType === "arrival" ||
+                            result.strip.stripType === "local" ||
+                            stripBefore?.stripType === "arrival" ||
+                            stripBefore?.stripType === "local"
+                        const ctlAlreadyByRule = moveAction?.commands.some(
+                            (c) => c.type === "setClearedToLand" && c.value === true,
+                        )
+                        if (
+                            staticConfig.look === "paper" &&
+                            toPabanan &&
+                            arrOrLocal &&
+                            !ctlAlreadyByRule &&
+                            !flight.clearedToLand
+                        ) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "setClearedToLand",
+                                    callsign: result.strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flight.clearedToLand = true
+                            stateChanged = true
+                            console.log(
+                                `[MOVE] ${result.strip.callsign}: CTL (drag ARR/local to PÅ BANAN)`,
+                            )
+                        }
+                        // Drag back to PÅ BANAN clears EFS soft G/A only (not TopSky MISAP_)
+                        if (
+                            staticConfig.look === "paper" &&
+                            toPabanan &&
+                            arrOrLocal &&
+                            flight.efsGoAround
+                        ) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "unsetEfsGoAround",
+                                    callsign: result.strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flightStore.clearSoftMissedApproach(result.strip.callsign)
                             stateChanged = true
                         }
 
-                        // Moving out of any RUNWAY section clears the cleared-to-land flag,
-                        // unless a move rule already sent setClearedToLand (avoid double UDP send)
-                        const clearedToLandHandledByRule = moveAction?.commands.some(
-                            (c) => c.type === "setClearedToLand",
+                        // ESGG paper: PÅ BANAN→UTFLYGNING ARR = soft G/A only (no auto XFER).
+                        // XFER via diagonal scribble / drop on pin tray (below).
+                        const ifrStrip = isIfrSidEligible(
+                            result.strip.flightRules || flight.flightRules,
                         )
-                        if (!clearedToLandHandledByRule && fromSectionId.includes('runway') && !message.targetSectionId.includes('runway') && flight.clearedToLand) {
+                        const softGoAroundArr = softGoaFromRunway
+
+                        // Moving out of any RUNWAY section clears the cleared-to-land flag,
+                        // unless a move rule already sent setClearedToLand (avoid double UDP send).
+                        // Soft G/A to UTFLYGNING keeps CTL if it was already set.
+                        // Paper: PÅ BANAN → PÅ TAXI keeps CTL + ATA (vacate after landing).
+                        // Ignore filtered-out unset-CTL commands from common-rules.
+                        const keepCtlVacateToTaxi =
+                            staticConfig.look === "paper" && inTaxi
+                        const clearedToLandHandledByRule = moveAction?.commands.some(
+                            (c) =>
+                                c.type === "setClearedToLand" &&
+                                !(softGoAroundArr && c.value === false) &&
+                                !(keepCtlVacateToTaxi && c.value === false),
+                        )
+                        if (
+                            !clearedToLandHandledByRule &&
+                            !softGoAroundArr &&
+                            !keepCtlVacateToTaxi &&
+                            fromSectionId.includes('runway') &&
+                            !message.targetSectionId.includes('runway') &&
+                            flight.clearedToLand
+                        ) {
                             console.log(`[MOVE] Clearing clearedToLand for ${result.strip.callsign} (left runway section)`)
                             sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign: result.strip.callsign }))
                             flight.clearedToLand = false
                             stateChanged = true
                         }
-                        if (stateChanged) {
-                            reevaluateAndBroadcast(result.strip.callsign)
+
+                        if (softGoAroundArr) {
+                            flightStore.applySoftMissedApproach(result.strip.callsign)
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "setEfsGoAround",
+                                    callsign: result.strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            stateChanged = true
+                            console.log(
+                                `[MOVE] ${result.strip.callsign}: soft G/A EFSGA (PÅ BANAN→UTFLYGNING, no auto XFER)`,
+                            )
+                        }
+                        // Pin-tray drop only → XFER APP (ARR G/A or airborne DEP). Not main-stack enter.
+                        const utflygningXfer =
+                            staticConfig.look === "paper" &&
+                            targetUtflygning &&
+                            ifrStrip &&
+                            !!message.isBottom &&
+                            ((arrOrLocalStrip &&
+                                (!!flight.missedApproach ||
+                                    !!flight.efsGoAround ||
+                                    softGoAroundArr)) ||
+                                (result.strip.stripType === "departure" && !!flight.airborne))
+                        if (utflygningXfer && flight) {
+                            const appCs = resolveXferTarget(result.strip, flight)
+                            if (appCs) {
+                                flightStore.startUtflygningPin(result.strip.callsign)
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: appCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.handoffTargetController = appCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                const pinned = flightStore.pinUtflygningTray(result.strip.callsign)
+                                if (pinned) {
+                                    const applied = store.updateStripFromFlight(pinned.strip, {
+                                        allowPositionChange: true,
+                                    })
+                                    result.strip = applied
+                                    for (const shifted of pinned.shiftedCallsigns) {
+                                        const shiftedStrip = flightStore.regenerateStrip(shifted)
+                                        if (shiftedStrip) {
+                                            broadcastStrip(
+                                                store.updateStripFromFlight(shiftedStrip, {
+                                                    allowPositionChange: true,
+                                                }),
+                                            )
+                                        }
+                                    }
+                                    broadcastStrip(applied, { exclude: socket })
+                                }
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: pin UTFLYGNING + XFER → ${appCs}`,
+                                )
+                            }
+                        }
+
+                        // ESGG paper: GND DEP/local PÅ TAXI → sequence bay → XFER to TWR.
+                        // Drop on main (non-pinned) stack still auto-pins + transfers.
+                        const iAmGndOnly = isEsggRolesConfig(staticConfig)
+                            ? hasEsggPositionRole("GND") && !hasEsggPositionRole("TWR")
+                            : staticConfig.myRole === "GND"
+                        if (
+                            staticConfig.look === "paper" &&
+                            fromTaxi &&
+                            toCtrArr &&
+                            depOrLocalStrip &&
+                            iAmGndOnly
+                        ) {
+                            const twrCs =
+                                resolveXferTarget(result.strip, flight) ??
+                                getControllerCallsign("TWR")
+                            if (twrCs) {
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: twrCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.handoffTargetController = twrCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                // Always pin (even if dropped on non-pinned main stack)
+                                const pinned = flightStore.pinRwySequenceTray(
+                                    result.strip.callsign,
+                                )
+                                if (pinned) {
+                                    const applied = store.updateStripFromFlight(pinned.strip, {
+                                        allowPositionChange: true,
+                                    })
+                                    result.strip = applied
+                                    for (const shifted of pinned.shiftedCallsigns) {
+                                        const shiftedStrip = flightStore.regenerateStrip(shifted)
+                                        if (shiftedStrip) {
+                                            broadcastStrip(
+                                                store.updateStripFromFlight(shiftedStrip, {
+                                                    allowPositionChange: true,
+                                                }),
+                                            )
+                                        }
+                                    }
+                                    broadcastStrip(applied, { exclude: socket })
+                                }
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: auto-pin sequence bay + XFER → ${twrCs}`,
+                                )
+                            }
+                        }
+
+                        // ESGG paper: assumed strip from rwy seq / PÅ BANAN / UTFLYGNING → INBOUND
+                        // → XFER to suitable APP (ARR/local by arr RWY side; DEP by SID/RWY).
+                        // Pending inbound dragged back to INBOUND is REFUSE (handled above).
+                        const fromUtflygningBay =
+                            fromSectionId === "ctr_dep" || fromSectionId.endsWith("_ctr_dep")
+                        const fromTowerFlowBay =
+                            fromCtrArr || fromRunwayEarly || fromUtflygningBay
+                        const assumedByMeForAppXfer =
+                            !!staticConfig.myCallsign &&
+                            (flight.controller || "").toUpperCase() ===
+                                staticConfig.myCallsign.toUpperCase()
+                        if (
+                            staticConfig.look === "paper" &&
+                            toInbound &&
+                            fromTowerFlowBay &&
+                            assumedByMeForAppXfer &&
+                            !wasIncomingTransfer &&
+                            (arrOrLocalStrip || result.strip.stripType === "departure") &&
+                            (myRoleForGnd === "TWR" ||
+                                myRoleForGnd === "APP" ||
+                                myRoleForGnd === "CTR")
+                        ) {
+                            const online = staticConfig.onlineControllers?.values()
+                            let appCs: string | undefined
+                            if (arrOrLocalStrip) {
+                                const arrRwy =
+                                    flight.arrRwy ||
+                                    staticConfig.activeRunways?.["ESGG"]?.arr?.[0]
+                                appCs = resolveEsggMisapApp(arrRwy, online)?.callsign
+                            } else {
+                                const depRwy =
+                                    flight.depRwy ||
+                                    staticConfig.activeRunways?.["ESGG"]?.dep?.[0]
+                                appCs = resolveEsggDepApp(
+                                    depRwy,
+                                    flight.sid || result.strip.sid,
+                                    online,
+                                    "ESGG",
+                                    flight.route,
+                                )?.callsign
+                            }
+                            appCs = appCs ?? getControllerCallsign("APP")
+                            const myCs = (staticConfig.myCallsign || "").toUpperCase()
+                            if (appCs && appCs.toUpperCase() !== myCs) {
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: appCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.handoffTargetController = appCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                if (flight.clearedToLand) {
+                                    sendUdp(
+                                        JSON.stringify({
+                                            type: "unsetClearedToLand",
+                                            callsign: result.strip.callsign,
+                                        } satisfies OutboundPluginCommand),
+                                    )
+                                    flight.clearedToLand = false
+                                }
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: XFER → ${appCs} (drag to INBOUND from ${fromSectionId})`,
+                                )
+                            }
+                        }
+
+                        // ESGG paper: PÅ BANAN / rwy-seq → PÅ TAXI
+                        // ARR/local: GND online → pin + XFER (TXIN on pin-exit). Solo → TXIN.
+                        // DEP/local: GND online → pin + XFER (TAXI on pin-exit). Solo → TAXI.
+                        const fromRunway =
+                            fromSectionId === "runway" || fromSectionId.includes("runway")
+                        const fromSeqOrRwy = fromCtrArr || fromRunway
+                        if (
+                            staticConfig.look === "paper" &&
+                            fromSeqOrRwy &&
+                            inTaxi &&
+                            (arrOrLocalStrip || depOrLocalStrip)
+                        ) {
+                            const gndCs = gndCsForTaxi
+                            const myRole = myRoleForGnd
+                            const iAmGnd = iAmGndForTaxi
+                            // DEP (and outbound local from sequence) → TAXI; ARR vacate → TXIN
+                            const soloGs =
+                                result.strip.stripType === "departure" ||
+                                (result.strip.stripType === "local" &&
+                                    fromCtrArr &&
+                                    !flight.clearedToLand)
+                                    ? "TAXI"
+                                    : "TXIN"
+                            if (
+                                gndCs &&
+                                !iAmGnd &&
+                                (myRole === "TWR" || myRole === "APP" || myRole === "CTR")
+                            ) {
+                                flightStore.startGndTaxiPin(result.strip.callsign)
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: gndCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.handoffTargetController = gndCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: pin PÅ TAXI + XFER → ${gndCs} (no GS yet)`,
+                                )
+                            } else if (!gndCs || iAmGnd) {
+                                // Solo TWR (covering GND) or already GND: set GS immediately
+                                if ((flight.groundstate || "").toUpperCase() !== soloGs) {
+                                    sendUdp(
+                                        JSON.stringify({
+                                            type: "setGroundState",
+                                            callsign: result.strip.callsign,
+                                            state: soloGs,
+                                        } satisfies OutboundPluginCommand),
+                                    )
+                                    flightStore.applyOptimisticGroundstate(
+                                        result.strip.callsign,
+                                        soloGs,
+                                    )
+                                    stateChanged = true
+                                    console.log(
+                                        `[MOVE] ${result.strip.callsign}: ${soloGs} (PÅ TAXI, no GND handoff)`,
+                                    )
+                                }
+                                flightStore.clearGndTaxiPinned(result.strip.callsign)
+                            }
                         }
                     }
                 } else {
                     console.log(`Strip ${message.stripId} dragged within ${message.targetSectionId} (bottom: ${message.isBottom})`)
+                    // ESGG paper: drop to UTFLYGNING pin tray → diagonal XFER to APP
+                    if (
+                        flight &&
+                        staticConfig.look === "paper" &&
+                        targetUtflygning &&
+                        message.isBottom &&
+                        !fromBottom &&
+                        isIfrSidEligible(result.strip.flightRules || flight.flightRules)
+                    ) {
+                        const arrLike =
+                            result.strip.stripType === "arrival" ||
+                            result.strip.stripType === "local"
+                        const depAirborne =
+                            result.strip.stripType === "departure" && !!flight.airborne
+                        if (arrLike && !flight.missedApproach) {
+                            flightStore.applySoftMissedApproach(result.strip.callsign)
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "setEfsGoAround",
+                                    callsign: result.strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                        }
+                        if (arrLike || depAirborne) {
+                            const appCs = resolveXferTarget(result.strip, flight)
+                            if (appCs) {
+                                flightStore.startUtflygningPin(result.strip.callsign)
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "transfer",
+                                        callsign: result.strip.callsign,
+                                        targetCallsign: appCs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flight.handoffTargetController = appCs
+                                flight.handoffOptimisticUntil = Date.now() + 3000
+                                const pinned = flightStore.pinUtflygningTray(result.strip.callsign)
+                                if (pinned) {
+                                    const applied = store.updateStripFromFlight(pinned.strip, {
+                                        allowPositionChange: true,
+                                    })
+                                    result.strip = applied
+                                    for (const shifted of pinned.shiftedCallsigns) {
+                                        const shiftedStrip = flightStore.regenerateStrip(shifted)
+                                        if (shiftedStrip) {
+                                            broadcastStrip(
+                                                store.updateStripFromFlight(shiftedStrip, {
+                                                    allowPositionChange: true,
+                                                }),
+                                            )
+                                        }
+                                    }
+                                    broadcastStrip(applied, { exclude: socket })
+                                }
+                                stateChanged = true
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: UTFLYGNING pin-tray + XFER → ${appCs}`,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (stateChanged && flight) {
+                    reevaluateAndBroadcast(result.strip.callsign)
                 }
             }
             break
@@ -2481,10 +3442,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const strip = store.getStrip(message.stripId)
             if (strip) {
                 console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
+                const flight = flightStore.getFlight(strip.callsign)
 
                 // READY is a compound action: set DE-ICE groundstate + transfer
                 if (message.action === "READY") {
-                    const flight = flightStore.getFlight(strip.callsign)
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
@@ -2494,7 +3455,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 // XFER: initiate handoff to the appropriate next controller
                 } else if (message.action === "XFER") {
-                    const flight = flightStore.getFlight(strip.callsign)
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
                     // Optimistic: show pending outbound transfer immediately
@@ -2503,6 +3463,42 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffOptimisticUntil = Date.now() + 3000
                         // Clear incoming ROF once we hand off to the requester
                         if (flight.rofRequestFrom) flightStore.clearRofRequest(flight)
+                        // ESGG paper: XFER from UTFLYGNING / soft G/A → pin bottom tray
+                        const inUtflygning =
+                            staticConfig.look === "paper" &&
+                            (strip.sectionId === "ctr_dep" ||
+                                strip.sectionId.endsWith("_ctr_dep") ||
+                                !!flight.missedApproach)
+                        if (inUtflygning) {
+                            // Ensure strip is in ctr_dep before pin (soft G/A may still be on runway)
+                            if (
+                                flight.missedApproach &&
+                                strip.sectionId !== "ctr_dep" &&
+                                !strip.sectionId.endsWith("_ctr_dep")
+                            ) {
+                                // Section rules will move on reevaluate; start pin session now
+                                flightStore.startUtflygningPin(strip.callsign)
+                            } else {
+                                flightStore.startUtflygningPin(strip.callsign)
+                                const pinned = flightStore.pinUtflygningTray(strip.callsign)
+                                if (pinned) {
+                                    const applied = store.updateStripFromFlight(pinned.strip, {
+                                        allowPositionChange: true,
+                                    })
+                                    for (const shifted of pinned.shiftedCallsigns) {
+                                        const shiftedStrip = flightStore.regenerateStrip(shifted)
+                                        if (shiftedStrip) {
+                                            broadcastStrip(
+                                                store.updateStripFromFlight(shiftedStrip, {
+                                                    allowPositionChange: true,
+                                                }),
+                                            )
+                                        }
+                                    }
+                                    broadcastStrip(applied)
+                                }
+                            }
+                        }
                     }
                 // PARK (TERM): PARK + release + clear scratchpad + clear HS
                 } else if (message.action === "PARK") {
@@ -2542,6 +3538,73 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
                     sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
+                    if (clrFlight) {
+                        flightStore.applyOptimisticClearance(strip.callsign, desired)
+                        // CD/DEL: voice CLR on → ASSUME (undo does not RELEASE)
+                        if (desired) {
+                            assumeCdDelKlareringDep(clrFlight, strip.stripType, "voice CLR")
+                        }
+                    }
+                } else if (message.action === "toggleClearanceRead") {
+                    // Paper FPS col 4 (CLR read).
+                    // In CLEARED (or ES CLR set): unsetting also clears CLR correct + ES CLR → strip moves.
+                    // Otherwise: local toggle; unchecking also clears col 5 local mark.
+                    // Undo never RELEASE — ownership stays if already assumed.
+                    if (flight) {
+                        const inCleared =
+                            strip.sectionId === "cleared" || strip.sectionId.endsWith("_cleared")
+                        if (flight.clearance || inCleared) {
+                            // Always UDP (same as toggleClearanceFlag) — --mock must not block ES sync
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "toggleClearanceFlag",
+                                    callsign: strip.callsign,
+                                    desired: false,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flightStore.applyOptimisticClearance(strip.callsign, false)
+                            flight.clearanceRead = false
+                        } else {
+                            const turningOn = !flight.clearanceRead
+                            flight.clearanceRead = !flight.clearanceRead
+                            if (!flight.clearanceRead) flight.clearanceReadback = false
+                            if (turningOn) {
+                                assumeCdDelKlareringDep(flight, strip.stripType, "CLR read")
+                            }
+                        }
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
+                } else if (message.action === "toggleClearanceReadback") {
+                    // Paper FPS col 5 (CLR correct) — sets/clears EuroScope CLR flag.
+                    // Checking 5 also checks 4. ES CLR on shows both as checked.
+                    if (flight) {
+                        const desired = !(flight.clearance || flight.clearanceReadback)
+                        // Always UDP — do not gate on !mock (inbound ES→EFS still works under --mock)
+                        sendUdp(
+                            JSON.stringify({
+                                type: "toggleClearanceFlag",
+                                callsign: strip.callsign,
+                                desired,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flightStore.applyOptimisticClearance(strip.callsign, desired)
+                        // Voice CLR correct clears pending DCL state (same as toggleClearanceFlag)
+                        if (desired && flight.dclStatus) {
+                            console.log(`[DCL] Clearing DCL state for ${strip.callsign} (CLR correct)`)
+                            flight.dclStatus = undefined
+                            flight.dclMessage = undefined
+                            flight.dclClearance = undefined
+                            flight.dclSeqNumber = undefined
+                            flight.dclPdcNumber = undefined
+                            flight.dclSentAt = undefined
+                            flight.dclRequestedAt = undefined
+                        }
+                        // CD/DEL: CLR correct on → ASSUME (undo does not RELEASE)
+                        if (desired) {
+                            assumeCdDelKlareringDep(flight, strip.stripType, "CLR correct")
+                        }
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
                 // GOA: MISAP_ + MAP heading/CFL (ESSA Appendix A or ESGG H020/H200 + A030)
                 } else if (message.action === "GOA") {
                     sendUdp(JSON.stringify({ type: "goaround", callsign: strip.callsign } satisfies OutboundPluginCommand))
@@ -2609,21 +3672,42 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         if (sqFlight) sqFlight.squawk = undefined
                         reevaluateAndBroadcast(strip.callsign)
                     }
+                // ESGG paper soft G/A (col-3 arrow scribble / equivalent) — EFSGA ann, not TopSky MISAP_
+                } else if (message.action === "softGA") {
+                    if (staticConfig.look === "paper" && flight) {
+                        // Keep CTL if already set — soft G/A must not clear it
+                        flightStore.applySoftMissedApproach(strip.callsign)
+                        sendUdp(
+                            JSON.stringify({
+                                type: "setEfsGoAround",
+                                callsign: strip.callsign,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        console.log(`[ACTION] softGA ${strip.callsign} (EFSGA, keep CTL, no TopSky MISAP_)`)
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
                         sendUdp(JSON.stringify(pluginCommand))
                     }
-                    // CTL on a missed-approach flight: also clear the MISAP_ scratchpad
+                    // CTL on a missed-approach flight: clear TopSky MISAP_ and/or EFS soft G/A
                     if (message.action === "CTL") {
                         const maFlight = flightStore.getFlight(strip.callsign)
-                        if (maFlight?.missedApproach) {
+                        if (maFlight?.missedApproach && !maFlight.efsGoAround) {
                             sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                        }
+                        if (maFlight?.efsGoAround) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "unsetEfsGoAround",
+                                    callsign: strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flightStore.clearSoftMissedApproach(strip.callsign)
                         }
                     }
                 }
-
-                const flight = flightStore.getFlight(strip.callsign)
 
                 // HP clears on CFTO; HS clears on LINE UP or CFTO (match EFS 0.0.17)
                 if (flight && (message.action === "LU" || message.action === "CTO")) {
@@ -2676,6 +3760,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }
+                // Paper CTL checkbox / scribble L — optimistic so section rules move immediately.
+                // Pending APP/CTR→TWR inbound: ASSUME first so runway_cleared_to_land → PÅ BANAN.
+                if (flight && !cliArgs.mock && (message.action === "CTL" || message.action === "unsetCTL")) {
+                    flight.clearedToLand = message.action === "CTL"
+                    if (message.action === "CTL") {
+                        flight.missedApproach = false
+                        flight.efsGoAround = false
+                        assumePendingAppInboundOnCtl(strip, flight)
+                    }
+                    reevaluateAndBroadcast(strip.callsign)
+                }
 
                 // When toggling clearance flag (user pressed OK for voice clearance), clear DCL state
                 if (message.action === "toggleClearanceFlag") {
@@ -2695,12 +3790,23 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 if (cliArgs.mock && flight) {
                     switch (message.action) {
                         case "toggleClearanceFlag":
-                            flight.clearance = !flight.clearance
+                            // Optimistic clearance already applied above
                             break
                         case "ASSUME":
                             flight.controller = staticConfig.myCallsign
                             flight.controllerId = staticConfig.myPositionId
                             flight.handoffTargetController = ""
+                            flight.ownershipOptimisticUntil = Date.now() + 5000
+                            if (
+                                staticConfig.look === "paper" &&
+                                flightStore.isGndTaxiPinned(strip.callsign) &&
+                                (strip.sectionId === "taxi" || strip.sectionId.endsWith("_taxi"))
+                            ) {
+                                const pinExitGs =
+                                    strip.stripType === "departure" ? "TAXI" : "TXIN"
+                                flight.groundstate = pinExitGs
+                                flightStore.releaseGndTaxiPinToMainTop(strip.callsign)
+                            }
                             break
                         case "REFUSE":
                             flight.handoffTargetController = ""
@@ -2736,6 +3842,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         case "CTL":
                             flight.clearedToLand = true
                             flight.missedApproach = false
+                            flight.efsGoAround = false
+                            assumePendingAppInboundOnCtl(strip, flight)
+                            break
+                        case "unsetCTL":
+                            flight.clearedToLand = false
+                            break
+                        case "softGA":
+                            flightStore.applySoftMissedApproach(strip.callsign)
                             break
                         case "GOA": {
                             flight.clearedToLand = false
@@ -2804,10 +3918,48 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 ) {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
+                        // Optimistic until ES ownership echo confirms StartTracking
                         flight.controller = staticConfig.myCallsign
                         flight.controllerId = staticConfig.myPositionId
                         flight.handoffTargetController = ""
                         flight.handoffOptimisticUntil = undefined
+                        flight.ownershipOptimisticUntil = Date.now() + 5000
+                        // ESGG paper: ASSUME while PÅ TAXI pinned → set GS + unpin to top of main
+                        if (
+                            staticConfig.look === "paper" &&
+                            flightStore.isGndTaxiPinned(strip.callsign) &&
+                            (strip.sectionId === "taxi" || strip.sectionId.endsWith("_taxi"))
+                        ) {
+                            const pinExitGs =
+                                strip.stripType === "departure" ? "TAXI" : "TXIN"
+                            if ((flight.groundstate || "").toUpperCase() !== pinExitGs) {
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "setGroundState",
+                                        callsign: strip.callsign,
+                                        state: pinExitGs,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flightStore.applyOptimisticGroundstate(strip.callsign, pinExitGs)
+                            }
+                            const released = flightStore.releaseGndTaxiPinToMainTop(strip.callsign)
+                            if (released.didUnpin) {
+                                const updated = flightStore.regenerateStrip(strip.callsign)
+                                if (updated) {
+                                    store.updateStripFromFlight(updated, {
+                                        allowPositionChange: true,
+                                    })
+                                }
+                                for (const shifted of released.shiftedCallsigns) {
+                                    const shiftedStrip = flightStore.regenerateStrip(shifted)
+                                    if (shiftedStrip) {
+                                        store.updateStripFromFlight(shiftedStrip, {
+                                            allowPositionChange: true,
+                                        })
+                                    }
+                                }
+                            }
+                        }
                     } else if (message.action === "REFUSE" && flight) {
                         flight.handoffTargetController = ""
                         flight.handoffTargetControllerId = undefined
@@ -2815,6 +3967,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     } else if ((message.action === "READY" || message.action === "DEICE") && flight) {
                         flight.groundstate = "DE-ICE"
                     }
+                    // toggleClearanceFlag: optimistic clearance already applied above
                     reevaluateAndBroadcast(strip.callsign)
                 }
             } else {
@@ -2922,8 +4075,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 }
                 if (flightForAssign && message.assignType === "assignSid") {
-                    flightForAssign.sidDisplayOverride = message.value || undefined
-                    flightForAssign.sid = message.value || undefined
+                    const newSid = message.value || undefined
+                    flightForAssign.sidDisplayOverride = newSid
+                    flightForAssign.sid = newSid
                     if (mockCflAuto !== undefined) flightForAssign.cfl = mockCflAuto
                     // Track / SLOW SID → ensure SLOW remarks; re-push scratch after AmendFlightPlan
                     // (ES often clears scratch during route amend, wiping a prior setScratch)
@@ -3170,6 +4324,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (flight) {
                 flight.controller = undefined
                 flight.controllerId = undefined
+                flight.ownershipOptimisticUntil = undefined
                 const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                 if (updatedStrip) {
                     store.updateStripFromFlight(updatedStrip)
@@ -3348,13 +4503,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.autoDepSquawkCfl = incoming.autoDepSquawkCfl
                 update.autoDepSquawkCfl = incoming.autoDepSquawkCfl
             }
-            if (typeof incoming.equalBayColumns === "boolean") {
-                currentUiSettings.equalBayColumns = incoming.equalBayColumns
-                update.equalBayColumns = incoming.equalBayColumns
-            }
             if (typeof incoming.showTobtSetByA === "boolean") {
                 currentUiSettings.showTobtSetByA = incoming.showTobtSetByA
                 update.showTobtSetByA = incoming.showTobtSetByA
+            }
+            if (
+                incoming.stripPrintSound === "off" ||
+                incoming.stripPrintSound === "short" ||
+                incoming.stripPrintSound === "long"
+            ) {
+                currentUiSettings.stripPrintSound = incoming.stripPrintSound
+                update.stripPrintSound = incoming.stripPrintSound
+            }
+            if (incoming.stripPrintMode === "auto" || incoming.stripPrintMode === "manual") {
+                currentUiSettings.stripPrintMode = incoming.stripPrintMode
+                update.stripPrintMode = incoming.stripPrintMode
             }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
@@ -3370,13 +4533,75 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     store.reprocessAllFlights()
                     broadcastRefresh("Auto PARK enabled")
                 }
+                if (update.stripPrintMode === "auto" && staticConfig.look === "paper") {
+                    // Create all previously gated strips
+                    store.reprocessAllFlights()
+                    broadcastRefresh("Strip print mode: auto")
+                    lastPendingPrintFp = ""
+                    broadcastPendingPrintList()
+                } else if (update.stripPrintMode === "manual") {
+                    lastPendingPrintFp = ""
+                    broadcastPendingPrintList()
+                }
             }
+            break
+        }
+
+        case "listPendingPrint": {
+            sendMessage(socket, {
+                type: "pendingPrintList",
+                flights: flightStore.listPendingPrint(),
+            })
+            break
+        }
+
+        case "printStrip": {
+            if (staticConfig.look !== "paper") {
+                sendMessage(socket, {
+                    type: "notify",
+                    level: "error",
+                    text: "Strip print is only available in paper-look config",
+                })
+                break
+            }
+            void (async () => {
+                const result = await flightStore.printStrip(message.callsign)
+                if (result.softDeleted) {
+                    console.log(`[PRINT] ${message.callsign} soft-deleted by rules`)
+                } else if (result.strip) {
+                    const applied = store.updateStripFromFlight(result.strip, {
+                        allowPositionChange: true,
+                    })
+                    if (result.shiftedCallsigns) {
+                        for (const shifted of result.shiftedCallsigns) {
+                            const shiftedStrip = flightStore.regenerateStrip(shifted)
+                            if (shiftedStrip) {
+                                broadcastStrip(
+                                    store.updateStripFromFlight(shiftedStrip, {
+                                        allowPositionChange: true,
+                                    })
+                                )
+                            }
+                        }
+                    }
+                    broadcastStrip(applied)
+                    console.log(`[PRINT] Strip printed for ${message.callsign} -> ${applied.sectionId}`)
+                } else {
+                    sendMessage(socket, {
+                        type: "notify",
+                        level: "info",
+                        text: `No FPL found for ${message.callsign.toUpperCase()}`,
+                    })
+                }
+                lastPendingPrintFp = ""
+                broadcastPendingPrintList()
+            })()
             break
         }
 
         case "switchConfig": {
             console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
-            switchConfig(message.file)
+            switchConfig(message.file, { manual: true })
             break
         }
 
@@ -3395,6 +4620,25 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 broadcastStatus()
                 broadcastLayout()
                 broadcastRefresh("ESSA roles changed")
+            }
+            break
+        }
+
+        case "setEsggRoles": {
+            if (!isEsggRolesConfig(staticConfig)) break
+            const roles = (normalizeEsggRoles(message.roles) ?? []) as EsggPositionRole[]
+            if (setEsggRoles(roles, message.manual)) {
+                saveUserSettings({
+                    esggRoles: message.manual ? roles : [],
+                    esggRolesManual: message.manual,
+                })
+                console.log(
+                    `[ESGG] Roles ${message.manual ? "manual" : "auto"}: ${(staticConfig.esggRoles ?? []).join(", ")}`
+                )
+                store.reprocessAllFlights()
+                broadcastStatus()
+                broadcastLayout()
+                broadcastRefresh("ESGG roles changed")
             }
             break
         }
@@ -3448,9 +4692,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.position,
                     message.isBottom,
                     message.airport,
+                    message.paperInfoKind,
                 )
                 if (strip) {
-                    console.log(`[CREATE] Note strip ${strip.id} created`)
+                    console.log(
+                        `[CREATE] Note strip ${strip.id} created` +
+                            (strip.paperInfoKind ? ` (${strip.paperInfoKind})` : "")
+                    )
                     broadcastStrip(strip)
                 }
             } else if (message.stripType === "vehicle") {
@@ -3903,12 +5151,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 break
             }
             flight.qnhGiven = qnh ?? undefined
+            if (qnh == null) {
+                flight.atisGiven = undefined
+            } else if (message.atis !== undefined) {
+                const letter = (message.atis || "").trim().toUpperCase()
+                flight.atisGiven = letter || undefined
+            }
             const updated = flightStore.regenerateStrip(qnhStrip.callsign)
             if (updated) {
                 store.updateStripFromFlight(updated)
                 broadcastStrip(updated)
             }
-            console.log(`[QNH] ${qnhStrip.callsign} given → ${qnh ?? "(clear)"}`)
+            console.log(
+                `[QNH] ${qnhStrip.callsign} given → ${qnh ?? "(clear)"}` +
+                    (flight.atisGiven ? ` ATIS ${flight.atisGiven}` : ""),
+            )
             break
         }
 
@@ -3933,6 +5190,12 @@ wsServer.on("connection", (socket) => {
     sendConfigList(socket)
     sendControllers(socket)
     sendMessage(socket, { type: "aupR16", ...getAupR16Status() })
+    if (staticConfig.look === "paper" && currentUiSettings.stripPrintMode === "manual") {
+        sendMessage(socket, {
+            type: "pendingPrintList",
+            flights: flightStore.listPendingPrint(),
+        })
+    }
 
     socket.on("message", (message) => {
         const text = message.toString("utf8").trim()
@@ -3960,6 +5223,51 @@ app.get("/api/flight/:callsign", (req, res) => {
         res.json(flight)
     } else {
         res.status(404).json({ error: "Flight not found" })
+    }
+})
+
+/** Local flight store first, then VATSIM network FPL (for paper print callsign entry). */
+app.get("/api/print-flight/:callsign", async (req, res) => {
+    const cs = String(req.params.callsign || "").trim().toUpperCase()
+    if (!cs) {
+        res.status(400).json({ error: "Missing callsign" })
+        return
+    }
+    const local = flightStore.getFlight(cs)
+    if (local && local.origin && local.destination) {
+        res.json({
+            source: "local",
+            callsign: local.callsign,
+            origin: local.origin,
+            destination: local.destination,
+            aircraftType: local.aircraftType,
+            eobt: local.eobt,
+            ctot: local.ctot,
+            squawk: local.squawk,
+        })
+        return
+    }
+    try {
+        const { lookupVatsimPilot } = await import("./vatsim-flights.js")
+        const pilot = await lookupVatsimPilot(cs)
+        const fp = pilot?.flight_plan
+        if (!pilot || !fp?.departure || !fp?.arrival) {
+            res.status(404).json({ error: "Flight not found" })
+            return
+        }
+        res.json({
+            source: "vatsim",
+            callsign: pilot.callsign,
+            origin: fp.departure.toUpperCase(),
+            destination: fp.arrival.toUpperCase(),
+            aircraftType: (fp.aircraft_short || fp.aircraft || "").toUpperCase() || undefined,
+            eobt: fp.deptime,
+            squawk: fp.assigned_transponder || pilot.transponder,
+        })
+    } catch (err) {
+        res.status(502).json({
+            error: err instanceof Error ? err.message : "VATSIM lookup failed",
+        })
     }
 })
 
@@ -4189,6 +5497,36 @@ app.get("/api/preferred-sid", (req, res) => {
             ? collectEsmsSidsForTmaExit({ runway, tmaExit, ekch30 })
             : []
         res.json({ ...result, ekch30, exitSids })
+        return
+    }
+
+    if (airport === "ESGG") {
+        const callsign = ((req.query.callsign as string) || "").trim().toUpperCase()
+        const flight = callsign ? flightStore.getFlight(callsign) : undefined
+        const engineType =
+            (req.query.engineType as string) || flight?.engineType || undefined
+        const propParam = req.query.prop
+        const prop =
+            propParam === "1" || propParam === "true"
+                ? true
+                : propParam === "0" || propParam === "false"
+                  ? false
+                  : undefined
+        const result = resolveEsggPreferredSid({
+            runway,
+            route,
+            engineType,
+            prop,
+        })
+        const tmaExit = exitParam || result.exit
+        const exitSids = tmaExit
+            ? collectEsggSidsForTmaExit({ runway, tmaExit, engineType, prop })
+            : []
+        res.json({
+            ...result,
+            prop: prop ?? isPropellerEngine(engineType),
+            exitSids,
+        })
         return
     }
 
@@ -4612,6 +5950,7 @@ udpIn.on("message", (msg, rinfo) => {
                             broadcastUserSettings()
                         }
                     }
+
                 }
 
                 // Extract active runways per airport
@@ -4637,6 +5976,14 @@ udpIn.on("message", (msg, rinfo) => {
                 }
                 ensureAupR16Service()
             }
+
+            // First primed session: ESSA → essa.yml, else ESGG → esgg.yml (waits for freq ≠ 199.998)
+            maybeAutoSelectConfigFromAirports(
+                staticConfig.activeAirports?.length
+                    ? staticConfig.activeAirports
+                    : staticConfig.myAirports,
+                msg.frequency ?? staticConfig.myFrequency,
+            )
 
             // Broadcast updated status to all clients
             broadcastStatus()
@@ -4705,13 +6052,41 @@ udpIn.on("message", (msg, rinfo) => {
                 for (const id of result.deletedStripIds) {
                     broadcastStripDelete(id)
                 }
-                console.log(`Strips soft-deleted: ${result.deletedStripIds.join(", ")}`)
+                console.log(
+                    result.cleanReprint
+                        ? `Strips soft-deleted to trash (G/A reprint): ${result.deletedStripIds.join(", ")}`
+                        : `Strips soft-deleted: ${result.deletedStripIds.join(", ")}`,
+                )
             } else if (result.deleteStripId && !result.strips?.length) {
                 broadcastStripDelete(result.deleteStripId)
                 if (result.softDeleted) {
                     console.log(`Strip ${result.deleteStripId} soft-deleted`)
                 } else {
                     console.log(`Strip ${result.deleteStripId} disconnected`)
+                }
+            }
+
+            // G/A APP-assume: clear EFSGA / CTL in EuroScope for the clean reprint
+            {
+                const goaCs =
+                    result.strip?.callsign ??
+                    result.strips?.[0]?.callsign ??
+                    (typeof result.deleteStripId === "string" ? result.deleteStripId : undefined)
+                if (goaCs && result.unsetEfsGoAround) {
+                    sendUdp(
+                        JSON.stringify({
+                            type: "unsetEfsGoAround",
+                            callsign: goaCs,
+                        } satisfies OutboundPluginCommand),
+                    )
+                }
+                if (goaCs && result.unsetClearedToLand) {
+                    sendUdp(
+                        JSON.stringify({
+                            type: "unsetClearedToLand",
+                            callsign: goaCs,
+                        } satisfies OutboundPluginCommand),
+                    )
                 }
             }
 
@@ -4735,7 +6110,10 @@ udpIn.on("message", (msg, rinfo) => {
                     }
                 }
                 for (const strip of result.strips) {
-                    broadcastStrip(strip)
+                    broadcastStrip(
+                        strip,
+                        result.cleanReprint ? { cleanReprint: true } : undefined,
+                    )
                 }
                 console.log(`Strips updated: ${result.strips.map(s => s.id).join(", ")}`)
                 if (result.multiUpdates) {
@@ -4822,7 +6200,6 @@ udpIn.on("message", (msg, rinfo) => {
                         runway: result.assignDepRwy,
                     } satisfies OutboundPluginCommand))
                 }
-
                 // Update DCL clearance preview when flight data changes (non-mock mode)
                 {
                     const flight = flightStore.getFlight(result.strip.callsign)
@@ -4864,6 +6241,11 @@ udpIn.on("message", (msg, rinfo) => {
             // ESSA: add RWY headers for FPL-assigned runways not already in RWY config
             if (result.strip || (result.strips && result.strips.length > 0)) {
                 maybeRefreshEssaRunwayHeaders()
+            }
+
+            // Paper manual print: keep pending queue in sync (eligible flights without strips)
+            if (staticConfig.look === "paper" && currentUiSettings.stripPrintMode === "manual") {
+                broadcastPendingPrintList()
             }
             // If result is empty (no strip, no delete), nothing changed - don't log
         } else {

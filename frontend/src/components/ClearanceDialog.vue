@@ -314,7 +314,7 @@ const clearanceSidName = computed(() => {
   if (
     !props.strip.assignedHeading &&
     !props.strip.clearance &&
-    (props.strip.adep === 'ESSA' || props.strip.adep === 'ESMS') &&
+    (props.strip.adep === 'ESSA' || props.strip.adep === 'ESMS' || props.strip.adep === 'ESGG') &&
     isIfrSidEligible(props.strip.flightRules) &&
     (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
   ) {
@@ -356,7 +356,7 @@ const showAhdgRow = computed(() => {
 function isPreferredSidIfrDep(): boolean {
   const adep = props.strip.adep
   return (
-    (adep === 'ESSA' || adep === 'ESMS') &&
+    (adep === 'ESSA' || adep === 'ESMS' || adep === 'ESGG') &&
     isIfrSidEligible(props.strip.flightRules) &&
     (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
   )
@@ -382,7 +382,7 @@ async function fetchSids() {
 }
 
 /**
- * Preferred SID: ESSA (config + SLOW) or ESMS (K/L, or G/H when EKCH RWY 30 active in ES).
+ * Preferred SID: ESSA (config + SLOW), ESMS (K/L or G/H), or ESGG (LOP §2.3).
  * Reassigns when uncleared so runway/config changes update the letter group.
  * Returns the SID that should be used for auto-CFL (newly assigned or matched preferred).
  */
@@ -407,6 +407,9 @@ async function applyPreferredSid(): Promise<string | undefined> {
     if (airport === 'ESSA') {
       params.set('config', store.essaRwyConfigIdResolved!)
       params.set('slow', isSlowForClr() ? '1' : '0')
+    }
+    if (airport === 'ESGG' && props.strip.callsign) {
+      params.set('callsign', props.strip.callsign)
     }
     if (props.strip.route) params.set('route', props.strip.route)
 

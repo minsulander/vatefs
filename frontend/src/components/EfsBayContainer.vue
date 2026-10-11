@@ -1,5 +1,9 @@
 <template>
-  <div class="efs-bay-container" @click="onContainerClick">
+  <div
+    class="efs-bay-container"
+    :class="{ 'efs-bay-container--paper': store.isPaperLook }"
+    @click="onContainerClick"
+  >
     <EfsTopBar />
     <div class="efs-bay-content">
       <div
@@ -7,6 +11,7 @@
         :class="{
           'bay-row--multi': store.multiAirport,
           'bay-row--choosing': store.pendingIdleSwap != null,
+          'bay-row--paper': store.isPaperLook,
         }"
       >
         <div
@@ -18,8 +23,7 @@
             'bay-column--empty': store.multiAirport && !store.columnAirports[index],
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
-            'bay-column--equal': store.equalBayColumns,
-            'bay-column--content': !store.equalBayColumns,
+            'bay-column--paper': store.isPaperLook,
           }"
           :style="store.multiAirport ? { '--bay-accent': columnAccent(index) } : undefined"
           @click="onColumnClick(index, $event)"
@@ -80,6 +84,17 @@ function onContainerClick() {
   flex-direction: column;
 }
 
+.efs-bay-container--paper {
+  /* Desk floor palette — mixed via soft gradients on each bay */
+  --efs-paper-bay-light: #c7a778;
+  --efs-paper-bay-mid-light: #ad926b;
+  --efs-paper-bay-mid: #89653b;
+  --efs-paper-bay-dark: #513a26;
+  --efs-paper-bay-floor: var(--efs-paper-bay-mid);
+  --efs-paper-panel: #2c241c;
+  background: var(--efs-paper-panel);
+}
+
 .efs-bay-content {
   flex: 1;
   overflow: hidden;
@@ -101,20 +116,22 @@ function onContainerClick() {
 }
 
 .bay-column {
+  flex: 1 1 0;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
   box-sizing: border-box;
   position: relative;
 }
 
-.bay-column--equal {
-  flex: 1 1 0;
-  min-width: 0;
+/* Paper: keep flush columns (no visible inter-bay gap); pipes live inside each bay */
+.bay-row--paper {
+  gap: 0;
+  padding: 0;
 }
 
-.bay-column--content {
-  flex: 1 1 auto;
-  min-width: 180px;
+.bay-column--paper {
+  background: transparent;
 }
 
 /* Full coloured frame around each column — multi-airport only */

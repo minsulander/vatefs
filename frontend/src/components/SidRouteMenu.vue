@@ -202,6 +202,9 @@ async function fetchExitMatches(airport: string, runway: string) {
       }
       params.set('slow', hasSlowRemark(props.strip.remarks) || props.strip.isSlow ? '1' : '0')
     }
+    if (airport === 'ESGG' && props.strip.callsign) {
+      params.set('callsign', props.strip.callsign)
+    }
     if (props.strip.route) params.set('route', props.strip.route)
     const res = await fetch(`/api/preferred-sid?${params}`)
     if (!res.ok) {

@@ -13,6 +13,8 @@ export interface StripMessage {
     type: 'strip'
     strip: FlightStrip
     autoMoved?: boolean
+    /** G/A APP-assume reprint: clear local scribbles + play print anim */
+    cleanReprint?: boolean
 }
 
 export interface StripDeleteMessage {
@@ -109,11 +111,19 @@ export interface StatusMessage {
     essaRoles?: string[]
     /** True when roles were chosen manually */
     essaRolesManual?: boolean
+    /** ESGG paper role picker active */
+    esggRolesMode?: boolean
+    /** Selected ESGG positions (CD, GND, TWR) */
+    esggRoles?: string[]
+    /** True when ESGG roles were chosen manually */
+    esggRolesManual?: boolean
     /**
      * ESSA TWR AOR split: runway ends we cover (e.g. 01L,19R).
      * Undefined = all runways (solo / no split). Used to hide MAP/breakout for uncovered ARR.
      */
     essaCoveredRunways?: string[]
+    /** Strip chrome from active YAML (`look: paper` → paper; default saab) */
+    look?: 'saab' | 'paper'
 }
 
 export interface DclStatusMessage {
@@ -223,7 +233,24 @@ export interface DeletedStripsMessage {
     strips: DeletedStripInfo[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | AupR16Message | RwyFlagsMessage
+/** Flight waiting for manual strip print (paper look + manual mode) */
+export interface PendingPrintFlightInfo {
+    callsign: string
+    stripType: FlightStrip['stripType']
+    adep: string
+    ades: string
+    aircraftType: string
+    eobt?: string
+    ctot?: string
+    assr?: string
+}
+
+export interface PendingPrintListMessage {
+    type: 'pendingPrintList'
+    flights: PendingPrintFlightInfo[]
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage
 
 // Client -> Server messages
 
@@ -346,6 +373,8 @@ export interface CreateStripMessage {
     targetSectionId?: string
     position?: number
     isBottom?: boolean
+    /** Paper-look blank / info strip template (note strips only) */
+    paperInfoKind?: import('./types.js').PaperInfoKind
 }
 
 export interface UpdateNoteMessage {
@@ -450,6 +479,8 @@ export interface SetQnhGivenMessage {
     stripId: string
     /** Current ATIS QNH in hPa, or null to clear */
     qnh: number | null
+    /** ATIS letter stamped with QNH (paper col 6); cleared when qnh is null */
+    atis?: string | null
 }
 
 export interface SetColumnAirportMessage {
@@ -486,6 +517,14 @@ export interface SetEssaRolesMessage {
     manual: boolean
 }
 
+export interface SetEsggRolesMessage {
+    type: 'setEsggRoles'
+    /** ESGG positions (CD, GND, TWR); ignored when manual is false (auto) */
+    roles: string[]
+    /** true = manual override; false = return to auto-detect */
+    manual: boolean
+}
+
 /** Toggle or set a RWY occupied/closed flag (broadcast to all clients). */
 export interface SetRwyFlagMessage {
     type: 'setRwyFlag'
@@ -494,7 +533,18 @@ export interface SetRwyFlagMessage {
     active: boolean
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetRwyFlagMessage
+/** List flights eligible for strip print but not yet printed (manual paper mode) */
+export interface ListPendingPrintMessage {
+    type: 'listPendingPrint'
+}
+
+/** Explicitly print (create) a strip for a callsign in manual paper mode */
+export interface PrintStripMessage {
+    type: 'printStrip'
+    callsign: string
+}
+
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | ListPendingPrintMessage | PrintStripMessage
 
 // Type guards for message parsing
 
@@ -508,7 +558,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
            type === 'controllers' || type === 'userSettings' || type === 'notify' ||
-           type === 'deletedStrips' || type === 'aupR16' || type === 'rwyFlags'
+           type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -516,5 +566,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setRwyFlag'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'listPendingPrint' || type === 'printStrip'
 }

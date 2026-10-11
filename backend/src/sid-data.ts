@@ -265,11 +265,18 @@ export function getDefaultInitialClimbFt(airport: string, slow = false): number 
 /**
  * SID COPX altitude, or Swedish TMA default initial climb when the SID exists
  * in ESE but no COPX fix matches (e.g. track/SLOW SIDs).
+ * ESGG LOP §2.3: MISVI/SOJWI propeller SIDs → 4000 ft when COPX missing.
  */
 export function resolveSidAltitude(
     airport: string,
     sidName: string,
     slow = false
 ): number | undefined {
-    return getSidAltitude(airport, sidName) ?? getDefaultInitialClimbFt(airport, slow)
+    const fromCopx = getSidAltitude(airport, sidName)
+    if (fromCopx !== undefined) return fromCopx
+    if (airport.toUpperCase() === "ESGG") {
+        const c = sidName.toUpperCase().replace(/\s+/g, "")
+        if (/^MISVI\d+P$/i.test(c) || /^SOJWI\d+P$/i.test(c)) return 4000
+    }
+    return getDefaultInitialClimbFt(airport, slow)
 }

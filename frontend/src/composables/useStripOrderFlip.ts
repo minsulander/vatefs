@@ -1,8 +1,12 @@
 import { watch, nextTick, type Ref, type ComputedRef } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import {
+  STRIP_FLIP_DURATION_MS,
+  isStripFlipSuppressed,
+} from '@/composables/stripFlipShared'
 
-/** Match FlightStrip auto-move fly-clone (AUTO_MOVE_DURATION / ease-in-out). */
-export const STRIP_FLIP_DURATION_MS = 500
+export { STRIP_FLIP_DURATION_MS, markStripDragEnded } from '@/composables/stripFlipShared'
+
 const STRIP_FLIP_EASING = 'ease-in-out'
 const STRIP_FLIP_ANIM_ID = 'strip-order-flip'
 const MIN_DELTA_PX = 1
@@ -16,6 +20,7 @@ function idsEqual(a: string[], b: string[]): boolean {
 }
 
 function isDragInProgress(): boolean {
+  if (isStripFlipSuppressed()) return true
   return !!document.querySelector('.flight-strip.dragging')
 }
 
@@ -89,6 +94,7 @@ function playStripFlip(container: HTMLElement, first: Map<string, DOMRect>) {
 export function useStripOrderFlip(
   containerRef: Ref<HTMLElement | null>,
   orderedIds: ComputedRef<string[]>,
+  enabled?: ComputedRef<boolean>,
 ) {
   let prevIds: string[] = []
 
@@ -109,7 +115,15 @@ export function useStripOrderFlip(
 
       if (idsEqual(prevIds, ids)) return
 
-      if (isDragInProgress()) {
+      // Stick-bottom / paper KLARERING: FLIP off for manual drag — still on for auto-move
+      const autoMoveActive = useEfsStore().autoMovingStripIds.size > 0
+      if (enabled && !enabled.value && !autoMoveActive) {
+        prevIds = ids.slice()
+        return
+      }
+
+      // Manual drag suppress — never block neighbor FLIP during auto-move fly
+      if (!autoMoveActive && isDragInProgress()) {
         prevIds = ids.slice()
         return
       }
@@ -120,9 +134,11 @@ export function useStripOrderFlip(
       prevIds = ids.slice()
 
       await nextTick()
-      // Settle layout (gaps / info strips) before Last
+      // Settle layout (gaps / info strips / stick-bottom spacer) before Last
       requestAnimationFrame(() => {
-        playStripFlip(container, first)
+        requestAnimationFrame(() => {
+          playStripFlip(container, first)
+        })
       })
     },
     { flush: 'pre' },

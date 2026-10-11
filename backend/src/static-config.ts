@@ -19,8 +19,16 @@ import {
     isEssaRolesConfig,
     type EssaPositionRole
 } from "./essa-roles.js"
+import {
+    computeAutoEsggRoles,
+    esggRoleToControllerRole,
+    highestEsggControllerRole,
+    isEsggRolesConfig,
+    normalizeEsggRoles,
+    type EsggPositionRole,
+} from "./esgg-roles.js"
 
-export { isEssaRolesConfig }
+export { isEssaRolesConfig, isEsggRolesConfig }
 
 /**
  * Top-down controller hierarchy, lowest to highest.
@@ -107,8 +115,24 @@ function recomputeMyRolesByAirport() {
         rolesByAirport.set(airport, computeEffectiveRolesForAirport(myCallsignRole, onlineRolesAtAirport))
     }
 
+    // Manual ESGG CD/GND/TWR override replaces covering-derived roles at ESGG
+    if (
+        isEsggRolesConfig(staticConfig) &&
+        staticConfig.esggRolesManual &&
+        staticConfig.esggRoles &&
+        staticConfig.esggRoles.length > 0
+    ) {
+        const mapped = staticConfig.esggRoles.map(esggRoleToControllerRole)
+        for (const airport of staticConfig.myAirports) {
+            if (airport.toUpperCase() === "ESGG") {
+                rolesByAirport.set(airport, mapped)
+            }
+        }
+    }
+
     staticConfig.myRolesByAirport = rolesByAirport
     refreshEssaRolesIfAuto()
+    refreshEsggRolesIfAuto()
 }
 
 /**
@@ -147,6 +171,8 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentColumnAirports = staticConfig.columnAirports
     const currentEssaRoles = staticConfig.essaRoles
     const currentEssaRolesManual = staticConfig.essaRolesManual
+    const currentEsggRoles = staticConfig.esggRoles
+    const currentEsggRolesManual = staticConfig.esggRolesManual
 
     // Replace all config properties
     staticConfig.myAirports = config.myAirports
@@ -162,6 +188,7 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules
     staticConfig.layoutMode = config.layoutMode
+    staticConfig.look = config.look === 'paper' ? 'paper' : 'saab'
     staticConfig.sectionVisibleFor = config.sectionVisibleFor
     staticConfig.bayTemplate = config.bayTemplate
     staticConfig.columnCount = config.columnCount
@@ -169,6 +196,8 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.columnAirports = config.columnAirports
     staticConfig.essaRoles = undefined
     staticConfig.essaRolesManual = undefined
+    staticConfig.esggRoles = undefined
+    staticConfig.esggRolesManual = undefined
 
     // Restore runtime state
     if (currentCallsign) staticConfig.myCallsign = currentCallsign
@@ -204,9 +233,16 @@ export function applyConfig(config: EfsStaticConfig) {
         staticConfig.essaRolesManual = true
     }
 
+    // Restore ESGG role selection when staying in / entering paper ESGG mode
+    if (isEsggRolesConfig(staticConfig) && currentEsggRolesManual && currentEsggRoles) {
+        staticConfig.esggRoles = currentEsggRoles
+        staticConfig.esggRolesManual = true
+    }
+
     // Recompute effective roles with restored runtime state
     recomputeMyRolesByAirport()
     refreshEssaRolesIfAuto()
+    refreshEsggRolesIfAuto()
 }
 
 /**
@@ -452,6 +488,7 @@ export function updateOnlineController(
 
     const prevRoles = staticConfig.myRolesByAirport
     const prevEssa = essaRolesKey(staticConfig.essaRoles)
+    const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     const prev = staticConfig.onlineControllers.get(callsign)
     const positionChanged = !!(positionId && positionId !== prev?.positionId)
     staticConfig.onlineControllers.set(callsign, {
@@ -465,7 +502,8 @@ export function updateOnlineController(
     return (
         rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
         positionChanged ||
-        essaRolesKey(staticConfig.essaRoles) !== prevEssa
+        essaRolesKey(staticConfig.essaRoles) !== prevEssa ||
+        esggRolesKey(staticConfig.esggRoles) !== prevEsgg
     )
 }
 
@@ -513,11 +551,13 @@ export function removeOnlineController(callsign: string): boolean {
 
     const prevRoles = staticConfig.myRolesByAirport
     const prevEssa = essaRolesKey(staticConfig.essaRoles)
+    const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     recomputeMyRolesByAirport()
 
     return (
         rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
-        essaRolesKey(staticConfig.essaRoles) !== prevEssa
+        essaRolesKey(staticConfig.essaRoles) !== prevEssa ||
+        esggRolesKey(staticConfig.esggRoles) !== prevEsgg
     )
 }
 
@@ -541,6 +581,16 @@ export function getControllerCallsign(role: ControllerRole): string | undefined 
     if (!staticConfig.onlineControllers) return undefined
     for (const ctrl of staticConfig.onlineControllers.values()) {
         if (ctrl.role === role) return ctrl.callsign
+    }
+    return undefined
+}
+
+/** Resolve online controller login callsign from EuroScope position SI (e.g. GE → ESGG_E_APP). */
+export function getCallsignForPositionId(positionId: string | undefined): string | undefined {
+    if (!positionId || !staticConfig.onlineControllers) return undefined
+    const want = positionId.toUpperCase()
+    for (const ctrl of staticConfig.onlineControllers.values()) {
+        if (ctrl.positionId?.toUpperCase() === want) return ctrl.callsign
     }
     return undefined
 }
@@ -641,5 +691,101 @@ export function restoreEssaRolesFromSettings(
     }
 }
 
-export type { EssaPositionRole }
+function esggRolesKey(roles: EsggPositionRole[] | undefined): string {
+    return (roles ?? []).join(",")
+}
+
+/**
+ * Recompute ESGG display roles from callsign + coverage when not in manual override.
+ * Returns true if the selected roles changed.
+ */
+export function refreshEsggRolesIfAuto(): boolean {
+    if (!isEsggRolesConfig(staticConfig)) {
+        if (staticConfig.esggRoles !== undefined || staticConfig.esggRolesManual) {
+            staticConfig.esggRoles = undefined
+            staticConfig.esggRolesManual = undefined
+            return true
+        }
+        return false
+    }
+
+    if (staticConfig.esggRolesManual) return false
+
+    let esggEffective: ControllerRole[] | undefined
+    if (staticConfig.myRolesByAirport) {
+        for (const [airport, roles] of staticConfig.myRolesByAirport) {
+            if (airport.toUpperCase() === "ESGG") {
+                esggEffective = roles
+                break
+            }
+        }
+    }
+    const next = computeAutoEsggRoles(esggEffective ?? getEffectiveRolesUnion())
+    const changed = esggRolesKey(staticConfig.esggRoles) !== esggRolesKey(next)
+    staticConfig.esggRoles = next
+    return changed
+}
+
+/**
+ * Set ESGG roles (manual picker or restore from settings).
+ * When manual=false, immediately re-runs auto-detect.
+ * Returns true if roles / manual flag changed.
+ */
+export function setEsggRoles(roles: EsggPositionRole[], manual: boolean): boolean {
+    if (!isEsggRolesConfig(staticConfig)) return false
+
+    if (!manual) {
+        const wasManual = !!staticConfig.esggRolesManual
+        const prev = esggRolesKey(staticConfig.esggRoles)
+        staticConfig.esggRolesManual = false
+        // Drop manual override from myRolesByAirport, then refresh auto roles
+        recomputeMyRolesByAirport()
+        return wasManual || esggRolesKey(staticConfig.esggRoles) !== prev
+    }
+
+    const next = normalizeEsggRoles(roles) ?? []
+    const changed =
+        esggRolesKey(staticConfig.esggRoles) !== esggRolesKey(next) ||
+        !staticConfig.esggRolesManual
+    staticConfig.esggRoles = next
+    staticConfig.esggRolesManual = true
+    recomputeMyRolesByAirport()
+    return changed
+}
+
+/**
+ * Restore ESGG roles from persisted user settings (call after applyConfig on startup).
+ */
+export function restoreEsggRolesFromSettings(
+    roles: EsggPositionRole[] | undefined,
+    manual: boolean | undefined
+) {
+    if (!isEsggRolesConfig(staticConfig)) return
+    if (manual && roles) {
+        staticConfig.esggRoles = normalizeEsggRoles(roles) ?? []
+        staticConfig.esggRolesManual = true
+        recomputeMyRolesByAirport()
+    } else {
+        staticConfig.esggRolesManual = false
+        refreshEsggRolesIfAuto()
+    }
+}
+
+/** Whether selected ESGG roles include the given position (manual or auto). */
+export function hasEsggPositionRole(role: EsggPositionRole): boolean {
+    return (staticConfig.esggRoles ?? []).includes(role)
+}
+
+/**
+ * Acting callsign-style role for paper ESGG GND/TWR checks.
+ * Prefer highest selected ESGG role when the picker is active.
+ */
+export function getActingControllerRole(): ControllerRole | undefined {
+    if (isEsggRolesConfig(staticConfig) && staticConfig.esggRoles && staticConfig.esggRoles.length > 0) {
+        return highestEsggControllerRole(staticConfig.esggRoles) ?? staticConfig.myRole
+    }
+    return staticConfig.myRole
+}
+
+export type { EssaPositionRole, EsggPositionRole }
 

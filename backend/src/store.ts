@@ -1,4 +1,4 @@
-import type { EfsLayout, FlightStrip, Section, Bay, Gap, DeletedStripInfo } from "@vatefs/common"
+import type { EfsLayout, FlightStrip, Section, Bay, Gap, DeletedStripInfo, PaperInfoKind } from "@vatefs/common"
 import { determineSectionForFlight } from "./config.js"
 import { GAP_BUFFER, gapKey } from "@vatefs/common"
 import { staticConfig } from "./config.js"
@@ -25,6 +25,11 @@ import {
     essaAorLayoutKey,
     filterEssaRunwayPlacementsForMyAor,
 } from "./essa-next-si.js"
+import {
+    applyEsggRoleLayout,
+    isEsggRolesConfig,
+    syncSectionToBayFromLayout,
+} from "./esgg-roles.js"
 
 /**
  * Resolve template variables in section titles.
@@ -112,6 +117,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "dclMessage",
     "dclClearance",
     "noteText",
+    "paperInfoKind",
     "hasMatchingFlight",
     "groundstate",
     // CDM / vIFF — must be compared or TOBT/TSAT/REA-only updates are dropped
@@ -123,6 +129,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "tsac",
     "ctoc",
     "qnhGiven",
+    "atisGiven",
     "cdmSts",
     "ctot",
     "ctotCancelled",
@@ -302,12 +309,20 @@ class EfsStore {
         clearScratchpadDelayMs?: number
         transferSound?: ProcessMessageResult['transferSound']
         multiUpdates?: ProcessMessageResult['multiUpdates']
+        cleanReprint?: boolean
+        unsetEfsGoAround?: boolean
+        unsetClearedToLand?: boolean
     } {
         const result = flightStore.processMessage(message)
         const transferSound = result.transferSound
         const scratchClear = {
             clearScratchpadCallsign: result.clearScratchpadCallsign,
             clearScratchpadDelayMs: result.clearScratchpadDelayMs,
+        }
+        const goaReprint = {
+            cleanReprint: result.cleanReprint,
+            unsetEfsGoAround: result.unsetEfsGoAround,
+            unsetClearedToLand: result.unsetClearedToLand,
         }
 
         // Multi-airport: apply each update
@@ -341,13 +356,15 @@ class EfsStore {
                     )
                 }
 
+                const allowPos =
+                    !!(update.isNew || update.sectionChanged || update.allowPositionChange)
                 const applied = this.applyStripUpdate(
                     update.strip,
-                    update.isNew || update.sectionChanged ? { allowPositionChange: true } : undefined
+                    allowPos ? { allowPositionChange: true } : undefined
                 )
                 strips.push(applied)
 
-                if ((update.isNew || update.sectionChanged) && update.shiftedCallsigns && update.shiftedCallsigns.length > 0) {
+                if (allowPos && update.shiftedCallsigns && update.shiftedCallsigns.length > 0) {
                     if (!shiftedStrips) shiftedStrips = []
                     for (const sid of update.shiftedCallsigns) {
                         const regeneratedStrip = flightStore.regenerateStrip(sid)
@@ -376,6 +393,7 @@ class EfsStore {
                 clearHs: result.clearHs,
                 assignDepRwy: result.assignDepRwy,
                 ...scratchClear,
+                ...goaReprint,
                 transferSound,
                 multiUpdates: result.multiUpdates
             }
@@ -434,6 +452,7 @@ class EfsStore {
                     softDeleted: true,
                     transferSound,
                     ...scratchClear,
+                    ...goaReprint,
                 }
             }
             if (result.flight) {
@@ -450,10 +469,11 @@ class EfsStore {
                         softDeleted: true,
                         transferSound,
                         ...scratchClear,
+                        ...goaReprint,
                     }
                 }
             }
-            return { softDeleted: true, transferSound, ...scratchClear }
+            return { softDeleted: true, transferSound, ...scratchClear, ...goaReprint }
         }
 
         // Handle restore: move strip back from deletedStrips
@@ -493,18 +513,20 @@ class EfsStore {
                 )
             }
 
-            // Same-slot GS/field updates pin appearance order; new/moved strips may change position
+            // Same-slot GS/field updates pin appearance order; new/moved strips
+            // (and APP-transfer sticky-top bumps) may change position
+            const allowPos =
+                !!(isNew || result.sectionChanged || result.allowPositionChange)
             const appliedStrip = this.applyStripUpdate(
                 result.strip,
-                isNew || result.sectionChanged ? { allowPositionChange: true } : undefined
+                allowPos ? { allowPositionChange: true } : undefined
             )
 
-            // Handle shifted strips and gaps (from add-from-top)
-            // Shift when a strip enters a section: either new or moved from another section
+            // Handle shifted strips and gaps (from add-from-top / sticky-top bump)
             let shiftedStrips: FlightStrip[] | undefined
             let shiftedGaps: Gap[] | undefined
             let deletedGapKeys: string[] | undefined
-            if ((isNew || result.sectionChanged) && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
+            if (allowPos && result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
                 shiftedStrips = []
                 for (const callsign of result.shiftedCallsigns) {
                     const regeneratedStrip = flightStore.regenerateStrip(callsign)
@@ -556,24 +578,34 @@ class EfsStore {
 
     // Get layout (for sending to clients), with section title templates resolved
     getLayout(): EfsLayout {
-        // ESSA role mode: always use config bay structure so role filtering
+        // ESSA / ESGG role modes: always use config bay structure so role remaps
         // cannot resurrect a stale combined bay from the store cache.
         const base = isMultiAirportConfig(staticConfig)
             ? getVisibleLayout(staticConfig)
-            : isEssaRolesConfig(staticConfig)
+            : isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)
               ? staticConfig.layout
               : this.layout
+
+        // Heights keyed by section id (sections may move between bays in ESGG remap)
+        const heightBySectionId = new Map<string, number | undefined>()
+        for (const storeBay of this.layout.bays) {
+            for (const s of storeBay.sections) {
+                if (s.height !== undefined) heightBySectionId.set(s.id, s.height)
+            }
+        }
+
         // Prefer store layout for section heights, but drop idle bay
         let withHeights: EfsLayout = {
             bays: base.bays.map(bay => {
                 const storeBay = this.layout.bays.find(b => b.id === bay.id)
-                if (!storeBay) return bay
                 return {
                     ...bay,
-                    title: bay.title ?? storeBay.title,
-                    airport: bay.airport ?? storeBay.airport,
+                    title: bay.title ?? storeBay?.title,
+                    airport: bay.airport ?? storeBay?.airport,
                     sections: bay.sections.map(section => {
-                        const storeSection = storeBay.sections.find(s => s.id === section.id)
+                        const h = heightBySectionId.get(section.id)
+                        const storeSection = storeBay?.sections.find(s => s.id === section.id)
+                        if (h !== undefined) return { ...section, height: h }
                         return storeSection ? { ...section, height: storeSection.height } : section
                     })
                 }
@@ -608,27 +640,41 @@ class EfsStore {
                 `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
         }
 
+        if (isEsggRolesConfig(staticConfig)) {
+            // Restore YAML bay mapping first, then apply GND/CD remap if needed
+            syncSectionToBayFromLayout(staticConfig.sectionToBay, staticConfig.layout)
+            withHeights = applyEsggRoleLayout(withHeights, staticConfig.esggRoles ?? [])
+            syncSectionToBayFromLayout(staticConfig.sectionToBay, withHeights)
+        }
+
         return resolveLayoutTemplates(withHeights, staticConfig)
     }
 
     // Get all strips as array
     getAllStrips(): FlightStrip[] {
         const strips = Array.from(this.strips.values())
-        if (!isEssaRolesConfig(staticConfig)) return strips
-        const remapped = remapStripsForEssaGndOnly(
-            strips,
-            staticConfig.essaRoles ?? [],
-            staticConfig.sectionToBay
-        )
-        // Align bayIds after CD ALL+TSAT column merge (max 4 columns)
-        return remapBayIdsToLayout(remapped, this.getLayout())
+        if (isEssaRolesConfig(staticConfig)) {
+            const remapped = remapStripsForEssaGndOnly(
+                strips,
+                staticConfig.essaRoles ?? [],
+                staticConfig.sectionToBay
+            )
+            // Align bayIds after CD ALL+TSAT column merge (max 4 columns)
+            return remapBayIdsToLayout(remapped, this.getLayout())
+        }
+        if (isEsggRolesConfig(staticConfig)) {
+            return remapBayIdsToLayout(strips, this.getLayout())
+        }
+        return strips
     }
 
     // Get all gaps as array
     getAllGaps(): Gap[] {
         const gaps = Array.from(this.gaps.values())
-        if (!isEssaRolesConfig(staticConfig)) return gaps
-        return remapBayIdsToLayout(gaps, this.getLayout())
+        if (isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)) {
+            return remapBayIdsToLayout(gaps, this.getLayout())
+        }
+        return gaps
     }
 
     getActiveRwyFlags(): string[] {
@@ -744,9 +790,31 @@ class EfsStore {
         const strip = this.strips.get(stripId)
         if (!strip) return null
 
-        // Other-owned strips stay where rules placed them (notes/vehicles have no owner)
-        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') {
-            console.log(`[MOVE] rejected ${strip.callsign || stripId}: owned by other`)
+        // Other-assumed strips stay where rules placed them (notes/vehicles have no owner).
+        // Ownership = ES tracking callsign and/or SI (live flight + strip). Paper: incoming transfer OK.
+        const flight = flightStore.getFlight(strip.callsign)
+        const liveOwner = flight?.controller?.trim()
+        const liveSi = flight?.controllerId?.trim()
+        const myCs = staticConfig.myCallsign?.trim()
+        const mySi = staticConfig.myPositionId?.trim()
+        const ownerCs = (strip.ownerCallsign || liveOwner || '').trim()
+        const trackedByMe =
+            (!!myCs && !!liveOwner && liveOwner.toUpperCase() === myCs.toUpperCase()) ||
+            (!!mySi && !!liveSi && liveSi.toUpperCase() === mySi.toUpperCase()) ||
+            !!strip.isAssumed
+        const liveOwnedByOther =
+            !trackedByMe && (!!liveOwner || !!liveSi || !!strip.ownedByOther || !!ownerCs)
+        const allowIncomingTransferDrag =
+            staticConfig.look === 'paper' && strip.transferPending === 'in'
+        if (
+            liveOwnedByOther &&
+            strip.stripType !== 'note' &&
+            strip.stripType !== 'vehicle' &&
+            !allowIncomingTransferDrag
+        ) {
+            console.log(
+                `[MOVE] rejected ${strip.callsign || stripId}: owned by ${ownerCs || liveOwner || liveSi || 'other'}`,
+            )
             return null
         }
 
@@ -918,6 +986,7 @@ class EfsStore {
 
     /**
      * Create a note strip (no associated flight, just text).
+     * Optional paperInfoKind for paper-look blank / HINDER / Bogsering / etc.
      * Returns the created strip.
      */
     createNoteStrip(
@@ -925,7 +994,8 @@ class EfsStore {
         targetSectionId?: string,
         position?: number,
         isBottom?: boolean,
-        airport?: string
+        airport?: string,
+        paperInfoKind?: PaperInfoKind,
     ): FlightStrip | undefined {
         const stripId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const icao = airport?.toUpperCase()
@@ -966,6 +1036,7 @@ class EfsStore {
             bottom: isBottom ?? false,
             noteText: '',
             airport: icao,
+            ...(paperInfoKind ? { paperInfoKind } : {}),
         }
 
         this.strips.set(stripId, strip)

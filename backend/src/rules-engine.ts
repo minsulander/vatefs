@@ -16,7 +16,7 @@ import type {
     StripAction,
     EuroscopeCommand
 } from "./config-types.js"
-import { isApproachClearanceLabel } from "@vatefs/common"
+import { isApproachClearanceLabel, isIfrSidEligible } from "@vatefs/common"
 import { getAirportElevation, getAirportCoords } from "./airport-data.js"
 import { findNearestAirport, isWithinRangeOfAnyAirport, isWithinStripVisibilityRange } from "./geo-utils.js"
 import { minutesUntilFlightEta } from "./hhmm-utils.js"
@@ -45,6 +45,8 @@ type CommonRuleConditions = {
     onRunway?: boolean
     depRunway?: boolean
     arrRunway?: boolean
+    /** true → I/Y only; false → non-IFR (V/Z/…) only */
+    ifr?: boolean
     myRole?: ControllerRole[]
     notMyRole?: ControllerRole[]
     essaFamilies?: EssaFamily[]
@@ -237,6 +239,14 @@ function callsignsEqual(a: string | undefined, b: string | undefined): boolean {
 /**
  * Check controller condition against flight
  */
+/** Tracking owner is me (callsign or position SI — ES often omits callsign at TWR). */
+function isTrackedByMyself(flight: Flight, config: EfsStaticConfig): boolean {
+    if (callsignsEqual(flight.controller, config.myCallsign)) return true
+    const mySi = config.myPositionId?.toUpperCase()
+    const ownerSi = flight.controllerId?.toUpperCase()
+    return !!mySi && !!ownerSi && mySi === ownerSi
+}
+
 function checkControllerCondition(
     flight: Flight,
     condition: ControllerCondition,
@@ -244,7 +254,7 @@ function checkControllerCondition(
 ): boolean {
     if (condition === 'any') return true
 
-    const isMyself = callsignsEqual(flight.controller, config.myCallsign)
+    const isMyself = isTrackedByMyself(flight, config)
     if (condition === 'myself') return isMyself
     if (condition === 'not_myself') return !isMyself
 
@@ -257,6 +267,14 @@ function isHandoffToMyself(flight: Flight, config: EfsStaticConfig): boolean {
     const mySi = config.myPositionId?.toUpperCase()
     const hoSi = flight.handoffTargetControllerId?.toUpperCase()
     return !!mySi && !!hoSi && mySi === hoSi
+}
+
+/** Any pending handoff (callsign and/or SI). */
+function hasHandoffTarget(flight: Flight): boolean {
+    return (
+        (!!flight.handoffTargetController && flight.handoffTargetController !== '') ||
+        (!!flight.handoffTargetControllerId && flight.handoffTargetControllerId !== '')
+    )
 }
 
 /**
@@ -395,7 +413,13 @@ function evaluateCommonConditions(
     }
 
     if (rule.clearance !== undefined) {
-        const hasClearance = flight.clearance ?? false
+        // Paper ESGG:
+        // - CLR read alone → stay above KLARERING (frontend bottom-sorts)
+        // - CLR correct / ES CLR → under KLARERING header (cleared)
+        const hasClearance =
+            config.look === "paper"
+                ? !!(flight.clearance || flight.clearanceReadback)
+                : !!(flight.clearance ?? false)
         if (hasClearance !== rule.clearance) {
             return false
         }
@@ -421,6 +445,13 @@ function evaluateCommonConditions(
     if (rule.airborne !== undefined) {
         const isAirborne = flight.airborne ?? false
         if (isAirborne !== rule.airborne) {
+            return false
+        }
+    }
+
+    if (rule.ifr !== undefined) {
+        const ifr = isIfrSidEligible(flight.flightRules)
+        if (ifr !== rule.ifr) {
             return false
         }
     }
@@ -539,10 +570,9 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         }
     }
 
-    // Check handoff initiated condition
+    // Check handoff initiated condition (callsign and/or SI)
     if (rule.handoffInitiated !== undefined) {
-        const hasHandoff = !!flight.handoffTargetController && flight.handoffTargetController !== ''
-        if (hasHandoff !== rule.handoffInitiated) {
+        if (hasHandoffTarget(flight) !== rule.handoffInitiated) {
             return false
         }
     }
@@ -557,9 +587,24 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
     // Handoff target role (e.g. APP→TWR while viewing as GND)
     if (rule.handoffToRole) {
         const target = flight.handoffTargetController
-        if (!target) return false
-        const targetRole = parseControllerRole(target, config.myAirports)
-        if (!rule.handoffToRole.includes(targetRole)) return false
+        if (!target) {
+            // SI-only handoff: resolve login callsign from online controllers
+            const hoSi = flight.handoffTargetControllerId?.toUpperCase()
+            if (!hoSi || !config.onlineControllers) return false
+            let resolved: string | undefined
+            for (const ctrl of config.onlineControllers.values()) {
+                if (ctrl.positionId?.toUpperCase() === hoSi) {
+                    resolved = ctrl.callsign
+                    break
+                }
+            }
+            if (!resolved) return false
+            const targetRole = parseControllerRole(resolved, config.myAirports)
+            if (!rule.handoffToRole.includes(targetRole)) return false
+        } else {
+            const targetRole = parseControllerRole(target, config.myAirports)
+            if (!rule.handoffToRole.includes(targetRole)) return false
+        }
     }
 
     // INBOUND APP time gate: ETA must exist and be within maxEtaMinutes (HHMM wrap)
@@ -692,10 +737,9 @@ function evaluateActionRule(
         return false
     }
 
-    // Check handoff initiated condition
+    // Check handoff initiated condition (callsign and/or SI)
     if (rule.handoffInitiated !== undefined) {
-        const hasHandoff = !!flight.handoffTargetController && flight.handoffTargetController !== ''
-        if (hasHandoff !== rule.handoffInitiated) {
+        if (hasHandoffTarget(flight) !== rule.handoffInitiated) {
             return false
         }
     }

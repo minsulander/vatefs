@@ -37,7 +37,7 @@ const touchDropPlacement = ref<TouchDropPlacement | null>(null)
  * (not only “above” → previous section bottom).
  */
 function computeTopInsertIndex(container: Element, clientY: number): number {
-  const strips = Array.from(container.querySelectorAll('.flight-strip'))
+  const strips = Array.from(container.querySelectorAll('.flight-strip:not(.dragging)'))
   if (strips.length === 0) {
     // Empty bay with only info strips: still allow append (index 0)
     return 0
@@ -61,10 +61,12 @@ function clearTouchDropPlacement() {
 function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) {
   const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
   const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
+  const headerEl = elementUnder?.closest('.section-header') as HTMLElement | null
   const isOverBottom = bottomZone !== null || bottomStripsContainer !== null
 
   const sectionEl =
     (elementUnder?.closest('.efs-section') as HTMLElement | null) ||
+    headerEl?.closest('.efs-section') ||
     bottomZone?.closest('.efs-section') ||
     bottomStripsContainer?.closest('.efs-section')
   const bayEl = sectionEl?.closest('.efs-bay') as HTMLElement | null
@@ -81,6 +83,15 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
     const dropTarget =
       (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
     return { dropTarget, isOverBottom: true }
+  }
+
+  // Drop on section header → insert at top of that section
+  if (headerEl && sectionEl?.contains(headerEl)) {
+    touchDropPlacement.value = { sectionId, bayId, insertIndex: 0, isBottom: false }
+    const topContainer = sectionEl.querySelector('.top-strips-container') as HTMLElement | null
+    const dropTarget =
+      (sectionEl.querySelector('.section-content') as HTMLElement | null) || topContainer
+    return { dropTarget, isOverBottom: false }
   }
 
   const topContainer =
@@ -133,8 +144,11 @@ export function useTouchDrag() {
     document.body.appendChild(clone)
     dragClone.value = clone
 
-    // Fade original
-    element.style.opacity = '0.3'
+    // Hide / collapse original (paper CSS collapses .dragging; else fade)
+    element.classList.add('dragging')
+    if (!element.classList.contains('look-paper')) {
+      element.style.opacity = '0.3'
+    }
 
     // Add body class
     document.body.classList.add('touch-dragging')
@@ -202,8 +216,11 @@ export function useTouchDrag() {
       cloneRect
     }
 
-    // Calculate drop position within section
-    if (currentDropTarget.value && dragClone.value) {
+    // Prefer placement from hit-test (header → 0); else compute from clone Y
+    const placedIndex = touchDropPlacement.value?.insertIndex
+    if (!result.isBottomDrop && placedIndex != null) {
+      result.dropPosition = placedIndex
+    } else if (currentDropTarget.value && dragClone.value) {
       const cloneRect = dragClone.value.getBoundingClientRect()
       const cloneCenterY = cloneRect.top + cloneRect.height / 2
 
@@ -212,7 +229,7 @@ export function useTouchDrag() {
         ? currentDropTarget.value.querySelector('.bottom-strips-container')
         : currentDropTarget.value.querySelector('.top-strips-container') || currentDropTarget.value
 
-      const strips = Array.from(container?.querySelectorAll('.flight-strip') || [])
+      const strips = Array.from(container?.querySelectorAll('.flight-strip:not(.dragging)') || [])
       let position = strips.length
 
       for (let i = 0; i < strips.length; i++) {
@@ -230,6 +247,7 @@ export function useTouchDrag() {
 
     // Cleanup
     if (dragElement.value) {
+      dragElement.value.classList.remove('dragging')
       dragElement.value.style.opacity = ''
     }
     if (dragClone.value) {
@@ -260,6 +278,7 @@ export function useTouchDrag() {
 
   function cancelDrag() {
     if (dragElement.value) {
+      dragElement.value.classList.remove('dragging')
       dragElement.value.style.opacity = ''
     }
     if (dragClone.value) {
@@ -294,9 +313,10 @@ export function useTouchDrag() {
     // Remove bottom-slot highlights
     document.querySelectorAll('.bottom-drop-zone.drop-active').forEach(el => el.classList.remove('drop-active'))
 
-    // Reset dragging elements opacity
+    // Reset dragging elements
     document.querySelectorAll('.flight-strip, .info-strip').forEach(el => {
-      (el as HTMLElement).style.opacity = ''
+      el.classList.remove('dragging')
+      ;(el as HTMLElement).style.opacity = ''
     })
 
     // Reset state

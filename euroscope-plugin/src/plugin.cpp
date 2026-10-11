@@ -44,6 +44,81 @@ static bool IsValidOctalSquawk(const char *squawk)
     return true;
 }
 
+/**
+ * Ground-state tokens — both modes for READ:
+ *   Native ES / GRpluginSettings "actual" names: LINEUP, TAXI, DEPA, PUSH, STUP, …
+ *   Legacy GRP display aliases (if still present in scratch): xLU, TXO, S/P, …
+ *
+ * WRITE uses native ES names only — GNG display labels are overridden by
+ * GRpluginSettings.txt; flashing S/P/TXO does not set GetGroundState().
+ */
+static bool IsGroundStateToken(const std::string &scratch)
+{
+    return scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE" ||
+           scratch == "TAXI" || scratch == "TXIN" || scratch == "DEPA" ||
+           scratch == "PUSH" || scratch == "STUP" || scratch == "ARR" ||
+           scratch == "PARK" || scratch == "NSTS" || scratch == "NOSTATE" ||
+           scratch == "xLU" || scratch == "XLU" || scratch == "xTO" || scratch == "XTO" ||
+           scratch == "TXO" || scratch == "TXI" || scratch == "FRQ" || scratch == "RDY" ||
+           scratch == "S/U" || scratch == "S/P" || scratch == "PRK";
+}
+
+/**
+ * Canonical VatEFS → token written to ES scratch.
+ * Prefer native ES names (PUSH/STUP/TAXI/LINEUP/…) — matches what ES reports
+ * in groundstate when set from the client; GRP aliases (S/P, TXO) do not stick.
+ */
+static std::string ToEsGroundStateWriteToken(const std::string &state)
+{
+    // Map legacy GRP aliases → native if backend ever sends them
+    if (state == "xLU" || state == "XLU") return "LINEUP";
+    if (state == "xTO" || state == "XTO") return "DEPA";
+    if (state == "TXO") return "TAXI";
+    if (state == "TXI") return "TXIN";
+    if (state == "FRQ") return "ONFREQ";
+    if (state == "RDY") return "DE-ICE";
+    if (state == "S/U") return "STUP";
+    if (state == "S/P") return "PUSH";
+    if (state == "PRK") return "PARK";
+    // Canonical / already-native passthrough
+    return state;
+}
+
+/** Precise scratch tokens that refine coarse GetGroundState() PUSH/TAXI/DEPA. */
+static bool IsPreciseGroundStateToken(const std::string &token)
+{
+    return token == "xLU" || token == "XLU" || token == "xTO" || token == "XTO" ||
+           token == "TXO" || token == "TXI" || token == "FRQ" || token == "RDY" ||
+           token == "S/U" || token == "S/P" || token == "PRK" ||
+           token == "LINEUP" || token == "ONFREQ" || token == "DE-ICE" ||
+           token == "STUP" || token == "TXIN" || token == "DEPA" ||
+           token == "NSTS" || token == "NOSTATE";
+}
+
+/**
+ * Emit groundstate for backend.
+ * Prefer precise scratch (LINEUP/xLU/…) over coarse GetGroundState() TAXI/PUSH.
+ */
+static void SetJsonGroundstateFromFpOrScratch(
+    nlohmann::json &message,
+    EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    const char *gs = FlightPlan.GetGroundState();
+    std::string gsStr = gs ? gs : "";
+    const char *scratch = FlightPlan.GetControllerAssignedData().GetScratchPadString();
+    std::string scratchStr = scratch ? scratch : "";
+
+    if (IsPreciseGroundStateToken(scratchStr)) {
+        message["groundstate"] = scratchStr;
+        return;
+    }
+    if (gsStr.empty() && IsGroundStateToken(scratchStr)) {
+        message["groundstate"] = scratchStr;
+        return;
+    }
+    message["groundstate"] = gsStr;
+}
+
 namespace VatEFS
 {
 
@@ -172,13 +247,31 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
             SetJsonIfValidUtf8(message, "communicationType", commStr);
         }
-        // TODO check this is set correctly, compare controllerAssignedDataUpdate, ensure it doesn't overwrite the custom groundstates
-        SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
+        // Swedish L/U·TXO etc. often only in scratch — fall back when GetGroundState empty
+        SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
 
         const char *route = fpData.GetRoute();
         if (route && *route && strlen(route) < 1000)
             message["route"] = AnsiToUtf8(route);
+
+        // Filed cruise TAS (FPL) — shown on paper DEP strips (e.g. N0430)
+        {
+            int tas = fpData.GetTrueAirspeed();
+            if (tas > 0 && tas < 1000) {
+                out << " tas " << tas;
+                message["tas"] = tas;
+            }
+        }
+
+        // Filed cruise altitude (FPL item 15) — RFL fallback when CAD final is unset
+        {
+            int altitude = fpData.GetFinalAltitude();
+            if (altitude > 0 && altitude <= 100000) {
+                out << " altitude " << altitude;
+                message["altitude"] = altitude;
+            }
+        }
 
         // FPL item 18 remarks (for CALLSIGN/CS/C/S telephony parsing)
         const char *fplRemarks = fpData.GetRemarks();
@@ -277,8 +370,9 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             break;
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_FINAL_ALTITUDE: {
-            int rfl = ctrData.GetFinalAltitude();
-            if (rfl >= 0 && rfl <= 100000) { // Reasonable altitude range
+            // Prefer FP+override (GetFinalAltitude on FP); CAD-only override is often 0
+            int rfl = FlightPlan.GetFinalAltitude();
+            if (rfl > 0 && rfl <= 100000) {
                 out << " rfl " << rfl;
                 message["rfl"] = rfl;
             }
@@ -318,8 +412,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             std::string scratch = scratchStr;
             out << " scratch " << scratch;
 
-            // Safe string comparisons
-            if (scratch == "LINEUP" || scratch == "ONFREQ" || scratch == "DE-ICE") {
+            // GS tokens (GRP xLU/TXO/… and canonical LINEUP/TAXI/…)
+            if (IsGroundStateToken(scratch)) {
                 SetJsonIfValidUtf8(message, "groundstate", scratch.c_str());
             } else if (scratch == "NOSTATE") {
                 // Swedish clear-ground-state token — treat as empty GS for the backend
@@ -364,7 +458,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_GROUND_STATE:
             out << " groundstate " << FlightPlan.GetGroundState();
-            SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
+            SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_CLEARENCE_FLAG:
             out << " clearance " << FlightPlan.GetClearenceFlag();
@@ -445,6 +539,7 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
         lastOwnershipSnapshot.erase(cs);
         lastHoldShortSnapshot.erase(cs);
         lastCtlSnapshot.erase(cs);
+        lastEfsGaSnapshot.erase(cs);
     }
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
@@ -1685,8 +1780,8 @@ void VatEFSPlugin::Refresh()
         if (IsValidOctalSquawk(squawk)) {
             SetJsonIfValidUtf8(message, "squawk", squawk);
         }
-        int rfl = ctrData.GetFinalAltitude();
-        if (rfl >= 0 && rfl <= 100000) { // Reasonable altitude range
+        int rfl = FlightPlan.GetFinalAltitude();
+        if (rfl > 0 && rfl <= 100000) {
             message["rfl"] = rfl;
         }
         int cfl = ctrData.GetClearedAltitude();
@@ -1702,21 +1797,25 @@ void VatEFSPlugin::Refresh()
                 lastXflSnapshot[cs] = message.value("xfl", 0);
         }
         SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
-        // VCH hold short HS (ann 4) + CTL (ann 3)
+        // VCH hold short HS (ann 4) + CTL (ann 3) + EFS soft G/A (ann 5)
         {
             const char *cs = FlightPlan.GetCallsign();
             std::string hs;
             bool ctl = false;
+            bool efsGa = false;
             if (cs && cs[0] != '\0') {
                 hs = GetHoldShort(cs);
                 ctl = GetVchCtl(cs);
+                efsGa = GetEfsGoAround(cs);
                 lastHoldShortSnapshot[cs] = hs;
                 lastCtlSnapshot[cs] = ctl ? "1" : "0";
+                lastEfsGaSnapshot[cs] = efsGa ? "1" : "0";
             }
             message["hs"] = hs;
             message["clearedToLand"] = ctl;
+            message["efsGoAround"] = efsGa;
         }
-        SetJsonIfValidUtf8(message, "groundstate", FlightPlan.GetGroundState());
+        SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
         int speed = ctrData.GetAssignedSpeed();
         if (speed >= 0 && speed <= 1500) { // Reasonable speed range
@@ -1941,21 +2040,22 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 if (message["type"] == "setGroundState") {
                     auto callsign = message["callsign"].get<std::string>();
                     auto state = message["state"].get<std::string>();
-                    // Empty / NOSTATE clears Swedish ground state via scratch (ES rejects empty GS)
+                    // Empty / NOSTATE clears ground state via scratch (ES rejects empty GS)
                     const bool clearGs = state.empty() || state == "NOSTATE";
-                    const std::string scratchState = clearGs ? "NOSTATE" : state;
-                    DebugMessage("setGroundState: " + callsign + " " + (clearGs ? "(clear)" : state));
+                    // Native ES tokens (PUSH/TAXI/LINEUP/…) — not GRP display aliases (S/P/TXO)
+                    const std::string scratchState =
+                        clearGs ? "NOSTATE" : ToEsGroundStateWriteToken(state);
+                    DebugMessage("setGroundState: " + callsign + " " +
+                                 (clearGs ? "(clear)" : scratchState));
                     if (callsign.empty()) {
                         DisplayMessage("setGroundState: Invalid callsign");
                     } else if (UpdateScratchPad(callsign, scratchState, true)) {
-                        if (clearGs) {
-                            // Echo cleared GS immediately — CAD may still report stale GS until ES applies NOSTATE
-                            nlohmann::json echo = nlohmann::json::object();
-                            echo["type"] = "controllerAssignedDataUpdate";
-                            echo["callsign"] = callsign;
-                            echo["groundstate"] = "";
-                            PostJson(echo, "setGroundState");
-                        }
+                        // Echo immediately — CAD often lags after scratch flash
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["groundstate"] = clearGs ? "" : scratchState;
+                        PostJson(echo, "setGroundState");
                     } else {
                         DisplayMessage("setGroundState: Failed for " + callsign);
                     }
@@ -2011,6 +2111,42 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         UpdateScratchPad(callsign, "MISAP_", false);
                     } else {
                         DisplayMessage("goaround: Invalid callsign");
+                    }
+                } else if (message["type"] == "setEfsGoAround") {
+                    // EFS soft G/A — annotation 5 (syncs to other EFS; not TopSky MISAP_)
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("setEfsGoAround: Invalid callsign");
+                    } else if (!SetEfsGoAround(callsign, true)) {
+                        DisplayMessage("setEfsGoAround: Failed for " + callsign);
+                    } else {
+                        lastEfsGaSnapshot[callsign] = "1";
+                        // Keep VCH CTL if already set — soft G/A must not clear it
+                        DebugMessage("setEfsGoAround: " + callsign + " -> EFSGA");
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["efsGoAround"] = true;
+                        PostJson(echo, "setEfsGoAround");
+                    }
+                } else if (message["type"] == "unsetEfsGoAround") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("unsetEfsGoAround: Invalid callsign");
+                    } else if (!SetEfsGoAround(callsign, false)) {
+                        DisplayMessage("unsetEfsGoAround: Failed for " + callsign);
+                    } else {
+                        lastEfsGaSnapshot[callsign] = "0";
+                        DebugMessage("unsetEfsGoAround: " + callsign);
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["efsGoAround"] = false;
+                        PostJson(echo, "unsetEfsGoAround");
                     }
                 } else if (message["type"] == "rof") {
                     auto callsign = message["callsign"].get<std::string>();
@@ -2078,22 +2214,37 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         if (fp.IsValid()) {
                             const char *handoffTarget = fp.GetHandoffTargetControllerCallsign();
                             const char *trackingCallsign = fp.GetTrackingControllerCallsign();
+                            const char *trackingId = fp.GetTrackingControllerId();
                             bool handoffToMe =
                             handoffTarget && handoffTarget[0] != '\0' && ControllerMyself().IsValid() &&
                             strcmp(handoffTarget, ControllerMyself().GetCallsign()) == 0;
-                            bool untracked = !trackingCallsign || trackingCallsign[0] == '\0';
+                            // SI alone counts as tracked (callsign often blank at TWR)
+                            bool untracked =
+                                (!trackingCallsign || trackingCallsign[0] == '\0') &&
+                                (!trackingId || trackingId[0] == '\0');
                             bool trackedByMe = fp.GetTrackingControllerIsMe();
                             bool outgoingHandoff = trackedByMe && handoffTarget && handoffTarget[0] != '\0' && !handoffToMe;
+                            auto postOwnershipEcho = [&]() {
+                                nlohmann::json echo = nlohmann::json::object();
+                                echo["type"] = "ownershipUpdate";
+                                echo["callsign"] = callsign;
+                                echo["ok"] = true;
+                                AppendOwnershipFields(echo, fp);
+                                echo["trackedByMe"] = fp.GetTrackingControllerIsMe();
+                                echo["fpState"] = fp.GetState();
+                                PostJson(echo, "assume");
+                            };
                             if (handoffToMe) {
                                 fp.AcceptHandoff();
                                 DebugMessage("Accepted handoff for " + callsign);
                                 OnFlightPlanFlightPlanDataUpdate(fp);
+                                postOwnershipEcho();
                             } else if (outgoingHandoff) {
-                                // Re-assume cancels a pending outbound handoff we initiated
                                 bool ok = fp.StartTracking();
                                 if (ok) {
                                     DebugMessage("Cancelled handoff for " + callsign);
                                     OnFlightPlanFlightPlanDataUpdate(fp);
+                                    postOwnershipEcho();
                                 } else
                                     DisplayMessage("Failed to cancel handoff for " + callsign);
                             } else if (untracked) {
@@ -2101,10 +2252,14 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                 if (ok) {
                                     DebugMessage("Started tracking " + callsign);
                                     OnFlightPlanFlightPlanDataUpdate(fp);
+                                    postOwnershipEcho();
                                 } else
-                                    DisplayMessage("Failed to start tracking " + callsign);
+                                    DisplayMessage("assume: Failed to start tracking " + callsign);
                             } else {
-                                DebugMessage(callsign + " already tracked by " + std::string(trackingCallsign));
+                                DisplayMessage(callsign + " already tracked by " +
+                                               std::string(trackingCallsign && trackingCallsign[0]
+                                                               ? trackingCallsign
+                                                               : (trackingId ? trackingId : "?")));
                             }
                         } else {
                             DisplayMessage("assume: Flight plan not found: " + callsign);
@@ -2856,25 +3011,44 @@ void VatEFSPlugin::AppendOwnershipFields(nlohmann::json &message, EuroScopePlugI
 
     // Always emit ownership keys (including "") so clears propagate — omitting keys leaves stale backend state
     // (e.g. downstream accept clears handoff but nullptr would otherwise keep transferPending: out).
+    // ES often omits tracking callsign while still providing position ID — resolve callsign from SI.
+    auto resolveCallsignFromSi = [this](const char *posId) -> std::string {
+        if (!posId || posId[0] == '\0' || strlen(posId) >= 10 || !IsValidUtf8(posId)) return "";
+        auto con = ControllerSelectByPositionId(posId);
+        if (!con.IsValid()) return "";
+        const char *cs = con.GetCallsign();
+        if (!cs || cs[0] == '\0' || strlen(cs) >= 20 || !IsValidUtf8(cs)) return "";
+        return cs;
+    };
+
     const char *trackingController = FlightPlan.GetTrackingControllerCallsign();
+    const char *trackingIdRaw = FlightPlan.GetTrackingControllerId();
     std::string trackingStr;
     if (trackingController && trackingController[0] != '\0' && strlen(trackingController) < 20 &&
         IsValidUtf8(trackingController)) {
         trackingStr = trackingController;
     }
+    std::string si = resolveSi(trackingIdRaw, trackingStr.c_str());
+    if (trackingStr.empty() && !si.empty()) {
+        trackingStr = resolveCallsignFromSi(si.c_str());
+    }
+    // trackedByMe + SI but still no callsign: keep SI so backend can mark ownedByOther
     message["controller"] = trackingStr;
-    std::string si = resolveSi(FlightPlan.GetTrackingControllerId(), trackingStr.c_str());
     message["controllerId"] = si;
     if (out && !trackingStr.empty()) *out << " controller " << trackingStr;
     if (out && !si.empty()) *out << " controllerId " << si;
 
     const char *handoffTarget = FlightPlan.GetHandoffTargetControllerCallsign();
+    const char *handoffIdRaw = FlightPlan.GetHandoffTargetControllerId();
     std::string handoffStr;
     if (handoffTarget && handoffTarget[0] != '\0' && strlen(handoffTarget) < 20 && IsValidUtf8(handoffTarget)) {
         handoffStr = handoffTarget;
     }
+    std::string hoSi = resolveSi(handoffIdRaw, handoffStr.c_str());
+    if (handoffStr.empty() && !hoSi.empty()) {
+        handoffStr = resolveCallsignFromSi(hoSi.c_str());
+    }
     message["handoffTargetController"] = handoffStr;
-    std::string hoSi = resolveSi(FlightPlan.GetHandoffTargetControllerId(), handoffStr.c_str());
     message["handoffTargetControllerId"] = hoSi;
     if (out && !handoffStr.empty()) *out << " handoffTargetController " << handoffStr;
     if (out && !hoSi.empty()) *out << " handoffTargetControllerId " << hoSi;
@@ -2883,8 +3057,9 @@ void VatEFSPlugin::AppendOwnershipFields(nlohmann::json &message, EuroScopePlugI
     if (cs && cs[0] != '\0') {
         int state = FlightPlan.GetState();
         bool trackedByMe = FlightPlan.GetTrackingControllerIsMe();
-        lastOwnershipSnapshot[cs] = trackingStr + "|" + handoffStr + "|" + std::to_string(state) + "|" +
-                                    (trackedByMe ? "1" : "0");
+        // Include SI — tracking callsign is often blank at TWR while APP owns via position ID
+        lastOwnershipSnapshot[cs] = trackingStr + "|" + si + "|" + handoffStr + "|" + hoSi + "|" +
+                                    std::to_string(state) + "|" + (trackedByMe ? "1" : "0");
     }
 }
 
@@ -2896,31 +3071,22 @@ void VatEFSPlugin::PollOwnershipChanges()
         const char *cs = fp.GetCallsign();
         if (!cs || cs[0] == '\0') continue;
 
-        const char *tracking = fp.GetTrackingControllerCallsign();
-        const char *handoff = fp.GetHandoffTargetControllerCallsign();
-        std::string trackingStr =
-            (tracking && tracking[0] != '\0' && strlen(tracking) < 20) ? tracking : "";
-        std::string handoffStr = (handoff && handoff[0] != '\0' && strlen(handoff) < 20) ? handoff : "";
-        // Include ES FP state + trackedByMe so remote accept/refuse is detected even when
-        // callsign fields briefly lag behind the transfer state machine.
-        int state = fp.GetState();
-        bool trackedByMe = fp.GetTrackingControllerIsMe();
-        std::string snapshot = trackingStr + "|" + handoffStr + "|" + std::to_string(state) + "|" +
-                               (trackedByMe ? "1" : "0");
-
         auto it = lastOwnershipSnapshot.find(cs);
-        if (it != lastOwnershipSnapshot.end() && it->second == snapshot) continue;
+        std::string prev = (it != lastOwnershipSnapshot.end()) ? it->second : "";
 
-        DebugMessage(std::string("Ownership change detected for ") + cs + ": " +
-                     (it != lastOwnershipSnapshot.end() ? it->second : "(none)") + " -> " + snapshot);
-
-        // Lightweight ownership-only UDP (avoid heavy FP dump / possible OnTimer reentrancy issues)
+        // Resolve via AppendOwnershipFields (fills SI when tracking callsign is blank at TWR)
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "ownershipUpdate";
         SetJsonIfValidUtf8(message, "callsign", cs);
-        message["fpState"] = state;
-        message["trackedByMe"] = trackedByMe;
+        message["fpState"] = fp.GetState();
+        message["trackedByMe"] = fp.GetTrackingControllerIsMe();
         AppendOwnershipFields(message, fp);
+
+        std::string next = lastOwnershipSnapshot.count(cs) ? lastOwnershipSnapshot[cs] : "";
+        if (prev == next) continue;
+
+        DebugMessage(std::string("Ownership change detected for ") + cs + ": " +
+                     (prev.empty() ? "(none)" : prev) + " -> " + next);
         PostJson(message, "PollOwnershipChanges");
     }
 }
@@ -2981,6 +3147,31 @@ bool VatEFSPlugin::SetVchCtl(const std::string &callsign, bool clearedToLand)
     }
 }
 
+/** EFS soft G/A — strip annotation index 5 ("EFSGA"); syncs via ES, not TopSky */
+bool VatEFSPlugin::GetEfsGoAround(const std::string &callsign)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(5);
+        return ann && strcmp(ann, "EFSGA") == 0;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool VatEFSPlugin::SetEfsGoAround(const std::string &callsign, bool goAround)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        return fp.GetControllerAssignedData().SetFlightStripAnnotation(
+            5, goAround ? "EFSGA" : "");
+    } catch (...) {
+        return false;
+    }
+}
+
 void VatEFSPlugin::PollVchAnnotationChanges()
 {
     for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
@@ -2992,6 +3183,8 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         std::string hs = GetHoldShort(cs);
         bool ctl = GetVchCtl(cs);
         std::string ctlSnap = ctl ? "1" : "0";
+        bool efsGa = GetEfsGoAround(cs);
+        std::string efsGaSnap = efsGa ? "1" : "0";
 
         bool hsChanged = true;
         auto hsIt = lastHoldShortSnapshot.find(cs);
@@ -3001,7 +3194,11 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         auto ctlIt = lastCtlSnapshot.find(cs);
         if (ctlIt != lastCtlSnapshot.end() && ctlIt->second == ctlSnap) ctlChanged = false;
 
-        if (!hsChanged && !ctlChanged) continue;
+        bool efsGaChanged = true;
+        auto efsGaIt = lastEfsGaSnapshot.find(cs);
+        if (efsGaIt != lastEfsGaSnapshot.end() && efsGaIt->second == efsGaSnap) efsGaChanged = false;
+
+        if (!hsChanged && !ctlChanged && !efsGaChanged) continue;
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
@@ -3019,6 +3216,13 @@ void VatEFSPlugin::PollVchAnnotationChanges()
                          ctlSnap + " (VCH)");
             lastCtlSnapshot[cs] = ctlSnap;
             message["clearedToLand"] = ctl;
+        }
+        if (efsGaChanged) {
+            DebugMessage(std::string("EFSGA change ") + cs + ": " +
+                         (efsGaIt != lastEfsGaSnapshot.end() ? efsGaIt->second : "(none)") +
+                         " -> " + efsGaSnap);
+            lastEfsGaSnapshot[cs] = efsGaSnap;
+            message["efsGoAround"] = efsGa;
         }
         PostJson(message, "PollVchAnnotationChanges");
     }

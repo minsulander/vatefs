@@ -46,6 +46,8 @@ interface YamlConfig {
     arrivalEtaMinutes?: number
     groundRange?: number
     layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
+    /** saab (default) or paper — paper enables ESGG print sound / manual print */
+    look?: 'saab' | 'paper'
     columnCount?: number
     bayTemplate?: BayTemplate
     layout?: {
@@ -54,6 +56,7 @@ interface YamlConfig {
                 title: string
                 addFromTop?: boolean
                 height?: number
+                hideHeader?: boolean
                 visibleFor?: EssaFamily[]
             }>
         }>
@@ -94,7 +97,8 @@ function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): {
                 id: sectionId,
                 title: sectionData.title,
                 addFromTop: sectionData.addFromTop,
-                height: sectionData.height
+                height: sectionData.height,
+                hideHeader: sectionData.hideHeader,
             })
         }
 
@@ -276,6 +280,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         deleteRules,
         moveRules,
         layoutMode,
+        look: yamlConfig.look === 'paper' ? 'paper' : 'saab',
         sectionVisibleFor,
         bayTemplate,
         columnCount,
@@ -285,6 +290,7 @@ export function loadConfig(configPath: string): EfsStaticConfig {
 
     console.log(`Loaded config from ${configPath}:`)
     console.log(`  Mode: ${layoutMode}`)
+    console.log(`  Look: ${config.look}`)
     console.log(
         `  Radar range: ${config.radarRangeNm}nm, arrival: ${config.arrivalRangeNm}nm / ETA≤${config.arrivalEtaMinutes}min, ground: ${config.groundRangeNm}nm`
     )

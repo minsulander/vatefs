@@ -6,6 +6,7 @@
     @create="onDialogCreate"
   />
   <TrashDialog v-model="trashOpen" />
+  <PrintDialog v-model="printOpen" />
 
   <div class="efs-bottom-bar">
     <div class="bottom-bar-side bottom-bar-left">
@@ -28,17 +29,23 @@
         location="top"
         :offset="8"
         :close-on-content-click="false"
+        :disabled="store.isPaperLook"
       >
         <template #activator="{ props: menuProps }">
           <button
             type="button"
             class="bar-icon-btn info-strips-btn"
-            :class="{ 'has-restore': hasMenuRestoreHint }"
-            title="Info strips"
-            v-bind="menuProps"
+            :class="{ 'has-restore': hasMenuRestoreHint && !store.isPaperLook }"
+            :disabled="store.isPaperLook"
+            :title="
+              store.isPaperLook
+                ? 'Info strips — use Print for blank / HINDER / etc. (ESGG)'
+                : 'Info strips'
+            "
+            v-bind="store.isPaperLook ? undefined : menuProps"
           >
             <v-icon :size="barIconSize">mdi-information-outline</v-icon>
-            <span v-if="hasMenuRestoreHint" class="info-dot" aria-hidden="true" />
+            <span v-if="hasMenuRestoreHint && !store.isPaperLook" class="info-dot" aria-hidden="true" />
           </button>
         </template>
 
@@ -113,6 +120,7 @@
       </v-menu>
 
       <div
+        v-if="!store.isPaperLook"
         class="bay-bg-slider"
         title="Strip bay background · double-click to reset"
         @pointerdown.stop
@@ -138,87 +146,102 @@
     </div>
 
     <div class="tiny-strips">
-      <div
-        class="tiny-strip tiny-strip-vehicle"
-        draggable="true"
-        @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
-        @dragend="onTinyDragEnd"
-        @click="() => onTinyClick('vehicle')"
-        @touchstart="(e) => onTinyTouchStart(e, 'vehicle')"
-        @touchmove.prevent="onTinyTouchMove"
-        @touchend="(e) => onTinyTouchEnd(e, 'vehicle')"
-        @touchcancel="onTinyTouchCancel"
+      <!-- Paper look: printer sits where ESSA strip-create buttons are (center) -->
+      <button
+        v-if="showPrintQueue"
+        type="button"
+        class="bar-icon-btn print-btn tiny-print-btn"
+        :class="{ 'has-pending': pendingPrintCount > 0 }"
+        title="Print strip"
+        @click="printOpen = true"
       >
-        <div class="tiny-body">
-          <span class="tiny-label">VEHICLE</span>
-        </div>
-      </div>
+        <v-icon :size="barIconSize">mdi-printer</v-icon>
+        <span v-if="pendingPrintCount > 0" class="print-badge">{{ pendingPrintCount }}</span>
+      </button>
 
-      <template v-if="store.myAirports.length > 0">
+      <template v-if="!store.isPaperLook">
         <div
-          class="tiny-strip tiny-strip-dep"
+          class="tiny-strip tiny-strip-vehicle"
           draggable="true"
-          @dragstart="(e) => onTinyDragStart(e, 'vfrDep')"
+          @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
           @dragend="onTinyDragEnd"
-          @click="() => onTinyClick('vfrDep')"
-          @touchstart="(e) => onTinyTouchStart(e, 'vfrDep')"
+          @click="() => onTinyClick('vehicle')"
+          @touchstart="(e) => onTinyTouchStart(e, 'vehicle')"
           @touchmove.prevent="onTinyTouchMove"
-          @touchend="(e) => onTinyTouchEnd(e, 'vfrDep')"
+          @touchend="(e) => onTinyTouchEnd(e, 'vehicle')"
           @touchcancel="onTinyTouchCancel"
         >
           <div class="tiny-body">
-            <span class="tiny-label">VFR DEP</span>
+            <span class="tiny-label">VEHICLE</span>
           </div>
         </div>
 
-        <div
-          class="tiny-strip tiny-strip-arr"
-          draggable="true"
-          @dragstart="(e) => onTinyDragStart(e, 'vfrArr')"
-          @dragend="onTinyDragEnd"
-          @click="() => onTinyClick('vfrArr')"
-          @touchstart="(e) => onTinyTouchStart(e, 'vfrArr')"
-          @touchmove.prevent="onTinyTouchMove"
-          @touchend="(e) => onTinyTouchEnd(e, 'vfrArr')"
-          @touchcancel="onTinyTouchCancel"
-        >
-          <div class="tiny-body">
-            <span class="tiny-label">VFR ARR</span>
+        <template v-if="store.myAirports.length > 0">
+          <div
+            class="tiny-strip tiny-strip-dep"
+            draggable="true"
+            @dragstart="(e) => onTinyDragStart(e, 'vfrDep')"
+            @dragend="onTinyDragEnd"
+            @click="() => onTinyClick('vfrDep')"
+            @touchstart="(e) => onTinyTouchStart(e, 'vfrDep')"
+            @touchmove.prevent="onTinyTouchMove"
+            @touchend="(e) => onTinyTouchEnd(e, 'vfrDep')"
+            @touchcancel="onTinyTouchCancel"
+          >
+            <div class="tiny-body">
+              <span class="tiny-label">VFR DEP</span>
+            </div>
           </div>
-        </div>
+
+          <div
+            class="tiny-strip tiny-strip-arr"
+            draggable="true"
+            @dragstart="(e) => onTinyDragStart(e, 'vfrArr')"
+            @dragend="onTinyDragEnd"
+            @click="() => onTinyClick('vfrArr')"
+            @touchstart="(e) => onTinyTouchStart(e, 'vfrArr')"
+            @touchmove.prevent="onTinyTouchMove"
+            @touchend="(e) => onTinyTouchEnd(e, 'vfrArr')"
+            @touchcancel="onTinyTouchCancel"
+          >
+            <div class="tiny-body">
+              <span class="tiny-label">VFR ARR</span>
+            </div>
+          </div>
+
+          <div
+            class="tiny-strip tiny-strip-cross"
+            draggable="true"
+            @dragstart="(e) => onTinyDragStart(e, 'cross')"
+            @dragend="onTinyDragEnd"
+            @click="() => onTinyClick('cross')"
+            @touchstart="(e) => onTinyTouchStart(e, 'cross')"
+            @touchmove.prevent="onTinyTouchMove"
+            @touchend="(e) => onTinyTouchEnd(e, 'cross')"
+            @touchcancel="onTinyTouchCancel"
+          >
+            <div class="tiny-body">
+              <span class="tiny-label">VFR CRS</span>
+            </div>
+          </div>
+        </template>
 
         <div
-          class="tiny-strip tiny-strip-cross"
+          class="tiny-strip tiny-strip-note"
           draggable="true"
-          @dragstart="(e) => onTinyDragStart(e, 'cross')"
+          @dragstart="(e) => onTinyDragStart(e, 'note')"
           @dragend="onTinyDragEnd"
-          @click="() => onTinyClick('cross')"
-          @touchstart="(e) => onTinyTouchStart(e, 'cross')"
+          @click="() => onTinyClick('note')"
+          @touchstart="(e) => onTinyTouchStart(e, 'note')"
           @touchmove.prevent="onTinyTouchMove"
-          @touchend="(e) => onTinyTouchEnd(e, 'cross')"
+          @touchend="(e) => onTinyTouchEnd(e, 'note')"
           @touchcancel="onTinyTouchCancel"
         >
           <div class="tiny-body">
-            <span class="tiny-label">VFR CRS</span>
+            <span class="tiny-label">NOTE</span>
           </div>
         </div>
       </template>
-
-      <div
-        class="tiny-strip tiny-strip-note"
-        draggable="true"
-        @dragstart="(e) => onTinyDragStart(e, 'note')"
-        @dragend="onTinyDragEnd"
-        @click="() => onTinyClick('note')"
-        @touchstart="(e) => onTinyTouchStart(e, 'note')"
-        @touchmove.prevent="onTinyTouchMove"
-        @touchend="(e) => onTinyTouchEnd(e, 'note')"
-        @touchcancel="onTinyTouchCancel"
-      >
-        <div class="tiny-body">
-          <span class="tiny-label">NOTE</span>
-        </div>
-      </div>
     </div>
 
     <div class="bottom-bar-side bottom-bar-right">
@@ -257,6 +280,7 @@ import {
 import Clock from './Clock.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import TrashDialog from './TrashDialog.vue'
+import PrintDialog from './PrintDialog.vue'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 
@@ -265,6 +289,11 @@ const chromeScale = useEfsChromeScaleValue()
 const barIconSize = computed(() => Math.max(14, Math.round(18 * chromeScale.value)))
 const bayBgIconSize = computed(() => Math.max(16, Math.round(22 * chromeScale.value)))
 const bayBgBrightness = useBayBgBrightness()
+const printOpen = ref(false)
+const showPrintQueue = computed(() => store.isPaperLook)
+const pendingPrintCount = computed(() =>
+  store.stripPrintMode === 'manual' ? store.pendingPrintFlights.length : 0,
+)
 
 function onBayBgInput(event: Event) {
   const el = event.target as HTMLInputElement
@@ -707,17 +736,67 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   border-radius: 2px;
 }
 
-.bar-icon-btn:hover {
+.bar-icon-btn:hover:not(:disabled) {
   color: #e8e8e8;
   border-color: #6b7280;
   background: #3f4248;
 }
 
-.trash-btn.drag-over {
+.bar-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  color: #6b7280;
+}
+
+.trash-btn.drag-over,
+.trash-btn.trash-receiving {
   color: #fecaca;
   border-color: #ef4444;
   background: #5c2a2a;
   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+}
+
+.trash-btn.trash-receiving {
+  animation: trash-receive-pulse 0.45s ease-out;
+}
+
+@keyframes trash-receive-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.tiny-print-btn {
+  width: calc(36px * var(--bb));
+  height: calc(28px * var(--bb));
+}
+
+.print-btn.has-pending {
+  color: #f6d365;
+  border-color: #a8842a;
+}
+
+.print-badge {
+  position: absolute;
+  top: calc(-4px * var(--bb));
+  right: calc(-6px * var(--bb));
+  min-width: calc(14px * var(--bb));
+  height: calc(14px * var(--bb));
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #c9a227;
+  color: #1e2022;
+  font-size: calc(9px * var(--bb));
+  font-weight: 700;
+  line-height: calc(14px * var(--bb));
+  text-align: center;
+  box-shadow: 0 0 0 1px #35373c;
 }
 
 .info-strips-btn.has-restore {

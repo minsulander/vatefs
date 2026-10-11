@@ -47,29 +47,46 @@
         title="Settings"
       />
 
+      <!-- ESGG paper: RWY + Roles (same order as ESSA) -->
+      <div v-if="efs.esggRolesMode" class="top-status-cluster">
+        <span
+          class="essa-status-btn esgg-rwy-label"
+          :title="esggRwyTitle"
+        >{{ esggRwyLabel }}</span>
+        <button
+          type="button"
+          class="essa-status-btn"
+          :class="{ 'is-manual': efs.esggRolesManual }"
+          :title="esggRolesStatusTitle"
+          @click="esggRolesDialog = true"
+        >
+          Roles: {{ esggRolesLabel }}
+        </button>
+      </div>
+
       <!-- ESSA status indicators (also editable via menu) -->
-      <button
-        v-if="efs.essaRolesMode"
-        type="button"
-        class="essa-status-btn"
-        :class="{ 'is-manual': efs.essaRwyConfigManual }"
-        :title="essaRwyStatusTitle"
-        @click="essaRwyDialog = true"
-        @mouseenter="onEssaRwyHoverEnter"
-        @mouseleave="onEssaRwyHoverLeave"
-      >
-        {{ essaRwyLabel || 'RWY: -' }}
-      </button>
-      <button
-        v-if="efs.essaRolesMode"
-        type="button"
-        class="essa-status-btn"
-        :class="{ 'is-manual': efs.essaRolesManual }"
-        :title="essaRolesStatusTitle"
-        @click="essaRolesDialog = true"
-      >
-        Roles: {{ essaRolesLabel }}
-      </button>
+      <div v-if="efs.essaRolesMode" class="top-status-cluster">
+        <button
+          type="button"
+          class="essa-status-btn"
+          :class="{ 'is-manual': efs.essaRwyConfigManual }"
+          :title="essaRwyStatusTitle"
+          @click="essaRwyDialog = true"
+          @mouseenter="onEssaRwyHoverEnter"
+          @mouseleave="onEssaRwyHoverLeave"
+        >
+          {{ essaRwyLabel || 'RWY: -' }}
+        </button>
+        <button
+          type="button"
+          class="essa-status-btn"
+          :class="{ 'is-manual': efs.essaRolesManual }"
+          :title="essaRolesStatusTitle"
+          @click="essaRolesDialog = true"
+        >
+          Roles: {{ essaRolesLabel }}
+        </button>
+      </div>
 
       <Teleport to="body">
         <div
@@ -163,8 +180,29 @@
           </div>
         </div>
       </v-dialog>
-      <!-- ATIS / airports (hidden in ESSA mode — RWY config indicator covers runways) -->
-      <template v-if="!efs.essaRolesMode">
+      <v-dialog v-model="esggRolesDialog" max-width="280" scrim content-class="essa-roles-dialog-wrap">
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-header">Roles</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in esggRoleOptions"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftEsggRoles.includes(role) }"
+            >
+              <input v-model="draftEsggRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ role }}</span>
+            </label>
+          </div>
+          <div class="essa-roles-actions">
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="esggRolesDialog = false">Cancel</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEsggRolesAuto">Auto</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEsggRolesOk">OK</button>
+          </div>
+        </div>
+      </v-dialog>
+      <!-- ATIS / airports: classic 1RWY/2RWY only (hidden ESSA roles + paper/ESGG) -->
+      <template v-if="!efs.essaRolesMode && !efs.isPaperLook">
       <span
         v-for="info in atisDisplayItems"
         :key="info.airport"
@@ -199,11 +237,11 @@
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
       </template>
-      <template v-if="showDclControls">
+      <div v-if="showDclControls" class="top-status-cluster">
         <v-btn
           variant="text"
           size="small"
-          class="ml-2 dcl-btn"
+          class="dcl-btn"
           :class="{
             'text-grey': !dclConnected,
             'text-green': dclConnected,
@@ -241,7 +279,12 @@
             </div>
           </div>
         </v-menu>
-      </template>
+        <span
+          v-if="efs.esggRolesMode"
+          class="essa-status-btn esgg-rwy-label"
+          :title="esggRwyTitle"
+        >{{ esggRwyLabel }}</span>
+      </div>
       <v-spacer />
       <!-- Config selector -->
       <v-menu
@@ -294,9 +337,10 @@
         </div>
       </v-menu>
 
-      <!-- Right chrome (L→R): SEP/DLV/GAP · ATIS · QNH · OK/OFF · Fullscreen -->
+      <!-- Right chrome (L→R): SEP/DLV/GAP (ESSA) · ATIS · QNH · OK/OFF · Fullscreen -->
       <div class="top-right-chrome">
-        <div class="top-sep-group" title="Separation">
+        <!-- SEP/DLV/DEP GAP — ESSA/SAAB only (hidden in ESGG paper mode) -->
+        <div v-if="!efs.isPaperLook" class="top-sep-group" title="Separation">
           <div class="top-sep-cell">
             <span class="top-sep-lbl">SEP</span>
             <span class="top-sep-val">{{ sepIndicators.sep }}</span>
@@ -574,6 +618,10 @@ const essaGndRoles = ['GND-E', 'GND-N', 'GND-W'] as const
 const essaTwrRoles = ['TWR-E', 'TWR-W'] as const
 const essaRolesDialog = ref(false)
 const draftEssaRoles = ref<string[]>([])
+
+const esggRoleOptions = ['TWR', 'GND', 'CD'] as const
+const esggRolesDialog = ref(false)
+const draftEsggRoles = ref<string[]>([])
 const essaRwyDialog = ref(false)
 const draftEssaRwyId = ref<string | null>(null)
 /** Minute tick so night/day letter auto-switch updates without ES change */
@@ -700,6 +748,41 @@ const essaRolesStatusTitle = computed(() => {
     ? `ESSA roles (manual override): ${essaRolesLabel.value}`
     : 'ESSA roles (auto)'
 })
+
+function sortEsggRolesDisplay(roles: string[]): string[] {
+  const order = ['TWR', 'GND', 'CD']
+  return [...roles].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+}
+
+const esggRolesLabel = computed(() => {
+  const roles = sortEsggRolesDisplay(efs.esggRoles)
+  return roles.length ? roles.join(', ') : '-'
+})
+
+const esggRolesStatusTitle = computed(() => {
+  return efs.esggRolesManual
+    ? `ESGG roles (manual override): ${esggRolesLabel.value}`
+    : `ESGG roles (auto): ${esggRolesLabel.value}`
+})
+
+/** Active ESGG runway(s) from ATIS / rwyconfig — only 03 / 21. */
+const esggRwyLabel = computed(() => {
+  const info = efs.atisInfo.find((a) => a.airport.toUpperCase() === 'ESGG')
+  if (!info) return 'RWY: -'
+  const arr = info.arrRunways ?? []
+  const dep = info.depRunways ?? []
+  const set = new Set<string>()
+  for (const r of [...arr, ...dep]) {
+    const m = (r || '').trim().toUpperCase().match(/^(\d{1,2})/)
+    if (!m) continue
+    const n = String(parseInt(m[1]!, 10)).padStart(2, '0')
+    if (n === '03' || n === '21') set.add(n)
+  }
+  if (!set.size) return 'RWY: -'
+  return `RWY: ${[...set].join('/')}`
+})
+
+const esggRwyTitle = computed(() => esggRwyLabel.value)
 
 /** Active ESSA ARR/DEP from EuroScope (via ATIS/rwyconfig) */
 const essaEsRunways = computed(() => {
@@ -838,6 +921,22 @@ function onEssaRolesAuto() {
   essaRolesDialog.value = false
 }
 
+watch(esggRolesDialog, (open) => {
+  if (open) {
+    draftEsggRoles.value = [...efs.esggRoles]
+  }
+})
+
+function onEsggRolesOk() {
+  efs.setEsggRoles([...draftEsggRoles.value], true)
+  esggRolesDialog.value = false
+}
+
+function onEsggRolesAuto() {
+  efs.setEsggRoles([], false)
+  esggRolesDialog.value = false
+}
+
 function onEssaRwyOk() {
   if (draftEssaRwyId.value) {
     efs.setEssaRwyConfig(draftEssaRwyId.value, true)
@@ -948,6 +1047,9 @@ const hasTwrRole = computed(() => {
   if (efs.essaRolesMode) {
     return efs.essaRoles.some((r) => r === 'TWR-E' || r === 'TWR-W' || r.startsWith('TWR'))
   }
+  if (efs.esggRolesMode) {
+    return efs.esggRoles.includes('TWR')
+  }
   return efs.myRole === 'TWR'
 })
 
@@ -956,9 +1058,15 @@ type TopAtisEntry = { letter: string; kind: 'arr' | 'dep' | 'single' }
 const topAtisEntries = computed((): TopAtisEntry[] => {
   const info = topMetInfo.value
   if (!info) return []
+  const single = (info.atis || '').trim().toUpperCase()
+
+  // ESGG / paper: single ATIS only (no ARR/DEP split)
+  if (efs.isPaperLook) {
+    return single ? [{ letter: single, kind: 'single' }] : []
+  }
+
   const arr = (info.arrAtis || '').trim().toUpperCase()
   const dep = (info.depAtis || '').trim().toUpperCase()
-  const single = (info.atis || '').trim().toUpperCase()
 
   if (hasTwrRole.value) {
     // TWR: colour ARR/DEP only when both letters are present
@@ -976,6 +1084,9 @@ const topAtisEntries = computed((): TopAtisEntry[] => {
 const topAtisTitle = computed(() => {
   const info = topMetInfo.value
   if (!info) return 'ATIS'
+  if (efs.isPaperLook) {
+    return info.atis ? `ATIS ${info.atis}` : 'ATIS'
+  }
   if (hasTwrRole.value) {
     const parts: string[] = []
     if (info.arrAtis) parts.push(`ARR ${info.arrAtis}`)
@@ -1030,9 +1141,10 @@ function onConfigClick(file: string) {
   }
 }
 
-/** ESSA: CD in selected roles; other airports: DEL position */
+/** ESSA/ESGG: CD in selected roles; other airports: DEL position */
 const hasCdRole = computed(() => {
   if (efs.essaRolesMode) return efs.essaRoles.includes('CD')
+  if (efs.esggRolesMode) return efs.esggRoles.includes('CD')
   return efs.myRole === 'DEL'
 })
 
@@ -1145,7 +1257,8 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: calc(2px * var(--tb));
+  /* Wider gap when the bar has room; tightens on narrow viewports */
+  gap: clamp(calc(4px * var(--tb)), 0.7vw, calc(14px * var(--tb)));
   padding: 0 calc(6px * var(--tb));
   font-size: calc(13px * var(--tb)) !important;
   overflow: hidden;
@@ -1154,6 +1267,14 @@ onUnmounted(() => {
 /* Prefer chrome-scale compression over flex-squashing text/controls */
 .efs-top-bar > :not(.v-spacer) {
   flex-shrink: 0;
+}
+
+/* RWY / Roles cluster — roomier spacing when width allows */
+.top-status-cluster {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: clamp(calc(8px * var(--tb)), 1.1vw, calc(22px * var(--tb)));
 }
 
 .top-menu-btn {
@@ -1238,6 +1359,11 @@ onUnmounted(() => {
 
 .essa-status-btn.is-manual:hover {
   color: #fbbf24;
+}
+
+span.essa-status-btn.esgg-rwy-label {
+  cursor: default;
+  pointer-events: none;
 }
 
 /* Vuetify buttons in the bar follow chrome scale */

@@ -114,6 +114,12 @@ export interface SectionRule {
     withinCtr?: boolean
 
     /**
+     * IFR filter: true → I/Y only; false → V/Z (and other non-IFR) only.
+     * Omit to match any flight rules.
+     */
+    ifr?: boolean
+
+    /**
      * Whether the flight's assigned runway is an active departure runway.
      * For departures/local on ground: checks depRwy
      * For arrivals/local airborne: checks arrRwy
@@ -527,6 +533,9 @@ export interface EfsStaticConfig {
     /** Layout mode — multiAirport expands bayTemplate; essaRoles filters sections by ESSA positions */
     layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
 
+    /** Strip chrome: saab (default) or paper (ESGG FPS). Controls print sound / manual print. */
+    look?: 'saab' | 'paper'
+
     /**
      * Per-section visibility families for essaRoles mode (sectionId → CD/GND/TWR).
      * Built from YAML `visibleFor` at load time.
@@ -538,6 +547,12 @@ export interface EfsStaticConfig {
 
     /** True when essaRoles were set manually (skip auto-detect until cleared) */
     essaRolesManual?: boolean
+
+    /** Selected ESGG paper positions (CD / GND / TWR) */
+    esggRoles?: Array<'CD' | 'GND' | 'TWR'>
+
+    /** True when esggRoles were set manually (skip auto-detect until cleared) */
+    esggRolesManual?: boolean
 
     /** Bay template for multiAirport mode (logical section ids) */
     bayTemplate?: {

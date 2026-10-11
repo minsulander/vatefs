@@ -7,7 +7,7 @@
  *
  * RWY 21: DETNA/SABAK/TOPLA/VADIN → W; LABAN/LUKAX/SULIX/NEGIL/PEVAK/MISVI → E
  * RWY 03: DETNA/LABAN/LUKAX/NEGIL/SABAK/TAKOV/TISAB → E; TOPLA/VADIN/SOJWI → W
- * MISAP: 03 → W, 21 → E
+ * MISAP: 03 → E, 21 → W
  */
 
 import type { ControllerRole } from "./config-types.js"
@@ -91,11 +91,11 @@ function prefsForRwy(rwy: string): EsggSidPref[] | undefined {
     return undefined
 }
 
-/** Split APP side for MISAP: 03→W, 21→E. */
+/** Split APP side for MISAP: 03→E, 21→W. */
 export function esggMisapAppSide(arrRwy?: string): EsggAppSide {
     const r = normalizeEsggRwy(arrRwy)
-    if (r === "03") return "W"
-    return "E" // 21 or unknown → E
+    if (r === "03") return "E"
+    return "W" // 21 or unknown → W
 }
 
 /**

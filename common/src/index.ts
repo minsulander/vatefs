@@ -12,10 +12,14 @@ export type {
     Gap,
     DclMode,
     UiSettings,
+    StripPrintSound,
+    StripPrintMode,
+    StripLook,
+    PaperInfoKind,
     AirportAtisInfo
 } from "./types.js"
 
-export { DEFAULT_UI_SETTINGS } from "./types.js"
+export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind } from "./types.js"
 
 export {
     ESSA_RWY_COMBINATIONS,
@@ -53,6 +57,7 @@ export {
     parseAltitudeToFeet,
     parseManualCfl,
     formatStripAltitude,
+    formatPaperCruiseLevel,
     isApproachClearanceLabel,
 } from "./altitude-format.js"
 
@@ -113,6 +118,7 @@ export type {
     ListDeletedStripsMessage,
     RestoreStripMessage,
     DeletedStripInfo,
+    PendingPrintFlightInfo,
     DeletedStripsMessage,
     DclActionMessage,
     DclRejectMessage,
@@ -132,6 +138,7 @@ export type {
     SetColumnCountMessage,
     UpdateUserSettingsMessage,
     SetEssaRolesMessage,
+    SetEsggRolesMessage,
     SetRwyFlagMessage,
     ConfigInfo,
     ConfigListMessage,

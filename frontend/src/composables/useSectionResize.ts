@@ -18,13 +18,15 @@ export function useSectionResize() {
   const resizeState = ref<ResizeState | null>(null)
 
   const MIN_HEIGHT = 80
-  /** Approximate strip row height — snap divider to strip-aligned positions. */
+  /** Approximate strip row height — snap divider to strip-aligned positions (SAAB only). */
   const SNAP_STRIP_PX = 44
   const SNAP_THRESHOLD_PX = 10
 
   function snapHeight(height: number, pairTotal: number): number {
     const maxH = pairTotal - MIN_HEIGHT
     let h = Math.max(MIN_HEIGHT, Math.min(maxH, height))
+    // ESGG paper: free drag — no equal-split / strip-grid snap on bay headers
+    if (store.isPaperLook) return Math.round(h)
     // Snap to equal split
     const half = pairTotal / 2
     if (Math.abs(h - half) <= SNAP_THRESHOLD_PX) return Math.round(half)

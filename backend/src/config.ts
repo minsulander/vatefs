@@ -41,6 +41,7 @@ export {
     removeOnlineController,
     getControllerFrequency,
     getControllerCallsign,
+    getCallsignForPositionId,
     getControllerPositionId,
     getFrequencyForCallsign,
     clearOnlineControllers,
@@ -51,8 +52,16 @@ export {
     isEssaRolesConfig,
     setEssaRoles,
     refreshEssaRolesIfAuto,
-    restoreEssaRolesFromSettings
+    restoreEssaRolesFromSettings,
+    isEsggRolesConfig,
+    setEsggRoles,
+    refreshEsggRolesIfAuto,
+    restoreEsggRolesFromSettings,
+    hasEsggPositionRole,
+    getActingControllerRole,
 } from "./static-config.js"
+
+export type { EsggPositionRole } from "./esgg-roles.js"
 
 // Re-export rules engine functions
 export {

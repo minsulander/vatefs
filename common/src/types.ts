@@ -44,6 +44,11 @@ export interface FlightStrip {
     clearedAltitude?: string   // Cleared altitude/FL
     assignedHeading?: string   // Assigned heading
     assignedSpeed?: string     // Assigned speed
+    /**
+     * Filed cruise TAS from FPL (ICAO group), e.g. "N0448", "M078".
+     * Paper DEP strips show this between C/S and FRUL/ATYP; ARR omits it.
+     */
+    tas?: string
 
     // Times
     eobt?: string              // Estimated Off Block Time (HHmm)
@@ -66,6 +71,8 @@ export interface FlightStrip {
     ctoc?: string
     /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
     qnhGiven?: number
+    /** ATIS letter stamped with QNH (paper FPS col 6) */
+    atisGiven?: string
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
     /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
     ctotCancelled?: boolean
@@ -97,7 +104,11 @@ export interface FlightStrip {
 
     // Clearance dialog data
     direct?: string              // Direct-to waypoint (for AHDG display in dialog)
-    clearance?: boolean          // Clearance flag (for dialog OK/Cancel behavior)
+    clearance?: boolean          // Clearance flag (for dialog OK/Cancel behavior / ES CLR)
+    /** Paper strip col 4: clearance has been read. Auto-set when readback or ES CLR. */
+    clearanceRead?: boolean
+    /** Paper strip col 5: CLR correct — toggles EuroScope CLR flag. */
+    clearanceReadback?: boolean
 
     // DCL (Data-Link Clearance) state
     dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
@@ -133,6 +144,11 @@ export interface FlightStrip {
 
     // Special strip fields
     noteText?: string            // Text content for note strips
+    /**
+     * Paper-look printed info / blank strip template (note strips only).
+     * When set, the strip uses a fixed FPS-style layout instead of free note text.
+     */
+    paperInfoKind?: PaperInfoKind
     /**
      * Free-text STD field on local vehicle strips (not EuroScope-linked).
      * Distinct from stand / scratchpad HP on flight strips.
@@ -178,6 +194,8 @@ export interface Section {
     title: string
     height?: number            // Section height in pixels (for resize)
     addFromTop?: boolean       // Whether new strips are added at top (default: true) or bottom
+    /** When true, omit the section header bar (strips only). Used by paper ESGG layout. */
+    hideHeader?: boolean
 }
 
 export interface Gap {
@@ -201,6 +219,50 @@ export interface EfsLayout {
 }
 
 export type DclMode = 'manual' | 'auto' | 'semi'
+
+/** Print / new-strip notification sound (client-side MP3). */
+export type StripPrintSound = 'off' | 'short' | 'long'
+
+/** Paper-look strip print mode (ignored unless config look is paper). */
+export type StripPrintMode = 'auto' | 'manual'
+
+/** Visual strip chrome selected by YAML config. */
+export type StripLook = 'saab' | 'paper'
+
+/** Paper FPS info / blank strip templates (printed via printer dialog). */
+export type PaperInfoKind =
+    | 'empty'
+    | 'empty_frame'
+    | 'empty_arr'
+    | 'empty_dep'
+    | 'hinder'
+    | 'snorojning'
+    | 'prel_rojning'
+    | 'bogsering'
+
+export const PAPER_INFO_KINDS: readonly PaperInfoKind[] = [
+    'empty',
+    'empty_frame',
+    'empty_arr',
+    'empty_dep',
+    'hinder',
+    'snorojning',
+    'prel_rojning',
+    'bogsering',
+] as const
+
+export function isPaperInfoKind(value: unknown): value is PaperInfoKind {
+    return (
+        value === 'empty' ||
+        value === 'empty_frame' ||
+        value === 'empty_arr' ||
+        value === 'empty_dep' ||
+        value === 'hinder' ||
+        value === 'snorojning' ||
+        value === 'prel_rojning' ||
+        value === 'bogsering'
+    )
+}
 
 /** UI preferences persisted in VatEFSsettings.json (local backend). */
 export interface UiSettings {
@@ -230,14 +292,21 @@ export interface UiSettings {
      */
     autoDepSquawkCfl: boolean
     /**
-     * Keep bay columns equal width (flex 1 1 0). When off, columns may size by content.
-     */
-    equalBayColumns: boolean
-    /**
      * Show the "A" (ATC) marker next to TOBT when TOBT was set by ATC.
      * Pilot "P" always shows when applicable. Default on.
      */
     showTobtSetByA: boolean
+    /**
+     * Play a printer-style sound in the browser when a new strip is added.
+     * Default: short. Suppressed during bulk refresh / reconnect sync.
+     * Only used when config look is paper.
+     */
+    stripPrintSound: StripPrintSound
+    /**
+     * Paper-look only: auto = create strips when eligible (default);
+     * manual = wait for an explicit print action per flight.
+     */
+    stripPrintMode: StripPrintMode
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -250,8 +319,9 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     showAppDepXcFrequency: false,
     autoParkEnabled: true,
     autoDepSquawkCfl: false,
-    equalBayColumns: true,
     showTobtSetByA: true,
+    stripPrintSound: 'short',
+    stripPrintMode: 'auto',
 }
 
 export interface AirportAtisInfo {

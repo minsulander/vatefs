@@ -25,6 +25,8 @@ export interface Flight {
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
     route?: string
+    /** Filed cruise TAS (N0448 / M078) — from FPL route group or VATSIM cruise_tas */
+    tas?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
     ete?: number               // ES prediction points ≈ minutes to destination
     /** Flight plan item 18 remarks (from EuroScope GetRemarks) */
@@ -63,7 +65,11 @@ export interface Flight {
     /** TopSky approach clearance type (CAT2/CAT3/OS/…) when cfl is 1 or 2 */
     approachType?: string
     groundstate?: GroundState
-    clearance?: boolean       // Clearance flag
+    clearance?: boolean       // Clearance flag (EuroScope CLR)
+    /** Paper FPS col 4: clearance has been read */
+    clearanceRead?: boolean
+    /** Paper FPS col 5: CLR correct — toggles EuroScope CLR flag */
+    clearanceReadback?: boolean
     stand?: string            // Parking stand/gate
 
     // Speed/altitude assignments
@@ -97,6 +103,8 @@ export interface Flight {
     ctoc?: string
     /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
     qnhGiven?: number
+    /** ATIS letter stamped with QNH (paper FPS col 6) */
+    atisGiven?: string
     taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
     ctot?: string                 // Calculated Take Off Time (HHmm)
     /** Had CTOT, now cancelled (cdmSts SLC) — strip shows SCL in CTOT slot */
@@ -125,7 +133,17 @@ export interface Flight {
     // Backend-managed state flags
     /** Cleared to land — VCH strip annotation 3 ("CTL") */
     clearedToLand?: boolean
-    missedApproach?: boolean  // Aircraft on missed approach (scratchpad MISAP_)
+    missedApproach?: boolean  // Aircraft on missed approach (TopSky MISAP_ and/or EFS soft G/A)
+    /**
+     * EFS soft go-around — strip annotation 5 ("EFSGA"), synced via ES to other EFS users.
+     * Not TopSky MISAP_ (paper mode keeps TopSky G/A automation separate).
+     */
+    efsGoAround?: boolean
+    /**
+     * Until this timestamp, keep soft EFS missedApproach against empty-scratch CAD
+     * while annotation echo catches up.
+     */
+    missedApproachHoldUntil?: number
     /** TopSky ROF requester login callsign (from /LAM/ROF/{cs}; persisted until transfer) */
     rofRequestFrom?: string
     /** Epoch ms until inbound ROF SI/XFER flash ends (request itself stays until XFER) */
@@ -149,6 +167,8 @@ export interface Flight {
 
     /** Until this timestamp, ignore plugin clears of handoffTarget (EFS-initiated XFER optimistic) */
     handoffOptimisticUntil?: number
+    /** Until this timestamp, ignore empty tracking echoes after EFS ASSUME */
+    ownershipOptimisticUntil?: number
     /** Until this timestamp, ignore stale non-empty groundstate from ES after NOSTATE clear */
     groundstateClearedUntil?: number
     /**
@@ -156,6 +176,11 @@ export interface Flight {
      * (e.g. TopSky still reports ARR while aircraft is on runway after TXI).
      */
     groundstateHoldUntil?: number
+    /**
+     * Until this timestamp, ignore ES clearance that differs from EFS-set value
+     * (stale CAD echo after CLR correct / voice CLR / drag setClearance).
+     */
+    clearanceHoldUntil?: number
     /**
      * Until this timestamp, ignore empty scratch for remarks/HP.
      * Set when TopSky protocol scratch (/ROF/…) is about to be cleared so wipe does not clear strip fields.
@@ -201,8 +226,14 @@ export interface FlightPlanDataUpdateMessage {
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
     route?: string
+    /**
+     * Filed TAS from EuroScope GetTrueAirspeed (knots), or preformatted "N0430".
+     */
+    tas?: number | string
     eobt?: string              // Estimated Off Block Time (HHmm)
     ete?: number               // ES prediction points ≈ minutes to destination
+    /** Filed cruise altitude from FPL (feet) — used when RFL/CAD final is unset */
+    altitude?: number
     rfl?: number              // Requested flight level (feet)
     /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
     xfl?: number
@@ -237,6 +268,8 @@ export interface ControllerAssignedDataUpdateMessage {
     clearance?: boolean
     /** VCH CTL — strip annotation 3 */
     clearedToLand?: boolean
+    /** EFS soft G/A — strip annotation 5 ("EFSGA") */
+    efsGoAround?: boolean
     /** EuroScope communication type: V/R/T/0 */
     communicationType?: string
     scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")

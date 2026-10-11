@@ -5,6 +5,7 @@
 import assert from "node:assert/strict"
 import {
     buildCombinedScratch,
+    groundstateFromScratch,
     isProtocolScratch,
     parseCombinedScratch,
 } from "./scratchpad.js"
@@ -76,6 +77,18 @@ check("other TopSky protocol does not become HP", () => {
 check("NOSTATE / MISAP leave fields", () => {
     assert.deepEqual(parseCombinedScratch("NOSTATE"), { remarks: null, hp: null })
     assert.deepEqual(parseCombinedScratch("MISAP_"), { remarks: null, hp: null })
+})
+
+check("GS scratch both modes (LINEUP / xLU) is not remarks", () => {
+    assert.deepEqual(parseCombinedScratch("LINEUP"), { remarks: null, hp: null })
+    assert.deepEqual(parseCombinedScratch("xLU"), { remarks: null, hp: null })
+    assert.deepEqual(parseCombinedScratch("TXO"), { remarks: null, hp: null })
+    assert.equal(isProtocolScratch("LINEUP"), true)
+    assert.equal(isProtocolScratch("xLU"), true)
+    assert.equal(groundstateFromScratch("LINEUP"), "LINEUP")
+    assert.equal(groundstateFromScratch("xLU"), "LINEUP")
+    assert.equal(groundstateFromScratch("TXO"), "TAXI")
+    assert.equal(groundstateFromScratch(".URNAV"), undefined)
 })
 
 check("build roundtrip", () => {

@@ -6,67 +6,125 @@
     @create="onDialogCreate"
   />
   <div
+    ref="sectionRoot"
     class="efs-section"
+    :class="{
+      'efs-section--no-header': !!section.hideHeader,
+      'efs-section--stick-bottom': stickBottomZone,
+    }"
     :data-section-id="section.id"
     :style="sectionStyle"
   >
     <div
+      v-if="!section.hideHeader"
       class="section-header"
       :class="[
         { 'no-resize': isFirstSection },
         essaHeaderClass,
+        { 'section-header--paper': store.isPaperLook },
+        { 'header-drop-active': headerDropActive },
       ]"
+      :title="
+        store.isPaperLook && !isFirstSection
+          ? 'Drag to adjust height · double-click to reset'
+          : undefined
+      "
+      @mousedown="store.isPaperLook ? onResizeStart($event) : undefined"
+      @touchstart="store.isPaperLook ? onResizeStart($event) : undefined"
+      @dblclick="store.isPaperLook ? onResizeReset($event) : undefined"
+      @dragover.prevent="onHeaderDragOver"
+      @dragenter.prevent="onHeaderDragEnter"
+      @dragleave="onHeaderDragLeave"
+      @drop.prevent="onHeaderDrop"
     >
-      <div class="section-header-left">
+      <template v-if="!store.isPaperLook">
+        <div class="section-header-left">
+          <button
+            type="button"
+            class="section-hdr-btn section-hdr-drag"
+            :class="{ 'is-inactive': isFirstSection }"
+            :disabled="isFirstSection"
+            :title="isFirstSection ? 'Adjust height' : 'Drag to adjust height · double-click to reset'"
+            @mousedown="onResizeStart"
+            @touchstart="onResizeStart"
+            @dblclick="onResizeReset"
+          >
+            <span class="section-hdr-drag-icon" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="section-hdr-btn section-hdr-search"
+            disabled
+            title="Search"
+          >
+            <svg class="section-hdr-search-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="6.5" cy="6.5" r="4.25" fill="none" stroke="currentColor" stroke-width="1.75" />
+              <path d="M9.6 9.6 L13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" />
+            </svg>
+          </button>
+          <button
+            v-if="showSortModeControls"
+            type="button"
+            class="section-hdr-btn section-sort-btn"
+            :title="sortModeTitle"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="toggleSortMode"
+          >{{ sortModeLabel }}</button>
+        </div>
+      </template>
+      <template v-if="store.isPaperLook && showUtflygningFreqs">
+        <div class="pg-hdr-freq pg-hdr-freq-left">
+          <span class="pg-hdr-freq-si">TW</span>
+          <span class="pg-hdr-freq-mhz">124,205</span>
+        </div>
+        <span class="section-title" :class="{ 'section-title--paper-lg': paperLargeTitle }">{{ section.title }}</span>
+        <div class="pg-hdr-freq pg-hdr-freq-right">
+          <span class="pg-hdr-freq-si">TE</span>
+          <span class="pg-hdr-freq-mhz">124,680</span>
+        </div>
+      </template>
+      <template v-else-if="store.isPaperLook && showPabananRwy">
+        <span class="section-title section-title--paper-lg section-title--paper-center">{{ section.title }}</span>
         <button
+          v-if="paperRwyId"
           type="button"
-          class="section-hdr-btn section-hdr-drag"
-          :class="{ 'is-inactive': isFirstSection }"
-          :disabled="isFirstSection"
-          :title="isFirstSection ? 'Adjust height' : 'Drag to adjust height · double-click to reset'"
-          @mousedown="onResizeStart"
-          @touchstart="onResizeStart"
-          @dblclick="onResizeReset"
-        >
-          <span class="section-hdr-drag-icon" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          class="section-hdr-btn section-hdr-search"
-          disabled
-          title="Search"
-        >
-          <svg class="section-hdr-search-icon" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="6.5" cy="6.5" r="4.25" fill="none" stroke="currentColor" stroke-width="1.75" />
-            <path d="M9.6 9.6 L13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" />
-          </svg>
-        </button>
-        <button
-          v-if="showSortModeControls"
-          type="button"
-          class="section-hdr-btn section-sort-btn"
-          :title="sortModeTitle"
+          class="pg-hdr-rwy"
+          title="Toggle runway designator (local display only)"
           @mousedown.stop
           @touchstart.stop
-          @click.stop="toggleSortMode"
-        >{{ sortModeLabel }}</button>
-      </div>
-      <span class="section-title">{{ section.title }}</span>
-      <div class="section-header-right">
-        <button
-          type="button"
-          class="section-hdr-btn section-hdr-close"
-          disabled
-          title="Close"
-        >
-          <svg class="section-hdr-close-icon" viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M1 1 L11 11 M11 1 L1 11" />
-          </svg>
-        </button>
-      </div>
+          @dblclick.stop
+          @click.stop="onPaperRwyClick"
+        >{{ paperRwyId }}</button>
+      </template>
+      <span
+        v-else
+        class="section-title"
+        :class="{ 'section-title--paper-lg': store.isPaperLook && paperLargeTitle }"
+      >{{ section.title }}</span>
+      <template v-if="!store.isPaperLook">
+        <div class="section-header-right">
+          <button
+            type="button"
+            class="section-hdr-btn section-hdr-close"
+            disabled
+            title="Close"
+          >
+            <svg class="section-hdr-close-icon" viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M1 1 L11 11 M11 1 L1 11" />
+            </svg>
+          </button>
+        </div>
+      </template>
     </div>
-    <div class="section-content">
-      <!-- Top strips container (scrollable) -->
+    <div
+      class="section-content"
+      :class="{ 'section-content--stick-bottom': stickBottomZone }"
+    >
+      <!--
+        Main list (scrollable). Stick-bottom zones: spacer pushes strips against the
+        header below; pinned zone is reordered to the top via CSS (reversed stick-to).
+      -->
       <div
         ref="topContainer"
         class="top-strips-container"
@@ -75,6 +133,11 @@
         @dragleave="onTopDragLeave"
         @drop="onTopDrop"
       >
+        <div
+          v-if="stickBottomZone"
+          class="stick-bottom-spacer"
+          aria-hidden="true"
+        />
         <!-- RWY flags always pinned to top of this runway bay -->
         <RwyFlagStrip
           v-if="showRwyFlagControls"
@@ -129,21 +192,26 @@
         />
       </div>
 
-      <!-- Bottom drop zone -->
+      <!-- Stick-to tray: bottom of normal sections; top of stick-bottom sections (CSS order) -->
       <div
         class="bottom-drop-zone"
-        :class="{ 'drop-active': isBottomDragOver, 'has-bottom': bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom || showDepAtBottom || showTurnAtBottom || showSid19lAtBottom || showR16AtBottom }"
+        :class="{
+          'drop-active': isBottomDragOver,
+          'has-bottom': hasPinnedZoneContent,
+          'bottom-drop-zone--stick-top': stickBottomZone,
+        }"
         @dragover.prevent="onBottomDragOver"
         @dragenter="onBottomDragEnter"
         @dragleave="onBottomDragLeave"
         @drop="onBottomDrop"
       ></div>
 
-      <!-- Bottom strips container (pinned) -->
+      <!-- Pinned strips: bottom of normal sections; top of stick-bottom sections (CSS order) -->
       <div
-        v-if="bottomStrips.length > 0 || showBreakoutAtBottom || showMapAtBottom || showDepAtBottom || showTurnAtBottom || showSid19lAtBottom || showR16AtBottom"
+        v-if="hasPinnedZoneContent"
         ref="bottomContainer"
         class="bottom-strips-container"
+        :class="{ 'bottom-strips-container--stick-top': stickBottomZone }"
         @dragover.prevent="onBottomStripsDragOver"
         @drop="onBottomStripsDrop"
       >
@@ -180,7 +248,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, type ComputedRef, type Ref } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, type ComputedRef, type Ref } from 'vue'
 import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
@@ -212,6 +280,12 @@ import {
   isRwyFlagHostSection,
 } from '@/composables/useRunwayFlagStrips'
 import { useTouchDropPlacement } from '@/composables/useTouchDrag'
+import {
+  claimDropHighlight,
+  dropHighlightOwnerKey,
+  releaseDropHighlight,
+  useDropHighlightOwner,
+} from '@/composables/useDropHighlightOwner'
 import { isRunwayOrderSectionId, sortRunwayLuOrder } from '@vatefs/common'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
@@ -281,6 +355,165 @@ const pendingCreateGapSize = ref<number>(0)
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
+
+/** Paper ESGG UTFLYGNING header: TW/TE APP frequencies flanking the title */
+const showUtflygningFreqs = computed(
+  () => store.isPaperLook && isCtrDepSectionId(props.section.id),
+)
+
+function isCtrArrSectionId(sectionId: string): boolean {
+  return sectionId === 'ctr_arr' || sectionId.endsWith('_ctr_arr')
+}
+
+/** Paper: above KLARERING — CLR read at bottom, else EOBT against the header */
+const paperPendingKlarering = computed(
+  () =>
+    store.isPaperLook &&
+    isPendingDepSectionId(props.section.id) &&
+    !!props.section.hideHeader,
+)
+
+function isTaxiSectionId(sectionId: string): boolean {
+  return sectionId === 'taxi' || sectionId.endsWith('_taxi')
+}
+
+function isAbovePushSectionId(sectionId: string): boolean {
+  return sectionId === 'above_push'
+}
+
+/**
+ * Paper zones that stick the main list to the bottom:
+ * headerless INBOUND / above KLARERING / above PÅ BANAN / above START-UP (CD→GND),
+ * and PÅ TAXI (mixed ARR-on-top / DEP-on-bottom stack, bottom-justified in the bay).
+ * Pin tray is reversed to top via CSS.
+ */
+const stickBottomZone = computed(
+  () =>
+    store.isPaperLook &&
+    ((!!props.section.hideHeader &&
+      (isPendingDepSectionId(props.section.id) ||
+        isAbovePushSectionId(props.section.id) ||
+        isCtrArrSectionId(props.section.id) ||
+        isInboundSectionId(props.section.id, props.section.title))) ||
+      isTaxiSectionId(props.section.id)),
+)
+
+function isRunwaySectionId(sectionId: string): boolean {
+  return sectionId === 'runway' || sectionId.startsWith('runway_') || sectionId.endsWith('_runway')
+}
+
+/** Larger title: UTFLYGNING / PÅ TAXI / PÅ BANAN */
+const paperLargeTitle = computed(
+  () =>
+    store.isPaperLook &&
+    (isCtrDepSectionId(props.section.id) ||
+      isTaxiSectionId(props.section.id) ||
+      isRunwaySectionId(props.section.id)),
+)
+
+const showPabananRwy = computed(
+  () => store.isPaperLook && isRunwaySectionId(props.section.id),
+)
+
+/**
+ * Paper/ESGG PÅ BANAN badge — only physical ends 03 / 21.
+ * Gate on paper look (ESGG view), not myAirports — atis can still list ESSA.
+ */
+const isEsggPabananRwy = computed(() => store.isPaperLook || store.esggRolesMode)
+
+/** Normalize to ESGG physical ends only; anything else → ''. */
+function esggPabananDesignator(raw: string): '03' | '21' | '' {
+  const first = (raw || '').split('/')[0]?.trim().toUpperCase() ?? ''
+  const m = first.match(/^(\d{1,2})/)
+  if (!m) return ''
+  const n = String(parseInt(m[1]!, 10)).padStart(2, '0')
+  if (n === '03') return '03'
+  if (n === '21') return '21'
+  return ''
+}
+
+/** Local visual override for PÅ BANAN RWY badge (does not change ES / system RWY). */
+const paperRwyLocal = ref<string | null>(null)
+
+/** Active RWY from ES — ESGG only for paper; never fall back to ESSA atis. */
+const paperRwyFromEs = computed((): string => {
+  if (!showPabananRwy.value) return ''
+
+  if (isEsggPabananRwy.value) {
+    const info = store.atisInfo.find((a) => a.airport.toUpperCase() === 'ESGG')
+    const candidates = [...(info?.depRunways ?? []), ...(info?.arrRunways ?? [])]
+    for (const r of candidates) {
+      const d = esggPabananDesignator(r)
+      if (d) return d
+    }
+    // Default so the badge/toggle always has a valid ESGG end
+    return '21'
+  }
+
+  const apt = store.myAirports[0]
+  const info =
+    (apt ? store.atisInfo.find((a) => a.airport === apt) : undefined) ?? store.atisInfo[0]
+  const dep = info?.depRunways ?? []
+  const arr = info?.arrRunways ?? []
+  const rwys = dep.length ? dep : arr
+  if (!rwys.length) return ''
+  if (dep.length && arr.length && dep.join('/') !== arr.join('/')) {
+    return [...new Set([...arr, ...dep])].join('/')
+  }
+  return rwys.join('/')
+})
+
+/** Displayed designator: local click override, else ES — ESGG clamped to 03|21 */
+const paperRwyId = computed(() => {
+  if (isEsggPabananRwy.value) {
+    const local = paperRwyLocal.value ? esggPabananDesignator(paperRwyLocal.value) : ''
+    return local || esggPabananDesignator(paperRwyFromEs.value) || '21'
+  }
+  return paperRwyLocal.value ?? paperRwyFromEs.value
+})
+
+/** Reciprocal runway end (03↔21, 01L↔19R). */
+function reciprocalRwy(rwy: string): string | null {
+  const m = rwy.trim().toUpperCase().match(/^(\d{1,2})([LCR]?)$/)
+  if (!m) return null
+  const n = parseInt(m[1]!, 10)
+  if (n < 1 || n > 36) return null
+  const suf = m[2] || ''
+  const flip = ((n - 1 + 18) % 36) + 1
+  const flipSuf = suf === 'L' ? 'R' : suf === 'R' ? 'L' : suf
+  return String(flip).padStart(2, '0') + flipSuf
+}
+
+function onPaperRwyClick() {
+  // ESGG paper: only ever 03 ↔ 21
+  if (isEsggPabananRwy.value) {
+    const cur = esggPabananDesignator(paperRwyId.value) || '21'
+    paperRwyLocal.value = cur === '03' ? '21' : '03'
+    return
+  }
+  const cur = (paperRwyId.value || '').split('/')[0]?.trim()
+  if (!cur) return
+  const next = reciprocalRwy(cur)
+  if (!next || next === cur) return
+  paperRwyLocal.value = next
+}
+
+// Fresh connect / ES update: drop local override when ES RWY changes so badge tracks ES
+watch(paperRwyFromEs, (es, prev) => {
+  if (!es) return
+  if (paperRwyLocal.value == null) return
+  if (prev && prev !== es) paperRwyLocal.value = null
+})
+
+// Drop stale local overrides that aren't 03/21 (e.g. 01L from older reciprocal toggle)
+watch(
+  isEsggPabananRwy,
+  (on) => {
+    if (!on || paperRwyLocal.value == null) return
+    if (!esggPabananDesignator(paperRwyLocal.value)) paperRwyLocal.value = null
+  },
+  { immediate: true },
+)
 
 const showRwyFlagControls = computed(() =>
   isRwyFlagHostSection(props.section.id, props.section.title),
@@ -634,7 +867,8 @@ function updateDropPlacementLine(event: DragEvent) {
     dropInsertIndex.value = null
     return
   }
-  const strips = Array.from(container.querySelectorAll('.flight-strip'))
+  // Skip collapsed paper drag source (height:0) so insert index stays correct
+  const strips = Array.from(container.querySelectorAll('.flight-strip:not(.dragging)'))
   if (strips.length === 0) {
     // Only info strips (or empty): still show end-of-list insert line
     dropInsertIndex.value = 0
@@ -656,30 +890,63 @@ function updateDropPlacementLine(event: DragEvent) {
 function clearDropPlacementLine() {
   dropInsertIndex.value = null
 }
+
 const isBottomDragOver = ref(false)
+/** Dropping on this section's header → insert at top of its strip list */
+const headerDropActive = ref(false)
 const topContainer = ref<HTMLElement | null>(null)
 const bottomContainer = ref<HTMLElement | null>(null)
 
 /** Touch/iPad drag: same insert line / bottom-slot as HTML5 dragover. */
 const touchDropPlacement = useTouchDropPlacement()
 let touchOwnedHighlight = false
+
+const myDropOwnerKey = computed(() =>
+  dropHighlightOwnerKey(props.bayId, props.section.id),
+)
+const html5DropOwner = useDropHighlightOwner()
+
+/** Clear insert line / stick-to tray / header drop — HTML5 dragleave is flaky across sections */
+function clearDragHighlights() {
+  dropInsertIndex.value = null
+  isBottomDragOver.value = false
+  headerDropActive.value = false
+  touchOwnedHighlight = false
+  releaseDropHighlight(myDropOwnerKey.value)
+}
+
+function claimHtml5DropHighlight() {
+  claimDropHighlight(myDropOwnerKey.value)
+}
+
+// Another section claimed the HTML5 marker → drop ours (dragleave often never fires).
+watch(html5DropOwner, (owner) => {
+  if (owner === myDropOwnerKey.value) return
+  if (touchOwnedHighlight) return
+  dropInsertIndex.value = null
+  isBottomDragOver.value = false
+  headerDropActive.value = false
+})
+
 watch(touchDropPlacement, (p) => {
   const mine = !!p && p.bayId === props.bayId && p.sectionId === props.section.id
   if (!mine) {
     if (touchOwnedHighlight) {
-      dropInsertIndex.value = null
-      isBottomDragOver.value = false
-      touchOwnedHighlight = false
+      clearDragHighlights()
     }
     return
   }
   touchOwnedHighlight = true
+  // Touch owns the single global marker — clear any stale HTML5 claim elsewhere
+  claimHtml5DropHighlight()
   if (p!.isBottom) {
     dropInsertIndex.value = null
     isBottomDragOver.value = true
+    headerDropActive.value = false
     return
   }
   isBottomDragOver.value = false
+  headerDropActive.value = p!.insertIndex === 0
   dropInsertIndex.value = p!.insertIndex
 })
 
@@ -842,7 +1109,7 @@ function sortByDepTime(
   })
 }
 
-/** ETA sort for INBOUND APP — earliest at bottom (bay fills from top); missing ETA at top. */
+/** ETA sort for SAAB INBOUND APP — earliest at bottom (bay fills from top); missing at top. */
 function sortByEta(list: FlightStripData[]): FlightStripData[] {
   const nowMin = utcNowMinutes()
   return [...list].sort((a, b) => {
@@ -853,6 +1120,58 @@ function sortByEta(list: FlightStripData[]): FlightStripData[] {
     // Missing ETA at top so they don't sit under the sequence
     if (aMiss !== bMiss) return aMiss ? -1 : 1
     // Later ETAs toward the top; earliest (first in sequence) at bottom
+    const d = kb - ka
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/**
+ * Paper stick-bottom INBOUND — stack justified to bottom; earliest ETA at top of
+ * that stack (later toward the bay floor); missing ETA at bottom of stack.
+ */
+function sortByEtaEarliestTop(list: FlightStripData[]): FlightStripData[] {
+  const nowMin = utcNowMinutes()
+  return [...list].sort((a, b) => {
+    const ka = hhmmSortKey(a.eta, nowMin)
+    const kb = hhmmSortKey(b.eta, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    if (aMiss !== bMiss) return aMiss ? 1 : -1
+    const d = ka - kb
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/**
+ * Paper CLR read (col 4) while still above KLARERING.
+ * Prefer local read without ES CLR/correct (those move under the header).
+ */
+function stripHasClrReadAbove(strip: FlightStripData): boolean {
+  if (strip.clearance || strip.clearanceReadback) return false
+  return !!strip.clearanceRead
+}
+
+/**
+ * Paper pending above KLARERING:
+ * CLR read at bottom (against header); within each group earliest EOBT at bottom; missing EOBT at top.
+ */
+function sortByEobtEarliestBottom(list: FlightStripData[]): FlightStripData[] {
+  const nowMin = utcNowMinutes()
+  return [...list].sort((a, b) => {
+    const aClr = stripHasClrReadAbove(a)
+    const bClr = stripHasClrReadAbove(b)
+    if (aClr !== bClr) return aClr ? 1 : -1
+    const ka = hhmmSortKey(a.eobt, nowMin)
+    const kb = hhmmSortKey(b.eobt, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    if (aMiss !== bMiss) return aMiss ? -1 : 1
     const d = kb - ka
     if (d !== 0) return d
     const cs = a.callsign.localeCompare(b.callsign)
@@ -887,6 +1206,7 @@ function sortByAtd(list: FlightStripData[]): FlightStripData[] {
 /** Gaps only when not in auto time/ETA/ATD/RWY-L/U-sort mode */
 const showGaps = computed(
   () =>
+    !stickBottomZone.value &&
     !etaSortEnabled.value &&
     !atdSortEnabled.value &&
     !runwayLuSortEnabled.value &&
@@ -899,9 +1219,15 @@ const topStrips = computed(() => {
   void sectionSortMode.value
   const list = collectTopStrips()
 
+  // Paper KLARERING (above header): CLR read at bottom, else EOBT
+  if (paperPendingKlarering.value) {
+    return sortByEobtEarliestBottom(list)
+  }
+
   // INBOUND APP: always ETA (drag reorder does not stick)
   if (etaSortEnabled.value) {
-    return sortByEta(list)
+    // Paper stick-bottom: earliest at top of bottom-justified stack
+    return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
   }
 
   // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
@@ -964,13 +1290,117 @@ const bottomStrips = computed(() => {
   void store.stripsVersion
   return store.getBottomStrips(props.bayId, props.section.id)
 })
+const hasPinnedZoneContent = computed(
+  () =>
+    bottomStrips.value.length > 0 ||
+    showBreakoutAtBottom.value ||
+    showMapAtBottom.value ||
+    showDepAtBottom.value ||
+    showTurnAtBottom.value ||
+    showSid19lAtBottom.value ||
+    showR16AtBottom.value,
+)
 const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.section.id))
 
 /** Ordered ids for FLIP when sort/add shifts neighbors (matches auto-move timing). */
 const topStripIds = computed(() => topStrips.value.map((s) => s.id))
 const bottomStripIds = computed(() => bottomStrips.value.map((s) => s.id))
-useStripOrderFlip(topContainer, topStripIds)
-useStripOrderFlip(bottomContainer, bottomStripIds)
+/**
+ * Stick-bottom zones (and cleared under pending): skip FLIP on manual drag
+ * (ghost strips), but allow it during auto-moves for neighbor shifts.
+ */
+const stripFlipEnabled = computed(() => {
+  if (store.autoMovingStripIds.size > 0) return true
+  if (stickBottomZone.value) return false
+  if (store.isPaperLook && isClearedSectionId(props.section.id)) {
+    const bay = store.layout.bays.find((b) => b.id === props.bayId)
+    const idx = bay?.sections.findIndex((s) => s.id === props.section.id) ?? -1
+    const above = idx > 0 ? bay!.sections[idx - 1] : undefined
+    if (above?.hideHeader && isPendingDepSectionId(above.id)) return false
+  }
+  return true
+})
+useStripOrderFlip(topContainer, topStripIds, stripFlipEnabled)
+useStripOrderFlip(bottomContainer, bottomStripIds, stripFlipEnabled)
+
+const sectionRoot = ref<HTMLElement | null>(null)
+
+/**
+ * Lock this section's pixel height before an auto-move remounts strips.
+ * Otherwise content enter/leave resizes the section and headers jump.
+ * Heights stay locked after the fly (manual resize can still change them).
+ */
+function freezeSectionHeightForAutoMove() {
+  if (props.isLastSection) return
+  const el = sectionRoot.value
+  if (!el) return
+  const h = el.getBoundingClientRect().height
+  if (h < 1) return
+  store.setSectionHeight(props.bayId, props.section.id, h, false)
+}
+
+/** Stick-bottom zones: keep main strips visible against the header when overflowing. */
+function pinStickBottomScroll() {
+  if (!stickBottomZone.value) return
+  const el = topContainer.value
+  if (!el) return
+  if (el.scrollHeight <= el.clientHeight + 1) {
+    el.scrollTop = 0
+    return
+  }
+  el.scrollTop = el.scrollHeight - el.clientHeight
+}
+
+let pendingScrollObserver: ResizeObserver | null = null
+
+watch(
+  [topStripIds, stickBottomZone],
+  async () => {
+    if (!stickBottomZone.value) return
+    // Don't fight neighbor FLIP mid auto-move
+    if (store.autoMovingStripIds.size > 0) return
+    await nextTick()
+    requestAnimationFrame(pinStickBottomScroll)
+  },
+  { flush: 'post' },
+)
+
+// Lock section heights before the strip remounts (beginAutoMove is sync-first).
+// Do not freeze the stick-bottom spacer — neighbors must shift (FLIP) into the gap.
+watch(
+  () => store.autoMovingStripIds.size,
+  (n, was) => {
+    const prev = was ?? 0
+    if (n > 0 && prev === 0) {
+      freezeSectionHeightForAutoMove()
+    }
+  },
+  { flush: 'sync' },
+)
+
+onMounted(() => {
+  // Dropping in another section (e.g. above KLARERING) often skips this section's
+  // dragleave — left a cyan insert/header indicator until reload.
+  document.addEventListener('dragend', clearDragHighlights, true)
+  document.addEventListener('drop', clearDragHighlights, true)
+
+  if (!stickBottomZone.value) return
+  const el = topContainer.value
+  if (!el || typeof ResizeObserver === 'undefined') return
+  pendingScrollObserver = new ResizeObserver(() => {
+    if (stickBottomZone.value && store.autoMovingStripIds.size === 0) {
+      pinStickBottomScroll()
+    }
+  })
+  pendingScrollObserver.observe(el)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('dragend', clearDragHighlights, true)
+  document.removeEventListener('drop', clearDragHighlights, true)
+  pendingScrollObserver?.disconnect()
+  pendingScrollObserver = null
+})
 
 const {
   showHere: showTurnHere,
@@ -1003,9 +1433,10 @@ const {
 })
 
 const sectionStyle = computed(() => {
+  const noHeader = !!props.section.hideHeader
   // Last section always flexes to fill remaining space
   if (props.isLastSection) {
-    return { flex: '1 1 auto', minHeight: '80px' }
+    return { flex: '1 1 auto', minHeight: noHeader ? '0px' : '80px' }
   }
   // Other sections: apply stored height, don't grow or shrink
   // Using flex: 0 0 auto prevents other sections from "bumping" during resize
@@ -1014,6 +1445,10 @@ const sectionStyle = computed(() => {
       height: `${props.section.height}px`,
       flex: '0 0 auto'  // don't grow, don't shrink
     }
+  }
+  // Headerless strip zones (e.g. pending above KLARERING) size to content
+  if (noHeader) {
+    return { flex: '1 1 auto', minHeight: '0px' }
   }
   return {}
 })
@@ -1220,6 +1655,63 @@ function openCreateDialog(type: SpecialStripType, position?: number, isBottom = 
   createDialogOpen.value = true
 }
 
+// Header drop → always insert at top of this section's strip list
+function onHeaderDragOver(event: DragEvent) {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
+    event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
+  }
+  claimHtml5DropHighlight()
+  headerDropActive.value = true
+  isBottomDragOver.value = false
+  dropInsertIndex.value = 0
+}
+
+function onHeaderDragEnter(event: DragEvent) {
+  event.preventDefault()
+  claimHtml5DropHighlight()
+  headerDropActive.value = true
+  isBottomDragOver.value = false
+  dropInsertIndex.value = 0
+}
+
+function onHeaderDragLeave(event: DragEvent) {
+  const target = event.currentTarget as HTMLElement
+  const related = event.relatedTarget as HTMLElement | null
+  if (!related || !target.contains(related)) {
+    headerDropActive.value = false
+  }
+}
+
+function onHeaderDrop(event: DragEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  headerDropActive.value = false
+  clearDropPlacementLine()
+  isBottomDragOver.value = false
+
+  if (!event.dataTransfer) return
+
+  const createType = event.dataTransfer.getData('application/efs-create')
+  if (createType) {
+    openCreateDialog(createType as SpecialStripType, 0, false)
+    return
+  }
+
+  if (tryHandleInfoStripDrop(event, false)) return
+
+  try {
+    const data = JSON.parse(event.dataTransfer.getData('application/json'))
+    if (data?.type === 'infoStrip') return
+    if (!data?.stripId) return
+    store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
+    store.moveStripToSection(data.stripId, props.bayId, props.section.id, 0)
+  } catch (error) {
+    console.error('Error handling header drop:', error)
+  }
+}
+
 // Top strips drag handling
 function onTopDragOver(event: DragEvent) {
   event.preventDefault()
@@ -1228,11 +1720,15 @@ function onTopDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  claimHtml5DropHighlight()
+  headerDropActive.value = false
   isBottomDragOver.value = false
   updateDropPlacementLine(event)
 }
 
 function onTopDragEnter(event: DragEvent) {
+  claimHtml5DropHighlight()
+  headerDropActive.value = false
   isBottomDragOver.value = false
   updateDropPlacementLine(event)
 }
@@ -1248,6 +1744,7 @@ function onTopDragLeave(event: DragEvent) {
 function onTopDrop(event: DragEvent) {
   event.preventDefault()
   clearDropPlacementLine()
+  headerDropActive.value = false
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
@@ -1489,11 +1986,13 @@ function onBottomDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  claimHtml5DropHighlight()
   isBottomDragOver.value = true
   clearDropPlacementLine()
 }
 
 function onBottomDragEnter() {
+  claimHtml5DropHighlight()
   isBottomDragOver.value = true
   clearDropPlacementLine()
 }
@@ -1541,6 +2040,7 @@ function onBottomStripsDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  claimHtml5DropHighlight()
   isBottomDragOver.value = true
   clearDropPlacementLine()
 }
@@ -1610,6 +2110,38 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   border-left: 1px solid #2b2d31;
 }
 
+.efs-section--no-header {
+  min-height: 0;
+  border-bottom: none;
+}
+
+/* Paper stick-bottom zones (INBOUND / above KLARERING / PÅ BANAN / PÅ TAXI) — SAAB never gets this */
+.efs-section--stick-bottom .top-strips-container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Grows when short → strips against the header below; collapses when overflowing */
+.efs-section--stick-bottom .stick-bottom-spacer {
+  flex: 1 1 auto;
+  min-height: 0;
+  pointer-events: none;
+}
+
+/*
+ * Reverse pin tray: pinned strips + stick-to zone at TOP, main list at BOTTOM.
+ * DOM order stays (main → tray → pinned) for shared handlers; flex order flips it.
+ */
+.section-content--stick-bottom .top-strips-container {
+  order: 3;
+}
+.section-content--stick-bottom .bottom-drop-zone {
+  order: 2;
+}
+.section-content--stick-bottom .bottom-strips-container {
+  order: 1;
+}
+
 .efs-section:last-child {
   border-bottom: none;
 }
@@ -1627,6 +2159,10 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   user-select: none;
   /* Floor with --efs-scale so large UI % stays readable on narrow bays */
   min-height: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
+}
+
+.section-header.header-drop-active {
+  box-shadow: inset 0 -3px 0 0 rgb(0, 150, 180);
 }
 
 .section-header:has(.section-sort-btn) {
@@ -1669,6 +2205,107 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 }
 .section-header--essa-other .section-title {
   color: #000;
+}
+
+/* Paper FPS: same 400×50 SAAB body ratio as strips (via --bay-scale) */
+.section-header--paper {
+  background: #111;
+  border-bottom-color: #111;
+  /* Body 50×scale + TB type frames (2×2×scale) so outer height matches strips */
+  height: calc(54px * var(--bay-scale, 1));
+  min-height: calc(54px * var(--bay-scale, 1));
+  max-height: calc(54px * var(--bay-scale, 1));
+  padding: 0 calc(6px * var(--bay-scale, 1));
+  box-sizing: border-box;
+  cursor: ns-resize;
+  gap: calc(6px * var(--bay-scale, 1));
+}
+.section-header--paper.no-resize {
+  cursor: default;
+}
+.section-header--paper .section-title {
+  color: #f0f0f0;
+  font-size: calc(24px * var(--bay-scale, 1));
+  letter-spacing: calc(1.2px * var(--bay-scale, 1));
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.section-header--paper .section-title--paper-lg {
+  font-size: calc(30px * var(--bay-scale, 1));
+  letter-spacing: calc(1.4px * var(--bay-scale, 1));
+}
+
+/* Center title in header; RWY badge overlays on the right */
+.section-header--paper .section-title--paper-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  flex: none;
+  margin: 0;
+  pointer-events: none;
+}
+
+.pg-hdr-rwy {
+  /* Same frame weights as flight-strip colour border (--frame-side / --frame-tb) */
+  --pg-rwy-frame-side: calc(8px * var(--bay-scale, 1));
+  --pg-rwy-frame-tb: calc(var(--pg-rwy-frame-side) / 4);
+  position: absolute;
+  top: calc(2px * var(--bay-scale, 1));
+  right: calc(2px * var(--bay-scale, 1));
+  bottom: calc(2px * var(--bay-scale, 1));
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: calc(48px * var(--bay-scale, 1));
+  margin: 0;
+  padding: 0 calc(6px * var(--bay-scale, 1));
+  box-sizing: border-box;
+  background: #fff;
+  color: #000;
+  border-style: solid;
+  border-color: #000;
+  border-width: var(--pg-rwy-frame-tb) var(--pg-rwy-frame-side);
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: calc(30px * var(--bay-scale, 1));
+  font-weight: 700;
+  letter-spacing: calc(1.4px * var(--bay-scale, 1));
+  line-height: 1;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+.pg-hdr-rwy:hover {
+  background: #f5f5f5;
+}
+
+.pg-hdr-freq {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 1.05;
+  color: #2e6640;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: calc(16px * var(--bay-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: center;
+  text-transform: uppercase;
+  user-select: none;
+}
+.pg-hdr-freq-left {
+  margin-right: auto;
+}
+.pg-hdr-freq-right {
+  margin-left: auto;
+}
+.pg-hdr-freq-mhz {
+  font-variant-numeric: tabular-nums;
 }
 
 .section-title {
@@ -1825,12 +2462,13 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* Bottom drop zone — append-to-bottom slot (distinct from between-strip insert line) */
+/* Bottom drop zone — stick-to tray (distinct from between-strip insert line) */
 .bottom-drop-zone {
   height: 25px;
   flex-shrink: 0;
   position: relative;
-  transition: background 0.15s ease, border-top 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, border-top 0.15s ease, border-bottom 0.15s ease,
+    box-shadow 0.15s ease;
   border-top: 1px dashed transparent;
   background: transparent;
 }
@@ -1852,7 +2490,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
     inset 0 10px 14px -8px rgba(0, 150, 180, 0.55);
 }
 
-/* End caps so the bottom slot reads as a bay-wide “tray”, not a thin insert */
+/* End caps so the slot reads as a bay-wide “tray”, not a thin insert */
 .bottom-drop-zone.drop-active::before,
 .bottom-drop-zone.drop-active::after {
   content: '';
@@ -1872,17 +2510,50 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   right: 2px;
 }
 
+/* Stick-bottom zones: tray at top — mirror border/gradient downward → upward */
+.bottom-drop-zone--stick-top {
+  border-top: none;
+  border-bottom: 1px dashed transparent;
+}
+.bottom-drop-zone--stick-top.has-bottom {
+  border-top: none;
+  border-bottom: 1px dashed #2a2e32;
+}
+.bottom-drop-zone--stick-top.drop-active {
+  border-top: none;
+  border-bottom: 7px solid rgb(0, 150, 180);
+  background: linear-gradient(
+    to top,
+    rgba(0, 150, 180, 0.45) 0%,
+    rgba(0, 150, 180, 0.12) 55%,
+    transparent 100%
+  );
+  box-shadow:
+    0 1px 0 0 rgba(0, 180, 200, 0.55),
+    inset 0 -10px 14px -8px rgba(0, 150, 180, 0.55);
+}
+.bottom-drop-zone--stick-top.drop-active::before,
+.bottom-drop-zone--stick-top.drop-active::after {
+  top: auto;
+  bottom: -1px;
+}
+
 .bottom-info-drop-tail {
   min-height: 12px;
   flex-shrink: 0;
 }
 
-/* Bottom strips container - pinned */
+/* Bottom strips container - pinned (stick-to zone) */
 .bottom-strips-container {
   flex-shrink: 0;
   padding: 2px 0;
   background: rgba(0, 100, 130, 0.1);
   border-top: 1px solid rgba(0, 150, 180, 0.3);
+}
+
+.bottom-strips-container--stick-top {
+  border-top: none;
+  border-bottom: 1px solid rgba(0, 150, 180, 0.3);
 }
 
 /* Strip gap - clickable area between strips */

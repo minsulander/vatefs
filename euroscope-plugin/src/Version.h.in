@@ -1,5 +1,8 @@
 #pragma once
 
+// PLUGIN_VERSION comes from euroscope-plugin/CMakeLists.txt PROJECT(... VERSION ...).
+// It is not tied to the MSI / common package version.
+
 namespace {
 const char *PLUGIN_NAME{ "VatEFS" };
 const char *PLUGIN_VERSION{ "@CMAKE_PROJECT_VERSION@" };

@@ -1,0 +1,338 @@
+# VatEFS ESGG (Gothenburg Landvetter) — paper FPS look
+# Single runway, 4 bays. Airports from EuroScope rwyconfig or --airport ESGG
+
+name: ESGG
+look: paper
+radarRange: 25  # nm (deps / general)
+arrivalRange: 100  # nm — arrivals also show within this range
+arrivalEtaMinutes: 20  # arrivals also show when ETE ≤ this (minutes)
+
+include:
+  - common-rules.yml
+
+layout:
+  bays:
+    # Leftmost bay = INBOUND (no section header — bay identity is the label)
+    bay1:
+      sections:
+        inbound:
+          title: INBOUND
+          hideHeader: true
+
+    bay2:
+      sections:
+        # Above PÅ BANAN: airborne CTR ARR; APP→TWR ARR pin; GND→TWR DEP pin
+        # (drag from PÅ TAXI); TWR sequence for taxiing DEP/ARR (sticky hold).
+        ctr_arr:
+          title: CTR ARR
+          hideHeader: true
+        runway:
+          title: PÅ BANAN
+          addFromTop: false
+        ctr_dep:
+          title: UTFLYGNING
+          addFromTop: false
+
+    bay3:
+      sections:
+        # Bottom-centered stack: ARR insert top, DEP insert bottom (flightStore);
+        # then sticky manual order. Paper UI sticks the list to the bay floor.
+        taxi:
+          title: PÅ TAXI
+
+    # Above KLARERING (CLR read → bottom) · under header (CLR correct / ES CLR) · START-UP & PUSH-BACK
+    bay4:
+      sections:
+        pending_dep:
+          title: KLARERING
+          hideHeader: true
+        cleared:
+          title: KLARERING
+        push_start:
+          title: START-UP & PUSH-BACK
+          addFromTop: true
+
+sectionRules:
+  # ESGG paper: bay above PÅ BANAN is for (1) APP→TWR ARR pin, (2) GND→TWR DEP pin,
+  # (3) TWR-assumed sequence. APP-owned approach CA/VA stay in INBOUND until handoff —
+  # do NOT use myRole:[DEL] to disable rules (TWR covering includes DEL).
+
+  # TWR: pending inbound DEP/local transfer from GND → pin tray (same as APP ARR)
+  ctr_arr_pending_inbound_transfer_dep:
+    sectionId: ctr_arr
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [TWR]
+    priority: 96
+
+  ctr_arr_pending_inbound_transfer_local_gnd:
+    sectionId: ctr_arr
+    direction: local
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [TWR]
+    priority: 96
+
+  # GND: keep DEP/local on sequence pin while XFER to TWR is pending
+  ctr_arr_pending_outbound_transfer_dep:
+    sectionId: ctr_arr
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: myself
+    handoffInitiated: true
+    handoffToRole: [TWR]
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 96
+
+  ctr_arr_pending_outbound_transfer_local:
+    sectionId: ctr_arr
+    direction: local
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: myself
+    handoffInitiated: true
+    handoffToRole: [TWR]
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 96
+
+  ctr_arr_approach_clearance_other:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    approachClearance: true
+    priority: 85
+
+  # IFR-only airborne auto-pulls — VFR stays put until manual drag or transfer pin
+  ctr_arr_within_ctr:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: true
+    controller: myself
+    ifr: true
+    priority: 76
+
+  ctr_arr_low_altitude:
+    sectionId: ctr_arr
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    maxAltitudeAboveField: 1500
+    controller: myself
+    ifr: true
+    priority: 75
+
+  # Override common-rules: do not snap VFR DEP / local airborne into UTFLYGNING
+  ctr_dep_airborne:
+    sectionId: ctr_dep
+    direction: departure
+    airborne: true
+    ifr: true
+    priority: 100
+
+  ctr_dep_airborne_local:
+    sectionId: ctr_dep
+    direction: local
+    airborne: true
+    ifr: true
+    priority: 100
+
+  # Pending ARR bay (INBOUND): APP-owned — align ETA gate with arrivalEtaMinutes
+  inbound_arr_groundstate:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    myRole: [TWR, APP, CTR]
+    maxEtaMinutes: 20
+    priority: 70
+
+  # No geographic on_runway section rule — PÅ BANAN is manual / GS / CTL only (no RWY-entry snap).
+
+  # === RUNWAY SECTION RULES ===
+
+  # RUNWAY: Lineup and departure roll
+  runway_lineup_depa:
+    sectionId: runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    priority: 90
+
+  # RUNWAY: Cleared to land (arrivals and local flights returning)
+  runway_cleared_to_land:
+    sectionId: runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
+
+  # Hold ARR/local in UTFLYGNING while TWR→APP handoff pending (soft G/A or MISAP)
+  ctr_dep_hold_pending_app_arr:
+    sectionId: ctr_dep
+    direction: arrival
+    airborne: true
+    handoffInitiated: true
+    handoffToRole: [APP, CTR]
+    myRole: [TWR]
+    priority: 120
+
+  ctr_dep_hold_pending_app_local_ga:
+    sectionId: ctr_dep
+    direction: local
+    airborne: true
+    handoffInitiated: true
+    handoffToRole: [APP, CTR]
+    myRole: [TWR]
+    priority: 120
+
+actionRules:
+  # RUNWAY: GOA (go-around) for airborne aircraft cleared to land (TWR/APP/CTR)
+  goa_runway:
+    action: GOA
+    sectionId: runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  goa_ctr_arr:
+    action: GOA
+    sectionId: ctr_arr
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+moveRules:
+  # TAXI -> RUNWAY: Set groundstate to LINEUP (TWR/APP/CTR top-down)
+  move_taxi_to_runway:
+    fromSectionId: taxi
+    toSectionId: runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  # INBOUND -> RUNWAY: Set cleared to land (TWR/APP/CTR top-down)
+  move_inbound_to_runway:
+    fromSectionId: inbound
+    toSectionId: runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  # Sequence bay / CTR ARR -> RUNWAY: DEP/local taxi → LINEUP; arrivals → CTL
+  move_ctr_arr_to_runway_dep:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: departure
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_ctr_arr_to_runway_local:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: local
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_ctr_arr_to_runway:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    priority: 10
+    command:
+      type: setClearedToLand
+      value: true
+
+  # Any bay → PÅ BANAN: ARR/local get CTL (covers pin-tray / inbound / etc.)
+  move_to_pabanan_arr_ctl:
+    toSectionId: runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    priority: 8
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_to_pabanan_local_ctl:
+    toSectionId: runway
+    direction: local
+    myRole: [TWR, APP, CTR]
+    priority: 8
+    command:
+      type: setClearedToLand
+      value: true
+
+  # PÅ BANAN → rwy seq: DEP/local undo L/U·CTO → TXO (TAXI) so sequence hold sticks
+  move_runway_to_ctr_arr_dep_txo:
+    fromSectionId: runway
+    toSectionId: ctr_arr
+    direction: departure
+    priority: 20
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_runway_to_ctr_arr_local_txo:
+    fromSectionId: runway
+    toSectionId: ctr_arr
+    direction: local
+    priority: 20
+    commands:
+      - type: setGroundstate
+        value: TAXI
+      - type: setClearedToLand
+        value: false
+
+  # RUNWAY -> TAXI (departure): Set groundstate to TAXI
+  move_runway_to_taxi_dep:
+    fromSectionId: runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  # RUNWAY -> TAXI (arrival/local): ARR groundstate.
+  # TXIN is deferred: when GND is online, strip pins on PÅ TAXI + XFER; TXIN on pin-exit.
+  # Solo TWR (no GND) upgrades to TXIN in server.ts after the move.
+  move_runway_to_taxi_arr:
+    fromSectionId: runway
+    toSectionId: taxi
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: ARR
+
+  # Runway -> CTR ARR/DEP: Unset cleared to land — now handled by common-rules.yml (runway_to_ctr_*_clear_ctl)
+  # Soft G/A (ARR PÅ BANAN→UTFLYGNING) + pin/XFER to APP is handled in server.ts (no TopSky MISAP_).

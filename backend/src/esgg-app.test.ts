@@ -99,10 +99,12 @@ check("unknown SID/rwy → undefined", () => {
 })
 
 check("MISAP sides", () => {
-    assert.equal(esggMisapAppSide("03"), "W")
-    assert.equal(esggMisapAppSide("21"), "E")
+    assert.equal(esggMisapAppSide("03"), "E")
+    assert.equal(esggMisapAppSide("21"), "W")
     assert.equal(resolveEsggMapDelivery("03").heading, 20)
+    assert.equal(resolveEsggMapDelivery("03").appSide, "E")
     assert.equal(resolveEsggMapDelivery("21").heading, 200)
+    assert.equal(resolveEsggMapDelivery("21").appSide, "W")
 })
 
 check("formatEsggDisplaySi DEL/GND/TWR/A/W", () => {
@@ -134,7 +136,9 @@ check("resolve online APP by side (A = east)", () => {
     assert.equal(east?.callsign, "ESGG_A_APP")
 
     const misap = resolveEsggMisapApp("03", online)
-    assert.equal(misap?.callsign, "ESGG_W_APP")
+    assert.equal(misap?.callsign, "ESGG_A_APP")
+    const misap21 = resolveEsggMisapApp("21", online)
+    assert.equal(misap21?.callsign, "ESGG_W_APP")
 
     assert.equal(formatEsggAppSi("ESGG_W_APP", "W"), "W")
     assert.equal(formatEsggAppSi("ESGG_A_APP", "E"), "A")

@@ -44,11 +44,13 @@ export function hasForcedSidInRoute(route: string | undefined | null): boolean {
     return true
 }
 
-/** RNAV spacing for a compact designator: ARS6E → ARS 6E */
-function formatNamedSidBase(base: string): string {
+/** RNAV spacing for a compact designator: ARS6E → ARS 6E (or ARS6E when compact). */
+function formatNamedSidBase(base: string, compact = false): string {
     const m = base.match(/^([A-Za-z]{2,})(\d+[A-Za-z]+)$/)
     if (!m) return base.toUpperCase()
-    return `${m[1]!.toUpperCase()} ${m[2]!.toUpperCase()}`
+    const name = m[1]!.toUpperCase()
+    const desig = m[2]!.toUpperCase()
+    return compact ? `${name}${desig}` : `${name} ${desig}`
 }
 
 /**
@@ -185,17 +187,18 @@ export function formatTrackSidDisplay(sid: string | undefined | null): string | 
 }
 
 /**
- * Display for radar-vector SIDs: "ARS 6E veKOGAV".
+ * Display for radar-vector SIDs: "ARS 6E veKOGAV" (or "ARS6EveKOGAV" when compact).
  * Prefers filled TMA exit from FPL when provided.
  */
 export function formatVectorSidDisplay(
     sid: string | undefined | null,
     tmaExit?: string | null,
+    compact = false,
 ): string | null {
     const parsed = parseVectorSidName(sid)
     if (!parsed) return null
     const exit = (tmaExit || "").trim().toUpperCase() || parsed.exit
-    return `${formatNamedSidBase(parsed.base)} ve${exit}`
+    return `${formatNamedSidBase(parsed.base, compact)} ve${exit}`
 }
 
 /** @deprecated AHDG is no longer derived from SID */
@@ -209,9 +212,13 @@ export function parseTrackSid(sid: string | undefined | null): { ahdg: string; d
     return { ahdg, display }
 }
 
+/**
+ * @param compact — paper/ESGG: no space between SID name and designator (PETEV2G).
+ */
 export function formatSidForDisplay(
     sid: string | undefined | null,
     tmaExit?: string | null,
+    compact = false,
 ): string {
     if (!sid) return ""
     const s = sid.trim()
@@ -223,17 +230,26 @@ export function formatSidForDisplay(
         return rest || s
     }
 
-    const vector = formatVectorSidDisplay(s, tmaExit)
+    const vector = formatVectorSidDisplay(s, tmaExit, compact)
     if (vector) return vector
 
     const track = formatTrackSidDisplay(s)
     if (track) return track
 
-    if (/\s/.test(s)) return s
+    // Already spaced (e.g. "PETEV 2G") — collapse for paper/ESGG
+    if (/\s/.test(s)) {
+        if (compact) {
+            const spaced = s.replace(/\s+/g, " ").trim().match(/^([A-Za-z]{2,})\s+(\d+[A-Za-z]+)$/i)
+            if (spaced) return `${spaced[1]!.toUpperCase()}${spaced[2]!.toUpperCase()}`
+        }
+        return s
+    }
     // EXIT + designator (digits + letter), e.g. PETEV3G, ARS5C, ROKNI3R
     const m = s.match(/^([A-Za-z]{2,})(\d+[A-Za-z]+)$/)
     if (!m) return s
-    return `${m[1]!.toUpperCase()} ${m[2]!.toUpperCase()}`
+    const name = m[1]!.toUpperCase()
+    const desig = m[2]!.toUpperCase()
+    return compact ? `${name}${desig}` : `${name} ${desig}`
 }
 
 /**

@@ -14,6 +14,12 @@
  * touch remarks or HP — return null to leave existing fields unchanged.
  */
 
+import { groundstateFromScratch, isGroundstateToken } from "./groundstate.js"
+
+export { groundstateFromScratch, isGroundstateToken }
+/** @deprecated use isGroundstateToken */
+export const isSwedishGroundstateScratch = isGroundstateToken
+
 export function buildCombinedScratch(
     remarks: string | undefined,
     hp: string | undefined,
@@ -34,6 +40,7 @@ export function buildScratchRemarks(remarks: string | undefined): string {
 /** True when scratch is a TopSky/ops message that must not update remarks or HP. */
 export function isProtocolScratch(scratch: string): boolean {
     if (scratch === "MISAP_" || scratch === "NOSTATE") return true
+    if (isGroundstateToken(scratch)) return true
     // Holding point is exactly /TOKEN; anything else starting with / is protocol
     if (scratch.startsWith("/") && !/^\/[A-Z0-9]+\s*$/i.test(scratch)) return true
     return false
@@ -87,6 +94,7 @@ export function parseCombinedScratch(scratch: string): {
 }
 
 /** Remarks-only parse (ignores HP). Prefer parseCombinedScratch. */
-export function parseScratchRemarks(scratch: string): string | undefined | null {
+export function parseScratchRemarks(scratch: string | undefined): string | undefined | null {
+    if (scratch === undefined) return null
     return parseCombinedScratch(scratch).remarks
 }

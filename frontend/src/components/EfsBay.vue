@@ -2,96 +2,113 @@
   <div
     ref="bayEl"
     class="efs-bay"
-    :class="{ 'efs-bay--empty': store.multiAirport && isEmpty }"
+    :class="{
+      'efs-bay--empty': store.multiAirport && isEmpty,
+      'efs-bay--paper': store.isPaperLook,
+    }"
     :data-bay-id="bay.id"
   >
-    <div
-      v-if="store.multiAirport"
-      ref="bayHeader"
-      class="bay-header"
-      :class="{ 'bay-header--empty': isEmpty }"
-      :style="{ background: accent }"
-    >
-      <button
-        ref="pickerBtn"
-        type="button"
-        class="airport-picker-btn"
-        :class="{ 'airport-picker-btn--empty': isEmpty, 'airport-picker-btn--open': pickerOpen }"
-        @click="onPickerClick"
+    <!-- ESGG paper board: dark edge panels + one pipe each side (same layer, under strips) -->
+    <template v-if="store.isPaperLook">
+      <div class="bay-edge bay-edge--left" aria-hidden="true" />
+      <div class="bay-edge bay-edge--right" aria-hidden="true" />
+      <div class="bay-rail bay-rail--left" aria-hidden="true">
+        <span class="bay-pipe" />
+      </div>
+      <div class="bay-rail bay-rail--right" aria-hidden="true">
+        <span class="bay-pipe" />
+      </div>
+    </template>
+
+    <div class="bay-body">
+      <div
+        v-if="store.multiAirport"
+        ref="bayHeader"
+        class="bay-header"
+        :class="{ 'bay-header--empty': isEmpty }"
+        :style="{ background: accent }"
       >
-        <span class="airport-picker-icao">{{ selectedAirport ?? '-' }}</span>
-        <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
-      </button>
-
-      <Teleport to="body">
-        <div
-          v-if="pickerOpen"
-          ref="pickerPanel"
-          class="efs-popup-menu efs-popup-menu--wide airport-picker-panel"
-          :style="pickerStyle"
-          @click.stop
+        <button
+          ref="pickerBtn"
+          type="button"
+          class="airport-picker-btn"
+          :class="{ 'airport-picker-btn--empty': isEmpty, 'airport-picker-btn--open': pickerOpen }"
+          @click="onPickerClick"
         >
-          <div class="efs-popup-header">Airport</div>
-          <div class="efs-popup-search">
-            <input
-              ref="searchInput"
-              v-model="searchQuery"
-              class="efs-popup-search-input"
-              type="text"
-              placeholder="Enter ICAO…"
-              maxlength="4"
-              autocomplete="off"
-              spellcheck="false"
-              @keydown.enter.prevent="onSearchEnter"
-              @keydown.esc.stop="closePicker"
-            />
-            <button
-              v-if="selectedAirport"
-              type="button"
-              class="efs-popup-chip"
-              title="Clear column"
-              @click="selectAirport(null)"
-            >Clear</button>
-          </div>
+          <span class="airport-picker-icao">{{ selectedAirport ?? '-' }}</span>
+          <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
+        </button>
 
-          <div class="efs-popup-list airport-picker-list">
-            <button
-              v-for="opt in filteredOptions"
-              :key="opt.icao"
-              type="button"
-              class="efs-popup-item efs-popup-item--start"
-              :class="{
-                selected: opt.icao === selectedAirport,
-                'efs-popup-muted': !opt.isActive,
-              }"
-              @click="selectAirport(opt.icao)"
-            >
-              <span class="item-icao">{{ opt.icao }}</span>
-              <span class="item-meta">
-                <span v-if="opt.name" class="item-name">{{ opt.name }}</span>
-                <span v-if="opt.country" class="item-country">{{ opt.country }}</span>
-              </span>
-              <span class="item-traffic">
-                <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
-                <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
-              </span>
-              <span v-if="opt.taken" class="item-taken">swap</span>
-            </button>
-            <div v-if="filteredOptions.length === 0" class="efs-popup-meta">
-              No airports match
+        <Teleport to="body">
+          <div
+            v-if="pickerOpen"
+            ref="pickerPanel"
+            class="efs-popup-menu efs-popup-menu--wide airport-picker-panel"
+            :style="pickerStyle"
+            @click.stop
+          >
+            <div class="efs-popup-header">Airport</div>
+            <div class="efs-popup-search">
+              <input
+                ref="searchInput"
+                v-model="searchQuery"
+                class="efs-popup-search-input"
+                type="text"
+                placeholder="Enter ICAO…"
+                maxlength="4"
+                autocomplete="off"
+                spellcheck="false"
+                @keydown.enter.prevent="onSearchEnter"
+                @keydown.esc.stop="closePicker"
+              />
+              <button
+                v-if="selectedAirport"
+                type="button"
+                class="efs-popup-chip"
+                title="Clear column"
+                @click="selectAirport(null)"
+              >Clear</button>
+            </div>
+
+            <div class="efs-popup-list airport-picker-list">
+              <button
+                v-for="opt in filteredOptions"
+                :key="opt.icao"
+                type="button"
+                class="efs-popup-item efs-popup-item--start"
+                :class="{
+                  selected: opt.icao === selectedAirport,
+                  'efs-popup-muted': !opt.isActive,
+                }"
+                @click="selectAirport(opt.icao)"
+              >
+                <span class="item-icao">{{ opt.icao }}</span>
+                <span class="item-meta">
+                  <span v-if="opt.name" class="item-name">{{ opt.name }}</span>
+                  <span v-if="opt.country" class="item-country">{{ opt.country }}</span>
+                </span>
+                <span class="item-traffic">
+                  <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
+                  <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
+                </span>
+                <span v-if="opt.taken" class="item-taken">swap</span>
+              </button>
+              <div v-if="filteredOptions.length === 0" class="efs-popup-meta">
+                No airports match
+              </div>
             </div>
           </div>
-        </div>
-      </Teleport>
+        </Teleport>
+      </div>
+      <EfsSection
+        v-for="(section, index) in bay.sections"
+        :key="section.id"
+        :section="section"
+        :bay-id="bay.id"
+        :is-first-section="index === 0"
+        :is-last-section="index === bay.sections.length - 1"
+      />
     </div>
-    <EfsSection
-      v-for="(section, index) in bay.sections"
-      :key="section.id"
-      :section="section"
-      :bay-id="bay.id"
-      :is-first-section="index === 0"
-      :is-last-section="index === bay.sections.length - 1"
-    />
   </div>
 </template>
 
@@ -312,7 +329,8 @@ onMounted(() => {
     for (let i = 0; i < sections.length - 1; i++) {
       const section = sections[i]
       const el = sectionEls[i]
-      if (section && !section.height && el) {
+      // Headerless zones size to content — do not lock pixel height
+      if (section && !section.height && !section.hideHeader && el) {
         const height = el.getBoundingClientRect().height
         store.setSectionHeight(props.bay.id, section.id, height, false)
       }
@@ -330,8 +348,148 @@ onMounted(() => {
   background: var(--efs-bay-bg, #3b3c41);
 }
 
+.bay-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
 .efs-bay--empty {
   opacity: 0.55;
+}
+
+/* ——— ESGG paper FPS board ———
+ * Layering (bottom → top): tan floor → (panels + pipes) → strips/headers.
+ * Body is full-width + transparent so overflow:hidden strip lists don't clip
+ * coloured strip edges behind the rails.
+ */
+.efs-bay--paper {
+  --bay-pipe-w: max(20px, calc(25px * var(--bay-scale, 1)));
+  /* Dark brown edge panels (between bays / outer edges); pipes sit just inside */
+  --bay-panel-w: max(12px, calc(14px * var(--bay-scale, 1)));
+  --bay-pipe-gap: max(4px, calc(5px * var(--bay-scale, 1)));
+  --bay-pipe-inset: calc(var(--bay-panel-w) + var(--bay-pipe-gap));
+  /* Vertical only: same gap between strips and above/below headers */
+  --paper-strip-gap: max(2px, calc(2px * var(--bay-scale, 1)));
+  position: relative;
+  overflow: hidden;
+  /* Soft desk shading: brighter center, darker borders */
+  background-color: var(--efs-paper-bay-mid, #89653b);
+  background-image:
+    radial-gradient(
+      ellipse 80% 75% at 50% 48%,
+      var(--efs-paper-bay-light, #c7a778) 0%,
+      var(--efs-paper-bay-mid-light, #ad926b) 42%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse 100% 100% at 50% 50%,
+      transparent 48%,
+      color-mix(in srgb, var(--efs-paper-bay-mid, #89653b) 55%, transparent) 75%,
+      color-mix(in srgb, var(--efs-paper-bay-dark, #513a26) 55%, var(--efs-paper-bay-mid, #89653b)) 100%
+    ),
+    linear-gradient(
+      180deg,
+      var(--efs-paper-bay-mid-light, #ad926b) 0%,
+      var(--efs-paper-bay-mid, #89653b) 55%,
+      color-mix(in srgb, var(--efs-paper-bay-dark, #513a26) 40%, var(--efs-paper-bay-mid, #89653b)) 100%
+    );
+}
+
+.efs-bay--paper .bay-body {
+  position: relative;
+  z-index: 2;
+  background: transparent;
+}
+
+/* Same layer as pipes — flush columns → double panel width between bays */
+.bay-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: var(--bay-panel-w);
+  background: var(--efs-paper-panel, #2c241c);
+  pointer-events: none;
+}
+
+.bay-edge--left {
+  left: 0;
+}
+
+.bay-edge--right {
+  right: 0;
+}
+
+/* Pipes above floor, below strips — inset past the edge panels */
+.bay-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: var(--bay-pipe-w);
+  display: flex;
+  pointer-events: none;
+}
+
+.bay-rail--left {
+  left: var(--bay-pipe-inset);
+}
+
+.bay-rail--right {
+  right: var(--bay-pipe-inset);
+}
+
+.bay-pipe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* No end rounding — full width top to bottom; cylinder from side gradient only */
+  border-radius: 0;
+  background: linear-gradient(
+    90deg,
+    #3a3a3a 0%,
+    #111 30%,
+    #000 50%,
+    #1a1a1a 70%,
+    #333 100%
+  );
+  box-shadow: inset 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+/* No section side borders — pipes replace the old hairlines */
+.efs-bay--paper :deep(.efs-section) {
+  border-left: none;
+  border-right: none;
+  border-bottom-color: rgba(0, 0, 0, 0.12);
+}
+
+.efs-bay--paper :deep(.section-content) {
+  background: transparent;
+}
+
+/* SAAB 400×50 body ratio; bay-scale so notes/vehicles match flight strips + headers */
+.efs-bay--paper :deep(.flight-strip) {
+  --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+}
+
+/* Vertical spacing only — strip↔strip = strip↔header; sideways unchanged */
+.efs-bay--paper :deep(.top-strips-container),
+.efs-bay--paper :deep(.bottom-strips-container) {
+  display: flex;
+  flex-direction: column;
+  padding: var(--paper-strip-gap) 2px;
+  gap: var(--paper-strip-gap);
+  box-sizing: border-box;
+}
+.efs-bay--paper :deep(.top-strips-container .flight-strip.look-paper),
+.efs-bay--paper :deep(.top-strips-container .flight-strip.paper-info-holder),
+.efs-bay--paper :deep(.bottom-strips-container .flight-strip.look-paper),
+.efs-bay--paper :deep(.bottom-strips-container .flight-strip.paper-info-holder) {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .bay-header {

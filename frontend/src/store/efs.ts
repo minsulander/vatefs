@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo, AupR16Status } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
@@ -25,6 +25,16 @@ import {
     collapseExpandersOnLeaveCdAllOrTsat,
     collapseTopExpanderOnCdAllToTsatIfNoCtot,
 } from "@/composables/useStripExpanders"
+import {
+    playStripPrintSound,
+    getStripPrintDurationMs,
+    isStripPrintSound,
+} from "@/composables/useStripPrintSound"
+import { clearStripScribbles, pushRisingDiagonalLeftCol } from "@/composables/useStripScribbles"
+
+function isStripPrintMode(value: unknown): value is StripPrintMode {
+    return value === 'auto' || value === 'manual'
+}
 
 export const useEfsStore = defineStore("efs", () => {
 
@@ -237,6 +247,11 @@ export const useEfsStore = defineStore("efs", () => {
     /** TWR AOR: runway ends we cover; null = all (solo / no split) */
     const essaCoveredRunways = ref<string[] | null>(null)
 
+    // ESGG paper role picker (CD / GND / TWR)
+    const esggRolesMode = ref(false)
+    const esggRoles = ref<string[]>([])
+    const esggRolesManual = ref(false)
+
     /** Manual ESSA RWY combination id (Appendix A/B); cleared when ES runways change */
     const essaRwyConfigId = ref<string | null>(null)
     const essaRwyConfigManual = ref(false)
@@ -446,10 +461,22 @@ export const useEfsStore = defineStore("efs", () => {
     const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
     const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
     const autoDepSquawkCfl = ref(DEFAULT_UI_SETTINGS.autoDepSquawkCfl)
-    const equalBayColumns = ref(DEFAULT_UI_SETTINGS.equalBayColumns)
     const showTobtSetByA = ref(DEFAULT_UI_SETTINGS.showTobtSetByA)
+    const stripPrintSound = ref<StripPrintSound>(DEFAULT_UI_SETTINGS.stripPrintSound)
+    const stripPrintMode = ref<StripPrintMode>(DEFAULT_UI_SETTINGS.stripPrintMode)
+    /** Strip chrome from active config (`paper` = ESGG FPS print features) */
+    const stripLook = ref<StripLook>('saab')
+    const pendingPrintFlights = ref<PendingPrintFlightInfo[]>([])
     /** Backend: any myAirport has GNG stand data */
     const autoParkAvailable = ref(false)
+
+    const isPaperLook = computed(() => stripLook.value === 'paper')
+
+    /** Skip print sounds during bulk sync (connect / refresh / config switch). */
+    let suppressPrintSoundUntil = 0
+    function suppressStripPrintSounds(ms = 2000) {
+        suppressPrintSoundUntil = Math.max(suppressPrintSoundUntil, Date.now() + ms)
+    }
 
     function applyUserSettings(settings: UiSettings, available?: boolean) {
         dclSoundEnabled.value = settings.dclSoundEnabled
@@ -467,14 +494,16 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.autoDepSquawkCfl === 'boolean'
                 ? settings.autoDepSquawkCfl
                 : DEFAULT_UI_SETTINGS.autoDepSquawkCfl
-        equalBayColumns.value =
-            typeof settings.equalBayColumns === 'boolean'
-                ? settings.equalBayColumns
-                : DEFAULT_UI_SETTINGS.equalBayColumns
         showTobtSetByA.value =
             typeof settings.showTobtSetByA === 'boolean'
                 ? settings.showTobtSetByA
                 : DEFAULT_UI_SETTINGS.showTobtSetByA
+        stripPrintSound.value = isStripPrintSound(settings.stripPrintSound)
+            ? settings.stripPrintSound
+            : DEFAULT_UI_SETTINGS.stripPrintSound
+        stripPrintMode.value = isStripPrintMode(settings.stripPrintMode)
+            ? settings.stripPrintMode
+            : DEFAULT_UI_SETTINGS.stripPrintMode
         if (typeof available === 'boolean') autoParkAvailable.value = available
     }
 
@@ -489,8 +518,9 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
         if (typeof partial.autoDepSquawkCfl === 'boolean') autoDepSquawkCfl.value = partial.autoDepSquawkCfl
-        if (typeof partial.equalBayColumns === 'boolean') equalBayColumns.value = partial.equalBayColumns
         if (typeof partial.showTobtSetByA === 'boolean') showTobtSetByA.value = partial.showTobtSetByA
+        if (isStripPrintSound(partial.stripPrintSound)) stripPrintSound.value = partial.stripPrintSound
+        if (isStripPrintMode(partial.stripPrintMode)) stripPrintMode.value = partial.stripPrintMode
         sendMessage({ type: 'updateUserSettings', settings: partial })
     }
     function connect() {
@@ -504,7 +534,8 @@ export const useEfsStore = defineStore("efs", () => {
         socket.onopen = () => {
             console.log("socket opened")
             connected.value = true
-            // Server sends initial state on connect, no need to request
+            // Server sends initial state on connect — don't print-sound the backlog
+            suppressStripPrintSounds(2500)
         }
         socket.onclose = () => {
             console.log("socket closed")
@@ -540,7 +571,7 @@ export const useEfsStore = defineStore("efs", () => {
                         handleLayoutMessage(message.layout)
                         break
                     case 'strip':
-                        handleStripMessage(message.strip, message.autoMoved)
+                        handleStripMessage(message.strip, message.autoMoved, message.cleanReprint)
                         break
                     case 'stripDelete':
                         handleStripDeleteMessage(message.stripId)
@@ -596,6 +627,9 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'deletedStrips':
                         deletedStrips.value = message.strips
                         break
+                    case 'pendingPrintList':
+                        pendingPrintFlights.value = message.flights
+                        break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
                 }
@@ -644,6 +678,36 @@ export const useEfsStore = defineStore("efs", () => {
         autoMovingStripIds.value = next
     }
 
+    /**
+     * Paper print animation: destination strip stays hidden while a clone
+     * "prints" at bottom-right (sound length) then flies to the bay slot.
+     */
+    const printingStripIds = ref<Set<string>>(new Set())
+    const printAnimDurationMs = new Map<string, number>()
+
+    /** Callsigns awaiting print animation after Print dialog / printStrip. */
+    const pendingPrintAnimCallsigns = new Set<string>()
+
+    function beginPrintAnim(stripId: string, durationMs: number) {
+        printAnimDurationMs.set(stripId, durationMs)
+        if (printingStripIds.value.has(stripId)) return
+        const next = new Set(printingStripIds.value)
+        next.add(stripId)
+        printingStripIds.value = next
+    }
+
+    function endPrintAnim(stripId: string) {
+        printAnimDurationMs.delete(stripId)
+        if (!printingStripIds.value.has(stripId)) return
+        const next = new Set(printingStripIds.value)
+        next.delete(stripId)
+        printingStripIds.value = next
+    }
+
+    function getPrintAnimDurationMs(stripId: string): number {
+        return printAnimDurationMs.get(stripId) ?? getStripPrintDurationMs(stripPrintSound.value)
+    }
+
     /** Awaiting server id, then that strip id — bay note opens zoom scribble once. */
     const PENDING_NOTE_SCRIBBLE_AWAIT = '__awaiting__'
     const pendingNoteScribbleId = ref<string | null>(null)
@@ -655,8 +719,13 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Handle strip message from server
-    function handleStripMessage(strip: FlightStrip, autoMoved?: boolean) {
+    function handleStripMessage(strip: FlightStrip, autoMoved?: boolean, cleanReprint?: boolean) {
         console.log("received strip:", strip.callsign)
+
+        // G/A APP-assume: new inbound strip reuses callsign id — wipe freehand ink
+        if (cleanReprint) {
+            clearStripScribbles(strip.id)
+        }
 
         const prev = strips.value.get(strip.id)
 
@@ -686,6 +755,22 @@ export const useEfsStore = defineStore("efs", () => {
         }
 
         const isNew = !prev
+        // Clear pending Print-dialog callsign mark (manual queue / printStrip)
+        const csKey = strip.callsign?.trim().toUpperCase()
+        if (csKey && pendingPrintAnimCallsigns.has(csKey)) pendingPrintAnimCallsigns.delete(csKey)
+        // Paper: new / clean-reprint strips print with sound length; Off → appear instantly
+        if (
+            (isNew || cleanReprint) &&
+            isPaperLook.value &&
+            Date.now() >= suppressPrintSoundUntil
+        ) {
+            const mode = stripPrintSound.value
+            if (mode !== 'off') {
+                const playedMs = playStripPrintSound(mode)
+                const durationMs = playedMs > 0 ? playedMs : getStripPrintDurationMs(mode)
+                beginPrintAnim(strip.id, durationMs)
+            }
+        }
         strips.value.set(strip.id, strip)
         stripsVersion.value++
 
@@ -699,9 +784,83 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    /**
+     * Paper look: fly a clone of the strip into the bottom-bar trash icon
+     * (used for auto-removes; manual trash-drop already removed the DOM node).
+     */
+    function flyStripToTrash(stripId: string) {
+        if (!isPaperLook.value) return
+        const nodes = document.querySelectorAll<HTMLElement>(`[data-strip-id="${stripId}"]`)
+        let el: HTMLElement | null = null
+        for (const n of nodes) {
+            if (!n.classList.contains('is-large-view')) {
+                el = n
+                break
+            }
+        }
+        if (!el) return
+        const trash = document.querySelector<HTMLElement>('.efs-trash-drop')
+        if (!trash) return
+
+        const from = el.getBoundingClientRect()
+        if (from.width < 2 || from.height < 2) return
+        const to = trash.getBoundingClientRect()
+        const clone = el.cloneNode(true) as HTMLElement
+        clone.classList.remove('auto-move-hidden', 'print-anim-hidden', 'dragging')
+        clone.removeAttribute('data-strip-id')
+        Object.assign(clone.style, {
+            position: 'fixed',
+            left: `${from.left}px`,
+            top: `${from.top}px`,
+            width: `${from.width}px`,
+            height: `${from.height}px`,
+            zIndex: '10000',
+            pointerEvents: 'none',
+            margin: '0',
+            transition: 'none',
+            opacity: '1',
+            visibility: 'visible',
+            transformOrigin: 'center center',
+        })
+        document.body.appendChild(clone)
+
+        const destX = to.left + to.width / 2 - from.width / 2
+        const destY = to.top + to.height / 2 - from.height / 2
+        trash.classList.add('trash-receiving')
+        const clearReceiving = () => trash.classList.remove('trash-receiving')
+
+        const anim = clone.animate(
+            [
+                {
+                    left: `${from.left}px`,
+                    top: `${from.top}px`,
+                    transform: 'scale(1)',
+                    opacity: 1,
+                },
+                {
+                    left: `${destX}px`,
+                    top: `${destY}px`,
+                    transform: 'scale(0.12)',
+                    opacity: 0.25,
+                },
+            ],
+            { duration: 480, easing: 'ease-in', fill: 'forwards' },
+        )
+        anim.onfinish = () => {
+            clone.remove()
+            clearReceiving()
+        }
+        anim.oncancel = () => {
+            clone.remove()
+            clearReceiving()
+        }
+    }
+
     // Handle strip delete message from server
     function handleStripDeleteMessage(stripId: string) {
         console.log("received strip delete:", stripId)
+        // Capture DOM before unmount so auto-removed strips can fly to trash
+        flyStripToTrash(stripId)
         strips.value.delete(stripId)
         stripsVersion.value++
     }
@@ -737,6 +896,7 @@ export const useEfsStore = defineStore("efs", () => {
     // Refresh all data from server
     function refresh(serverRequested: boolean = false) {
         console.log("Refreshing all data from server")
+        suppressStripPrintSounds(2500)
         pendingLayoutHeights.value = snapshotSectionHeights()
         // Clear local state
         layout.value = { bays: [] }
@@ -782,7 +942,11 @@ export const useEfsStore = defineStore("efs", () => {
         essaRolesMode?: boolean
         essaRoles?: string[]
         essaRolesManual?: boolean
+        esggRolesMode?: boolean
+        esggRoles?: string[]
+        esggRolesManual?: boolean
         essaCoveredRunways?: string[]
+        look?: StripLook
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
@@ -798,7 +962,14 @@ export const useEfsStore = defineStore("efs", () => {
         essaRolesMode.value = message.essaRolesMode ?? false
         essaRoles.value = message.essaRoles ?? []
         essaRolesManual.value = message.essaRolesManual ?? false
+        esggRolesMode.value = message.esggRolesMode ?? false
+        esggRoles.value = message.esggRoles ?? []
+        esggRolesManual.value = message.esggRolesManual ?? false
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
+        stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
+        if (stripLook.value !== 'paper') {
+            pendingPrintFlights.value = []
+        }
         const nextActive = message.activeAirports ?? message.airports
         markNewlyActiveAirports(nextActive)
         activeAirports.value = nextActive
@@ -1114,6 +1285,29 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Actions
+    /**
+     * Drag lock from EuroScope assume/track owner (`ownedByOther` / ownerCallsign / ownerSi).
+     * Sole exception (paper): incoming transfer to me.
+     */
+    function isStripOwnedByOther(strip: FlightStrip): boolean {
+        if (strip.stripType === 'note' || strip.stripType === 'vehicle') return false
+        if (strip.transferPending === 'in' || strip.isAssumed) return false
+        if (strip.ownedByOther) return true
+        const owner = strip.ownerCallsign?.trim()
+        const mine = myCallsign.value.trim()
+        if (owner && mine && owner.toUpperCase() !== mine.toUpperCase()) return true
+        // Display SI present and not assumed by me → other owner
+        // (ownerSi is formatted for UI; isAssumed already covers "mine")
+        if (strip.ownerSi?.trim()) return true
+        return false
+    }
+
+    function allowMoveOwnedStrip(strip: FlightStrip): boolean {
+        if (strip.stripType === 'note' || strip.stripType === 'vehicle') return true
+        if (!isStripOwnedByOther(strip)) return true
+        return isPaperLook.value && strip.transferPending === 'in'
+    }
+
     function moveStripToSection(
         stripId: string,
         targetBayId: string,
@@ -1122,8 +1316,7 @@ export const useEfsStore = defineStore("efs", () => {
     ) {
         const strip = strips.value.get(stripId)
         if (!strip) return
-        // Other-owned flight strips cannot be moved (notes always allowed)
-        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') return
+        if (!allowMoveOwnedStrip(strip)) return
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -1134,7 +1327,17 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Get target strips count (excluding the moving strip)
         const targetStrips = getTopStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
-        const targetPosition = resolveTargetPosition(position, targetStrips.length)
+        let targetPosition = resolveTargetPosition(position, targetStrips.length)
+
+        // Paper: pending (above KLARERING) → cleared always inserts at top of CLEARED
+        if (
+            !isSameSection &&
+            isPaperLook.value &&
+            isPendingDepSectionId(oldSectionId) &&
+            isClearedSectionId(targetSectionId)
+        ) {
+            targetPosition = 0
+        }
 
         // Handle gaps for same-zone moves
         if (isSameZone) {
@@ -1189,7 +1392,7 @@ export const useEfsStore = defineStore("efs", () => {
     ) {
         const strip = strips.value.get(stripId)
         if (!strip) return
-        if (strip.ownedByOther && strip.stripType !== 'note' && strip.stripType !== 'vehicle') return
+        if (!allowMoveOwnedStrip(strip)) return
 
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
@@ -1223,6 +1426,14 @@ export const useEfsStore = defineStore("efs", () => {
         }
 
         stripsVersion.value++
+
+        // ESGG paper: pin tray on UTFLYGNING → rising / (backend XFERs on isBottom)
+        if (
+            isPaperLook.value &&
+            (targetSectionId === 'ctr_dep' || targetSectionId.endsWith('_ctr_dep'))
+        ) {
+            pushRisingDiagonalLeftCol(stripId, 'blue', 'xfer-app')
+        }
 
         // Send update to server
         sendMessage({
@@ -1336,7 +1547,9 @@ export const useEfsStore = defineStore("efs", () => {
         const section = bay?.sections.find(s => s.id === sectionId)
         if (!section) return
 
-        const newHeight = Math.max(80, height)
+        // Headerless zones (paper pending above KLARERING) may shrink below the SAAB floor
+        const minH = section.hideHeader ? 0 : 80
+        const newHeight = Math.max(minH, height)
         const oldHeight = section.height ?? 0
 
         // Only update if height actually changed
@@ -1355,6 +1568,14 @@ export const useEfsStore = defineStore("efs", () => {
                 height: Math.round(newHeight) // Round to avoid floating point noise
             })
         }
+    }
+
+    function isPendingDepSectionId(sectionId: string): boolean {
+        return sectionId === 'pending_dep' || sectionId.endsWith('_pending_dep')
+    }
+
+    function isClearedSectionId(sectionId: string): boolean {
+        return sectionId === 'cleared' || sectionId.endsWith('_cleared')
     }
 
     // Batch send section heights (called at end of resize)
@@ -1502,17 +1723,23 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'setCtoc', stripId, ctoc })
     }
 
-    /** Record QNH given to pilot (hPa), or clear with null. */
-    function setQnhGiven(stripId: string, qnh: number | null) {
+    /** Record QNH (+ optional ATIS letter) given to pilot, or clear with null. */
+    function setQnhGiven(stripId: string, qnh: number | null, atis?: string | null) {
         const strip = strips.value.get(stripId)
         if (strip) {
             strips.value.set(stripId, {
                 ...strip,
                 qnhGiven: qnh ?? undefined,
+                atisGiven: qnh == null ? undefined : (atis != null ? (atis || undefined) : strip.atisGiven),
             })
             stripsVersion.value++
         }
-        sendMessage({ type: 'setQnhGiven', stripId, qnh })
+        sendMessage({
+            type: 'setQnhGiven',
+            stripId,
+            qnh,
+            ...(atis !== undefined ? { atis } : {}),
+        })
     }
 
     function switchConfig(file: string) {
@@ -1528,6 +1755,17 @@ export const useEfsStore = defineStore("efs", () => {
             essaRolesManual.value = false
         }
         sendMessage({ type: 'setEssaRoles', roles, manual })
+    }
+
+    /** Set ESGG roles manually, or pass manual=false to return to auto-detect. */
+    function setEsggRoles(roles: string[], manual: boolean) {
+        if (manual) {
+            esggRoles.value = [...roles]
+            esggRolesManual.value = true
+        } else {
+            esggRolesManual.value = false
+        }
+        sendMessage({ type: 'setEsggRoles', roles, manual })
     }
 
     /**
@@ -1786,7 +2024,8 @@ export const useEfsStore = defineStore("efs", () => {
                 }
             }
         }
-        return formatSidForDisplay(raw, strip.tmaExit)
+        // Paper/ESGG: no space between SID name and designator (PETEV2G)
+        return formatSidForDisplay(raw, strip.tmaExit, isPaperLook.value)
     }
 
     /**
@@ -1855,7 +2094,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     /**
-     * Assign preferred SID for uncleared ESSA/ESMS IFR deps (slow track vs letter group).
+     * Assign preferred SID for uncleared ESSA/ESMS/ESGG IFR deps.
      * Used by the SLOW chip and after manual DEP RWY changes.
      */
     async function preferSidForStrip(
@@ -1873,7 +2112,7 @@ export const useEfsStore = defineStore("efs", () => {
         const airport = strip.adep
         const runway = opts?.runway || strip.runway
         if (!airport || !runway) return
-        if (airport !== 'ESSA' && airport !== 'ESMS') return
+        if (airport !== 'ESSA' && airport !== 'ESMS' && airport !== 'ESGG') return
         if (airport === 'ESSA' && !essaRwyConfigIdResolved.value) return
         if (!opts?.ignoreForcedRoute && hasForcedSidInRoute(strip.route)) return
 
@@ -1882,6 +2121,9 @@ export const useEfsStore = defineStore("efs", () => {
             if (airport === 'ESSA') {
                 params.set('config', essaRwyConfigIdResolved.value!)
                 params.set('slow', slow ? '1' : '0')
+            }
+            if (airport === 'ESGG' && strip.callsign) {
+                params.set('callsign', strip.callsign)
             }
             // After RWY change, drop stale SID/rwy prefix so exit matching uses the route body
             let route = strip.route || ''
@@ -1955,6 +2197,16 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'listDeletedStrips' })
     }
 
+    function listPendingPrint() {
+        sendMessage({ type: 'listPendingPrint' })
+    }
+
+    function printStrip(callsign: string) {
+        const cs = callsign.trim().toUpperCase()
+        if (cs) pendingPrintAnimCallsigns.add(cs)
+        sendMessage({ type: 'printStrip', callsign: cs || callsign })
+    }
+
     function restoreStrip(stripId: string) {
         sendMessage({ type: 'restoreStrip', stripId })
     }
@@ -1967,9 +2219,19 @@ export const useEfsStore = defineStore("efs", () => {
         targetBayId?: string,
         targetSectionId?: string,
         position?: number,
-        isBottom?: boolean
+        isBottom?: boolean,
+        paperInfoKind?: PaperInfoKind
     ) {
-        if (stripType === 'note' || stripType === 'vehicle') {
+        // Auto-open scribble zoom for blank notes / empty paper strips only
+        if (
+            stripType === 'vehicle' ||
+            (stripType === 'note' &&
+                (!paperInfoKind ||
+                    paperInfoKind === 'empty' ||
+                    paperInfoKind === 'empty_frame' ||
+                    paperInfoKind === 'empty_arr' ||
+                    paperInfoKind === 'empty_dep'))
+        ) {
             pendingNoteScribbleId.value = PENDING_NOTE_SCRIBBLE_AWAIT
         }
         sendMessage({
@@ -1981,8 +2243,14 @@ export const useEfsStore = defineStore("efs", () => {
             targetBayId,
             targetSectionId,
             position,
-            isBottom
+            isBottom,
+            paperInfoKind,
         })
+    }
+
+    /** Print a blank or paper info strip (paper look). */
+    function printPaperInfoStrip(kind: PaperInfoKind) {
+        createStrip('note', undefined, undefined, undefined, undefined, undefined, undefined, undefined, kind)
     }
 
     function updateNote(stripId: string, text: string) {
@@ -2143,6 +2411,10 @@ export const useEfsStore = defineStore("efs", () => {
         essaRolesManual,
         essaCoveredRunways,
         setEssaRoles,
+        esggRolesMode,
+        esggRoles,
+        esggRolesManual,
+        setEsggRoles,
         essaRwyConfigId,
         essaRwyConfigManual,
         essaRwyConfigIdResolved,
@@ -2151,7 +2423,6 @@ export const useEfsStore = defineStore("efs", () => {
         activeRwyFlagsVersion,
         isRwyFlagActive,
         setRwyFlag,
-        equalBayColumns,
         showTobtSetByA,
         essaRwyAutoPreferId,
         essaPreferredSids,
@@ -2200,6 +2471,8 @@ export const useEfsStore = defineStore("efs", () => {
         getTopStrips,
         getBottomStrips,
         getGapsForSection,
+        isStripOwnedByOther,
+        allowMoveOwnedStrip,
         moveStripToSection,
         moveStripToBottom,
         setGapAtIndex,
@@ -2251,6 +2524,9 @@ export const useEfsStore = defineStore("efs", () => {
         autoMoveData,
         autoMovingStripIds,
         endAutoMove,
+        printingStripIds,
+        endPrintAnim,
+        getPrintAnimDurationMs,
         controllers,
         releaseStrip,
         manualTransfer,
@@ -2264,6 +2540,14 @@ export const useEfsStore = defineStore("efs", () => {
         autoParkEnabled,
         autoDepSquawkCfl,
         autoParkAvailable,
+        stripPrintSound,
+        stripPrintMode,
+        stripLook,
+        isPaperLook,
+        pendingPrintFlights,
+        listPendingPrint,
+        printStrip,
+        printPaperInfoStrip,
         updateUserSettings,
     }
 })

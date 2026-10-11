@@ -114,13 +114,33 @@ moveRules:
       type: setClearedToLand
       value: true
 
-  # CTR ARR -> RUNWAY: Set cleared to land (TWR/APP/CTR top-down)
-  # Also applies to local flights manually placed in CTR ARR
+  # Sequence bay / CTR ARR -> RUNWAY: DEP/local taxi → LINEUP; arrivals → CTL
+  move_ctr_arr_to_runway_dep:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: departure
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_ctr_arr_to_runway_local:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: local
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
   move_ctr_arr_to_runway:
     fromSectionId: ctr_arr
     toSectionId: runway
-    direction: either
+    direction: arrival
     myRole: [TWR, APP, CTR]
+    priority: 10
     command:
       type: setClearedToLand
       value: true

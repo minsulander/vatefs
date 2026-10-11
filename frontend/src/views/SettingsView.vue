@@ -1,4 +1,4 @@
-<template>
+﻿<template>
     <v-app-bar color="#2b2d31" height="30" elevation="0">
         <v-btn variant="text" color="grey" to="/"
             ><v-icon>mdi-chevron-left</v-icon> RETURN TO APP</v-btn
@@ -48,6 +48,46 @@
                 </p>
             </div>
 
+            <template v-if="efs.isPaperLook">
+                <div class="scribble-mode-option mb-4">
+                    <div class="ui-scale-label">Strip print mode</div>
+                    <v-btn-toggle
+                        :model-value="efs.stripPrintMode"
+                        mandatory
+                        density="comfortable"
+                        color="amber-darken-2"
+                        class="scribble-mode-toggle"
+                        @update:model-value="onStripPrintMode"
+                    >
+                        <v-btn value="auto" class="text-none" size="small">Auto</v-btn>
+                        <v-btn value="manual" class="text-none" size="small">Manual</v-btn>
+                    </v-btn-toggle>
+                    <p class="text-caption text-grey mt-1">
+                        Auto: strips appear when eligible (default). Manual: print each strip from the printer queue.
+                    </p>
+                </div>
+
+                <div class="scribble-mode-option mb-4">
+                    <div class="ui-scale-label">Strip print animation(+sound)</div>
+                    <v-btn-toggle
+                        :model-value="efs.stripPrintSound"
+                        mandatory
+                        density="comfortable"
+                        color="amber-darken-2"
+                        class="scribble-mode-toggle"
+                        @update:model-value="onStripPrintSound"
+                    >
+                        <v-btn value="off" class="text-none" size="small">Off</v-btn>
+                        <v-btn value="short" class="text-none" size="small">Short</v-btn>
+                        <v-btn value="long" class="text-none" size="small">Long</v-btn>
+                    </v-btn-toggle>
+                    <p class="text-caption text-grey mt-1">
+                        Printer sound and print animation length when a strip appears.
+                        Off: strips appear instantly. Default: Short.
+                    </p>
+                </div>
+            </template>
+
             <v-switch
                 color="white"
                 base-color="grey-darken-1"
@@ -83,7 +123,7 @@
                 @update:model-value="onFlashTsatWindow"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Flash green/yellow during the last minute of the TSAT ±5 startup window.
+                Flash green/yellow during the last minute of the TSAT Â±5 startup window.
             </p>
 
             <v-switch
@@ -164,35 +204,23 @@
                 style="margin-top: -15px"
             >
                 Automatically set PARK when an assumed arrival is stationary at a stand
-                (requires GRP stand data).
+                (requires GRP stand data). In paper strip mode, Auto PARK also removes the strip.
             </p>
 
             <v-switch
                 color="white"
                 base-color="grey-darken-1"
                 hide-details
-                label="Auto squawk and CFL for new departures"
+                label="Auto squawk, SID and CFL for new departures"
                 class="mt-2"
                 :model-value="efs.autoDepSquawkCfl"
                 @update:model-value="onAutoDepSquawkCfl"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                When enabled, assign a TopSky squawk and initial climb (CFL) as soon as a new
-                departure strip appears, and the strip action shows <strong>ACK CLR</strong>
-                (never CLR) to voice-ack the clearance flag. When off, open the clearance window.
-            </p>
-
-            <v-switch
-                color="white"
-                base-color="grey-darken-1"
-                hide-details
-                label="Equal bay column widths"
-                class="mt-2"
-                :model-value="efs.equalBayColumns"
-                @update:model-value="onEqualBayColumns"
-            />
-            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Keep all bay columns the same width. When off, columns may size by content.
+                When enabled, assign preferred SID (ESSA/ESMS/ESGG), TopSky squawk and initial climb
+                (CFL) as soon as a new departure strip appears, and the strip action shows
+                <strong>ACK CLR</strong> (never CLR) to voice-ack the clearance flag.
+                When off, SID/CFL/squawk are applied when you open the clearance window.
             </p>
 
             <v-switch
@@ -227,6 +255,11 @@ import {
     setStripScribbleMode,
     type StripScribbleMode,
 } from "@/composables/useStripScribbleMode"
+import { isStripPrintSound } from "@/composables/useStripPrintSound"
+
+function isStripPrintMode(value: unknown): value is "auto" | "manual" {
+    return value === "auto" || value === "manual"
+}
 
 const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
@@ -250,6 +283,16 @@ const showAppDepXcOption = computed(() =>
         return u === "ESSA" || u === "ESGG"
     }),
 )
+
+function onStripPrintMode(value: unknown) {
+    if (!isStripPrintMode(value)) return
+    efs.updateUserSettings({ stripPrintMode: value })
+}
+
+function onStripPrintSound(value: unknown) {
+    if (!isStripPrintSound(value)) return
+    efs.updateUserSettings({ stripPrintSound: value })
+}
 
 function onDclSound(value: boolean | null) {
     if (typeof value !== "boolean") return
@@ -294,11 +337,6 @@ function onAutoParkEnabled(value: boolean | null) {
 function onAutoDepSquawkCfl(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ autoDepSquawkCfl: value })
-}
-
-function onEqualBayColumns(value: boolean | null) {
-    if (typeof value !== "boolean") return
-    efs.updateUserSettings({ equalBayColumns: value })
 }
 
 function onShowTobtSetByA(value: boolean | null) {
