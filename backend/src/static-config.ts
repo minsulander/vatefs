@@ -11,7 +11,6 @@ import {
     MAX_COLUMN_COUNT,
     isMultiAirportConfig,
     normalizeColumnAirports,
-    seedColumnAirports
 } from "./multi-airport.js"
 import {
     computeAutoEssaRoles,
@@ -168,7 +167,6 @@ export function applyConfig(config: EfsStaticConfig) {
     const currentMyFrequency = staticConfig.myFrequency
     const currentMyPositionId = staticConfig.myPositionId
     const currentActiveAirports = staticConfig.activeAirports
-    const currentColumnAirports = staticConfig.columnAirports
     const currentEssaRoles = staticConfig.essaRoles
     const currentEssaRolesManual = staticConfig.essaRolesManual
     const currentEsggRoles = staticConfig.esggRoles
@@ -218,12 +216,9 @@ export function applyConfig(config: EfsStaticConfig) {
             staticConfig.activeAirports = [...currentMyAirports]
             staticConfig.myAirports = [...currentMyAirports]
         }
+        // Always start RTC with empty columns (no restore / no seed from active)
         const count = staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
-        if (currentColumnAirports && currentColumnAirports.length > 0) {
-            staticConfig.columnAirports = normalizeColumnAirports(currentColumnAirports, count)
-        } else {
-            staticConfig.columnAirports = seedColumnAirports(staticConfig.activeAirports ?? [], count)
-        }
+        staticConfig.columnAirports = normalizeColumnAirports([], count)
         rebuildMultiAirportLayout()
     }
 
@@ -337,13 +332,7 @@ export function setMyAirports(airports: string[], opts?: { force?: boolean }): s
     if (isMultiAirportConfig(staticConfig) && !opts?.force) {
         if (!staticConfig.activeAirports || staticConfig.activeAirports.length === 0) {
             setActiveAirports(incoming)
-            if (!staticConfig.columnAirports?.some(Boolean)) {
-                staticConfig.columnAirports = seedColumnAirports(
-                    staticConfig.activeAirports ?? [],
-                    staticConfig.columnCount ?? DEFAULT_COLUMN_COUNT
-                )
-                rebuildMultiAirportLayout()
-            }
+            // Do not seed column slots — RTC columns stay empty until the user picks
             return incoming
         }
         // Merge only — rwyconfig often lists a subset and must not wipe user selection

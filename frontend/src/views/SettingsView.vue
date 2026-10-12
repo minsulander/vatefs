@@ -104,70 +104,14 @@
                 color="white"
                 base-color="grey-darken-1"
                 hide-details
-                label="Flash changed times"
+                label="Coordination sounds"
                 class="mt-2"
-                :model-value="efs.flashChangedTimes"
-                @update:model-value="onFlashChangedTimes"
+                :model-value="efs.transferSoundsEnabled"
+                @update:model-value="onTransferSounds"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Briefly highlight TOBT, TSAT, and CTOT when their values change.
+                Play EuroScope sounds for transfer request, accept, and refuse.
             </p>
-
-            <v-switch
-                color="white"
-                base-color="grey-darken-1"
-                hide-details
-                label="Flash TSAT window"
-                class="mt-2"
-                :model-value="efs.flashTsatWindow"
-                @update:model-value="onFlashTsatWindow"
-            />
-            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Flash green/yellow during the last minute of the TSAT Â±5 startup window.
-            </p>
-
-            <v-switch
-                color="white"
-                base-color="grey-darken-1"
-                hide-details
-                label="Show strip ownership"
-                class="mt-2"
-                :model-value="efs.showStripOwnership"
-                @update:model-value="onShowStripOwnership"
-            />
-            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Show the tracking controller SI on strips.
-            </p>
-
-            <div v-if="efs.showStripOwnership" class="ownership-suboption">
-                <v-switch
-                    color="white"
-                    base-color="grey-darken-1"
-                    hide-details
-                    density="compact"
-                    label="Dim other-owned strips"
-                    class="mt-1"
-                    :model-value="efs.dimOtherOwnedStrips"
-                    @update:model-value="onDimOtherOwnedStrips"
-                />
-                <p class="text-caption text-grey ownership-suboption-hint">
-                    Dim strips assumed by other positions.
-                </p>
-
-                <v-switch
-                    color="white"
-                    base-color="grey-darken-1"
-                    hide-details
-                    density="compact"
-                    label="Transfer sounds"
-                    class="mt-1"
-                    :model-value="efs.transferSoundsEnabled"
-                    @update:model-value="onTransferSounds"
-                />
-                <p class="text-caption text-grey ownership-suboption-hint">
-                    Play EuroScope handoff sounds for transfer request, accept, and refuse.
-                </p>
-            </div>
 
             <v-switch
                 v-if="showAppDepXcOption"
@@ -184,8 +128,8 @@
                 class="text-caption text-grey ml-13"
                 style="margin-top: -15px"
             >
-                Always show the ideal SI and frequency on XFER, even when AFV does not detect the
-                covering position monitoring that frequency.
+                ESGG and ESSA only. Always show the ideal SI and frequency on XFER, even when AFV
+                does not detect the covering position monitoring that frequency.
             </p>
 
             <v-switch
@@ -207,20 +151,53 @@
                 (requires GRP stand data). In paper strip mode, Auto PARK also removes the strip.
             </p>
 
+            <div class="scribble-mode-option mb-4 mt-2">
+                <div class="ui-scale-label">Auto LOP+SSR</div>
+                <v-btn-toggle
+                    :model-value="efs.autoLopSsr"
+                    mandatory
+                    density="comfortable"
+                    color="amber-darken-2"
+                    class="scribble-mode-toggle"
+                    @update:model-value="onAutoLopSsr"
+                >
+                    <v-btn value="instant" class="text-none" size="small">Instant</v-btn>
+                    <v-btn value="assume" class="text-none" size="small">On assume</v-btn>
+                    <v-btn value="manual" class="text-none" size="small">Manual</v-btn>
+                </v-btn-toggle>
+                <p class="text-caption text-grey mt-1">
+                    Assign LOP DCT / preferred SID, CFL and TopSky squawk for untracked or own IFR
+                    departures. Instant: on connect/spawn. On assume: when you assume.
+                    Manual: when opening clearance. Instant and On assume show
+                    <strong>ACK CLR</strong>.
+                </p>
+            </div>
+
+            <h2 class="settings-section-title">CDM</h2>
+
             <v-switch
                 color="white"
                 base-color="grey-darken-1"
                 hide-details
-                label="Auto squawk, SID and CFL for new departures"
-                class="mt-2"
-                :model-value="efs.autoDepSquawkCfl"
-                @update:model-value="onAutoDepSquawkCfl"
+                label="Flash changed times"
+                :model-value="efs.flashChangedTimes"
+                @update:model-value="onFlashChangedTimes"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                When enabled, assign preferred SID (ESSA/ESMS/ESGG), TopSky squawk and initial climb
-                (CFL) as soon as a new departure strip appears, and the strip action shows
-                <strong>ACK CLR</strong> (never CLR) to voice-ack the clearance flag.
-                When off, SID/CFL/squawk are applied when you open the clearance window.
+                Briefly highlight TOBT, TSAT, and CTOT when their values change.
+            </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Flash TSAT window"
+                class="mt-2"
+                :model-value="efs.flashTsatWindow"
+                @update:model-value="onFlashTsatWindow"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                Flash green/yellow during the last minute of the TSAT ±5 min startup window.
             </p>
 
             <v-switch
@@ -243,6 +220,7 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useEfsStore } from "@/store/efs"
+import { isAutoLopSsrMode } from "@vatefs/common"
 import {
     useUiScalePercent,
     setUiScalePercent,
@@ -314,16 +292,6 @@ function onFlashTsatWindow(value: boolean | null) {
     efs.updateUserSettings({ flashTsatWindow: value })
 }
 
-function onShowStripOwnership(value: boolean | null) {
-    if (typeof value !== "boolean") return
-    efs.updateUserSettings({ showStripOwnership: value })
-}
-
-function onDimOtherOwnedStrips(value: boolean | null) {
-    if (typeof value !== "boolean") return
-    efs.updateUserSettings({ dimOtherOwnedStrips: value })
-}
-
 function onShowAppDepXcFrequency(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ showAppDepXcFrequency: value })
@@ -334,9 +302,9 @@ function onAutoParkEnabled(value: boolean | null) {
     efs.updateUserSettings({ autoParkEnabled: value })
 }
 
-function onAutoDepSquawkCfl(value: boolean | null) {
-    if (typeof value !== "boolean") return
-    efs.updateUserSettings({ autoDepSquawkCfl: value })
+function onAutoLopSsr(value: unknown) {
+    if (!isAutoLopSsrMode(value)) return
+    efs.updateUserSettings({ autoLopSsr: value })
 }
 
 function onShowTobtSetByA(value: boolean | null) {
@@ -375,21 +343,10 @@ function onShowTobtSetByA(value: boolean | null) {
     margin-top: 0.25rem;
 }
 
-.ownership-suboption {
-    margin-left: 2rem;
-}
-
-.ownership-suboption-hint {
-    margin-top: -10px;
-    margin-left: 2.75rem; /* align under compact switch label */
-}
-
-.ownership-suboption :deep(.v-switch) {
-    font-size: 0.875rem;
-}
-
-.ownership-suboption :deep(.v-label) {
-    font-size: 0.875rem;
-    opacity: 0.9;
+.settings-section-title {
+    margin: 1.5rem 0 0.75rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #c4c8ce;
 }
 </style>

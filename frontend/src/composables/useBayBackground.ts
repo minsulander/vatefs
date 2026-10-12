@@ -3,14 +3,18 @@ import { computed, ref } from 'vue'
 const STORAGE_KEY = 'efs/bayBgBrightness'
 /** Darkest bay bg — matches top/bottom bar */
 const DARK_RGB = { r: 0x00, g: 0x00, b: 0x00 }
-/** Max brt — cold grey, a bit brighter than previous #767882 */
-const LIGHT_RGB = { r: 0x84, g: 0x86, b: 0x90 }
+/** Max brt — ESSA / default: cold grey (original) */
+const LIGHT_RGB_DEFAULT = { r: 0x84, g: 0x86, b: 0x90 }
+/** Max brt — RTC: warm grey (less blue) */
+const LIGHT_RGB_RTC = { r: 0x8c, g: 0x88, b: 0x82 }
 const PERCENT_MIN = 0
 const PERCENT_MAX = 100
 export const BAY_BG_BRIGHTNESS_DEFAULT = 50
 const PERCENT_DEFAULT = BAY_BG_BRIGHTNESS_DEFAULT
 
 const brightness = ref(loadPercent())
+/** When true, use warm RTC grey scale; otherwise ESSA/default cold grey */
+const rtcPalette = ref(false)
 
 function clampPercent(n: number): number {
   if (!Number.isFinite(n)) return PERCENT_DEFAULT
@@ -31,18 +35,19 @@ function mixChannel(from: number, to: number, t: number): number {
   return Math.round(from + (to - from) * t)
 }
 
-/** Single linear scale: 0 = #000000 … 100 = #848690 */
-export function bayBgColorFromBrightness(percent: number): string {
+/** Single linear scale: 0 = #000000 … 100 = palette light grey */
+export function bayBgColorFromBrightness(percent: number, warmRtc = false): string {
+  const light = warmRtc ? LIGHT_RGB_RTC : LIGHT_RGB_DEFAULT
   const t = clampPercent(percent) / 100
-  const r = mixChannel(DARK_RGB.r, LIGHT_RGB.r, t)
-  const g = mixChannel(DARK_RGB.g, LIGHT_RGB.g, t)
-  const b = mixChannel(DARK_RGB.b, LIGHT_RGB.b, t)
+  const r = mixChannel(DARK_RGB.r, light.r, t)
+  const g = mixChannel(DARK_RGB.g, light.g, t)
+  const b = mixChannel(DARK_RGB.b, light.b, t)
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 }
 
 function applyBayBg(): void {
   if (typeof document === 'undefined') return
-  const color = bayBgColorFromBrightness(brightness.value)
+  const color = bayBgColorFromBrightness(brightness.value, rtcPalette.value)
   document.documentElement.style.setProperty('--efs-bay-bg', color)
 }
 
@@ -57,6 +62,13 @@ export function setBayBgBrightness(percent: number): void {
   applyBayBg()
 }
 
+/** Switch bay bg palette: RTC warm grey vs ESSA/default cold grey. */
+export function setBayBgRtcPalette(enabled: boolean): void {
+  if (rtcPalette.value === enabled) return
+  rtcPalette.value = enabled
+  applyBayBg()
+}
+
 /** Call once from App mount so CSS var is ready before first paint of bays. */
 export function startBayBackground(): void {
   applyBayBg()
@@ -67,5 +79,5 @@ export function useBayBgBrightness() {
 }
 
 export function useBayBgColor() {
-  return computed(() => bayBgColorFromBrightness(brightness.value))
+  return computed(() => bayBgColorFromBrightness(brightness.value, rtcPalette.value))
 }

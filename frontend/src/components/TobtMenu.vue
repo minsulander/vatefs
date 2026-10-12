@@ -10,7 +10,7 @@
   >
     <div class="tobt-menu" @click.stop>
       <button type="button" class="tobt-menu-top" title="Close" @click="closeMenu">
-        <div class="tobt-menu-header">TOBT</div>
+        <div class="tobt-menu-header">{{ kindLabel }}</div>
         <div class="tobt-menu-callsign">{{ strip.callsign }}</div>
       </button>
       <div class="tobt-menu-manual" @click.stop>
@@ -36,12 +36,12 @@
           class="tobt-menu-item"
           :disabled="!manualValid"
           @click="onSetOnly"
-        >Set TOBT</button>
+        >{{ setLabel }}</button>
         <button
           type="button"
           class="tobt-menu-item tobt-menu-ready"
           @click="onReady"
-        >Ready TOBT</button>
+        >{{ readyLabel }}</button>
       </div>
     </div>
   </v-menu>
@@ -52,14 +52,18 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 
+export type TobtMenuKind = 'tobt' | 'eobt'
+
 const props = withDefaults(
   defineProps<{
     modelValue: boolean
     strip: FlightStrip
     target: [number, number]
+    /** TOBT (CDM) or EOBT (SAAB EFS-wide) */
+    kind?: TobtMenuKind
     zIndex?: number
   }>(),
-  { zIndex: 2600 },
+  { kind: 'tobt', zIndex: 2600 },
 )
 
 const emit = defineEmits<{
@@ -71,6 +75,10 @@ const manualInput = ref<HTMLInputElement | null>(null)
 const manualText = ref('')
 const manualValid = computed(() => parseTobtHhmm(manualText.value) != null)
 let ignoreCloseUntil = 0
+
+const kindLabel = computed(() => (props.kind === 'eobt' ? 'EOBT' : 'TOBT'))
+const setLabel = computed(() => (props.kind === 'eobt' ? 'Set EOBT' : 'Set TOBT'))
+const readyLabel = computed(() => (props.kind === 'eobt' ? 'Ready EOBT' : 'Ready TOBT'))
 
 function utcNowHhmm(): string {
   const d = new Date()
@@ -98,7 +106,10 @@ function parseTobtHhmm(text: string): string | null {
 }
 
 function seedText() {
-  const raw = props.strip.tobt || props.strip.eobt || utcNowHhmm()
+  const raw =
+    props.kind === 'eobt'
+      ? props.strip.eobt || utcNowHhmm()
+      : props.strip.tobt || props.strip.eobt || utcNowHhmm()
   const digits = raw.replace(/\D/g, '').slice(0, 4)
   manualText.value = formatHhmmColon(digits.length === 4 ? digits : utcNowHhmm())
 }
@@ -162,14 +173,24 @@ function onSetOnly() {
   const value = parseTobtHhmm(manualText.value)
   if (!value) return
   closeMenu()
+  if (props.kind === 'eobt') {
+    if (value !== (props.strip.eobt || '')) {
+      store.viffUpdateEobt(props.strip.id, value)
+    }
+    return
+  }
   if (value !== (props.strip.tobt || props.strip.eobt || '')) {
     store.viffUpdateTobt(props.strip.id, value)
   }
 }
 
-/** Ready = TOBT now (UTC HHMM) then REA — ignores the typed field. */
+/** Ready TOBT = now then REA (server). Ready EOBT = EOBT now (UTC HHMM). */
 function onReady() {
   closeMenu()
+  if (props.kind === 'eobt') {
+    store.viffUpdateEobt(props.strip.id, utcNowHhmm())
+    return
+  }
   store.viffReadyTobt(props.strip.id)
 }
 </script>

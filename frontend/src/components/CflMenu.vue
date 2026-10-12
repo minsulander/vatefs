@@ -79,7 +79,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { isApproachClearanceLabel, parseAltitudeToFeet, parseManualCfl } from '@vatefs/common'
+import {
+  buildCflMenuOptions,
+  DEFAULT_TRANSITION_ALTITUDE_FT,
+  isApproachClearanceLabel,
+  parseAltitudeToFeet,
+  parseManualCfl,
+} from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 
@@ -108,6 +114,7 @@ const appEl = ref<HTMLElement | null>(null)
 const manualInput = ref<HTMLInputElement | null>(null)
 const manualText = ref('')
 const appClrTypes = ref<string[]>([])
+const transitionAltitudeFt = ref(DEFAULT_TRANSITION_ALTITUDE_FT)
 let ignoreCloseUntil = 0
 
 /** Extra APPCLR types from TopSky (OS / CA / VA are fixed keys above). */
@@ -117,19 +124,8 @@ const customAppClrTypes = computed(() =>
 
 const manualValid = computed(() => parseManualCfl(manualText.value) != null)
 
-/** A05–A50 (500 ft), then 060–510 (1000 ft), high → low like TopSky. */
-const cflOptions: CflOption[] = (() => {
-  const opts: CflOption[] = []
-  for (let alt = 51000; alt >= 6000; alt -= 1000) {
-    const fl = Math.round(alt / 100)
-    opts.push({ label: String(fl).padStart(3, '0'), value: String(alt) })
-  }
-  for (let alt = 5000; alt >= 500; alt -= 500) {
-    const hundreds = Math.round(alt / 100)
-    opts.push({ label: `A${String(hundreds).padStart(2, '0')}`, value: String(alt) })
-  }
-  return opts
-})()
+/** Levels from TopSkyAirspace TA (same rule as FPL PEL/CFL). */
+const cflOptions = computed<CflOption[]>(() => buildCflMenuOptions(transitionAltitudeFt.value))
 
 const currentLabel = computed(() => (props.strip.clearedAltitude || '').trim().toUpperCase())
 
@@ -139,7 +135,7 @@ watch(
     if (open) {
       ignoreCloseUntil = Date.now() + 450
       manualText.value = ''
-      await fetchAppClr()
+      await Promise.all([fetchAppClr(), fetchTransitionAltitude()])
       await nextTick()
       scrollToSelected()
       // Layout settles after APPCLR rows mount
@@ -190,6 +186,34 @@ function submitManual() {
   if (feet == null) return
   store.sendAssignment(props.strip.id, 'assignCfl', String(feet))
   closeMenu()
+}
+
+function taAirportForStrip(): string {
+  const type = props.strip.stripType
+  const dest = (props.strip.ades || '').trim().toUpperCase()
+  const orig = (props.strip.adep || '').trim().toUpperCase()
+  if (type === 'arrival' || type === 'local') return dest
+  return orig || dest
+}
+
+async function fetchTransitionAltitude() {
+  const airport = taAirportForStrip()
+  if (!airport || airport === '????' || airport === 'ZZZZ') {
+    transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+    return
+  }
+  try {
+    const res = await fetch(`/api/transition-altitude?airport=${encodeURIComponent(airport)}`)
+    if (!res.ok) {
+      transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+      return
+    }
+    const data = (await res.json()) as { feet?: number }
+    transitionAltitudeFt.value =
+      typeof data.feet === 'number' && data.feet > 0 ? data.feet : DEFAULT_TRANSITION_ALTITUDE_FT
+  } catch {
+    transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+  }
 }
 
 async function fetchAppClr() {

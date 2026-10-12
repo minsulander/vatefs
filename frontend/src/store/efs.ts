@@ -1,11 +1,12 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
     gapKey,
     DEFAULT_UI_SETTINGS,
+    isAutoLopSsrMode,
     resolveEssaRwyConfigId,
     extractTmaExitPoint,
     formatAhdVectorSidDisplay,
@@ -17,6 +18,8 @@ import {
     hasVectRemark,
     isIfrSidEligible,
     isTrackSidName,
+    isLopFprDepAirport,
+    fprDepDisplayFix,
     hasSlowRemark,
     sidsMatch,
     withVectRemark,
@@ -460,7 +463,7 @@ export const useEfsStore = defineStore("efs", () => {
     const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
     const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
     const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
-    const autoDepSquawkCfl = ref(DEFAULT_UI_SETTINGS.autoDepSquawkCfl)
+    const autoLopSsr = ref<AutoLopSsrMode>(DEFAULT_UI_SETTINGS.autoLopSsr)
     const showTobtSetByA = ref(DEFAULT_UI_SETTINGS.showTobtSetByA)
     const stripPrintSound = ref<StripPrintSound>(DEFAULT_UI_SETTINGS.stripPrintSound)
     const stripPrintMode = ref<StripPrintMode>(DEFAULT_UI_SETTINGS.stripPrintMode)
@@ -490,10 +493,9 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.autoParkEnabled === 'boolean'
                 ? settings.autoParkEnabled
                 : DEFAULT_UI_SETTINGS.autoParkEnabled
-        autoDepSquawkCfl.value =
-            typeof settings.autoDepSquawkCfl === 'boolean'
-                ? settings.autoDepSquawkCfl
-                : DEFAULT_UI_SETTINGS.autoDepSquawkCfl
+        autoLopSsr.value = isAutoLopSsrMode(settings.autoLopSsr)
+            ? settings.autoLopSsr
+            : DEFAULT_UI_SETTINGS.autoLopSsr
         showTobtSetByA.value =
             typeof settings.showTobtSetByA === 'boolean'
                 ? settings.showTobtSetByA
@@ -517,7 +519,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
         if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
-        if (typeof partial.autoDepSquawkCfl === 'boolean') autoDepSquawkCfl.value = partial.autoDepSquawkCfl
+        if (isAutoLopSsrMode(partial.autoLopSsr)) autoLopSsr.value = partial.autoLopSsr
         if (typeof partial.showTobtSetByA === 'boolean') showTobtSetByA.value = partial.showTobtSetByA
         if (isStripPrintSound(partial.stripPrintSound)) stripPrintSound.value = partial.stripPrintSound
         if (isStripPrintMode(partial.stripPrintMode)) stripPrintMode.value = partial.stripPrintMode
@@ -1057,7 +1059,7 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function setColumnCount(count: number) {
-        const n = Math.max(2, Math.min(6, Math.floor(count)))
+        const n = Math.max(1, Math.min(6, Math.floor(count)))
         if (n === columnCount.value) return
         sendMessage({ type: 'setColumnCount', count: n })
         // Optimistic local update until status/layout arrives
@@ -1171,14 +1173,15 @@ export const useEfsStore = defineStore("efs", () => {
         return true
     }
 
-    // Unique accents for up to MAX columns (2–6); no reuse within a layout
+    // Unique accents for up to MAX columns (1–6) — RTC header/frame colours
+    // Teal is warm/greyish (not icy blue); orange stays as second column
     const COLUMN_COLORS = [
-        '#4d9eab',
-        '#f3b84b',
-        '#9e6dc2',
-        '#e57373',
-        '#81c784',
-        '#64b5f6',
+        '#5c9e94',
+        '#e89a3a',
+        '#9a6fb0',
+        '#d96b6b',
+        '#6fad72',
+        '#6a9ec4',
     ] as const
 
     function columnColor(index: number): string {
@@ -1612,9 +1615,20 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    /** IFR DEP/local — eligible for VECT / ve{exit} SID display (ARR never). */
+    function isVectCapableStrip(strip: FlightStrip): boolean {
+        if (strip.stripType !== 'departure' && strip.stripType !== 'local') return false
+        return isIfrSidEligible(strip.flightRules)
+    }
+
+    /** Auto-set VECT on AHD only while still on ground. */
+    function shouldAutoVectOnAhd(strip: FlightStrip): boolean {
+        return isVectCapableStrip(strip) && strip.airborne !== true
+    }
+
     /**
-     * Set/clear AHD: setting clears SID (preferred + assigned) and adds VECT;
-     * clearing removes VECT. Strip SID cell shows ve{TMA exit} while AHD is set.
+     * Set/clear AHD. For IFR DEP/local on ground: clear SID + add VECT (SID cell → ve{exit}).
+     * Arrivals / airborne: heading only (no VECT).
      */
     function applyAssignedHeading(stripId: string, heading: string) {
         const strip = strips.value.get(stripId)
@@ -1622,11 +1636,12 @@ export const useEfsStore = defineStore("efs", () => {
 
         const padded = heading.trim()
         const clearing = !padded || padded === '0' || padded === '000'
+        const autoVect = shouldAutoVectOnAhd(strip)
 
         if (clearing) {
             sendAssignment(stripId, 'assignHeading', '0')
-            // Clearing AHD also drops VECT (auto-set with heading)
-            if (hasVectRemark(strip.remarks)) {
+            // Clear VECT for IFR DEP/local even if now airborne
+            if (isVectCapableStrip(strip) && hasVectRemark(strip.remarks)) {
                 updateRemarks(stripId, withVectRemark(strip.remarks, false))
             }
             strips.value.set(stripId, {
@@ -1637,7 +1652,148 @@ export const useEfsStore = defineStore("efs", () => {
             return
         }
 
+        // TopSky AHD special: localizer (ARR) — backend sets scratch /LLZ/
+        if (padded.toUpperCase() === 'LLZ') {
+            sendAssignment(stripId, 'assignHeading', 'LLZ')
+            strips.value.set(stripId, {
+                ...strips.value.get(stripId)!,
+                assignedHeading: 'LLZ',
+                direct: undefined,
+            })
+            stripsVersion.value++
+            return
+        }
+
         const hdg = String(Math.min(360, Math.max(1, parseInt(padded, 10) || 0))).padStart(3, '0')
+
+        if (autoVect) {
+            if (essaPreferredSids.value.has(stripId)) {
+                const next = new Map(essaPreferredSids.value)
+                next.delete(stripId)
+                essaPreferredSids.value = next
+            }
+            if (essaPreferredCfls.value.has(stripId)) {
+                const next = new Map(essaPreferredCfls.value)
+                next.delete(stripId)
+                essaPreferredCfls.value = next
+            }
+        }
+
+        sendAssignment(stripId, 'assignHeading', hdg)
+
+        if (autoVect && !hasVectRemark(strip.remarks)) {
+            updateRemarks(stripId, withVectRemark(strip.remarks, true))
+        }
+
+        const nextRoute = (() => {
+            if (!autoVect) return strip.route || ''
+            const route = strip.route || ''
+            if (!hasForcedSidInRoute(route)) return route
+            const tokens = route.trim().split(/\s+/).filter(Boolean)
+            tokens.shift()
+            return tokens.join(' ')
+        })()
+        strips.value.set(stripId, {
+            ...strips.value.get(stripId)!,
+            assignedHeading: hdg,
+            sid: autoVect ? undefined : strip.sid,
+            direct: undefined,
+            route: nextRoute,
+        })
+        stripsVersion.value++
+    }
+
+    /**
+     * After DCT clear: optimistically put ESE preferred SID back in the SID cell
+     * (display only — do not force into FPL). Backend also restores flight.sid.
+     */
+    async function restorePreferredSidDisplayAfterDctClear(stripId: string): Promise<void> {
+        const strip = strips.value.get(stripId)
+        if (!strip || strip.direct || strip.clearance) return
+        if (strip.assignedHeading || hasVectRemark(strip.remarks)) return
+        if (!isIfrSidEligible(strip.flightRules)) return
+        if (strip.stripType !== 'departure' && strip.stripType !== 'local') return
+        const airport = strip.adep
+        const runway = strip.runway
+        if (!airport || !runway) return
+        if (hasForcedSidInRoute(strip.route)) return
+        try {
+            // Preferred tables (ESSA/ESMS/ESGG) or ESE exit match for other airports
+            let sid: string | null = null
+            if (airport === 'ESSA' || airport === 'ESMS' || airport === 'ESGG') {
+                if (airport === 'ESSA' && !essaRwyConfigIdResolved.value) return
+                const params = new URLSearchParams({ airport, runway })
+                if (airport === 'ESSA') {
+                    params.set('config', essaRwyConfigIdResolved.value!)
+                    params.set('slow', hasSlowRemark(strip.remarks) || strip.isSlow ? '1' : '0')
+                }
+                if (airport === 'ESGG' && strip.callsign) {
+                    params.set('callsign', strip.callsign)
+                }
+                if (strip.route) params.set('route', strip.route)
+                const res = await fetch(`/api/preferred-sid?${params}`)
+                if (res.ok) {
+                    const data = (await res.json()) as { sid: string | null }
+                    sid = data.sid
+                }
+            }
+            if (!sid && strip.route) {
+                // Fallback: first SID from /api/sids matching route exit (ESE prio)
+                const tma =
+                    strip.tmaExit ||
+                    extractTmaExitPoint(undefined, strip.route)
+                if (tma) {
+                    const res = await fetch(
+                        `/api/sids?airport=${encodeURIComponent(airport)}&runway=${encodeURIComponent(runway)}`,
+                    )
+                    if (res.ok) {
+                        const list = (await res.json()) as { name: string }[]
+                        const exit = tma.toUpperCase()
+                        const match = list
+                            .filter(
+                                (s) =>
+                                    s.name.toUpperCase().startsWith(exit) &&
+                                    s.name.length > exit.length &&
+                                    /\d/.test(s.name.slice(exit.length)),
+                            )
+                            .sort((a, b) => a.name.localeCompare(b.name))[0]
+                        sid = match?.name ?? null
+                    }
+                }
+            }
+            if (!sid) return
+            const live = strips.value.get(stripId)
+            if (!live || live.direct) return
+            strips.value.set(stripId, { ...live, sid })
+            stripsVersion.value++
+        } catch {
+            // ignore
+        }
+    }
+
+    /**
+     * Set/clear DCT (FPR): setting clears SID and AHD (no VECT);
+     * drops forced SID/rwy from route like AHD does.
+     */
+    function applyAssignedDirect(stripId: string, point: string) {
+        const strip = strips.value.get(stripId)
+        if (!strip) return
+
+        const fix = point.trim().toUpperCase()
+        const clearing = !fix
+
+        if (clearing) {
+            sendAssignment(stripId, 'assignDirect', '')
+            strips.value.set(stripId, {
+                ...strips.value.get(stripId)!,
+                direct: undefined,
+            })
+            stripsVersion.value++
+            // Re-show ESE preferred SID (backend restores flight.sid; refresh amber preview)
+            void refreshEssaPreferredSids()
+            void restorePreferredSidDisplayAfterDctClear(stripId)
+            return
+        }
 
         // Drop preferred SID preview immediately
         if (essaPreferredSids.value.has(stripId)) {
@@ -1651,14 +1807,17 @@ export const useEfsStore = defineStore("efs", () => {
             essaPreferredCfls.value = next
         }
 
-        sendAssignment(stripId, 'assignHeading', hdg)
-        // Backend drops forced SID/rwy only — never injects ADEP/rwy for VECT
-
-        if (!hasVectRemark(strip.remarks)) {
-            updateRemarks(stripId, withVectRemark(strip.remarks, true))
+        // Clear AHD if set (DCT and heading are mutually exclusive in ES)
+        if (strip.assignedHeading) {
+            sendAssignment(stripId, 'assignHeading', '0')
+        }
+        // FPR/DCT follows filed route — drop VECT if present
+        if (hasVectRemark(strip.remarks)) {
+            updateRemarks(stripId, withVectRemark(strip.remarks, false))
         }
 
-        // Optimistic: drop forced SID prefix if present; leave ADEP/rwy or bare route alone
+        sendAssignment(stripId, 'assignDirect', fix)
+
         const nextRoute = (() => {
             const route = strip.route || ''
             if (!hasForcedSidInRoute(route)) return route
@@ -1668,9 +1827,13 @@ export const useEfsStore = defineStore("efs", () => {
         })()
         strips.value.set(stripId, {
             ...strips.value.get(stripId)!,
-            assignedHeading: hdg,
+            direct: fix,
             sid: undefined,
+            assignedHeading: undefined,
             route: nextRoute,
+            remarks: hasVectRemark(strip.remarks)
+                ? withVectRemark(strip.remarks, false)
+                : strip.remarks,
         })
         stripsVersion.value++
     }
@@ -1813,7 +1976,7 @@ export const useEfsStore = defineStore("efs", () => {
     function isEssaPreferredIfrDep(strip: FlightStrip): boolean {
         return (
             !strip.clearance &&
-            (strip.adep === 'ESSA' || strip.adep === 'ESMS') &&
+            (strip.adep === 'ESSA' || strip.adep === 'ESMS' || strip.adep === 'ESGG') &&
             isIfrSidEligible(strip.flightRules) &&
             (strip.stripType === 'departure' || strip.stripType === 'local')
         )
@@ -1926,7 +2089,11 @@ export const useEfsStore = defineStore("efs", () => {
         if (!hasRealAssignedCfl(strip)) return ''
         const formatted =
             formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
+        if (!formatted) return ''
         if (strip.stripType === 'arrival' && formatted === 'CA') return ''
+        // Display-string match (same level, any token form) + feet fallback
+        const xflFormatted = displayXflForStrip(strip)
+        if (xflFormatted && formatted === xflFormatted) return ''
         const cflFeet = parseAltitudeToFeet(strip.clearedAltitude)
         const xflFeet = xflFeetForStrip(strip)
         if (cflFeet != null && xflFeet != null && cflFeet === xflFeet) return ''
@@ -1997,14 +2164,30 @@ export const useEfsStore = defineStore("efs", () => {
      * - Forced SID in FPL (RNAV / track / VFR) always wins when present
      */
     function displaySidForStrip(strip: FlightStrip): string {
+        // Assigned DCT: show the waypoint name in the SID cell (not "FPR")
+        const dct = (strip.direct || '').trim().toUpperCase()
+        if (dct) return dct
+
         const exit = strip.tmaExit || extractTmaExitPoint(undefined, strip.route)
-        // Vector departure: keep ve{exit} while AHD/VECT is set — ignore GetSid until a
-        // real SID/rwy is forced into the FPL (or AHD is cleared).
+        // Vector IFR DEP/local: ve{exit} while AHD/VECT — never for arrivals
         if (
+            isVectCapableStrip(strip) &&
             (strip.assignedHeading || hasVectRemark(strip.remarks)) &&
             !hasForcedSidInRoute(strip.route)
         ) {
             return formatAhdVectorSidDisplay(exit)
+        }
+
+        // FPR airports: first FPL fix when ES/FPL has DEP RWY (no DCT). Blank if no RWY.
+        // strip.runway may be active-runway fallback — do not use it as the gate.
+        if (isLopFprDepAirport(strip.adep) && !hasForcedSidInRoute(strip.route)) {
+            const fromFpl = fprDepDisplayFix(strip.adep, strip.route, null)
+            // Backend fills strip.sid from ES depRwy + FPR path
+            return formatSidForDisplay(
+                fromFpl || strip.sid || '',
+                strip.tmaExit,
+                isPaperLook.value,
+            )
         }
 
         let raw = strip.sid || ''
@@ -2340,6 +2523,18 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    /** Push FPL field amendments to EuroScope via backend */
+    function amendFlightPlan(
+        stripId: string,
+        fields: Omit<Extract<ClientMessage, { type: 'amendFlightPlan' }>, 'type' | 'stripId'>,
+    ) {
+        sendMessage({
+            type: 'amendFlightPlan',
+            stripId,
+            ...fields,
+        })
+    }
+
     function releaseStrip(stripId: string) {
         sendMessage({
             type: 'releaseStrip',
@@ -2483,6 +2678,7 @@ export const useEfsStore = defineStore("efs", () => {
         sendStripAction,
         sendAssignment,
         applyAssignedHeading,
+        applyAssignedDirect,
         deleteStrip,
         deletedStrips,
         listDeletedStrips,
@@ -2521,6 +2717,7 @@ export const useEfsStore = defineStore("efs", () => {
         updateRemarks,
         updateHp,
         updateHs,
+        amendFlightPlan,
         autoMoveData,
         autoMovingStripIds,
         endAutoMove,
@@ -2538,7 +2735,7 @@ export const useEfsStore = defineStore("efs", () => {
         transferSoundsEnabled,
         showAppDepXcFrequency,
         autoParkEnabled,
-        autoDepSquawkCfl,
+        autoLopSsr,
         autoParkAvailable,
         stripPrintSound,
         stripPrintMode,

@@ -808,15 +808,17 @@ export function determineActionForFlight(
     const transferredToMe = isHandoffToMyself(flight, config)
 
     // Find first matching rule (never ROF when the handoff is to us — ASSUME wins)
+    // ROF is other-owned only — skip when untracked so fallback ASSUME applies
+    const uncontrolled = !flight.controller
     for (const rule of sortedRules) {
         if (evaluateActionRule(flight, sectionId, rule, config)) {
             if (transferredToMe && rule.action === 'ROF') continue
+            if (uncontrolled && rule.action === 'ROF') continue
             return rule.action
         }
     }
 
     // Fallback: ASSUME when nobody has the track or flight is transferred to me
-    const uncontrolled = !flight.controller
     if (uncontrolled || transferredToMe) {
         return 'ASSUME'
     }

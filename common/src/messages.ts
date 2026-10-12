@@ -105,6 +105,10 @@ export interface StatusMessage {
     columnCount?: number
     /** Multi-airport mode active */
     multiAirport?: boolean
+    /** RTC: ICAOs where IFR DEPs need ACC coordination (COO checkmark) */
+    needsCoordination?: string[]
+    /** RTC: per-airport TMA exits that do NOT need COO (e.g. ESNU) */
+    needsCoordinationExits?: Record<string, string[]>
     /** ESSA role-profile mode active */
     essaRolesMode?: boolean
     /** Selected ESSA positions (CD, GND-E, …) */
@@ -307,6 +311,8 @@ export type AssignmentType =
     | 'assignArrivalRunway'
     | 'assignSid'
     | 'assignHeading'
+    /** Direct-to waypoint (FPR / DCT); empty clears */
+    | 'assignDirect'
     | 'assignCfl'
     /** TopSky approach clearance type (CA/VA/CAT2/CAT3/OS/…) */
     | 'assignAppClr'
@@ -409,6 +415,13 @@ export interface UpdateHsMessage {
     type: 'updateHs'
     stripId: string
     text: string
+}
+
+/** Toggle ACC coordination flag — scratchpad `.COO` */
+export interface SetCooMessage {
+    type: 'setCoo'
+    stripId: string
+    coo: boolean
 }
 
 export interface ReleaseStripMessage {
@@ -544,7 +557,48 @@ export interface PrintStripMessage {
     callsign: string
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | ListPendingPrintMessage | PrintStripMessage
+/**
+ * Amend EuroScope flight plan from the FPL dialog (TopSky Apply).
+ * Only include fields that changed; plugin amends then echoes FPD/CAD.
+ */
+export interface AmendFlightPlanMessage {
+    type: 'amendFlightPlan'
+    stripId: string
+    flightRules?: string
+    aircraftType?: string
+    wakeTurbulence?: string
+    /** Formation / field 9 number of aircraft (1–99); embedded in AircraftInfo as N/TYPE/… */
+    numberOfAircraft?: number
+    /** ICAO field 10a, or omitted when using faaEquipment */
+    equipment?: string
+    /** ICAO field 10b surveillance */
+    surveillance?: string
+    /** FAA single-letter equip (ATYP/G) — plugin sets TYPE/WTC-G style if needed */
+    faaEquipment?: string
+    origin?: string
+    destination?: string
+    alternate?: string
+    /** Second alternate → remarks RALT/ */
+    alternate2?: string
+    eobd?: string
+    eobt?: string
+    tas?: string
+    /** Cleared/requested level as feet, or A050/F090/090 string */
+    rfl?: string | number
+    /** Filed EET HHmm */
+    eet?: string
+    route?: string
+    /** Item 18 remarks (Other) */
+    fplRemarks?: string
+    /** SUP: endurance E/HHmm and/or C/name */
+    supl?: string
+    /** Assigned SSR (with or without A prefix) */
+    squawk?: string
+    /** PEL/CFL as feet or A/F label */
+    cfl?: string | number
+}
+
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage
 
 // Type guards for message parsing
 
@@ -566,5 +620,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'listPendingPrint' || type === 'printStrip'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan'
 }

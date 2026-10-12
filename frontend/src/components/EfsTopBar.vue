@@ -319,7 +319,7 @@
                 <button
                   type="button"
                   class="column-count-btn"
-                  :disabled="!efs.multiAirport || efs.columnCount <= 2"
+                  :disabled="!efs.multiAirport || efs.columnCount <= 1"
                   title="Fewer columns"
                   @click="efs.adjustColumnCount(-1)"
                 >−</button>
@@ -339,8 +339,8 @@
 
       <!-- Right chrome (L→R): SEP/DLV/GAP (ESSA) · ATIS · QNH · OK/OFF · Fullscreen -->
       <div class="top-right-chrome">
-        <!-- SEP/DLV/DEP GAP — ESSA/SAAB only (hidden in ESGG paper mode) -->
-        <div v-if="!efs.isPaperLook" class="top-sep-group" title="Separation">
+        <!-- SEP/DLV/DEP GAP — ESSA only (hidden in ESGG paper + RTC) -->
+        <div v-if="!efs.isPaperLook && !efs.multiAirport" class="top-sep-group" title="Separation">
           <div class="top-sep-cell">
             <span class="top-sep-lbl">SEP</span>
             <span class="top-sep-val">{{ sepIndicators.sep }}</span>
@@ -355,35 +355,38 @@
           </div>
         </div>
 
-        <div
-          v-if="topAtisEntries.length"
-          class="top-atis"
-          :class="{ 'is-changed': topAtisChanged }"
-          :title="topAtisTitle"
-        >
-          <span class="top-atis-lbl">ATIS</span>
-          <span
-            v-for="(entry, i) in topAtisEntries"
-            :key="`${entry.kind}-${entry.letter}-${i}`"
-            class="top-atis-letter"
-            :class="{
-              'is-changed': topAtisChanged,
-              'is-arr': !topAtisChanged && entry.kind === 'arr',
-              'is-dep': !topAtisChanged && entry.kind === 'dep',
-            }"
-          >{{ entry.letter }}</span>
-        </div>
+        <!-- ATIS / QNH — ESSA only (RTC uses per-column bay headers) -->
+        <template v-if="!efs.multiAirport">
+          <div
+            v-if="topAtisEntries.length"
+            class="top-atis"
+            :class="{ 'is-changed': topAtisChanged }"
+            :title="topAtisTitle"
+          >
+            <span class="top-atis-lbl">ATIS</span>
+            <span
+              v-for="(entry, i) in topAtisEntries"
+              :key="`${entry.kind}-${entry.letter}-${i}`"
+              class="top-atis-letter"
+              :class="{
+                'is-changed': topAtisChanged,
+                'is-arr': !topAtisChanged && entry.kind === 'arr',
+                'is-dep': !topAtisChanged && entry.kind === 'dep',
+              }"
+            >{{ entry.letter }}</span>
+          </div>
 
-        <button
-          v-if="topQnh != null"
-          type="button"
-          class="top-qnh"
-          :class="{ 'is-changed': topQnhChanged }"
-          :title="topQnhChanged ? `QNH ${topQnh} - click to acknowledge` : `QNH ${topQnh}`"
-          @click="onTopQnhClick"
-        >
-          <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
-        </button>
+          <button
+            v-if="topQnh != null"
+            type="button"
+            class="top-qnh"
+            :class="{ 'is-changed': topQnhChanged }"
+            :title="topQnhChanged ? `QNH ${topQnh} - click to acknowledge` : `QNH ${topQnh}`"
+            @click="onTopQnhClick"
+          >
+            <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
+          </button>
+        </template>
 
         <div
           ref="connBtnWrap"
@@ -1004,16 +1007,15 @@ function buildAtisItem(airport: string, idle: boolean): AtisDisplayItem {
 
 const atisDisplayItems = computed((): AtisDisplayItem[] => {
   if (efs.multiAirport) {
-    const active = new Set(efs.activeAirports)
-    const open = efs.columnAirports.filter(
-      (a): a is string => !!a && active.has(a),
-    )
+    // Top bar: column airports + ES-active only (not leftover saved activeAirports)
+    const es = new Set(efs.esAirports)
+    const open = efs.columnAirports.filter((a): a is string => !!a)
     const visible = new Set(open)
     const idle = efs.activeAirports.filter(
-      a => !visible.has(a) && efs.airportHasTraffic(a),
+      a => es.has(a) && !visible.has(a) && efs.airportHasTraffic(a),
     )
     const newborn = efs.newlyActiveAirports.filter(
-      a => active.has(a) && !visible.has(a) && !idle.includes(a),
+      a => es.has(a) && !visible.has(a) && !idle.includes(a),
     )
     return [
       ...newborn.map(a => buildAtisItem(a, true)),

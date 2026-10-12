@@ -25,7 +25,10 @@
         v-if="store.multiAirport"
         ref="bayHeader"
         class="bay-header"
-        :class="{ 'bay-header--empty': isEmpty }"
+        :class="{
+          'bay-header--empty': isEmpty,
+          'bay-header--warm-accent': warmAccentHeader,
+        }"
         :style="{ background: accent }"
       >
         <button
@@ -38,12 +41,28 @@
           <span class="airport-picker-icao">{{ selectedAirport ?? '-' }}</span>
           <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
         </button>
+        <div v-if="!isEmpty && (headerAtis || headerQnh)" class="bay-header-meta">
+          <span
+            v-if="headerAtis"
+            class="bay-header-atis"
+            :class="{ 'bay-header-atis--flash': atisLetterFlash }"
+            :title="`ATIS ${headerAtis}`"
+          >{{ headerAtis }}</span>
+          <button
+            v-if="headerQnh"
+            type="button"
+            class="bay-header-qnh"
+            :class="{ 'bay-header-qnh--changed': headerQnhChanged }"
+            :title="headerQnhChanged ? `QNH ${headerQnh} - click to acknowledge` : `QNH ${headerQnh}`"
+            @click.stop="onHeaderQnhClick"
+          >{{ headerQnh }}</button>
+        </div>
 
         <Teleport to="body">
           <div
             v-if="pickerOpen"
             ref="pickerPanel"
-            class="efs-popup-menu efs-popup-menu--wide airport-picker-panel"
+            class="efs-popup-menu airport-picker-panel"
             :style="pickerStyle"
             @click.stop
           >
@@ -83,15 +102,13 @@
                 @click="selectAirport(opt.icao)"
               >
                 <span class="item-icao">{{ opt.icao }}</span>
-                <span class="item-meta">
-                  <span v-if="opt.name" class="item-name">{{ opt.name }}</span>
-                  <span v-if="opt.country" class="item-country">{{ opt.country }}</span>
+                <span class="item-right">
+                  <span v-if="opt.taken" class="item-taken">swap</span>
+                  <span class="item-traffic">
+                    <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
+                    <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
+                  </span>
                 </span>
-                <span class="item-traffic">
-                  <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
-                  <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
-                </span>
-                <span v-if="opt.taken" class="item-taken">swap</span>
               </button>
               <div v-if="filteredOptions.length === 0" class="efs-popup-meta">
                 No airports match
@@ -100,14 +117,26 @@
           </div>
         </Teleport>
       </div>
-      <EfsSection
-        v-for="(section, index) in bay.sections"
-        :key="section.id"
-        :section="section"
-        :bay-id="bay.id"
-        :is-first-section="index === 0"
-        :is-last-section="index === bay.sections.length - 1"
-      />
+      <!-- Empty column: no section chrome — click body to pick an airport -->
+      <button
+        v-if="store.multiAirport && isEmpty"
+        type="button"
+        class="efs-bay-empty-body"
+        title="Select airport"
+        @click="onEmptyBodyClick"
+      >
+        <span class="efs-bay-empty-hint">Select airport</span>
+      </button>
+      <template v-else>
+        <EfsSection
+          v-for="(section, index) in bay.sections"
+          :key="section.id"
+          :section="section"
+          :bay-id="bay.id"
+          :is-first-section="index === 0"
+          :is-last-section="index === bay.sections.length - 1"
+        />
+      </template>
     </div>
   </div>
 </template>
@@ -116,6 +145,7 @@
 import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import type { Bay } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
+import { buildRtcAirportList } from '@/composables/rtcAirportList'
 import EfsSection from './EfsSection.vue'
 
 const props = defineProps<{
@@ -164,57 +194,59 @@ const isEmpty = computed(() => !selectedAirport.value)
 const accent = computed(() =>
   isEmpty.value ? '#757575' : store.columnColor(columnIndex.value)
 )
+/** Orange (col 2) / red (col 4) — amber QNH-changed washes out; use lime instead */
+const warmAccentHeader = computed(
+  () => !isEmpty.value && (columnIndex.value === 1 || columnIndex.value === 3),
+)
 
-const pickerOptions = computed(() => {
-  const opts = new Set<string>([
-    ...store.airportOptions.map((a) => a.icao),
-    ...store.activeAirports,
-    ...store.columnAirports.filter((a): a is string => !!a),
-  ])
-  return [...opts]
-    .map(icao => {
-      const meta = store.airportMeta(icao)
-      const isActive = store.isAirportRelevant(icao)
-      const counts = isActive ? store.airportTrafficCounts(icao) : { arr: 0, dep: 0 }
-      const { arr, dep } = counts
-      const total = arr + dep
-      const taken = isTakenElsewhere(icao)
-      // Relevant/ES first; traffic only affects sort among relevant airports
-      const priority = (isActive ? 0 : 2) + (isActive && total > 0 ? 0 : 1)
-      return {
-        icao,
-        name: meta?.name,
-        country: meta?.country,
-        arr,
-        dep,
-        total,
-        isActive,
-        taken,
-        priority,
-      }
-    })
-    .sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority
-      if (b.total !== a.total) return b.total - a.total
-      if (b.dep !== a.dep) return b.dep - a.dep
-      if (b.arr !== a.arr) return b.arr - a.arr
-      return a.icao.localeCompare(b.icao)
-    })
+const airportAtis = computed(() => {
+  const icao = selectedAirport.value
+  if (!icao) return null
+  return store.atisInfo.find((a) => a.airport === icao) ?? null
 })
+
+const headerQnh = computed(() => {
+  const q = airportAtis.value?.qnh
+  return q != null && q > 0 ? String(q) : null
+})
+
+/** ATIS letter(s) for this column airport — single, or ARR/DEP when split */
+const headerAtis = computed(() => {
+  const info = airportAtis.value
+  if (!info) return null
+  const single = (info.atis || '').trim().toUpperCase()
+  if (single) return single
+  const arr = (info.arrAtis || '').trim().toUpperCase()
+  const dep = (info.depAtis || '').trim().toUpperCase()
+  if (arr && dep) return arr === dep ? arr : `${arr}/${dep}`
+  return arr || dep || null
+})
+
+const atisLetterFlash = computed(() => {
+  const icao = selectedAirport.value
+  return !!icao && store.isAtisLetterChanged(icao)
+})
+
+const headerQnhChanged = computed(() => {
+  const icao = selectedAirport.value
+  return !!icao && store.isQnhChanged(icao)
+})
+
+function onHeaderQnhClick() {
+  const icao = selectedAirport.value
+  if (!icao || !headerQnhChanged.value) return
+  store.acknowledgeQnh(icao)
+}
+
+const pickerOptions = computed(() =>
+  buildRtcAirportList({ excludeColumnIndex: columnIndex.value }),
+)
 
 const filteredOptions = computed(() => {
   const q = searchQuery.value.trim().toUpperCase()
   if (!q) return pickerOptions.value
-  return pickerOptions.value.filter((o) =>
-    o.icao.includes(q) ||
-    (o.name?.toUpperCase().includes(q) ?? false) ||
-    (o.country?.toUpperCase().includes(q) ?? false)
-  )
+  return pickerOptions.value.filter((o) => o.icao.includes(q))
 })
-
-function isTakenElsewhere(icao: string): boolean {
-  return store.columnAirports.some((a, i) => a === icao && i !== columnIndex.value)
-}
 
 function selectAirport(airport: string | null) {
   if (airport && !store.activeAirports.includes(airport)) {
@@ -230,6 +262,12 @@ function onPickerClick(event: MouseEvent) {
   if (store.pendingIdleSwap) return
   event.stopPropagation()
   pickerOpen.value = !pickerOpen.value
+}
+
+function onEmptyBodyClick(event: MouseEvent) {
+  if (store.pendingIdleSwap) return
+  event.stopPropagation()
+  pickerOpen.value = true
 }
 
 function onSearchEnter() {
@@ -358,6 +396,32 @@ onMounted(() => {
 
 .efs-bay--empty {
   opacity: 0.55;
+}
+
+.efs-bay-empty-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.35);
+  font: inherit;
+}
+.efs-bay-empty-body:hover {
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.03);
+}
+.efs-bay-empty-hint {
+  font-size: max(calc(12px * var(--bay-scale, 1)), calc(13px * var(--efs-scale, 1)));
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
 }
 
 /* ——— ESGG paper FPS board ———
@@ -493,9 +557,8 @@ onMounted(() => {
 }
 
 .bay-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  display: block;
   padding: 0 calc(4px * var(--bay-scale));
   flex-shrink: 0;
   min-height: 0;
@@ -503,8 +566,13 @@ onMounted(() => {
   height: max(calc(18px * var(--bay-scale)), calc(20px * var(--efs-scale, 1)));
 }
 
+/* ICAO centred; QNH/ATIS overlay on the right */
 .airport-picker-btn {
-  flex: 1;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -518,6 +586,96 @@ onMounted(() => {
   padding: 0;
   cursor: pointer;
   text-align: center;
+}
+/* Empty column: whole header is the pick control */
+.bay-header--empty .airport-picker-btn {
+  inset: 0;
+  left: 0;
+  top: 0;
+  transform: none;
+  width: 100%;
+  height: 100%;
+}
+
+.bay-header-meta {
+  position: absolute;
+  right: calc(4px * var(--bay-scale));
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(6px * var(--bay-scale));
+  min-width: 0;
+  max-width: 42%;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  user-select: none;
+  pointer-events: none;
+}
+.bay-header-meta .bay-header-qnh {
+  pointer-events: auto;
+}
+
+.bay-header-atis,
+.bay-header-qnh {
+  /* Match .section-hdr-rwy */
+  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  opacity: 0.92;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bay-header-atis {
+  pointer-events: none;
+  min-width: 0.9em;
+  text-align: center;
+}
+
+.bay-header-qnh {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  cursor: default;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.bay-header-qnh--changed {
+  color: #f59e0b;
+  opacity: 1;
+  cursor: pointer;
+}
+
+/* Warm accents (orange/red): amber blends into header — bright lime, not white */
+.bay-header--warm-accent .bay-header-qnh--changed {
+  color: #c8f542;
+}
+
+.bay-header-atis--flash {
+  animation: bay-atis-flash 0.55s ease-in-out 3;
+}
+
+@keyframes bay-atis-flash {
+  0%,
+  100% {
+    opacity: 0.92;
+    color: #fff;
+  }
+  50% {
+    opacity: 1;
+    color: #ffe082;
+  }
 }
 
 .airport-picker-btn--empty {
@@ -545,7 +703,8 @@ onMounted(() => {
 }
 
 .airport-picker-panel {
-  width: min(calc(340px * var(--efs-scale, 1)), calc(100vw - 16px));
+  width: min(calc(168px * var(--efs-scale, 1)), calc(100vw - 16px));
+  min-width: calc(148px * var(--efs-scale, 1));
   max-height: calc(360px * var(--efs-scale, 1));
   display: flex;
   flex-direction: column;
@@ -562,42 +721,24 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.item-meta {
+.item-right {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
-  text-transform: none;
-}
-
-.item-name {
-  font-size: calc(11px * var(--efs-scale, 1));
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.item-country {
-  font-size: calc(10px * var(--efs-scale, 1));
-  font-weight: 600;
-  opacity: 0.75;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  align-items: center;
+  gap: calc(6px * var(--efs-scale, 1));
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .item-traffic {
   display: flex;
-  gap: calc(6px * var(--efs-scale, 1));
+  gap: calc(5px * var(--efs-scale, 1));
   flex-shrink: 0;
-  margin-left: auto;
   font-weight: 800;
+  min-width: calc(36px * var(--efs-scale, 1));
+  justify-content: flex-end;
 }
 
 .item-taken {
-  margin-left: auto;
   font-size: calc(10px * var(--efs-scale, 1));
   font-weight: 800;
   letter-spacing: 0.06em;

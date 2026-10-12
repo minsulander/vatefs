@@ -24,7 +24,9 @@
         <v-icon :size="barIconSize">mdi-trash-can-outline</v-icon>
       </button>
 
+      <!-- Info strips + RWY flags: ESSA (SAAB) only — not RTC for now -->
       <v-menu
+        v-if="!store.multiAirport"
         v-model="infoMenuOpen"
         location="top"
         :offset="8"
@@ -162,6 +164,7 @@
       <template v-if="!store.isPaperLook">
         <div
           class="tiny-strip tiny-strip-vehicle"
+          :class="{ 'tiny-strip-vehicle-rtc': store.multiAirport }"
           draggable="true"
           @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
           @dragend="onTinyDragEnd"
@@ -401,15 +404,6 @@ function airportForBay(bayId: string | undefined): string | undefined {
   return bay?.airport ?? undefined
 }
 
-/** First section in the visible client layout (ESSA-filtered). */
-function firstVisiblePlacement(): { bayId: string; sectionId: string } | undefined {
-  for (const bay of store.layout.bays) {
-    const section = bay.sections[0]
-    if (section) return { bayId: bay.id, sectionId: section.id }
-  }
-  return undefined
-}
-
 function openCreateDialog(type: SpecialStripType, target?: {
   bayId?: string
   sectionId?: string
@@ -418,22 +412,24 @@ function openCreateDialog(type: SpecialStripType, target?: {
   gapIndex?: number
   gapSize?: number
 }) {
-  const fallback = firstVisiblePlacement()
-  const bayId = target?.bayId ?? fallback?.bayId
-  const sectionId = target?.sectionId ?? fallback?.sectionId
+  // Bottom-bar click (no drop target): leave bay/section unset so the backend
+  // places by selected airport + strip-type defaults (DEP bottom / ARR top).
+  const hasDropTarget = !!(target?.bayId && target?.sectionId)
+  const bayId = hasDropTarget ? target!.bayId : undefined
+  const sectionId = hasDropTarget ? target!.sectionId : undefined
 
   dialogStripType.value = type
   dialogTargetBayId.value = bayId
   dialogTargetSectionId.value = sectionId
-  dialogTargetPosition.value = target?.position
-  dialogTargetIsBottom.value = target?.isBottom ?? false
-  dialogTargetGapIndex.value = target?.gapIndex
-  dialogTargetGapSize.value = target?.gapSize ?? 0
-  dialogInitialAirport.value = airportForBay(bayId)
+  dialogTargetPosition.value = hasDropTarget ? target?.position : undefined
+  dialogTargetIsBottom.value = hasDropTarget ? (target?.isBottom ?? false) : false
+  dialogTargetGapIndex.value = hasDropTarget ? target?.gapIndex : undefined
+  dialogTargetGapSize.value = hasDropTarget ? (target?.gapSize ?? 0) : 0
+  dialogInitialAirport.value = airportForBay(bayId) ?? store.columnAirports.find((a): a is string => !!a) ?? store.myAirports[0]
 
-  // Vehicle: always create immediately into a visible section (no ES / no dialog).
   // Note: immediate unless multi-airport RTC needs an airport column choice.
-  if (type === 'vehicle' || (type === 'note' && !store.multiAirport)) {
+  // Vehicle always opens the dialog (callsign; airport in RTC).
+  if (type === 'note' && !store.multiAirport) {
     store.createStrip(
       type,
       undefined,
@@ -924,6 +920,7 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 .tiny-strip-cross { --tiny-type: #881fe0; }
 .tiny-strip-note { --tiny-type: #888; }
 .tiny-strip-vehicle { --tiny-type: #4a4a4a; }
+.tiny-strip-vehicle-rtc { --tiny-type: #c62828; }
 
 .tiny-body {
   flex: 1 1 auto;

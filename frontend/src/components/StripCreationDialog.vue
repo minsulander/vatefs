@@ -7,21 +7,21 @@
       </div>
 
       <div class="dialog-body">
-        <!-- Callsign input (not for notes) -->
+        <!-- Callsign (notes excluded; vehicles: no FPL match) -->
         <div v-if="!isNote" class="dialog-field">
           <label class="dialog-label">Callsign</label>
           <input
             ref="callsignInput"
             v-model="callsign"
             class="dialog-input"
-            :class="{ 'input-error': callsign.length > 0 && callsign.length < 2 }"
-            placeholder="e.g. SEKFH"
+            :class="{ 'input-error': !isVehicle && callsign.length > 0 && callsign.length < 2 }"
+            :placeholder="isVehicle ? '' : 'e.g. SEKFH'"
             maxlength="10"
             @input="onCallsignInput"
             @keydown.enter="onOk"
             @keydown.escape="onCancel"
           />
-          <div class="match-indicator" :class="matchClass">
+          <div v-if="!isVehicle" class="match-indicator" :class="matchClass">
             <span v-if="isSearching">Searching...</span>
             <span v-else-if="callsign.length < 2"></span>
             <span v-else-if="matchFound">Flight found</span>
@@ -43,12 +43,38 @@
           />
         </div>
 
-        <!-- Airport selector -->
+        <!-- Airport selector — same sort/look as RTC bay airport picker (ICAO only) -->
         <div v-if="showAirportSelector" class="dialog-field">
           <label class="dialog-label">{{ airportLabel }}</label>
-          <select ref="airportSelect" v-model="selectedAirport" class="dialog-input dialog-select" @keydown.enter="onOk">
-            <option v-for="ap in airports" :key="ap" :value="ap">{{ airportOptionLabel(ap) }}</option>
-          </select>
+          <div class="airport-pick efs-popup-menu">
+            <div class="efs-popup-list airport-pick-list">
+              <button
+                v-for="opt in airportOptions"
+                :key="opt.icao"
+                type="button"
+                class="efs-popup-item efs-popup-item--start airport-pick-item"
+                :class="{
+                  selected: opt.icao === selectedAirport,
+                  'efs-popup-muted': !opt.isActive,
+                  'airport-pick-item--accent': !!opt.accent,
+                }"
+                :style="opt.accent ? { background: opt.accent, color: '#000' } : undefined"
+                @click="selectedAirport = opt.icao"
+                @keydown.enter.prevent="onOk"
+              >
+                <span class="item-icao">{{ opt.icao }}</span>
+                <span v-if="store.multiAirport && (opt.arr || opt.dep)" class="item-right">
+                  <span class="item-traffic">
+                    <span v-if="opt.arr" class="traffic-arr">↓{{ opt.arr }}</span>
+                    <span v-if="opt.dep" class="traffic-dep">↑{{ opt.dep }}</span>
+                  </span>
+                </span>
+              </button>
+              <div v-if="airportOptions.length === 0" class="efs-popup-meta">
+                {{ store.multiAirport ? 'Assign an airport to a column first' : 'No airports' }}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -63,6 +89,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import { buildRtcAirportList } from '@/composables/rtcAirportList'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 
@@ -81,7 +108,6 @@ const emit = defineEmits<{
 const store = useEfsStore()
 
 const callsignInput = ref<HTMLInputElement | null>(null)
-const airportSelect = ref<HTMLSelectElement | null>(null)
 const callsign = ref('')
 const aircraftType = ref('')
 const selectedAirport = ref('')
@@ -90,35 +116,38 @@ const isSearching = ref(false)
 
 let searchDebounce: ReturnType<typeof setTimeout> | undefined
 
-const isNote = computed(() => props.stripType === 'note' || props.stripType === 'vehicle')
+const isNote = computed(() => props.stripType === 'note')
+const isVehicle = computed(() => props.stripType === 'vehicle')
 
-const airports = computed(() => {
-  if (store.multiAirport) {
-    const opts = new Set<string>([
-      ...store.activeAirports,
-      ...store.columnAirports.filter((a): a is string => !!a),
-    ])
-    return [...opts].sort()
+/**
+ * Airports for manual strip creation.
+ * RTC: only airports currently assigned to a visible column (column order).
+ * Single-airport: myAirports.
+ */
+const airportOptions = computed(() => {
+  if (!store.multiAirport) {
+    return store.myAirports.map((icao) => ({
+      icao,
+      arr: 0,
+      dep: 0,
+      total: 0,
+      isActive: true,
+      inColumn: true,
+      hasEsFlag: false,
+      accent: null as string | null,
+      priority: 0,
+      taken: false,
+    }))
   }
-  return store.myAirports
+  return buildRtcAirportList().filter((o) => o.inColumn)
 })
 
-function airportOptionLabel(icao: string): string {
-  const meta = store.airportMeta(icao)
-  if (meta?.name && meta?.country) return `${icao} - ${meta.name} (${meta.country})`
-  if (meta?.country) return `${icao} - ${meta.country}`
-  if (meta?.name) return `${icao} - ${meta.name}`
-  return icao
-}
-
 const showAirportSelector = computed(() => {
-  if (airports.value.length === 0) return false
-  // CROSS/NOTE airport choice is only meaningful in RTC (multi-airport) columns
-  if (props.stripType === 'cross' || props.stripType === 'note' || props.stripType === 'vehicle') {
-    return store.multiAirport
-  }
-  // VFR DEP/ARR
-  return airports.value.length > 1
+  // Exactly one column/airport → auto-select, skip picker
+  if (airportOptions.value.length === 1) return false
+  // RTC with none assigned: show empty hint; 2+ : pick
+  if (store.multiAirport) return true
+  return airportOptions.value.length > 1
 })
 
 const airportLabel = computed(() => {
@@ -145,7 +174,7 @@ const headerIndicatorClass = computed(() => {
     case 'vfrDep': return 'indicator-dep'
     case 'vfrArr': return 'indicator-arr'
     case 'cross': return 'indicator-cross'
-    case 'vehicle': return 'indicator-vehicle'
+    case 'vehicle': return store.multiAirport ? 'indicator-vehicle-rtc' : 'indicator-vehicle'
     default: return 'indicator-note'
   }
 })
@@ -157,10 +186,16 @@ const matchClass = computed(() => {
 })
 
 const isValid = computed(() => {
+  // RTC: must pick a column airport
+  if (store.multiAirport) {
+    if (!selectedAirport.value) return false
+    if (!airportOptions.value.some((o) => o.icao === selectedAirport.value)) return false
+  }
   if (isNote.value) {
     return !showAirportSelector.value || !!selectedAirport.value
   }
-  if (callsign.value.length < 2) return false
+  // Vehicle callsign is optional; other types need ≥2 chars
+  if (!isVehicle.value && callsign.value.length < 2) return false
   if (showAirportSelector.value && !selectedAirport.value) return false
   return true
 })
@@ -170,19 +205,16 @@ watch(() => props.modelValue, (open) => {
   if (open) {
     callsign.value = ''
     aircraftType.value = ''
+    const selectable = airportOptions.value.map((o) => o.icao)
     const prefer =
-      props.initialAirport && airports.value.includes(props.initialAirport)
+      props.initialAirport && selectable.includes(props.initialAirport)
         ? props.initialAirport
-        : airports.value[0] ?? ''
+        : selectable[0] ?? ''
     selectedAirport.value = prefer
     matchFound.value = false
     isSearching.value = false
     nextTick(() => {
-      if (isNote.value) {
-        airportSelect.value?.focus()
-      } else {
-        callsignInput.value?.focus()
-      }
+      if (!isNote.value) callsignInput.value?.focus()
     })
   }
 })
@@ -190,6 +222,13 @@ watch(() => props.modelValue, (open) => {
 function onCallsignInput() {
   const cs = callsign.value.toUpperCase().trim()
   callsign.value = cs
+
+  // Vehicles are local-only — never match against VATSIM FPLs
+  if (isVehicle.value) {
+    matchFound.value = false
+    isSearching.value = false
+    return
+  }
 
   if (cs.length < 2) {
     matchFound.value = false
@@ -223,7 +262,7 @@ function onOk() {
 
   emit('create', {
     callsign: isNote.value ? '' : callsign.value,
-    aircraftType: aircraftType.value || undefined,
+    aircraftType: isVehicle.value ? undefined : (aircraftType.value || undefined),
     airport: selectedAirport.value || undefined
   })
   emit('update:modelValue', false)
@@ -265,6 +304,7 @@ function onCancel() {
 .indicator-cross { background: #881fe0; }
 .indicator-note { background: #888; }
 .indicator-vehicle { background: #4a4a4a; }
+.indicator-vehicle-rtc { background: #c62828; }
 
 .dialog-header-title {
   font-size: calc(12px * var(--s));
@@ -312,11 +352,6 @@ function onCancel() {
 
 .dialog-input.input-error {
   border-color: #c62828;
-}
-
-.dialog-select {
-  appearance: auto;
-  cursor: pointer;
 }
 
 .match-indicator {
@@ -376,5 +411,31 @@ function onCancel() {
   background: #444;
   color: #777;
   cursor: default;
+}
+
+/* RTC-style airport list (ICAO only; column accent; muted if inactive) */
+.airport-pick {
+  width: 100%;
+  max-width: none;
+  border: 1px solid #555;
+  box-shadow: none;
+}
+
+.airport-pick-list {
+  max-height: calc(220px * var(--s));
+}
+
+.airport-pick-item .item-icao {
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.airport-pick-item.selected:not(.airport-pick-item--accent) {
+  outline: 2px solid #1a3a6e;
+  outline-offset: -2px;
+}
+
+.airport-pick-item.selected.airport-pick-item--accent {
+  box-shadow: inset 0 0 0 2px #000;
 }
 </style>

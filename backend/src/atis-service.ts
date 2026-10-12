@@ -1,10 +1,12 @@
 /**
- * VATSIM ATIS data polling service.
- * Fetches ATIS information from the VATSIM Data API and extracts
- * ATIS letter codes and QNH values for configured airports.
+ * VATSIM ATIS + VatIRIS METAR polling service.
+ * ATIS letter/QNH from VATSIM Data API; QNH falls back to VatIRIS METAR
+ * (same source VatIRIS uses when no ATIS/WX is online).
  */
 
 const VATSIM_DATA_URL = "https://data.vatsim.net/v3/vatsim-data.json"
+/** VatIRIS METAR proxy — same endpoint as VatIRIS metar store */
+const VATIRIS_METAR_URL = "https://api.vatiris.se/metar"
 
 interface VatsimAtisEntry {
     cid: number
@@ -17,7 +19,8 @@ interface VatsimDataResponse {
     atis: VatsimAtisEntry[]
 }
 
-interface AtisCache {
+/** ATIS-sourced fields only (letter + optional QNH from ATIS text) */
+interface AtisOnlyCache {
     letter?: string
     qnh?: number
 }
@@ -57,29 +60,38 @@ function extractAtisCode(icao: string, textLines: string[]): string | undefined 
 }
 
 /**
- * Extract QNH from ATIS text.
+ * Extract QNH from ATIS text (QNH 1013) or METAR (Q1013).
  */
-function extractQnh(textLines: string[]): number | undefined {
-    const text = textLines.join(" ")
-    const match = text.match(/QNH\s+(\d{3,4})/i)
-    if (match) {
-        const val = parseInt(match[1]!, 10)
-        // Sanity check: QNH should be between 900 and 1100 hPa
-        if (val >= 900 && val <= 1100) {
-            return val
-        }
+function extractQnhFromText(text: string): number | undefined {
+    const atisMatch = text.match(/QNH\s+(\d{3,4})/i)
+    if (atisMatch) {
+        const val = parseInt(atisMatch[1]!, 10)
+        if (val >= 900 && val <= 1100) return val
+    }
+    const metarMatch = text.match(/\bQ(\d{4})\b/)
+    if (metarMatch) {
+        const val = parseInt(metarMatch[1]!, 10)
+        if (val >= 900 && val <= 1100) return val
     }
     return undefined
+}
+
+function extractQnh(textLines: string[]): number | undefined {
+    return extractQnhFromText(textLines.join(" "))
 }
 
 export class AtisService {
     private airports: string[] = []
     private pollTimer: ReturnType<typeof setTimeout> | null = null
-    private cache = new Map<string, AtisCache>()
-    private essaCache: { arrLetter?: string; depLetter?: string; qnh?: number } = {}
+    /** ATIS-only fields (letter + QNH parsed from ATIS) */
+    private atisCache = new Map<string, AtisOnlyCache>()
+    private essaAtisCache: { arrLetter?: string; depLetter?: string; qnh?: number } = {}
+    /** Latest METAR QNH from VatIRIS (fallback when ATIS has no QNH) */
+    private metarQnh = new Map<string, number>()
     private onUpdate: () => void
     private pollIntervalMs: number
     private lastFetchOk = false
+    private lastMetarOk = false
     private started = false
 
     constructor(options: { onUpdate: () => void; pollIntervalMs?: number }) {
@@ -90,16 +102,17 @@ export class AtisService {
     /** Health for Connection status popup */
     getHealth(): { ok: boolean; detail: string } {
         if (!this.started) return { ok: false, detail: "Not started" }
-        return this.lastFetchOk
-            ? { ok: true, detail: "Connected" }
-            : { ok: false, detail: "Fetch failed" }
+        if (this.lastFetchOk && this.lastMetarOk) return { ok: true, detail: "Connected" }
+        if (this.lastFetchOk) return { ok: true, detail: "ATIS ok (METAR fallback pending)" }
+        if (this.lastMetarOk) return { ok: true, detail: "METAR ok (no ATIS)" }
+        return { ok: false, detail: "Fetch failed" }
     }
 
     /**
      * Start polling for the given airports. Fetches immediately, then schedules.
      */
     start(airports: string[]): void {
-        this.airports = airports
+        this.airports = airports.map((a) => a.toUpperCase())
         this.started = true
         this.poll()
     }
@@ -110,6 +123,7 @@ export class AtisService {
     stop(): void {
         this.started = false
         this.lastFetchOk = false
+        this.lastMetarOk = false
         if (this.pollTimer) {
             clearTimeout(this.pollTimer)
             this.pollTimer = null
@@ -117,17 +131,28 @@ export class AtisService {
     }
 
     /**
-     * Get cached ATIS data for a single-ATIS airport.
+     * Merged ATIS (+ METAR QNH fallback) for a single-ATIS airport.
      */
     getAtis(airport: string): { letter?: string; qnh?: number } {
-        return this.cache.get(airport) ?? {}
+        const key = airport.toUpperCase()
+        const atis = this.atisCache.get(key)
+        const metar = this.metarQnh.get(key)
+        return {
+            letter: atis?.letter,
+            qnh: atis?.qnh ?? metar,
+        }
     }
 
     /**
-     * Get cached ATIS data for ESSA (split arrival/departure ATIS).
+     * ESSA split ATIS + METAR QNH fallback.
      */
     getEssaAtis(): { arrLetter?: string; depLetter?: string; qnh?: number } {
-        return { ...this.essaCache }
+        const qnh = this.essaAtisCache.qnh ?? this.metarQnh.get("ESSA")
+        return {
+            arrLetter: this.essaAtisCache.arrLetter,
+            depLetter: this.essaAtisCache.depLetter,
+            qnh,
+        }
     }
 
     private schedulePoll(): void {
@@ -138,52 +163,117 @@ export class AtisService {
     }
 
     private async poll(): Promise<void> {
+        let changed = false
         try {
-            const response = await fetch(VATSIM_DATA_URL)
-            if (!response.ok) {
-                console.warn(`[ATIS] Failed to fetch VATSIM data: ${response.status}`)
-                this.lastFetchOk = false
-                this.schedulePoll()
-                return
-            }
-
-            const data = (await response.json()) as VatsimDataResponse
-            if (!data.atis) {
-                this.lastFetchOk = false
-                this.schedulePoll()
-                return
-            }
-
-            this.lastFetchOk = true
-            let changed = false
-
-            for (const airport of this.airports) {
-                if (airport === "ESSA") {
-                    changed = this.processEssa(data.atis) || changed
-                } else {
-                    changed = this.processAirport(airport, data.atis) || changed
-                }
-            }
-
-            if (changed) {
-                this.onUpdate()
-            }
+            changed = (await this.pollVatsimAtis()) || changed
         } catch (err) {
             this.lastFetchOk = false
             console.warn(`[ATIS] Error fetching VATSIM data: ${err instanceof Error ? err.message : err}`)
         }
 
+        try {
+            changed = (await this.pollMetarQnh()) || changed
+        } catch (err) {
+            this.lastMetarOk = false
+            console.warn(`[ATIS] Error fetching VatIRIS METAR: ${err instanceof Error ? err.message : err}`)
+        }
+
+        if (changed) {
+            this.onUpdate()
+        }
+
         this.schedulePoll()
+    }
+
+    private async pollVatsimAtis(): Promise<boolean> {
+        const response = await fetch(VATSIM_DATA_URL)
+        if (!response.ok) {
+            console.warn(`[ATIS] Failed to fetch VATSIM data: ${response.status}`)
+            this.lastFetchOk = false
+            return false
+        }
+
+        const data = (await response.json()) as VatsimDataResponse
+        if (!data.atis) {
+            this.lastFetchOk = false
+            return false
+        }
+
+        this.lastFetchOk = true
+        let changed = false
+        for (const airport of this.airports) {
+            if (airport === "ESSA") {
+                changed = this.processEssa(data.atis) || changed
+            } else {
+                changed = this.processAirport(airport, data.atis) || changed
+            }
+        }
+        return changed
+    }
+
+    /**
+     * Pull newest METAR QNH from VatIRIS API (same as VatIRIS metar store).
+     * Used when no ATIS is online or ATIS text has no QNH.
+     */
+    private async pollMetarQnh(): Promise<boolean> {
+        if (this.airports.length === 0) return false
+        const ids = this.airports.join(",")
+        const url = `${VATIRIS_METAR_URL}?ids=${encodeURIComponent(ids)}&hours=1`
+        const response = await fetch(url)
+        if (!response.ok) {
+            console.warn(`[ATIS] VatIRIS METAR failed: ${response.status}`)
+            this.lastMetarOk = false
+            return false
+        }
+
+        const text = await response.text()
+        this.lastMetarOk = true
+
+        // Newest observation is first per ICAO in the response
+        const seen = new Set<string>()
+        const next = new Map<string, number>()
+        for (const section of text.split(/\n+/)) {
+            const line = section.trim()
+            const m = line.match(/^METAR\s+(\w{4})\b/i)
+            if (!m?.[1]) continue
+            const icao = m[1].toUpperCase()
+            if (seen.has(icao)) continue
+            seen.add(icao)
+            const qnh = extractQnhFromText(line)
+            if (qnh != null) next.set(icao, qnh)
+        }
+
+        let changed = false
+        for (const airport of this.airports) {
+            const q = next.get(airport)
+            const prev = this.metarQnh.get(airport)
+            if (q != null) {
+                if (prev !== q) {
+                    this.metarQnh.set(airport, q)
+                    changed = true
+                }
+            } else if (prev != null) {
+                this.metarQnh.delete(airport)
+                changed = true
+            }
+        }
+        if (changed) {
+            console.log(
+                `[ATIS] METAR QNH: ${[...this.metarQnh.entries()].map(([a, q]) => `${a}=${q}`).join(" ")}`,
+            )
+        }
+        return changed
     }
 
     private processAirport(airport: string, atisList: VatsimAtisEntry[]): boolean {
         const callsign = `${airport}_ATIS`
         const entry = atisList.find((a) => a.callsign === callsign)
 
-        const prev = this.cache.get(airport)
+        const prev = this.atisCache.get(airport)
         if (!entry || !entry.text_atis) {
-            if (prev) {
-                this.cache.delete(airport)
+            // Clear ATIS letter/QNH — METAR QNH still available via getAtis()
+            if (prev && (prev.letter != null || prev.qnh != null)) {
+                this.atisCache.delete(airport)
                 return true
             }
             return false
@@ -194,7 +284,7 @@ export class AtisService {
 
         const changed = prev?.letter !== letter || prev?.qnh !== qnh
         if (changed) {
-            this.cache.set(airport, { letter, qnh })
+            this.atisCache.set(airport, { letter, qnh })
         }
         return changed
     }
@@ -227,16 +317,20 @@ export class AtisService {
             qnh = extractQnh(combinedEntry.text_atis)
         }
 
-        const prev = this.essaCache
+        const prev = this.essaAtisCache
         const changed =
             prev.arrLetter !== arrLetter ||
             prev.depLetter !== depLetter ||
             prev.qnh !== qnh
 
         if (changed) {
-            this.essaCache = { arrLetter, depLetter, qnh }
+            this.essaAtisCache = { arrLetter, depLetter, qnh }
             // Also update the main cache for getAtis() fallback
-            this.cache.set("ESSA", { letter: depLetter ?? arrLetter, qnh })
+            if (depLetter || arrLetter || qnh != null) {
+                this.atisCache.set("ESSA", { letter: depLetter ?? arrLetter, qnh })
+            } else {
+                this.atisCache.delete("ESSA")
+            }
         }
         return changed
     }

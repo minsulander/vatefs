@@ -10,36 +10,15 @@
     >
       <div
         class="strip-zoom-shell"
+        :class="{ 'keys-above': keysAbove }"
         :style="shellStyle"
         @pointerdown.stop
       >
-        <div class="strip-zoom-row">
-          <div ref="stageEl" class="strip-zoom-panel">
-            <FlightStrip
-              :strip="strip"
-              :bay-id="bayId"
-              :section-id="sectionId"
-              is-large-view
-              :active-scribble-stroke="activeStroke"
-              :active-scribble-color="drawInk"
-              @close-large-view="close"
-            />
-
-            <!-- Capture only: ink renders on FlightStrip band SVGs (seamless across expanders) -->
-            <svg
-              ref="drawEl"
-              class="strip-zoom-draw"
-              :class="{ 'pen-active': penActive }"
-              @pointerdown="onDrawPointerDown"
-              @pointermove="onDrawPointerMove"
-              @pointerup="onDrawPointerUp"
-              @pointercancel="onDrawPointerCancel"
-            >
-              <rect width="100%" height="100%" fill="transparent" />
-            </svg>
-          </div>
-
-          <div class="strip-zoom-keys" :style="{ width: keyColWidth + 'px' }">
+        <div class="strip-zoom-row" :class="{ 'keys-above': keysAbove }">
+          <div
+            class="strip-zoom-keys"
+            :style="keysAbove ? undefined : { width: keyColWidth + 'px' }"
+          >
             <!-- Paper + toggle: off → blue → red → off -->
             <button
               v-if="useMergedPenTool && isPaperLook"
@@ -102,6 +81,31 @@
             >
               <v-icon :size="toolIconSize" class="zoom-key-icon">mdi-close</v-icon>
             </button>
+          </div>
+
+          <div ref="stageEl" class="strip-zoom-panel">
+            <FlightStrip
+              :strip="strip"
+              :bay-id="bayId"
+              :section-id="sectionId"
+              is-large-view
+              :active-scribble-stroke="activeStroke"
+              :active-scribble-color="drawInk"
+              @close-large-view="close"
+            />
+
+            <!-- Capture only: ink renders on FlightStrip band SVGs (seamless across expanders) -->
+            <svg
+              ref="drawEl"
+              class="strip-zoom-draw"
+              :class="{ 'pen-active': penActive }"
+              @pointerdown="onDrawPointerDown"
+              @pointermove="onDrawPointerMove"
+              @pointerup="onDrawPointerUp"
+              @pointercancel="onDrawPointerCancel"
+            >
+              <rect width="100%" height="100%" fill="transparent" />
+            </svg>
           </div>
         </div>
 
@@ -168,6 +172,8 @@ export interface StripZoomAnchor {
 /** Design width at zoom-strip scale 100% */
 const ZOOM_REF_WIDTH_PX = 780
 const KEY_COL_REF_PX = 44
+/** Horizontal scribble toolbar when side column does not fit (RTC 1-col) */
+const KEY_ROW_REF_H = 40
 /** Tight bottom-right size bar — tracks Settings UI scale only, not zoomed-strip size */
 const SCALE_BAR_REF_H = 22
 const SCALE_BAR_REF_W = 350
@@ -232,6 +238,13 @@ const stageHeight = ref(0)
 /** Locked shell position — avoid recentering on every strip-height RO tick (zoom twitch). */
 const shellLeft = ref(0)
 const shellTop = ref(0)
+/** Reactive viewport width so narrow RTC 1-col can flip keys above the strip */
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
+
+function syncViewportWidth() {
+  if (typeof window === 'undefined') return
+  viewportWidth.value = window.innerWidth
+}
 const bands = ref<ScribbleBandScreen[]>([])
 
 let pointerPending = false
@@ -247,17 +260,35 @@ const keyColWidth = computed(() =>
   Math.max(44, Math.round(KEY_COL_REF_PX * zoomFactor.value)),
 )
 
-const panelWidth = computed(() => {
-  // Wide paper bays can exceed ZOOM_REF — size from the bay strip so zoom is never narrower
+/** Full viewport — no side padding; strip may expand edge-to-edge when zoomed up */
+const availZoomWidth = computed(() => Math.max(280, viewportWidth.value))
+
+/** Preferred strip width before reserving a side key column */
+const unconstrainedPanelWidth = computed(() => {
   const anchorW = Math.round(props.anchorRect?.width ?? 0)
   const refW = Math.max(ZOOM_REF_WIDTH_PX, Math.round(anchorW * 1.15))
   const scaled = Math.round(refW * zoomFactor.value)
-  const max =
-    typeof window !== 'undefined'
-      ? Math.floor(window.innerWidth * 0.94 - keyColWidth.value)
-      : scaled
-  return Math.max(280, anchorW, Math.min(scaled, max))
+  return Math.max(280, anchorW, scaled)
 })
+
+/**
+ * Side scribble column does not fit beside the strip (typical RTC 1-col).
+ * Toolbar moves above; strip keeps full width; Size bar stays on strip BR.
+ */
+const keysAbove = computed(
+  () => unconstrainedPanelWidth.value + keyColWidth.value > availZoomWidth.value,
+)
+
+const panelWidth = computed(() => {
+  const max = keysAbove.value
+    ? availZoomWidth.value
+    : Math.max(280, availZoomWidth.value - keyColWidth.value)
+  return Math.max(280, Math.min(unconstrainedPanelWidth.value, max))
+})
+
+const keyRowHeight = computed(() =>
+  Math.max(36, Math.round(KEY_ROW_REF_H * zoomFactor.value)),
+)
 
 /** Compact bottom-right slider chrome — Settings UI scale only. */
 const scaleBarHeight = computed(() =>
@@ -275,12 +306,13 @@ const penActive = computed(
 
 const shellStyle = computed(() => {
   const pw = panelWidth.value
-  const totalW = pw + keyColWidth.value
+  const totalW = keysAbove.value ? pw : pw + keyColWidth.value
   return {
     left: `${shellLeft.value}px`,
     top: `${shellTop.value}px`,
     width: `${totalW}px`,
     '--zoom-panel-w': `${pw}px`,
+    '--zoom-key-row-h': `${keyRowHeight.value}px`,
     /** Deterministic strip scale for zoom (avoids RO width dither → --strip-scale twitch) */
     '--zoom-strip-scale': String(Math.round((pw / 400) * 50) / 50),
     '--zoom-scale-bar-h': `${scaleBarHeight.value}px`,
@@ -290,9 +322,11 @@ const shellStyle = computed(() => {
 
 /** Place shell from anchor / viewport. Call on open + Size % commit — not on height RO. */
 function placeShell() {
+  syncViewportWidth()
   const pw = panelWidth.value
-  const totalW = pw + keyColWidth.value
+  const totalW = keysAbove.value ? pw : pw + keyColWidth.value
   const barH = scaleBarHeight.value
+  const keysH = keysAbove.value ? keyRowHeight.value : 0
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280
   const anchor = props.anchorRect
@@ -302,7 +336,7 @@ function placeShell() {
       : anchor
         ? Math.max(72, anchor.height * (pw / Math.max(1, anchor.width)))
         : 120
-  const estH = stageH + barH
+  const estH = keysH + stageH + barH
 
   let left: number
   let top: number
@@ -310,14 +344,17 @@ function placeShell() {
     const cx = anchor.left + anchor.width / 2
     const cy = anchor.top + anchor.height / 2
     left = cx - pw / 2
-    top = cy - stageH / 2
+    // Center on strip body (keys above sit outside that vertical center)
+    top = cy - stageH / 2 - keysH
   } else {
     left = (vw - totalW) / 2
     top = Math.max(16, (vh - estH) / 3)
   }
 
-  shellLeft.value = Math.round(Math.max(4, Math.min(left, vw - totalW - 4)))
-  shellTop.value = Math.round(Math.max(4, Math.min(top, vh - estH - 4)))
+  // Edge-to-edge when zoomed to full width; otherwise keep a tiny clamp only if overflowing
+  const maxLeft = Math.max(0, vw - totalW)
+  shellLeft.value = Math.round(Math.max(0, Math.min(left, maxLeft)))
+  shellTop.value = Math.round(Math.max(0, Math.min(top, Math.max(0, vh - estH))))
 }
 
 function onZoomScaleDrag(event: Event) {
@@ -708,8 +745,16 @@ function onDrawPointerCancel(event: PointerEvent) {
   resetDrawPointerState()
 }
 
+function onViewportResize() {
+  if (!props.modelValue) return
+  syncViewportWidth()
+  placeShell()
+  measureStage()
+}
+
 async function afterOpenMeasure() {
   await nextTick()
+  syncViewportWidth()
   overlayEl.value?.focus()
   placeShell()
   measureStage({ relocate: true })
@@ -717,6 +762,9 @@ async function afterOpenMeasure() {
     measureStage({ relocate: true })
     requestAnimationFrame(() => measureStage({ relocate: true }))
   })
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', onViewportResize)
+  }
   if (stageEl.value && typeof ResizeObserver !== 'undefined') {
     stageResizeObs?.disconnect()
     stageResizeObs = new ResizeObserver(() => {
@@ -733,6 +781,9 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (!open) {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', onViewportResize)
+      }
       stageResizeObs?.disconnect()
       stageResizeObs = null
       bands.value = []
@@ -764,6 +815,9 @@ watch(scribbleMode, (mode) => {
 })
 
 onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', onViewportResize)
+  }
   stageResizeObs?.disconnect()
   stageResizeObs = null
 })
@@ -792,17 +846,26 @@ onUnmounted(() => {
 
 .strip-zoom-row {
   display: grid;
+  /* Default: keys column left in DOM order → place beside panel via grid areas */
   grid-template-columns: var(--zoom-panel-w, 560px) auto;
   grid-template-rows: auto;
+  grid-template-areas: "panel keys";
   gap: 0;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
 }
 
+.strip-zoom-row.keys-above {
+  grid-template-columns: var(--zoom-panel-w, 560px);
+  grid-template-rows: var(--zoom-key-row-h, 40px) auto;
+  grid-template-areas:
+    "keys"
+    "panel";
+}
+
 .strip-zoom-panel {
   position: relative;
-  grid-column: 1;
-  grid-row: 1;
+  grid-area: panel;
   width: 100%;
   border: 1px solid #888;
   border-right: none;
@@ -810,6 +873,11 @@ onUnmounted(() => {
   touch-action: none;
   /* Paper WTC scribble / type frame may paint slightly outside the strip box */
   overflow: visible;
+}
+
+.strip-zoom-row.keys-above .strip-zoom-panel {
+  /* No side keys — keep strip right edge closed */
+  border-right: 1px solid #888;
 }
 
 .strip-zoom-scale {
@@ -820,7 +888,7 @@ onUnmounted(() => {
   align-self: flex-end;
   gap: calc(6px * var(--efs-scale, 1));
   width: var(--zoom-scale-bar-w, 350px);
-  max-width: 100%;
+  max-width: var(--zoom-panel-w, 100%);
   height: var(--zoom-scale-bar-h, 22px);
   margin-top: -1px;
   padding: 0 calc(8px * var(--efs-scale, 1));
@@ -832,6 +900,15 @@ onUnmounted(() => {
   user-select: none;
   -webkit-user-select: none;
   pointer-events: auto;
+}
+
+/* Side-keys layout: Size bar under the strip only (right side of strip stays clear of keys) */
+.strip-zoom-shell:not(.keys-above) .strip-zoom-scale {
+  align-self: flex-start;
+  margin-left: max(
+    0px,
+    calc(var(--zoom-panel-w, 560px) - min(var(--zoom-scale-bar-w, 350px), var(--zoom-panel-w, 560px)))
+  );
 }
 
 .zoom-scale-label,
@@ -875,8 +952,7 @@ onUnmounted(() => {
 }
 
 .strip-zoom-keys {
-  grid-column: 2;
-  grid-row: 1;
+  grid-area: keys;
   display: flex;
   flex-direction: column;
   justify-content: stretch;
@@ -886,6 +962,13 @@ onUnmounted(() => {
   background: #d8d8d8;
   border: 1px solid #888;
   box-sizing: border-box;
+}
+
+.strip-zoom-row.keys-above .strip-zoom-keys {
+  flex-direction: row;
+  width: 100%;
+  height: var(--zoom-key-row-h, 40px);
+  border-bottom: none;
 }
 
 .zoom-key {
@@ -909,6 +992,18 @@ onUnmounted(() => {
 
 .zoom-key:last-child {
   border-bottom: none;
+}
+
+.strip-zoom-row.keys-above .zoom-key {
+  border-bottom: none;
+  border-right: 1px solid #666;
+  height: 100%;
+  width: auto;
+  min-width: 0;
+}
+
+.strip-zoom-row.keys-above .zoom-key:last-child {
+  border-right: none;
 }
 
 .zoom-key:hover:not(:disabled) {

@@ -110,6 +110,17 @@ export function parseManualCfl(raw: string | null | undefined): number | undefin
 }
 
 /**
+ * Shared EFS TA rule (TopSkyAirspace.txt): at/below TA → altitude, above → flight level.
+ * Used by FPL A/F labels, CFL menu, and strip cells — same threshold everywhere.
+ */
+export function isAltitudeAtOrBelowTa(
+  feet: number,
+  transitionAltitudeFt: number = DEFAULT_TRANSITION_ALTITUDE_FT,
+): boolean {
+  return feet <= transitionAltitudeFt
+}
+
+/**
  * Format altitude for strip CFL/XFL cells.
  * @param transitionAltitudeFt from TopSkyAirspace (default Swedish ES = 5000)
  */
@@ -127,23 +138,75 @@ export function formatStripAltitude(
   const feet = parseAltitudeToFeet(input)
   if (feet == null) return undefined
 
-  if (feet <= transitionAltitudeFt) {
+  if (isAltitudeAtOrBelowTa(feet, transitionAltitudeFt)) {
     return (feet / 1000).toFixed(1)
   }
   return String(Math.round(feet / 100))
 }
 
 /**
- * Paper FPS cruise level: Axxx at/below TA, Fxxx above TA (e.g. A050 / F350).
+ * EFS-wide level label (TopSkyAirspace TA): Axxx at/below TA, Fxxx above TA
+ * (e.g. A050 / F090). Same threshold as the CFL menu.
  */
-export function formatPaperCruiseLevel(
+export function formatEfsLevel(
   input: string | number | null | undefined,
   transitionAltitudeFt: number = DEFAULT_TRANSITION_ALTITUDE_FT,
 ): string {
+  if (input == null || input === '') return ''
+  if (typeof input === 'string' && isApproachClearanceLabel(input)) {
+    return input.trim().toUpperCase()
+  }
+  if (input === 1 || input === '1') return 'CA'
+  if (input === 2 || input === '2') return 'VA'
+
   const feet = parseAltitudeToFeet(input)
-  if (feet == null) return ''
+  if (feet == null || feet <= 0) return ''
   const hundreds = Math.round(feet / 100)
   if (hundreds < 1) return ''
   const body = String(hundreds).padStart(3, '0')
-  return feet <= transitionAltitudeFt ? `A${body}` : `F${body}`
+  return isAltitudeAtOrBelowTa(feet, transitionAltitudeFt) ? `A${body}` : `F${body}`
+}
+
+/**
+ * CFL menu label using the same EFS TA rule as {@link formatEfsLevel}:
+ *   ≤ TA → A05…A50 (hundreds, 2 digits)
+ *   > TA → 060…510 (FL, 3 digits, no F prefix)
+ * Special ES values 1/2 → CA / VA.
+ */
+export function formatCflMenuLabel(
+  input: string | number | null | undefined,
+  transitionAltitudeFt: number = DEFAULT_TRANSITION_ALTITUDE_FT,
+): string {
+  if (input == null || input === '') return ''
+  if (typeof input === 'string' && isApproachClearanceLabel(input)) {
+    return input.trim().toUpperCase()
+  }
+  if (input === 1 || input === '1') return 'CA'
+  if (input === 2 || input === '2') return 'VA'
+
+  const feet = parseAltitudeToFeet(input)
+  if (feet == null || feet <= 0) return ''
+  const hundreds = Math.round(feet / 100)
+  if (hundreds < 1) return ''
+  if (isAltitudeAtOrBelowTa(feet, transitionAltitudeFt)) {
+    return `A${String(hundreds).padStart(2, '0')}`
+  }
+  return String(hundreds).padStart(3, '0')
+}
+
+/** Build CFL menu level options (high → low) for a given transition altitude. */
+export function buildCflMenuOptions(
+  transitionAltitudeFt: number = DEFAULT_TRANSITION_ALTITUDE_FT,
+): { label: string; value: string }[] {
+  const ta = transitionAltitudeFt > 0 ? transitionAltitudeFt : DEFAULT_TRANSITION_ALTITUDE_FT
+  const opts: { label: string; value: string }[] = []
+  // Above TA: 1000 ft steps up to FL510
+  for (let alt = 51000; alt > ta; alt -= 1000) {
+    opts.push({ label: formatCflMenuLabel(alt, ta), value: String(alt) })
+  }
+  // At/below TA: 500 ft steps down to 500
+  for (let alt = ta; alt >= 500; alt -= 500) {
+    opts.push({ label: formatCflMenuLabel(alt, ta), value: String(alt) })
+  }
+  return opts
 }

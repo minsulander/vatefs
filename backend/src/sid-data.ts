@@ -194,6 +194,38 @@ export function hasSidInEse(airport: string, sidName: string, runway?: string): 
 }
 
 /**
+ * ESE-priority SID for a route exit / first significant fix on a runway.
+ * e.g. ESNU/32 + DEDIT → DEDIT2L when that SID exists in the ESE list.
+ */
+export function pickEseSidForRouteExit(
+    airport: string,
+    runway: string | undefined,
+    exit: string | undefined,
+): string | undefined {
+    if (!airport || !runway || !exit) return undefined
+    const fix = exit.trim().toUpperCase()
+    if (!fix) return undefined
+    const list = getSidsForRunway(airport, runway)
+    if (list.length === 0) return undefined
+
+    // Named SID starting with the exit (DEDIT2L, PETEV3G, …)
+    const named = list
+        .filter((s) => {
+            const n = s.name.toUpperCase()
+            if (!n.startsWith(fix) || n.length <= fix.length) return false
+            return /\d/.test(n.slice(fix.length))
+        })
+        .sort((a, b) => a.name.localeCompare(b.name))
+    if (named.length > 0) return named[0]!.name
+
+    // SID whose procedure waypoints include the exit
+    const byWp = list.find((s) =>
+        s.waypoints.some((w) => w.toUpperCase() === fix),
+    )
+    return byWp?.name
+}
+
+/**
  * Look up SID definition from ESE data.
  */
 export function getSidInfo(airport: string, sidName: string, runway?: string): SidInfo | undefined {

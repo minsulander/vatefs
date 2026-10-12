@@ -5,13 +5,20 @@
 </template>
 
 <script lang="ts" setup>
+import { watch } from "vue"
 import { useEfsStore } from "./store/efs"
 import { useEfsUiScale } from "./composables/useEfsUiScale"
-import { startBayBackground } from "./composables/useBayBackground"
+import { setBayBgRtcPalette, startBayBackground } from "./composables/useBayBackground"
 
 const efs = useEfsStore()
 useEfsUiScale()
 startBayBackground()
+// ESSA keeps cold grey bay bg; RTC uses warm grey palette
+watch(
+  () => efs.multiAirport,
+  (rtc) => setBayBgRtcPalette(!!rtc),
+  { immediate: true },
+)
 </script>
 
 <style>

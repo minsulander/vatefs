@@ -1005,13 +1005,23 @@ class EfsStore {
         let sectionId: string
         let pos: number
 
-        if (targetBayId && targetSectionId) {
+        // RTC: NOTE → top of ARR in the selected airport column
+        let bottom = isBottom ?? false
+        if (icao && isMultiAirportConfig(staticConfig)) {
+            const airportBayId = resolveBayForAirport(icao, staticConfig.columnAirports)
+            if (targetBayId && targetSectionId && targetBayId === airportBayId) {
+                bayId = targetBayId
+                sectionId = targetSectionId
+                pos = position ?? 0
+            } else {
+                bayId = airportBayId
+                sectionId = prefixedSectionId(bayId, 'arr')
+                bottom = false
+                pos = position ?? 0
+            }
+        } else if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
-            pos = position ?? 0
-        } else if (icao && isMultiAirportConfig(staticConfig)) {
-            bayId = resolveBayForAirport(icao, staticConfig.columnAirports)
-            sectionId = prefixedSectionId(bayId, 'app')
             pos = position ?? 0
         } else if (staticConfig.layout.bays.length > 0 && staticConfig.layout.bays[0].sections.length > 0) {
             bayId = staticConfig.layout.bays[0].id
@@ -1019,6 +1029,20 @@ class EfsStore {
             pos = 0
         } else {
             return undefined
+        }
+
+        // Insert at top: shift existing strips down (ARR addFromTop)
+        if (!bottom && pos === 0 && position === undefined) {
+            for (const s of this.getStripsForSection(bayId, sectionId, false)) {
+                s.position += 1
+                this.strips.set(s.id, s)
+                flightStore.setStripAssignment(s.id, {
+                    bayId,
+                    sectionId,
+                    position: s.position,
+                    bottom: false,
+                })
+            }
         }
 
         const strip: FlightStrip = {
@@ -1033,7 +1057,7 @@ class EfsStore {
             bayId,
             sectionId,
             position: pos,
-            bottom: isBottom ?? false,
+            bottom,
             noteText: '',
             airport: icao,
             ...(paperInfoKind ? { paperInfoKind } : {}),
@@ -1062,22 +1086,34 @@ class EfsStore {
         targetSectionId?: string,
         position?: number,
         isBottom?: boolean,
-        airport?: string
+        airport?: string,
+        callsign?: string,
     ): FlightStrip | undefined {
         const stripId = `vehicle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const icao = airport?.toUpperCase()
+        const cs = (callsign ?? '').trim().toUpperCase()
 
         let bayId: string
         let sectionId: string
         let pos: number
+        let bottom = isBottom ?? false
 
-        if (targetBayId && targetSectionId) {
+        // RTC: place in selected airport column (drop target only if same column)
+        if (icao && isMultiAirportConfig(staticConfig)) {
+            const airportBayId = resolveBayForAirport(icao, staticConfig.columnAirports)
+            if (targetBayId && targetSectionId && targetBayId === airportBayId) {
+                bayId = targetBayId
+                sectionId = targetSectionId
+                pos = position ?? 0
+            } else {
+                bayId = airportBayId
+                sectionId = prefixedSectionId(bayId, 'app')
+                bottom = false
+                pos = position ?? 0
+            }
+        } else if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
-            pos = position ?? 0
-        } else if (icao && isMultiAirportConfig(staticConfig)) {
-            bayId = resolveBayForAirport(icao, staticConfig.columnAirports)
-            sectionId = prefixedSectionId(bayId, 'app')
             pos = position ?? 0
         } else {
             // Prefer a non-runway section so the strip lands somewhere useful
@@ -1104,7 +1140,7 @@ class EfsStore {
 
         const strip: FlightStrip = {
             id: stripId,
-            callsign: '',
+            callsign: cs,
             aircraftType: '',
             wakeTurbulence: 'M',
             flightRules: 'V',
@@ -1114,7 +1150,7 @@ class EfsStore {
             bayId,
             sectionId,
             position: pos,
-            bottom: isBottom ?? false,
+            bottom,
             hp: '',
             std: '',
             airport: icao,

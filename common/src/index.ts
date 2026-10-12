@@ -12,6 +12,7 @@ export type {
     Gap,
     DclMode,
     UiSettings,
+    AutoLopSsrMode,
     StripPrintSound,
     StripPrintMode,
     StripLook,
@@ -19,7 +20,7 @@ export type {
     AirportAtisInfo
 } from "./types.js"
 
-export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind } from "./types.js"
+export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind, isAutoLopSsrMode } from "./types.js"
 
 export {
     ESSA_RWY_COMBINATIONS,
@@ -57,9 +58,19 @@ export {
     parseAltitudeToFeet,
     parseManualCfl,
     formatStripAltitude,
-    formatPaperCruiseLevel,
+    formatEfsLevel,
+    formatCflMenuLabel,
+    buildCflMenuOptions,
+    isAltitudeAtOrBelowTa,
     isApproachClearanceLabel,
 } from "./altitude-format.js"
+
+export {
+    FAA_TO_ICAO,
+    faaToIcaoEquip,
+    formatFaaEquipDisplay,
+    isFaaEquipLetter,
+} from "./faa-equipment.js"
 
 export {
     formatSidForDisplay,
@@ -80,7 +91,19 @@ export {
     withVectRemark,
     formatAhdVectorSidDisplay,
     extractTmaExitPoint,
+    extractSignificantRouteFixes,
 } from "./sid-format.js"
+
+export {
+    parseRflToFeet,
+    isLopFprDepAirport,
+    hasExplicitDepRunway,
+    fprDepDisplayFix,
+    resolveLopAutoDirect,
+    resolveLopSuggestDirects,
+    resolveLopDirectHighlights,
+} from "./auto-direct.js"
+export type { LopDirectMode, LopDirectSuggestion, LopDirectInput } from "./auto-direct.js"
 
 // WebSocket API messages
 export type {

@@ -20,7 +20,13 @@
     </div>
   </v-dialog>
 
-  <TobtMenu v-model="tobtMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <TobtMenu
+    v-model="tobtMenuOpen"
+    :strip="strip"
+    :target="menuPosition"
+    :kind="timeMenuKind"
+    :z-index="overlayMenuZ"
+  />
 
   <v-menu v-model="menuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <div class="efs-popup-menu" @click.stop>
@@ -55,6 +61,12 @@
           class="efs-popup-item"
           @click="openTobtMenuFromContext"
         >Ready TOBT…</button>
+        <button
+          v-if="canOpenEobtMenu"
+          type="button"
+          class="efs-popup-item"
+          @click="openEobtMenuFromContext"
+        >EOBT…</button>
         <button v-if="canSendRea" type="button" class="efs-popup-item" @click="onSendReaClick">Set REA</button>
         <button v-if="canClearRea" type="button" class="efs-popup-item" @click="onClearReaClick">Remove REA</button>
         <button type="button" class="efs-popup-item" @click="onDeleteClick">Delete</button>
@@ -160,8 +172,8 @@
       'bottom-expanded': bottomExpanded,
       'is-large-view': isLargeView,
       'dimmed-data': dimmedData,
-      'dim-other-owned': dimOtherOwned,
       'no-drag': !canDragStrip && !isLargeView,
+      'rtc-layout': store.multiAirport,
     }]"
     :data-strip-id="strip.id"
     :draggable="canDragStrip ? true : false"
@@ -291,7 +303,7 @@
             :stroke-width="bayScribbleStrokeWidth"
           />
         </svg>
-        <div class="vehicle-cs">C/S</div>
+        <div class="vehicle-cs">{{ strip.callsign?.trim() }}</div>
         <div class="vehicle-fields">
           <div
             class="vehicle-cell editable"
@@ -315,7 +327,9 @@
             />
             <template v-else>{{ strip.hp || 'HP' }}</template>
           </div>
+          <!-- RTC: HP only (no HS/STD sibling — matches flight strips) -->
           <div
+            v-if="!store.multiAirport"
             class="vehicle-cell editable"
             :class="{
               ghost: !strip.std?.trim() && vehicleEditField !== 'std',
@@ -776,8 +790,27 @@
           @click.stop="topExpanded = false"
         ><span class="arrow-glyph">▲</span></button>
         <div class="exp-chips">
-          <button type="button" class="exp-chip" :class="{ 'exp-rea': isRea }" @click.stop="onExpRea">REA</button>
-          <button type="button" class="exp-chip inert" disabled>SIG</button>
+          <!-- ARR: ATIS/MET + QNH only; DEP chips below -->
+          <template v-if="!isArrLayout">
+            <button type="button" class="exp-chip" :class="{ 'exp-rea': isRea }" @click.stop="onExpRea">REA</button>
+            <button type="button" class="exp-chip inert" disabled>SIG</button>
+          </template>
+          <button
+            v-if="store.multiAirport && currentAtisLetter"
+            type="button"
+            class="exp-chip"
+            :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhStale }"
+            :disabled="!canStampAtisQnh"
+            :title="`ATIS ${currentAtisLetter}`"
+            @click.stop="onExpAtis"
+          >ATIS {{ currentAtisLetter }}</button>
+          <button
+            v-else-if="store.multiAirport"
+            type="button"
+            class="exp-chip"
+            title="TopSky WEATHER manual alert"
+            @click.stop="onExpMet"
+          >MET</button>
           <button
             type="button"
             class="exp-chip"
@@ -785,30 +818,34 @@
             :disabled="!canSetQnh"
             @click.stop="onExpQnh"
           >QNH</button>
-          <button
-            type="button"
-            class="exp-chip"
-            :class="{ active: hasSlowFlag }"
-            @click.stop="onExpSlow"
-          >SLOW</button>
-          <button
-            type="button"
-            class="exp-chip"
-            :class="{ active: hasUrnavRemark }"
-            @click.stop="onExpUrnav"
-          >URNAV</button>
-          <button
-            type="button"
-            class="exp-chip"
-            :class="{ active: hasVectRemarkFlag }"
-            @click.stop="onExpVect"
-          >VECT</button>
-          <button
-            type="button"
-            class="exp-chip"
-            :class="clrChipClass"
-            @click.stop="onClncMenuClick"
-          >CLR</button>
+          <template v-if="!isArrLayout">
+            <button
+              v-if="!store.multiAirport"
+              type="button"
+              class="exp-chip"
+              :class="{ active: hasSlowFlag }"
+              @click.stop="onExpSlow"
+            >SLOW</button>
+            <button
+              v-if="!store.multiAirport"
+              type="button"
+              class="exp-chip"
+              :class="{ active: hasUrnavRemark }"
+              @click.stop="onExpUrnav"
+            >URNAV</button>
+            <button
+              type="button"
+              class="exp-chip"
+              :class="{ active: hasVectRemarkFlag }"
+              @click.stop="onExpVect"
+            >VECT</button>
+            <button
+              type="button"
+              class="exp-chip"
+              :class="clrChipClass"
+              @click.stop="onClncMenuClick"
+            >CLR</button>
+          </template>
         </div>
         <svg
           v-if="showStripScribbles"
@@ -989,6 +1026,7 @@
             title="EuroScope XFL (exit coordination)"
           >{{ displayXfl || 'XFL' }}</div>
           <div
+            v-if="!store.multiAirport"
             class="cell cell-hs"
             :class="{
               ghost: !strip.hs && !hsEditing,
@@ -1128,6 +1166,12 @@
             title="Departure route / SID"
             @click.stop="onSidClick"
           >{{ store.displaySidForStrip(strip) || 'SID' }}</div>
+          <!-- RTC ARR: empty framed SID slot (no data / no edit) -->
+          <div
+            v-else-if="store.multiAirport && !hideArrGroundAssignFields"
+            class="cell cell-sid cell-sid-arr-empty"
+            aria-hidden="true"
+          />
         </div>
 
         <div v-if="store.isController" class="strip-actions" :class="{ 'multi-action': effectiveActionCount > 1 }">
@@ -1234,7 +1278,7 @@ import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } fro
 import {
   DEFAULT_TRANSITION_ALTITUDE_FT,
   extractTmaExitPoint,
-  formatPaperCruiseLevel,
+  formatEfsLevel,
   formatTrackSidDisplay,
   getEssaRwyCombination,
   hasSlowRemark,
@@ -1277,7 +1321,7 @@ import FlightplanDialog from './FlightplanDialog.vue'
 import SidRouteMenu from './SidRouteMenu.vue'
 import RwyMenu from './RwyMenu.vue'
 import CflMenu from './CflMenu.vue'
-import TobtMenu from './TobtMenu.vue'
+import TobtMenu, { type TobtMenuKind } from './TobtMenu.vue'
 import AhdMenu from './AhdMenu.vue'
 import StripZoomOverlay from './StripZoomOverlay.vue'
 import StripCloseButton from './StripCloseButton.vue'
@@ -2032,7 +2076,7 @@ const paperFplRoute = computed(() => {
 /** DEP col 7 bottom: cruise level — Axxx ≤ TA, Fxxx > TA */
 const paperCrz = computed(() => {
   if (isArrLayout.value) return ''
-  return formatPaperCruiseLevel(props.strip.rfl, DEFAULT_TRANSITION_ALTITUDE_FT)
+  return formatEfsLevel(props.strip.rfl, DEFAULT_TRANSITION_ALTITUDE_FT)
 })
 /** Filed TAS (N0448) for paper DEP — from strip.tas or FPL route (incl. FIX/N0446F390) */
 const paperTas = computed(() => {
@@ -2200,30 +2244,30 @@ function onVehicleFieldClick(field: 'hp' | 'std') {
   startVehicleEdit(field)
 }
 
-/** INBOUND (and backend `dimmed`): data fields use placeholder grey; C/S + highlighted RWY stay full. */
+/**
+ * Partial data dim (not classic full-strip opacity):
+ * placeholder grey on data cells; callsign + nonstandard RWY stay full.
+ * — ESSA INBOUND / backend `dimmed`
+ * — Assumed by another controller (e.g. ACC) anywhere
+ * Pending inbound transfer stays full brightness.
+ */
 const dimmedData = computed(() => {
-  // Pending transfer in → full brightness (assume/handoff focus)
   if (props.strip.transferPending === 'in') return false
+  if (props.strip.ownedByOther) return true
   if (props.strip.dimmed) return true
   const id = (props.sectionId || props.strip.sectionId || '').toLowerCase()
   return id === 'inbound' || id === 'inbound_gnd' || id.endsWith('_inbound')
 })
-/** Setting: dim strips owned by another controller once they assume. */
-const dimOtherOwned = computed(
-  () =>
-    !!store.dimOtherOwnedStrips &&
-    !!props.strip.ownedByOther &&
-    props.strip.transferPending !== 'in',
-)
 /** Assigned data (CFL/SID/RWY/scratch/…) — only when untracked or assumed by me */
 const canEditAssignedData = computed(
   () => store.isController && !props.strip.ownedByOther,
 )
-/** Context menu ASSUME — untracked / mine / inbound handoff; hide if other owns */
+/** Context menu ASSUME — untracked / inbound handoff only (not when already assumed by me) */
 const canAssumeFromMenu = computed(
   () =>
     store.isController &&
     !isLocalOnlyStrip.value &&
+    !props.strip.isAssumed &&
     !store.isStripOwnedByOther(props.strip),
 )
 
@@ -2238,8 +2282,15 @@ const canDragStrip = computed(() => {
   return store.allowMoveOwnedStrip(props.strip)
 })
 
-/** Uncleared dep fields (XFL/CFL/AHD/SID) — amber when a value is present */
-const unclearedFieldHighlight = computed(() => !props.strip.clearance)
+/**
+ * Uncleared dep fields (XFL/CFL/AHD/SID) — amber when a value is present and
+ * departure clearance is not yet given. Arrivals never use the DEP clearance flag.
+ */
+const unclearedFieldHighlight = computed(() => {
+  const t = props.strip.stripType
+  if (t !== 'departure' && t !== 'local') return false
+  return !props.strip.clearance
+})
 
 /**
  * Amber SID:
@@ -2578,6 +2629,23 @@ const callsignBoxTitle = computed(() => {
 function onExpQnh() {
   if (!canSetQnh.value || currentQnh.value == null) return
   store.setQnhGiven(props.strip.id, currentQnh.value)
+}
+
+/** RTC: stamp ATIS letter + QNH (same as paper ATIS/QNH clickspot) */
+function onExpAtis() {
+  if (!canStampAtisQnh.value || currentQnh.value == null || !currentAtisLetter.value) return
+  const given = props.strip.qnhGiven
+  if (given != null && given === currentQnh.value) {
+    store.setQnhGiven(props.strip.id, null)
+    return
+  }
+  store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
+}
+
+/** RTC: TopSky WEATHER manual alert flag */
+function onExpMet() {
+  if (!canEditAssignedData.value) return
+  store.sendStripAction(props.strip.id, 'WEATHER')
 }
 
 /** SLOW chip highlight = remarks flag only (slow ATYP is framed separately on DEP). */
@@ -3235,8 +3303,12 @@ function onSecondaryTimeDblClick() {
   if (secondaryTimeKind.value === 'assr') onAssrDblClick()
 }
 
-const canEditPrimaryTime = computed(() =>
-  canEditAssignedData.value && (isFls.value || primaryTimeKind.value === 'tobt')
+const canEditPrimaryTime = computed(
+  () =>
+    canEditAssignedData.value &&
+    (isFls.value ||
+      primaryTimeKind.value === 'tobt' ||
+      (primaryTimeKind.value === 'eobt' && !store.isPaperLook)),
 )
 
 /** ESSA CDM TOBT entry / Ready TOBT click menu */
@@ -3248,17 +3320,42 @@ const canOpenReadyTobt = computed(
     primaryTimeKind.value === 'tobt',
 )
 
+/** SAAB only — EOBT click menu (Set / Ready EOBT); not paper */
+const canOpenEobtMenu = computed(
+  () =>
+    canEditAssignedData.value &&
+    !store.isPaperLook &&
+    !isFls.value &&
+    !isLocalOnlyStrip.value &&
+    primaryTimeKind.value === 'eobt' &&
+    showPrimaryTime.value,
+)
+
 const tobtMenuOpen = ref(false)
+const timeMenuKind = ref<TobtMenuKind>('tobt')
 
 function openTobtMenu(event?: MouseEvent) {
   menuOpen.value = false
   if (!canOpenReadyTobt.value) return
   if (event) menuPosition.value = [event.clientX, event.clientY]
+  timeMenuKind.value = 'tobt'
   tobtMenuOpen.value = true
 }
 
 function openTobtMenuFromContext() {
   openTobtMenu()
+}
+
+function openEobtMenu(event?: MouseEvent) {
+  menuOpen.value = false
+  if (!canOpenEobtMenu.value) return
+  if (event) menuPosition.value = [event.clientX, event.clientY]
+  timeMenuKind.value = 'eobt'
+  tobtMenuOpen.value = true
+}
+
+function openEobtMenuFromContext() {
+  openEobtMenu()
 }
 
 const showTobtSetBy = computed(() => {
@@ -3718,6 +3815,10 @@ function onPrimaryTimeClick(event?: MouseEvent) {
   }
   if (primaryTimeKind.value === 'tobt') {
     openTobtMenu(event)
+    return
+  }
+  if (primaryTimeKind.value === 'eobt') {
+    openEobtMenu(event)
   }
 }
 
@@ -3795,10 +3896,12 @@ function onReaBadgeClick(event: MouseEvent) {
 }
 
 /**
- * When autoDepSquawkCfl is on: always label CLNC as ACK CLR (never CLR),
- * and voice-ack sets the clearance flag (no CLR dialog).
+ * Instant / On assume: label CLNC as ACK CLR (voice-ack sets clearance flag).
+ * Manual: open CLR dialog as usual.
  */
-const showAckClrLabel = computed(() => !!store.autoDepSquawkCfl)
+const showAckClrLabel = computed(
+  () => store.autoLopSsr === 'instant' || store.autoLopSsr === 'assume',
+)
 
 /** Strip label for action codes (internal codes unchanged for rules/handlers). */
 function actionLabel(action: string): string {
@@ -4361,7 +4464,8 @@ function onCflClick(event: MouseEvent) {
 }
 
 function onAhdClick(event: MouseEvent) {
-  if (!canEditAssignedData.value || isNote.value || isArrLayout.value) return
+  // Arrivals (RTC ARR/CTR) use AHD for radar vectors — same as CFL
+  if (!canEditAssignedData.value || isNote.value) return
   menuPosition.value = menuCoordsFromEvent(event)
   closeAssignmentMenus()
   ahdMenuOpen.value = true
@@ -5604,9 +5708,12 @@ function onGroundStateClick(action: string) {
   background: #fff;
 }
 
-/* Vehicle strips: dark grey type frame */
+/* Vehicle strips: dark grey type frame; RTC uses red */
 .strip-vehicle {
   --strip-type: #4a4a4a;
+}
+.flight-strip.rtc-layout.strip-vehicle {
+  --strip-type: #c62828;
 }
 
 .flight-strip.dragging {
@@ -5685,7 +5792,7 @@ function onGroundStateClick(action: string) {
   font-weight: 700;
   letter-spacing: 0.02em;
   line-height: 1;
-  color: #b0b0b0;
+  color: #1a1a1a;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6100,7 +6207,7 @@ function onGroundStateClick(action: string) {
 }
 
 /*
- * INBOUND / dimmed strips: all data → placeholder grey.
+ * INBOUND / other-owned / dimmed: data → placeholder grey.
  * Exceptions: callsign (and suffix/SI), highlighted (non-standard) RWY.
  */
 .flight-strip.dimmed-data .strip-left .ctrl-ident,
@@ -6123,13 +6230,6 @@ function onGroundStateClick(action: string) {
 }
 .flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard {
   color: #000 !important;
-}
-/* Other-owned after assume: whole strip slightly dimmer (actions stay readable) */
-.flight-strip.dim-other-owned .strip-grid {
-  opacity: 0.55;
-}
-.flight-strip.dim-other-owned .strip-actions {
-  opacity: 0.85;
 }
 .cell-cfl.arr-cfl-ghost {
   color: #b0b0b0 !important;
@@ -6505,6 +6605,39 @@ function onGroundStateClick(action: string) {
   grid-template-areas:
     'cs  cs  .   .   .   hs  hp  rwy'
     'cto std cfl ahd .   .   .   .';
+}
+/* RTC: no HS (ESSA-only); STD|triangle; SID|AHD; SID framed */
+.flight-strip.rtc-layout .strip-grid-arr .strip-main {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
+  grid-template-areas:
+    'cs  cs  .   .   .   hp  rwy'
+    'std cto cfl sid sid sid ahd';
+}
+.flight-strip.rtc-layout .exp-bottom-main-arr,
+.flight-strip.rtc-layout .exp-bottom-main-dep {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
+}
+.flight-strip.rtc-layout .strip-grid-dep .strip-main {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
+  grid-template-areas:
+    'cs  cs  xfl .   .   hp  rwy'
+    'std cto cfl sid sid sid ahd';
+}
+.flight-strip.rtc-layout .strip-main .cell-sid {
+  position: relative;
+  margin: 0 var(--frame-inset-x) var(--frame-inset-y-outer);
+  outline: none !important;
+}
+.flight-strip.rtc-layout .strip-main .cell-sid::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--frame-visual-pad-y);
+  bottom: var(--frame-visual-pad-y);
+  border: 1px solid #d8d8d8;
+  box-sizing: border-box;
+  pointer-events: none;
 }
 /*
  * Framed data boxes: layout margins keep cell size/placement.

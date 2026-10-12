@@ -25,6 +25,12 @@
           @click="onSelect(opt)"
         >{{ opt }}</button>
       </div>
+      <button
+        type="button"
+        class="ahd-menu-item ahd-menu-llz"
+        :class="{ selected: currentHeading === 'LLZ' }"
+        @click="onSelect('LLZ')"
+      >LLZ</button>
       <div class="ahd-menu-manual" @click.stop>
         <input
           ref="manualInput"
@@ -239,6 +245,11 @@ function onClear() {
   text-align: center;
   text-transform: uppercase;
   background: #c0c0c0;
+  border-bottom: 2px solid #555;
+}
+
+.ahd-menu-llz {
+  border-top: 2px solid #555;
   border-bottom: 2px solid #555;
 }
 

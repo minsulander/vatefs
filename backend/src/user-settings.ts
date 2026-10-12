@@ -4,8 +4,8 @@
 
 import fs from "fs"
 import path from "path"
-import type { DclMode, StripPrintMode, StripPrintSound, UiSettings } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
+import type { AutoLopSsrMode, DclMode, StripPrintMode, StripPrintSound, UiSettings } from "@vatefs/common"
+import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode } from "@vatefs/common"
 
 function isStripPrintSound(value: unknown): value is StripPrintSound {
     return value === "off" || value === "short" || value === "long"
@@ -13,6 +13,15 @@ function isStripPrintSound(value: unknown): value is StripPrintSound {
 
 function isStripPrintMode(value: unknown): value is StripPrintMode {
     return value === "auto" || value === "manual"
+}
+
+/** Prefer autoLopSsr; migrate legacy autoDepSquawkCfl boolean (true→instant, false→manual). */
+function resolveAutoLopSsr(saved: UserSettings): AutoLopSsrMode {
+    if (isAutoLopSsrMode(saved.autoLopSsr)) return saved.autoLopSsr
+    if (typeof saved.autoDepSquawkCfl === "boolean") {
+        return saved.autoDepSquawkCfl ? "instant" : "manual"
+    }
+    return DEFAULT_UI_SETTINGS.autoLopSsr
 }
 
 export interface UserSettings {
@@ -29,7 +38,9 @@ export interface UserSettings {
     transferSoundsEnabled?: boolean
     showAppDepXcFrequency?: boolean
     autoParkEnabled?: boolean
+    /** @deprecated Prefer autoLopSsr; true→instant, false→manual */
     autoDepSquawkCfl?: boolean
+    autoLopSsr?: AutoLopSsrMode
     showTobtSetByA?: boolean
     stripPrintSound?: StripPrintSound
     stripPrintMode?: StripPrintMode
@@ -79,8 +90,9 @@ export function saveUserSettings(update: Partial<UserSettings>) {
     if (!settingsPath) return
     const current = loadUserSettings()
     const merged = { ...current, ...update } as UserSettings & { equalBayColumns?: boolean }
-    // Drop removed preference if still present in older settings files
+    // Drop removed / migrated preferences if still present in older settings files
     delete merged.equalBayColumns
+    if (merged.autoLopSsr !== undefined) delete merged.autoDepSquawkCfl
     try {
         fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2), "utf-8")
     } catch (err) {
@@ -121,10 +133,7 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.autoParkEnabled === "boolean"
                 ? saved.autoParkEnabled
                 : DEFAULT_UI_SETTINGS.autoParkEnabled,
-        autoDepSquawkCfl:
-            typeof saved.autoDepSquawkCfl === "boolean"
-                ? saved.autoDepSquawkCfl
-                : DEFAULT_UI_SETTINGS.autoDepSquawkCfl,
+        autoLopSsr: resolveAutoLopSsr(saved),
         showTobtSetByA:
             typeof saved.showTobtSetByA === "boolean"
                 ? saved.showTobtSetByA

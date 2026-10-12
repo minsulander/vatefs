@@ -22,6 +22,8 @@
         { 'no-resize': isFirstSection },
         essaHeaderClass,
         { 'section-header--paper': store.isPaperLook },
+        { 'section-header--rtc': store.multiAirport && !store.isPaperLook },
+        { 'section-header--rtc-rwy': !!rtcHeaderRwy },
         { 'header-drop-active': headerDropActive },
       ]"
       :title="
@@ -104,6 +106,11 @@
       >{{ section.title }}</span>
       <template v-if="!store.isPaperLook">
         <div class="section-header-right">
+          <span
+            v-if="rtcHeaderRwy"
+            class="section-hdr-rwy"
+            :title="rtcHeaderRwyTitle"
+          >{{ rtcHeaderRwy }}</span>
           <button
             type="button"
             class="section-hdr-btn section-hdr-close"
@@ -287,6 +294,7 @@ import {
   useDropHighlightOwner,
 } from '@/composables/useDropHighlightOwner'
 import { isRunwayOrderSectionId, sortRunwayLuOrder } from '@vatefs/common'
+import { rtcInsertAtTop } from '@/composables/rtcStripInsert'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 type TimeSortField = 'etobt' | 'tsat'
@@ -323,6 +331,16 @@ function isInboundAppSectionTitle(title?: string): boolean {
 
 function isCtrDepSectionId(sectionId: string): boolean {
   return sectionId === 'ctr_dep' || sectionId.endsWith('_ctr_dep')
+}
+
+/** RTC ARR section (bayN_arr / arr) */
+function isRtcArrSectionId(sectionId: string): boolean {
+  return sectionId === 'arr' || /^(bay\d+|idle)_arr$/.test(sectionId)
+}
+
+/** RTC DEP section (bayN_dep / dep) — not ctr_dep / pending_dep */
+function isRtcDepSectionId(sectionId: string): boolean {
+  return sectionId === 'dep' || /^(bay\d+|idle)_dep$/.test(sectionId)
 }
 
 function isClearedSectionId(sectionId: string): boolean {
@@ -374,7 +392,12 @@ const paperPendingKlarering = computed(
 )
 
 function isTaxiSectionId(sectionId: string): boolean {
-  return sectionId === 'taxi' || sectionId.endsWith('_taxi')
+  return (
+    sectionId === 'taxi' ||
+    sectionId.endsWith('_taxi') ||
+    sectionId === 'twy' ||
+    sectionId.endsWith('_twy')
+  )
 }
 
 function isAbovePushSectionId(sectionId: string): boolean {
@@ -858,6 +881,32 @@ const bayAirport = computed(() => {
   return bay?.airport
 })
 
+/** RTC: ARR header → arr RWY(s); DEP header → dep RWY(s) */
+const rtcHeaderRwy = computed(() => {
+  if (!store.multiAirport || store.isPaperLook) return null
+  const icao = (bayAirport.value || '').toUpperCase()
+  if (!icao) return null
+  const info = store.atisInfo.find((a) => a.airport === icao)
+  if (!info) return null
+  const id = props.section.id
+  if (isRtcArrSectionId(id)) {
+    const arr = info.arrRunways ?? []
+    return arr.length ? arr.join('/') : null
+  }
+  if (isRtcDepSectionId(id)) {
+    const dep = info.depRunways ?? []
+    return dep.length ? dep.join('/') : null
+  }
+  return null
+})
+
+const rtcHeaderRwyTitle = computed(() => {
+  if (!rtcHeaderRwy.value) return undefined
+  if (isRtcArrSectionId(props.section.id)) return `ARR RWY ${rtcHeaderRwy.value}`
+  if (isRtcDepSectionId(props.section.id)) return `DEP RWY ${rtcHeaderRwy.value}`
+  return `RWY ${rtcHeaderRwy.value}`
+})
+
 /** Index among topStrips where a dragged strip would insert (line before that index; length = end). */
 const dropInsertIndex = ref<number | null>(null)
 
@@ -964,6 +1013,8 @@ const timeSortEnabled = computed(
 )
 /** INBOUND APP only: always ETA auto-sort (no sticky manual order). */
 const etaSortEnabled = computed(() => isInboundAppSection.value)
+/** RTC ARR: ETA + assumed-below-sequence auto-sort */
+const rtcArrSortEnabled = computed(() => isRtcArrSectionId(props.section.id))
 /** CTR DEP: always ATD auto-sort (earliest at top; no ATD → add sequence at bottom). */
 const atdSortEnabled = computed(() => isCtrDepSection.value)
 /** RUNWAY: CFTO above L/U; sticky appearance within each tier (addFromTop:false). */
@@ -1087,6 +1138,32 @@ function collectTopStrips(): FlightStripData[] {
   return list
 }
 
+/**
+ * Mixed TAXI / RTC TWY stack: arrivals (taxi-in) above departures (taxi-out);
+ * sticky appearance order within each tier.
+ */
+function taxiMixedStackRank(strip: FlightStripData): number {
+  if (strip.stripType === 'arrival') return 0
+  if (strip.stripType === 'departure') return 1
+  if (strip.stripType === 'local') {
+    const gs = (strip.groundstate || '').toUpperCase()
+    if (gs === 'ARR' || gs === 'TXIN' || gs === 'PARK') return 0
+    if (strip.clearedToLand) return 0
+    return 1
+  }
+  return 1
+}
+
+function sortTaxiMixedStack(list: FlightStripData[]): FlightStripData[] {
+  return [...list].sort((a, b) => {
+    const ra = taxiMixedStackRank(a)
+    const rb = taxiMixedStackRank(b)
+    if (ra !== rb) return ra - rb
+    if (a.position !== b.position) return a.position - b.position
+    return a.callsign.localeCompare(b.callsign)
+  })
+}
+
 function sortByDepTime(
   list: FlightStripData[],
   field: TimeSortField,
@@ -1120,6 +1197,38 @@ function sortByEta(list: FlightStripData[]): FlightStripData[] {
     // Missing ETA at top so they don't sit under the sequence
     if (aMiss !== bMiss) return aMiss ? -1 : 1
     // Later ETAs toward the top; earliest (first in sequence) at bottom
+    const d = kb - ka
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/**
+ * RTC ARR: sequence (non-assumed / pending inbound) above assumed.
+ * Within each tier: closest ETA at bottom of tier; missing ETA at top of tier.
+ */
+function isRtcArrSequenceStrip(strip: FlightStripData): boolean {
+  // Pending inbound handoff stays in the sequence even if briefly flagged assumed
+  if (strip.transferPending === 'in') return true
+  return !strip.isAssumed
+}
+
+function sortRtcArrByEtaAndAssume(list: FlightStripData[]): FlightStripData[] {
+  const nowMin = utcNowMinutes()
+  return [...list].sort((a, b) => {
+    const aSeq = isRtcArrSequenceStrip(a)
+    const bSeq = isRtcArrSequenceStrip(b)
+    // Sequence tier above assumed
+    if (aSeq !== bSeq) return aSeq ? -1 : 1
+
+    const ka = hhmmSortKey(a.eta, nowMin)
+    const kb = hhmmSortKey(b.eta, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    if (aMiss !== bMiss) return aMiss ? -1 : 1
+    // Later ETA toward top of tier; closest ETA at bottom of tier
     const d = kb - ka
     if (d !== 0) return d
     const cs = a.callsign.localeCompare(b.callsign)
@@ -1208,6 +1317,7 @@ const showGaps = computed(
   () =>
     !stickBottomZone.value &&
     !etaSortEnabled.value &&
+    !rtcArrSortEnabled.value &&
     !atdSortEnabled.value &&
     !runwayLuSortEnabled.value &&
     (!timeSortEnabled.value || preferManualOrder.value),
@@ -1230,6 +1340,11 @@ const topStrips = computed(() => {
     return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
   }
 
+  // RTC ARR: non-assumed / pending-in above assumed; closest ETA at bottom of each tier
+  if (rtcArrSortEnabled.value) {
+    return sortRtcArrByEtaAndAssume(list)
+  }
+
   // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
   if (atdSortEnabled.value) {
     return sortByAtd(list)
@@ -1238,6 +1353,11 @@ const topStrips = computed(() => {
   // RUNWAY: CFTO above LINEUP; sticky appearance within tier / for non-L/U
   if (runwayLuSortEnabled.value) {
     return sortRunwayLuOrder(list)
+  }
+
+  // TAXI / RTC TWY: ARR (taxi-in) above DEP (taxi-out); sticky within tier
+  if (isTaxiSectionId(props.section.id)) {
+    return sortTaxiMixedStack(list)
   }
 
   if (timeSortEnabled.value && !preferManualOrder.value) {
@@ -1646,8 +1766,8 @@ function openCreateDialog(type: SpecialStripType, position?: number, isBottom = 
   pendingCreateGapIndex.value = gapIndex
   pendingCreateGapSize.value = gapSize
 
-  // Vehicle: always create in this section. Note: immediate unless multi-airport RTC.
-  if (type === 'vehicle' || (type === 'note' && !store.multiAirport)) {
+  // Note: immediate unless multi-airport RTC. Vehicle always opens dialog (callsign).
+  if (type === 'note' && !store.multiAirport) {
     applyCreate(type, undefined, undefined, bayAirport.value, position, isBottom, gapIndex, gapSize)
     return
   }
@@ -1655,7 +1775,19 @@ function openCreateDialog(type: SpecialStripType, position?: number, isBottom = 
   createDialogOpen.value = true
 }
 
-// Header drop → always insert at top of this section's strip list
+/** Header-drop preview index (RTC: dep → bottom of TWY/RWY; arr → top). */
+function headerDropInsertIndex(stripId?: string): number {
+  const count = topStrips.value.length
+  if (!store.multiAirport || !stripId) return 0
+  const strip = store.strips.get(stripId)
+  if (!strip) return 0
+  const atTop = rtcInsertAtTop(props.section.id, strip.stripType, strip.groundstate)
+  // Exclude the moving strip if already in this section
+  const others = strip.bayId === props.bayId && strip.sectionId === props.section.id ? count - 1 : count
+  return atTop ? 0 : Math.max(0, others)
+}
+
+// Header drop → top by default; RTC TWY/RWY use arr-top / dep-bottom
 function onHeaderDragOver(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) {
@@ -1695,7 +1827,14 @@ function onHeaderDrop(event: DragEvent) {
 
   const createType = event.dataTransfer.getData('application/efs-create')
   if (createType) {
-    openCreateDialog(createType as SpecialStripType, 0, false)
+    const t = createType as SpecialStripType
+    const stripType =
+      t === 'vfrDep' ? 'departure' : t === 'vfrArr' ? 'arrival' : t === 'cross' ? 'cross' : 'note'
+    const pos =
+      store.multiAirport && !rtcInsertAtTop(props.section.id, stripType)
+        ? topStrips.value.length
+        : 0
+    openCreateDialog(t, pos, false)
     return
   }
 
@@ -1706,7 +1845,8 @@ function onHeaderDrop(event: DragEvent) {
     if (data?.type === 'infoStrip') return
     if (!data?.stripId) return
     store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
-    store.moveStripToSection(data.stripId, props.bayId, props.section.id, 0)
+    const pos = headerDropInsertIndex(data.stripId)
+    store.moveStripToSection(data.stripId, props.bayId, props.section.id, pos)
   } catch (error) {
     console.error('Error handling header drop:', error)
   }
@@ -2149,9 +2289,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 .section-header {
   position: relative;
   background: #2c3138;
-  /* Clear left (drag+search[+sort]) and right (close) action buttons */
-  padding: 0 max(calc(22px * var(--bay-scale, 1)), calc(24px * var(--efs-scale, 1)))
-    0 max(calc(40px * var(--bay-scale, 1)), calc(44px * var(--efs-scale, 1)));
+  padding: 0;
   border-bottom: 1px solid #4a5058;
   display: flex;
   align-items: center;
@@ -2161,13 +2299,14 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   min-height: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
 }
 
-.section-header.header-drop-active {
-  box-shadow: inset 0 -3px 0 0 rgb(0, 150, 180);
+/* RTC: warm grey section bars (less blue than default chrome) */
+.section-header--rtc {
+  background: #3a3836;
+  border-bottom-color: #52504c;
 }
 
-.section-header:has(.section-sort-btn) {
-  /* drag + search + TOBT|TSAT|MAN toggle */
-  padding-left: max(calc(76px * var(--bay-scale, 1)), calc(82px * var(--efs-scale, 1)));
+.section-header.header-drop-active {
+  box-shadow: inset 0 -3px 0 0 rgb(0, 150, 180);
 }
 
 .section-header.no-resize {
@@ -2308,6 +2447,20 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   font-variant-numeric: tabular-nums;
 }
 
+/* SAAB/RTC/ESSA: title locked to header center; side controls overlay */
+.section-header:not(.section-header--paper) .section-title {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+  max-width: calc(100% - 88px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .section-title {
   font-size: max(calc(14px * var(--bay-scale, 1)), calc(15px * var(--efs-scale, 1)));
   font-weight: 700;
@@ -2327,6 +2480,22 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   display: flex;
   align-items: stretch;
   z-index: 1;
+}
+
+.section-hdr-rwy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 max(calc(5px * var(--bay-scale, 1)), calc(6px * var(--efs-scale, 1)));
+  margin-right: 1px;
+  color: #e8e4dc;
+  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
 }
 
 /* Same look as strip .action-button keys */

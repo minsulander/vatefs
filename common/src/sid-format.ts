@@ -253,19 +253,19 @@ export function formatSidForDisplay(
 }
 
 /**
- * TMA exit = first significant FPL route point, excluding ADEP/rwy and SID/rwy.
- * SID procedure name is ignored (ROKNI4R/08 ARS … → ARS).
- * `sid` is unused (kept for call-site compatibility).
+ * Significant FPL route fixes in order (excludes DCT, ADEP/rwy, SID/rwy, speed/level, airports).
+ * Used for TMA exit / FPR and DCT waypoint lists.
  */
-export function extractTmaExitPoint(
-    _sid: string | undefined | null,
+export function extractSignificantRouteFixes(
     route: string | undefined | null,
-): string | undefined {
-    if (!route) return undefined
+): string[] {
+    if (!route) return []
+    const out: string[] = []
+    const seen = new Set<string>()
     for (const raw of route.split(/\s+/)) {
         const upper = raw.trim().toUpperCase()
         if (!upper || upper === "DCT") continue
-        // Skip ADEP/rwy and SID/rwy entirely (do not treat SID name as the exit)
+        // Skip ADEP/rwy and SID/rwy entirely (do not treat SID name as a fix)
         if (upper.includes("/")) continue
         if (/^\d{1,2}[LRC]?$/i.test(upper)) continue
         if (/^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(upper)) continue
@@ -274,16 +274,32 @@ export function extractTmaExitPoint(
         if (/^[A-Z]{4}$/.test(upper)) continue
         // Skip named SID designators left in the route without /rwy
         if (/^[A-Z]{2,}\d+[A-Z]+$/.test(upper)) continue
+        let fix: string | undefined
         // Vector SID in route (ARS6E·KOGAV) → exit is the suffix
         const vector = parseVectorSidName(upper)
-        if (vector) return vector.exit
-        if (TRACK_SEP_RE.test(upper)) {
+        if (vector) {
+            fix = vector.exit
+        } else if (TRACK_SEP_RE.test(upper)) {
             const last = upper.split(TRACK_SEP_RE).filter(Boolean).pop()
-            if (last && /^[A-Z]{2,}$/.test(last)) return last
-            continue
+            if (last && /^[A-Z]{2,}$/.test(last)) fix = last
+        } else if (/^[A-Z]{2,3}$/.test(upper) || /^[A-Z]{5}$/.test(upper)) {
+            fix = upper
         }
-        // Bare fix (2–3 or 5 letters) — the TMA exit
-        if (/^[A-Z]{2,3}$/.test(upper) || /^[A-Z]{5}$/.test(upper)) return upper
+        if (!fix || seen.has(fix)) continue
+        seen.add(fix)
+        out.push(fix)
     }
-    return undefined
+    return out
+}
+
+/**
+ * TMA exit = first significant FPL route point, excluding ADEP/rwy and SID/rwy.
+ * SID procedure name is ignored (ROKNI4R/08 ARS … → ARS).
+ * `sid` is unused (kept for call-site compatibility).
+ */
+export function extractTmaExitPoint(
+    _sid: string | undefined | null,
+    route: string | undefined | null,
+): string | undefined {
+    return extractSignificantRouteFixes(route)[0]
 }

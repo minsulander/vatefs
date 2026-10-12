@@ -226,6 +226,24 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             SetJsonIfValidUtf8(message, "aircraftType", aircraftType);
         }
         SetJsonIfValidUtf8(message, "wakeTurbulence", (std::string("") + fpData.GetAircraftWtc()).c_str());
+        // Unextracted AC info — ICAO (B738/M-VW/C) or FAA (PC24/G); always send (even "")
+        {
+            const char *acInfo = fpData.GetAircraftInfo();
+            if (acInfo && strlen(acInfo) < 120) {
+                message["aircraftInfo"] = *acInfo ? AnsiToUtf8(acInfo) : "";
+                if (*acInfo) out << " acInfo " << acInfo;
+            } else {
+                message["aircraftInfo"] = "";
+            }
+        }
+        // FAA-style nav capability letter (same codes as TYPE/G suffix) + RVSM flag
+        {
+            char cap = fpData.GetCapibilities();
+            char capStr[2] = {cap == 0 ? '?' : cap, '\0'};
+            SetJsonIfValidUtf8(message, "capabilities", capStr);
+            message["rvsm"] = (bool)fpData.IsRvsm();
+            out << " cap " << capStr << (fpData.IsRvsm() ? " RVSM" : "");
+        }
         // Engine type for SLOW/low-speed: P/T = propeller, J = jet, E = electric, ? = unknown
         {
             char eng = fpData.GetEngineType();
@@ -288,10 +306,13 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             message["star"] = AnsiToUtf8(starName);
         if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
         // Always send sid (empty when cleared) so the backend can drop a stale GetSid()
-        if (sidName && *sidName && strlen(sidName) < 50)
+        if (sidName && *sidName && strlen(sidName) < 50) {
             message["sid"] = AnsiToUtf8(sidName);
-        else
+            out << " sid " << sidName;
+        } else {
             message["sid"] = "";
+            out << " sid (none)";
+        }
 
         const char *eobtRaw = fpData.GetEstimatedDepartureTime();
         if (eobtRaw && eobtRaw[0] != '\0') {
@@ -309,6 +330,64 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             }
         }
 
+        // Filed EET (FPL item 15) — HHmm from enroute hours/minutes
+        {
+            const char *eh = fpData.GetEnrouteHours();
+            const char *em = fpData.GetEnrouteMinutes();
+            std::string hh, mm;
+            if (eh) {
+                for (const char *p = eh; *p; ++p)
+                    if (*p >= '0' && *p <= '9') hh.push_back(*p);
+            }
+            if (em) {
+                for (const char *p = em; *p; ++p)
+                    if (*p >= '0' && *p <= '9') mm.push_back(*p);
+            }
+            if (!hh.empty() || !mm.empty()) {
+                while (hh.size() < 2) hh.insert(hh.begin(), '0');
+                if (hh.size() > 2) hh = hh.substr(hh.size() - 2);
+                while (mm.size() < 2) mm.insert(mm.begin(), '0');
+                if (mm.size() > 2) mm = mm.substr(0, 2);
+                std::string filedEet = hh + mm;
+                out << " filedEet " << filedEet;
+                message["filedEet"] = filedEet;
+            }
+        }
+
+        // Endurance (FPL item 19 E/) — for SUP field
+        {
+            const char *fh = fpData.GetFuelHours();
+            const char *fm = fpData.GetFuelMinutes();
+            std::string hh, mm;
+            if (fh) {
+                for (const char *p = fh; *p; ++p)
+                    if (*p >= '0' && *p <= '9') hh.push_back(*p);
+            }
+            if (fm) {
+                for (const char *p = fm; *p; ++p)
+                    if (*p >= '0' && *p <= '9') mm.push_back(*p);
+            }
+            if (!hh.empty() || !mm.empty()) {
+                while (hh.size() < 2) hh.insert(hh.begin(), '0');
+                if (hh.size() > 2) hh = hh.substr(hh.size() - 2);
+                while (mm.size() < 2) mm.insert(mm.begin(), '0');
+                if (mm.size() > 2) mm = mm.substr(0, 2);
+                std::string endurance = hh + mm;
+                out << " endurance " << endurance;
+                message["endurance"] = endurance;
+            }
+        }
+
+        // Pilot name (FPL item 19 C/) — statistics / FP when available
+        {
+            const char *pilot = FlightPlan.GetPilotName();
+            if (pilot && *pilot && strlen(pilot) < 80) {
+                message["pilotName"] = AnsiToUtf8(pilot);
+                out << " pilot " << pilot;
+            }
+        }
+
+        // Prediction points ≈ minutes remaining — used as ETB approximation
         int ete = FlightPlan.GetPositionPredictions().GetPointsNumber();
         if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
             out << " ete " << ete;
@@ -496,16 +575,29 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             if (heading >= 0 && heading <= 360) { // Valid heading range
                 out << " ahdg " << heading;
                 message["ahdg"] = heading;
-                message["direct"] = "";
+                // Real AHD clears DCT. ahdg=0 (e.g. after FPR/DCT) must NOT wipe direct —
+                // that race cleared strip.direct so CLR showed nothing under SID/DCT.
+                if (heading > 0) {
+                    message["direct"] = "";
+                } else {
+                    const char *directTo = ctrData.GetDirectToPointName();
+                    const std::string d = directTo ? directTo : "";
+                    if (d.size() < 50) {
+                        message["direct"] = d;
+                        if (!d.empty()) out << " direct " << d;
+                    }
+                }
             }
             break;
         }
         case EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO: {
             const char *directTo = ctrData.GetDirectToPointName();
-            if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
-                out << " direct " << directTo;
-                SetJsonIfValidUtf8(message, "direct", directTo);
-                if (strlen(directTo) > 0) message["ahdg"] = 0;
+            const std::string d = directTo ? directTo : "";
+            if (d.size() < 50) {
+                out << " direct " << (d.empty() ? "(clear)" : d);
+                // Always publish — empty clears strip SID/DCT display
+                message["direct"] = d;
+                if (!d.empty()) message["ahdg"] = 0;
             }
             break;
         }
@@ -1832,12 +1924,14 @@ void VatEFSPlugin::Refresh()
         int heading = ctrData.GetAssignedHeading();
         if (heading >= 0 && heading <= 360) { // Valid heading range
             message["ahdg"] = heading;
-            message["direct"] = "";
         }
         const char *directTo = ctrData.GetDirectToPointName();
-        if (directTo && strlen(directTo) < 50) { // Reasonable waypoint name length
-            SetJsonIfValidUtf8(message, "direct", directTo);
-            if (strlen(directTo) > 0) message["ahdg"] = 0;
+        const std::string directStr = directTo ? directTo : "";
+        if (directStr.size() < 50) {
+            message["direct"] = directStr;
+            if (!directStr.empty()) message["ahdg"] = 0;
+        } else if (heading > 0) {
+            message["direct"] = "";
         }
         PostJson(message, "Refresh");
     }
@@ -2466,21 +2560,16 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         bool amend = false;
                         auto slashPos = firstTerm.find('/');
                         if (sid.empty()) {
-                            // Clear SID: SID/rwy → ADEP/rwy (leave ICAO/rwy alone).
-                            // If SID's rwy differs from assigned dep rwy, use assigned (used) rwy.
+                            // Clear SID: SID/rwy → drop prefix (rest of route).
+                            // ADEP/rwy only forces RWY (no SID) — still drop it on clear.
                             if (slashPos != std::string::npos) {
                                 std::string prefix = firstTerm.substr(0, slashPos);
                                 std::string existingRwy = firstTerm.substr(slashPos + 1);
                                 if (isAirportIcao(prefix)) {
-                                    // Already ADEP/rwy — update rwy if assigned dep differs
-                                    if (!adep.empty() && !currentRwy.empty()
-                                        && existingRwy != currentRwy) {
-                                        newRoute = adep + "/" + currentRwy;
-                                        if (!restOfRoute.empty()) newRoute += " " + restOfRoute;
-                                        amend = true;
-                                    } else {
-                                        DebugMessage("assignSid: clear skipped (already " + firstTerm + ")");
-                                    }
+                                    // ADEP/rwy — not a SID; clear means remove the prefix
+                                    newRoute = restOfRoute;
+                                    amend = true;
+                                    DebugMessage("assignSid: clear dropped ADEP/rwy " + firstTerm);
                                 } else if (!adep.empty() && !existingRwy.empty()) {
                                     std::string rwy = existingRwy;
                                     if (!currentRwy.empty() && existingRwy != currentRwy) {
@@ -2606,6 +2695,60 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         bool ok = fp.GetControllerAssignedData().SetAssignedHeading(heading);
                         if (!ok) DisplayMessage("assignHeading: Failed for " + callsign);
+                    }
+                } else if (message["type"] == "assignDirect") {
+                    // DCT / FPR: update FLEG like ES COPX / "clear direct".
+                    // Set: flash fix via scratch (VOR/NDB/FIX → DCT, updates next route).
+                    // Clear: same as ES clear-direct — zero AHDG, clear DirectTo, flash
+                    // empty scratch (then restore) so FLEG drops the DCT.
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto point = message["point"].get<std::string>();
+                    DebugMessage("assignDirect: " + callsign + " -> " + (point.empty() ? "(clear)" : point));
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    for (auto &c : point)
+                        c = (char)std::toupper((unsigned char)c);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("assignDirect: Flight plan not found: " + callsign);
+                    } else {
+                        auto cad = fp.GetControllerAssignedData();
+                        // Direct and assigned heading are mutually exclusive
+                        cad.SetAssignedHeading(0);
+                        bool ok = cad.SetDirectToPointName(point.c_str());
+                        if (!ok) {
+                            // Empty clear often returns false when already cleared — not fatal
+                            const char *cur = cad.GetDirectToPointName();
+                            const bool alreadyClear =
+                                point.empty() && (!cur || cur[0] == '\0');
+                            if (!alreadyClear) {
+                                DisplayMessage("assignDirect: SetDirectToPointName failed for " +
+                                               callsign);
+                            } else {
+                                DebugMessage("assignDirect: clear — already empty in ES");
+                            }
+                        }
+                        // Scratch flash: waypoint for set, empty for clear (ES clear-direct)
+                        const std::string flash = point;
+                        if (!UpdateScratchPad(callsign, flash, true)) {
+                            DisplayMessage("assignDirect: scratch flash failed for " + callsign);
+                        } else {
+                            DebugMessage(point.empty()
+                                             ? "assignDirect: clear direct (scratch flash)"
+                                             : "assignDirect: FLEG via scratch " + point);
+                        }
+                        if (point.empty()) {
+                            // Push FP + CAD so EFS picks up GetSid / cleared direct
+                            auto fp2 = FlightPlanSelect(callsign.c_str());
+                            if (fp2.IsValid()) {
+                                OnFlightPlanFlightPlanDataUpdate(fp2);
+                                OnFlightPlanControllerAssignedDataUpdate(
+                                    fp2, EuroScopePlugIn::CTR_DATA_TYPE_DIRECT_TO);
+                                const char *sidName = fp2.GetFlightPlanData().GetSidName();
+                                DebugMessage(std::string("assignDirect: clear — ES GetSid ") +
+                                             (sidName && *sidName ? sidName : "(none)"));
+                            }
+                        }
                     }
                 } else if (message["type"] == "assignCfl") {
                     auto callsign = message["callsign"].get<std::string>();
@@ -2885,6 +3028,369 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         }
                     } else {
                         DebugMessage("createFlightPlan: No flight plan or radar target for " + callsign + ", cannot amend");
+                    }
+                } else if (message["type"] == "amendFlightPlan") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    DebugMessage("amendFlightPlan: " + callsign);
+                    auto fp = FlightPlanSelect(callsign.c_str());
+                    if (!fp.IsValid()) {
+                        DisplayMessage("amendFlightPlan: Flight plan not found: " + callsign);
+                    } else {
+                        auto fpData = fp.GetFlightPlanData();
+                        bool dirty = false;
+
+                        auto jsonStr = [&](const char *key) -> std::string {
+                            if (!message.contains(key) || message[key].is_null()) return "";
+                            if (message[key].is_string()) return message[key].get<std::string>();
+                            if (message[key].is_number()) return std::to_string(message[key].get<int>());
+                            return "";
+                        };
+                        auto hasKey = [&](const char *key) -> bool {
+                            return message.contains(key) && !message[key].is_null();
+                        };
+                        auto parseFeet = [&](const nlohmann::json &v) -> int {
+                            if (v.is_number_integer() || v.is_number_unsigned()) {
+                                int n = v.get<int>();
+                                if (n > 0 && n < 1000) return n * 100;
+                                return n;
+                            }
+                            if (!v.is_string()) return -1;
+                            std::string s = v.get<std::string>();
+                            for (auto &c : s) c = (char)std::toupper((unsigned char)c);
+                            std::string digits;
+                            char prefix = 0;
+                            for (char c : s) {
+                                if (c == 'F' || c == 'A' || c == 'L') {
+                                    if (!prefix && digits.empty()) {
+                                        if (c != 'L') prefix = c;
+                                    }
+                                    continue;
+                                }
+                                if (c >= '0' && c <= '9') digits.push_back(c);
+                            }
+                            if (digits.empty()) return -1;
+                            int n = std::atoi(digits.c_str());
+                            if (prefix == 'F' || (prefix == 0 && n < 1000 && digits.size() <= 3))
+                                return n * 100;
+                            if (prefix == 'A') return n * 100;
+                            return n;
+                        };
+                        auto upsertRemarkToken = [](std::string remarks, const std::string &token,
+                                                   const std::string &value) -> std::string {
+                            // Remove existing TOKEN/… then append TOKEN/value (or just strip if value empty)
+                            std::string upper = remarks;
+                            for (auto &c : upper) c = (char)std::toupper((unsigned char)c);
+                            std::string needle = token + "/";
+                            for (auto &c : needle) c = (char)std::toupper((unsigned char)c);
+                            size_t pos = 0;
+                            while ((pos = upper.find(needle, pos)) != std::string::npos) {
+                                size_t start = pos;
+                                size_t end = start + needle.size();
+                                while (end < remarks.size() && remarks[end] != ' ' && remarks[end] != '\n')
+                                    ++end;
+                                remarks.erase(start, end - start);
+                                upper.erase(start, end - start);
+                                while (!remarks.empty() && start < remarks.size() && remarks[start] == ' ')
+                                    remarks.erase(start, 1);
+                                if (start > 0 && start <= remarks.size() && remarks[start - 1] == ' ' &&
+                                    (start == remarks.size() || remarks[start] == ' ')) {
+                                    remarks.erase(start - 1, 1);
+                                    if (start > 0) --start;
+                                }
+                                pos = start;
+                                upper = remarks;
+                                for (auto &c : upper) c = (char)std::toupper((unsigned char)c);
+                            }
+                            while (!remarks.empty() && remarks.back() == ' ') remarks.pop_back();
+                            if (!value.empty()) {
+                                if (!remarks.empty()) remarks.push_back(' ');
+                                remarks += token + "/" + value;
+                            }
+                            return remarks;
+                        };
+
+                        if (hasKey("flightRules")) {
+                            std::string fr = jsonStr("flightRules");
+                            if (!fr.empty()) {
+                                fr[0] = (char)std::toupper((unsigned char)fr[0]);
+                                fpData.SetPlanType(fr.substr(0, 1).c_str());
+                                dirty = true;
+                            }
+                        }
+
+                        // Aircraft info: prefer FAA letter, else ICAO [N/]TYPE/WTC-EQUIP/SUR
+                        {
+                            std::string type = jsonStr("aircraftType");
+                            std::string wtc = jsonStr("wakeTurbulence");
+                            std::string faa = jsonStr("faaEquipment");
+                            std::string equip = jsonStr("equipment");
+                            std::string surv = jsonStr("surveillance");
+                            int nrac = 1;
+                            if (hasKey("numberOfAircraft")) {
+                                if (message["numberOfAircraft"].is_number())
+                                    nrac = message["numberOfAircraft"].get<int>();
+                                else {
+                                    try { nrac = std::stoi(jsonStr("numberOfAircraft")); } catch (...) { nrac = 1; }
+                                }
+                                if (nrac < 1) nrac = 1;
+                                if (nrac > 99) nrac = 99;
+                            } else {
+                                // Preserve existing leading NUMBER/ from current AircraftInfo
+                                const char *curInfo = fpData.GetAircraftInfo();
+                                if (curInfo && curInfo[0] >= '1' && curInfo[0] <= '9') {
+                                    int n = 0;
+                                    for (const char *p = curInfo; *p >= '0' && *p <= '9'; ++p)
+                                        n = n * 10 + (*p - '0');
+                                    if (n >= 1 && n <= 99) nrac = n;
+                                }
+                            }
+                            bool touchAc =
+                                hasKey("aircraftType") || hasKey("wakeTurbulence") ||
+                                hasKey("faaEquipment") || hasKey("equipment") || hasKey("surveillance") ||
+                                hasKey("numberOfAircraft");
+                            if (touchAc) {
+                                if (type.empty()) {
+                                    const char *cur = fpData.GetAircraftFPType();
+                                    if (cur && *cur) type = cur;
+                                }
+                                if (type.empty()) type = "ZZZZ";
+                                for (auto &c : type) c = (char)std::toupper((unsigned char)c);
+                                for (auto &c : wtc) c = (char)std::toupper((unsigned char)c);
+                                for (auto &c : faa) c = (char)std::toupper((unsigned char)c);
+                                for (auto &c : equip) c = (char)std::toupper((unsigned char)c);
+                                for (auto &c : surv) c = (char)std::toupper((unsigned char)c);
+
+                                std::string info;
+                                if (hasKey("faaEquipment") && faa.size() == 1) {
+                                    info = type + "/" + faa;
+                                } else if (!equip.empty() || !surv.empty() || hasKey("equipment") ||
+                                           hasKey("surveillance") || !wtc.empty()) {
+                                    if (wtc.empty()) {
+                                        char wc = fpData.GetAircraftWtc();
+                                        if (wc && wc != '?') wtc = std::string(1, wc);
+                                        else wtc = "M";
+                                    }
+                                    // When only NRAC changes, keep existing equip/sur from AircraftInfo if possible
+                                    if (equip.empty() || surv.empty()) {
+                                        const char *curInfo = fpData.GetAircraftInfo();
+                                        std::string raw = curInfo ? curInfo : "";
+                                        // Strip leading NUMBER/
+                                        if (!raw.empty() && raw[0] >= '0' && raw[0] <= '9') {
+                                            size_t sl = raw.find('/');
+                                            if (sl != std::string::npos) raw = raw.substr(sl + 1);
+                                        }
+                                        // TYPE/WTC-EQUIP/SUR
+                                        size_t dash = raw.find('-');
+                                        size_t lastSlash = raw.rfind('/');
+                                        if (dash != std::string::npos && lastSlash != std::string::npos &&
+                                            lastSlash > dash) {
+                                            if (equip.empty())
+                                                equip = raw.substr(dash + 1, lastSlash - dash - 1);
+                                            if (surv.empty())
+                                                surv = raw.substr(lastSlash + 1);
+                                        }
+                                    }
+                                    if (equip.empty()) equip = "S";
+                                    if (surv.empty()) surv = "C";
+                                    info = type + "/" + wtc.substr(0, 1) + "-" + equip + "/" + surv;
+                                } else if (hasKey("aircraftType") || hasKey("wakeTurbulence") ||
+                                           hasKey("numberOfAircraft")) {
+                                    // Type/WTC only — keep existing capabilities letter if present
+                                    char cap = fpData.GetCapibilities();
+                                    if (wtc.empty()) {
+                                        char wc = fpData.GetAircraftWtc();
+                                        if (wc && wc != '?') wtc = std::string(1, wc);
+                                    }
+                                    if (cap && cap != '?' && wtc.empty()) {
+                                        info = type + "/" + std::string(1, (char)std::toupper((unsigned char)cap));
+                                    } else if (!wtc.empty()) {
+                                        info = type + "/" + wtc.substr(0, 1);
+                                    } else {
+                                        info = type;
+                                    }
+                                }
+                                if (!info.empty()) {
+                                    // ICAO field 9 number of aircraft — only when > 1
+                                    if (nrac > 1)
+                                        info = std::to_string(nrac) + "/" + info;
+                                    fpData.SetAircraftInfo(info.c_str());
+                                    dirty = true;
+                                }
+                            }
+                        }
+
+                        if (hasKey("origin")) {
+                            std::string v = jsonStr("origin");
+                            for (auto &c : v) c = (char)std::toupper((unsigned char)c);
+                            fpData.SetOrigin(v.c_str());
+                            dirty = true;
+                        }
+                        if (hasKey("destination")) {
+                            std::string v = jsonStr("destination");
+                            for (auto &c : v) c = (char)std::toupper((unsigned char)c);
+                            fpData.SetDestination(v.c_str());
+                            dirty = true;
+                        }
+                        if (hasKey("alternate")) {
+                            std::string v = jsonStr("alternate");
+                            for (auto &c : v) c = (char)std::toupper((unsigned char)c);
+                            fpData.SetAlternate(v.c_str());
+                            dirty = true;
+                        }
+                        if (hasKey("eobt")) {
+                            std::string eobt = jsonStr("eobt");
+                            std::string digits;
+                            for (char c : eobt)
+                                if (c >= '0' && c <= '9') digits.push_back(c);
+                            if (digits.size() == 3) digits = "0" + digits;
+                            if (digits.size() > 4) digits = digits.substr(0, 4);
+                            if (digits.size() == 4 || digits.empty()) {
+                                fpData.SetEstimatedDepartureTime(digits.c_str());
+                                dirty = true;
+                            }
+                        }
+                        if (hasKey("tas")) {
+                            std::string tas = jsonStr("tas");
+                            std::string digits;
+                            for (char c : tas) {
+                                if (c >= '0' && c <= '9') digits.push_back(c);
+                            }
+                            if (!digits.empty()) {
+                                fpData.SetTrueAirspeed(std::atoi(digits.c_str()));
+                                dirty = true;
+                            }
+                        }
+                        if (hasKey("rfl")) {
+                            int feet = parseFeet(message["rfl"]);
+                            if (feet > 0) {
+                                fpData.SetFinalAltitude(feet);
+                                dirty = true;
+                            }
+                        }
+                        if (hasKey("eet")) {
+                            std::string eet = jsonStr("eet");
+                            std::string digits;
+                            for (char c : eet)
+                                if (c >= '0' && c <= '9') digits.push_back(c);
+                            if (digits.size() == 3) digits = "0" + digits;
+                            if (digits.size() == 4) {
+                                fpData.SetEnrouteHours(digits.substr(0, 2).c_str());
+                                fpData.SetEnrouteMinutes(digits.substr(2, 2).c_str());
+                                dirty = true;
+                            }
+                        }
+                        if (hasKey("route")) {
+                            std::string route = Utf8ToAnsi(jsonStr("route"));
+                            fpData.SetRoute(route.c_str());
+                            dirty = true;
+                        }
+
+                        // Remarks + RALT + DOF + SUP fuel
+                        {
+                            std::string remarks;
+                            if (hasKey("fplRemarks")) {
+                                remarks = Utf8ToAnsi(jsonStr("fplRemarks"));
+                            } else {
+                                const char *cur = fpData.GetRemarks();
+                                if (cur) remarks = cur;
+                            }
+                            bool remarksDirty = hasKey("fplRemarks");
+                            if (hasKey("alternate2")) {
+                                std::string a2 = jsonStr("alternate2");
+                                for (auto &c : a2) c = (char)std::toupper((unsigned char)c);
+                                remarks = upsertRemarkToken(remarks, "RALT", a2);
+                                remarksDirty = true;
+                            }
+                            if (hasKey("eobd")) {
+                                std::string dof = jsonStr("eobd");
+                                std::string digits;
+                                for (char c : dof)
+                                    if (c >= '0' && c <= '9') digits.push_back(c);
+                                if (digits.size() > 6) digits = digits.substr(digits.size() - 6);
+                                remarks = upsertRemarkToken(remarks, "DOF", digits);
+                                remarksDirty = true;
+                            }
+                            if (hasKey("supl")) {
+                                std::string supl = jsonStr("supl");
+                                // E/HHmm → fuel hours/minutes
+                                size_t ep = supl.find("E/");
+                                if (ep == std::string::npos) ep = supl.find("e/");
+                                if (ep != std::string::npos) {
+                                    std::string digits;
+                                    for (size_t i = ep + 2; i < supl.size() && digits.size() < 4; ++i) {
+                                        if (supl[i] >= '0' && supl[i] <= '9') digits.push_back(supl[i]);
+                                        else if (!digits.empty()) break;
+                                    }
+                                    if (digits.size() == 3) digits = "0" + digits;
+                                    if (digits.size() == 4) {
+                                        fpData.SetFuelHours(digits.substr(0, 2).c_str());
+                                        fpData.SetFuelMinutes(digits.substr(2, 2).c_str());
+                                        dirty = true;
+                                    }
+                                }
+                                // C/name → keep in remarks (no SetPilotName API)
+                                size_t cp = supl.find("C/");
+                                if (cp == std::string::npos) cp = supl.find("c/");
+                                if (cp != std::string::npos) {
+                                    size_t start = cp + 2;
+                                    size_t end = start;
+                                    while (end < supl.size()) {
+                                        if (end + 1 < supl.size() && supl[end] == ' ' &&
+                                            ((supl[end + 1] >= 'A' && supl[end + 1] <= 'Z') ||
+                                             (supl[end + 1] >= 'a' && supl[end + 1] <= 'z')) &&
+                                            end + 2 < supl.size() && supl[end + 2] == '/')
+                                            break;
+                                        ++end;
+                                    }
+                                    while (end > start && supl[end - 1] == ' ') --end;
+                                    std::string pic = Utf8ToAnsi(supl.substr(start, end - start));
+                                    remarks = upsertRemarkToken(remarks, "C", pic);
+                                    remarksDirty = true;
+                                }
+                            }
+                            if (remarksDirty) {
+                                fpData.SetRemarks(remarks.c_str());
+                                dirty = true;
+                            }
+                        }
+
+                        if (dirty) {
+                            bool amended = fpData.AmendFlightPlan();
+                            if (!amended) {
+                                DisplayMessage("amendFlightPlan: Failed to amend for " + callsign);
+                            } else {
+                                DebugMessage("amendFlightPlan: Amended FP for " + callsign);
+                                OnFlightPlanFlightPlanDataUpdate(fp);
+                            }
+                        }
+
+                        // CAD fields (squawk / CFL) — separate from FP amend
+                        auto cad = fp.GetControllerAssignedData();
+                        bool cadDirty = false;
+                        if (hasKey("squawk")) {
+                            std::string sq = jsonStr("squawk");
+                            std::string digits;
+                            for (char c : sq)
+                                if (c >= '0' && c <= '7') digits.push_back(c);
+                            if (digits.size() > 4) digits = digits.substr(0, 4);
+                            if (digits.size() == 4 || digits.empty()) {
+                                cad.SetSquawk(digits.c_str());
+                                cadDirty = true;
+                            }
+                        }
+                        if (hasKey("cfl")) {
+                            int feet = parseFeet(message["cfl"]);
+                            if (feet > 0) {
+                                cad.SetClearedAltitude(feet);
+                                cadDirty = true;
+                            }
+                        }
+                        if (cadDirty) {
+                            // EuroScope fires OnFlightPlanControllerAssignedDataUpdate for SetSquawk / SetClearedAltitude
+                            DebugMessage("amendFlightPlan: Updated CAD for " + callsign);
+                        }
                     }
                 } else {
                     DisplayMessage("Unknown message type: " + message["type"].get<std::string>());

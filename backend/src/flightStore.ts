@@ -40,6 +40,9 @@ import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { remapPushActionForStand } from "./essa-push-stands.js"
 import {
     extractTmaExitPoint,
+    FAA_TO_ICAO,
+    formatCflMenuLabel,
+    formatFaaEquipDisplay,
     hasForcedSidInRoute,
     hasSlowRemark,
     isIfrSidEligible,
@@ -47,10 +50,13 @@ import {
     isTrackSidName,
     isVectorSidName,
     resolveDisplayFlightRules,
+    isLopFprDepAirport,
+    fprDepDisplayFix,
 } from "@vatefs/common"
+import { getTransitionAltitudeFt } from "./topsky-airspace.js"
 import { getRtfCallsign } from "./icao-airlines.js"
 import { getIcaoAirportName } from "./icao-airports.js"
-import { hasSidInEse, getSidInfo, getSidsForRunway } from "./sid-data.js"
+import { hasSidInEse, getSidInfo, getSidsForRunway, pickEseSidForRouteExit } from "./sid-data.js"
 import {
     parseCombinedScratch,
     buildCombinedScratch,
@@ -352,15 +358,21 @@ function sidMatchesRoutePrefix(sid: string, prefix: string): boolean {
  * - Track/SLOW GetSid is never sticky once FPL no longer forces a SID (ESE preferred fills strip)
  * - Else first significant FPL fix / ESE-matched GetSid for RNAV
  */
+/** Runway for ESE SID pick: ES depRwy, else /rwy on first route term. */
+function runwayForSidPick(flight: Flight): string | undefined {
+    return extractDisplayDepRunway(flight)
+}
+
 function extractDisplaySid(flight: Flight): string | undefined {
     const forcedPrefix = routeForcedSidPrefix(flight.route)
+    const depRwy = runwayForSidPick(flight)
 
     if (flight.sidDisplayOverride) {
         if (forcedPrefix && sidMatchesRoutePrefix(flight.sidDisplayOverride, forcedPrefix)) {
             return flight.sidDisplayOverride
         }
-        // Optimistic: just assigned via EFS, AmendFlightPlan not reflected yet
-        if (!forcedPrefix && flight.sid && sidMatchesRoutePrefix(flight.sidDisplayOverride, flight.sid)) {
+        // Display-only restore (DCT clear) or optimistic assign before AmendFlightPlan
+        if (!forcedPrefix) {
             return flight.sidDisplayOverride
         }
     }
@@ -376,6 +388,13 @@ function extractDisplaySid(flight: Flight): string | undefined {
         return forcedPrefix
     }
 
+    // FPR airports (LOP via flight planned route): show first FPL fix when DEP RWY
+    // is set in ES or FPL — no DCT assign needed (FLEG already to that point).
+    // No explicit RWY → blank (do not use active-runway fallback).
+    if (isLopFprDepAirport(flight.origin)) {
+        return fprDepDisplayFix(flight.origin, flight.route, flight.depRwy)
+    }
+
     // No SID/rwy in FPL — never keep a track/SLOW GetSid (cleared in ES or EFS).
     // Radar-vector SIDs (ARS6E·KOGAV) are normal RNAV — keep them.
     if (flight.sid && isTrackSidName(flight.sid)) {
@@ -385,14 +404,20 @@ function extractDisplaySid(flight: Flight): string | undefined {
     const firstFix = flight.route ? firstSignificantRouteFix(flight.route) : undefined
     const sidInfo =
         flight.sid && flight.origin
-            ? getSidInfo(flight.origin, flight.sid, flight.depRwy)
+            ? getSidInfo(flight.origin, flight.sid, depRwy)
             : undefined
+
+    // Valid ESE GetSid / restored preferred for this runway (non-track) — show in EFS
+    // even when the route exit does not match SID waypoints (after DCT clear, etc.)
+    if (sidInfo && flight.sid && !isTrackSidName(flight.sid)) {
+        return flight.sid
+    }
 
     if (firstFix) {
         if (
             flight.sid &&
             flight.origin &&
-            hasSidInEse(flight.origin, firstFix, flight.depRwy) &&
+            hasSidInEse(flight.origin, firstFix, depRwy) &&
             (firstFix === flight.sid || flight.sid.startsWith(firstFix))
         ) {
             return flight.sid
@@ -401,9 +426,15 @@ function extractDisplaySid(flight: Flight): string | undefined {
             return firstFix
         }
         if (!flight.sid && !sidInfo) {
+            // No GetSid — if ESE has a SID for this runway+exit (ES prio), show it
+            // (e.g. ESNU/32 + DEDIT → DEDIT2L). Otherwise bare fix when no ESE SIDs.
+            const eseSid = flight.origin
+                ? pickEseSidForRouteExit(flight.origin, depRwy, firstFix)
+                : undefined
+            if (eseSid) return eseSid
             const eseCount =
-                flight.origin && flight.depRwy
-                    ? getSidsForRunway(flight.origin, flight.depRwy).length
+                flight.origin && depRwy
+                    ? getSidsForRunway(flight.origin, depRwy).length
                     : 0
             if (eseCount === 0) return firstFix
             return undefined
@@ -424,6 +455,184 @@ function formatCommunicationSuffix(communicationType: string | undefined): strin
     if (c === 'T') return '/t'
     if (c === 'R') return '/r'
     return undefined
+}
+
+/** Letters that are FAA capability codes in TopSky's conversion table. */
+const FAA_CAP_LETTERS = new Set(Object.keys(FAA_TO_ICAO))
+
+export type ParsedAircraftInfo = {
+    equipment?: string
+    surveillance?: string
+    /**
+     * Full EQUIP field when FAA-sourced — TopSky form `G (SDFGRY/H)`.
+     * Edit UI uses the single FAA letter only; conversion is display-only.
+     */
+    equipmentDisplay?: string
+    /** FAA letter when format is faa (e.g. G) — for editing */
+    faaEquipment?: string
+    format?: 'icao' | 'faa'
+}
+
+function applyRvsm(equip: string, rvsm?: boolean): string {
+    if (!rvsm || equip.includes('W')) return equip
+    return equip + 'W'
+}
+
+function fromFaaLetter(faa: string, _rvsm?: boolean): ParsedAircraftInfo {
+    const code = faa.toUpperCase()
+    const icaoPart = FAA_TO_ICAO[code]
+    if (icaoPart == null) return { format: 'faa', faaEquipment: code }
+    // "SF/X" → equip SF, sur X; "/H" → equip empty, sur H
+    const slash = icaoPart.lastIndexOf('/')
+    const equip = slash >= 0 ? icaoPart.slice(0, slash) : icaoPart
+    const sur = slash >= 0 ? icaoPart.slice(slash + 1) : ''
+    return {
+        format: 'faa',
+        faaEquipment: code,
+        equipment: equip || undefined,
+        surveillance: sur || undefined,
+        equipmentDisplay: formatFaaEquipDisplay(code),
+    }
+}
+
+/**
+ * Parse EuroScope GetAircraftInfo / VATSIM aircraft string —
+ * ICAO (A20N/M-VW/C, or bare VW/C) or FAA (PC24/G).
+ * Falls back to GetCapibilities letter when info is missing or WTC-only.
+ */
+export function parseAircraftInfo(
+    info: string | undefined,
+    capabilities?: string,
+    rvsm?: boolean
+): ParsedAircraftInfo {
+    // Strip leading slash some VATSIM aircraft strings use
+    const raw = (info || '').trim().replace(/^\//, '')
+
+    // ICAO: TYPE/WTC-EQUIP/SUR  (e.g. B738/M-VW/C)
+    const icao = raw.match(/^[^/\s]+\/[A-Z?]-(.+)\/([^/\s]+)$/i)
+    if (icao) {
+        let equipment = icao[1].replace(/\s+/g, '').toUpperCase()
+        const surveillance = icao[2].replace(/\s+/g, '').toUpperCase()
+        equipment = applyRvsm(equipment, rvsm)
+        return {
+            format: 'icao',
+            equipment: equipment || undefined,
+            surveillance: surveillance || undefined,
+        }
+    }
+
+    // ICAO bare field 10: EQUIP/SUR (e.g. VW/C) — first token letters-only, length ≥ 1
+    const bare = raw.match(/^([A-Z][A-Z0-9]*)\/([A-Z0-9]{1,5})$/i)
+    if (bare && !/\d/.test(bare[1])) {
+        let equipment = bare[1].replace(/\s+/g, '').toUpperCase()
+        const surveillance = bare[2].replace(/\s+/g, '').toUpperCase()
+        // Single-letter first token is FAA TYPE/G, not bare EQUIP
+        if (equipment.length >= 2) {
+            equipment = applyRvsm(equipment, rvsm)
+            return {
+                format: 'icao',
+                equipment: equipment || undefined,
+                surveillance: surveillance || undefined,
+            }
+        }
+    }
+
+    // FAA / short: TYPE/G (TopSky ATYP/X capability letter)
+    const faaSlash = raw.match(/^[^/\s]+\/([A-Z?])$/i)
+    if (faaSlash) {
+        const letter = faaSlash[1].toUpperCase()
+        // Bare WTC-only J/? (not in TopSky FAA table) — try capabilities
+        if (letter === 'J' || letter === '?') {
+            // fall through
+        } else if (FAA_CAP_LETTERS.has(letter)) {
+            // M is both WTC Medium and FAA — prefer GetCapibilities when it differs
+            if (
+                letter === 'M' &&
+                capabilities &&
+                /^[A-Z]$/i.test(capabilities) &&
+                capabilities.toUpperCase() !== 'M' &&
+                FAA_CAP_LETTERS.has(capabilities.toUpperCase())
+            ) {
+                return fromFaaLetter(capabilities, rvsm)
+            }
+            return fromFaaLetter(letter, rvsm)
+        }
+    }
+
+    // Fallback: GetCapibilities letter
+    const cap = (capabilities || '').trim().toUpperCase()
+    if (cap && cap !== '?' && FAA_CAP_LETTERS.has(cap)) {
+        return fromFaaLetter(cap, rvsm)
+    }
+
+    return {}
+}
+
+/** Apply parsed equipment onto a Flight (does not clear existing richer ICAO data). */
+export function applyParsedEquipment(flight: Flight, parsed: ParsedAircraftInfo, rawInfo?: string): void {
+    if (rawInfo && !flight.aircraftInfo) flight.aircraftInfo = rawInfo
+    if (parsed.format === 'icao') {
+        if (parsed.equipment) flight.equipment = parsed.equipment
+        if (parsed.surveillance) flight.surveillance = parsed.surveillance
+        flight.equipmentDisplay = undefined
+        flight.faaEquipment = undefined
+        return
+    }
+    if (parsed.format === 'faa') {
+        if (parsed.faaEquipment) flight.faaEquipment = parsed.faaEquipment
+        if (parsed.equipmentDisplay) flight.equipmentDisplay = parsed.equipmentDisplay
+        if (parsed.equipment) flight.equipment = parsed.equipment
+        if (parsed.surveillance) flight.surveillance = parsed.surveillance
+    }
+}
+
+/** TopSky EQCST letters: EQ / NO / UN for W Y U R P S. */
+export function deriveEqcst(equipment: string | undefined): string {
+    if (!equipment) return ''
+    const eq = equipment.toUpperCase()
+    return (['W', 'Y', 'U', 'R', 'P', 'S'] as const)
+        .map((c) => `${c}/${eq.includes(c) ? 'EQ' : 'NO'}`)
+        .join(' ')
+}
+
+function parseDofFromRemarks(remarks: string | undefined): string | undefined {
+    if (!remarks) return undefined
+    const m = remarks.match(/\bDOF\/(\d{6})\b/i)
+    return m?.[1]
+}
+
+/** Second alternate from item 18 RALT/ or ALTN/ when different from primary. */
+export function parseAltn2FromRemarks(remarks: string | undefined, altn1?: string): string | undefined {
+    if (!remarks) return undefined
+    const m = remarks.match(/\b(?:RALT|ALTN)\/([A-Z0-9]{3,4})\b/i)
+    if (!m?.[1]) return undefined
+    const icao = m[1].toUpperCase()
+    if (altn1 && icao === altn1.toUpperCase()) return undefined
+    return icao
+}
+
+/**
+ * SUP line (TopSky): endurance E/HHmm + pilot C/name (ICAO item 19).
+ * Prefer structured fields from EuroScope; fall back to item 18/19 tokens in remarks.
+ */
+export function formatSupl(
+    endurance?: string,
+    pilotName?: string,
+    remarks?: string
+): string {
+    const parts: string[] = []
+    if (endurance) {
+        parts.push(`E/${endurance}`)
+    } else if (remarks) {
+        const em = remarks.match(/\bE\/(\d{4})\b/i)
+        if (em) parts.push(`E/${em[1]}`)
+    }
+    const pic =
+        (pilotName && pilotName.trim()) ||
+        remarks?.match(/\bC\/([^\n/]+?)(?=\s+[A-Z]\/|$)/i)?.[1]?.trim() ||
+        undefined
+    if (pic) parts.push(`C/${pic}`)
+    return parts.join(' ')
 }
 
 /**
@@ -698,6 +907,7 @@ class FlightStore {
         const flight = this.flights.get(callsign)
         if (!flight) return
         flight.groundstate = state
+        if (state === 'PARK') flight.airborne = false
         if (!state) {
             flight.groundstateClearedUntil = Date.now() + 3000
             flight.groundstateHoldUntil = undefined
@@ -880,6 +1090,7 @@ class FlightStore {
         if (!flight.stand) flight.stand = standAtPos
 
         flight.groundstate = 'PARK'
+        flight.airborne = false
         console.log(
             `Auto-PARK: ${flight.callsign} assumed, stationary ${AUTO_PARK_DWELL_MS}ms at stand ${standAtPos}`
         )
@@ -2088,6 +2299,26 @@ class FlightStore {
         if (message.aircraftType !== undefined) flight.aircraftType = message.aircraftType
         if (message.wakeTurbulence !== undefined) flight.wakeTurbulence = message.wakeTurbulence
         if (message.engineType !== undefined) flight.engineType = message.engineType || undefined
+        if (message.capabilities !== undefined) {
+            flight.capabilities = message.capabilities || undefined
+        }
+        if (message.rvsm !== undefined) {
+            flight.rvsm = message.rvsm
+        }
+        if (
+            message.aircraftInfo !== undefined ||
+            message.capabilities !== undefined ||
+            message.rvsm !== undefined
+        ) {
+            if (message.aircraftInfo !== undefined) {
+                flight.aircraftInfo = message.aircraftInfo || undefined
+            }
+            const parsed = parseAircraftInfo(flight.aircraftInfo, flight.capabilities, flight.rvsm)
+            // ES ICAO info wins over any prior FAA conversion
+            if (parsed.equipment || parsed.surveillance || parsed.faaEquipment) {
+                applyParsedEquipment(flight, parsed, flight.aircraftInfo)
+            }
+        }
         if (message.flightRules !== undefined) flight.flightRules = message.flightRules
         if (message.communicationType !== undefined) {
             flight.communicationType = message.communicationType || undefined
@@ -2104,6 +2335,9 @@ class FlightStore {
             }
         }
         if (message.eobt !== undefined) flight.eobt = message.eobt
+        if (message.filedEet !== undefined) flight.filedEet = message.filedEet || undefined
+        if (message.endurance !== undefined) flight.endurance = message.endurance || undefined
+        if (message.pilotName !== undefined) flight.pilotName = message.pilotName || undefined
         if (message.ete !== undefined) flight.ete = message.ete
         // Filed FPL cruise altitude → RFL; explicit positive RFL (CAD) wins if present
         if (message.altitude !== undefined && message.altitude > 0) {
@@ -2115,7 +2349,11 @@ class FlightStore {
         if (message.xfl !== undefined) {
             flight.xfl = message.xfl > 0 ? message.xfl : undefined
         }
-        if (message.fplRemarks !== undefined) flight.fplRemarks = message.fplRemarks || undefined
+        if (message.fplRemarks !== undefined) {
+            flight.fplRemarks = message.fplRemarks || undefined
+            const dof = parseDofFromRemarks(flight.fplRemarks)
+            if (dof) flight.eobd = dof
+        }
         if (message.arrRwy !== undefined) flight.arrRwy = message.arrRwy
         if (message.star !== undefined) flight.star = message.star
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy
@@ -2242,6 +2480,10 @@ class FlightStore {
             // ASSR must be ICAO octal (0–7). Ignore junk like "9875" from interim ES updates.
             const next = normalizeAssignedSquawk(message.squawk)
             if (next !== undefined) {
+                const prev = flight.squawk
+                if (prev && next && prev !== next) {
+                    flight.previousSquawk = prev
+                }
                 flight.squawk = next || undefined
             }
         }
@@ -2289,6 +2531,7 @@ class FlightStore {
                 // keep EFS-set groundstate
             } else {
                 flight.groundstate = incomingGs
+                if (incomingGs === 'PARK') flight.airborne = false
                 flight.groundstateClearedUntil = undefined
                 flight.groundstateHoldUntil = undefined
             }
@@ -2396,6 +2639,11 @@ class FlightStore {
                 if (flight.approachType === 'OS') flight.cfl = 2
                 else if (flight.cfl !== 1 && flight.cfl !== 2) flight.cfl = 1
             }
+            // TopSky AHD special: /LLZ/ (localizer) — show LLZ in AHD cell
+            if (/^\/LLZ\/?$/i.test(scratch)) {
+                flight.llz = true
+                flight.ahdg = 0
+            }
             // Protocol scratch we will wipe — do not let the ensuing empty clear wipe remarks/HP
             if (isProtocolScratch(scratch)) {
                 flight.scratchFieldsHoldUntil = Date.now() + 2500
@@ -2441,8 +2689,11 @@ class FlightStore {
         if (message.asp !== undefined) flight.asp = message.asp
         if (message.mach !== undefined) flight.mach = message.mach
         if (message.arc !== undefined) flight.arc = message.arc
-        if (message.ahdg !== undefined) flight.ahdg = message.ahdg
-        if (message.direct !== undefined) flight.direct = message.direct
+        if (message.ahdg !== undefined) {
+            flight.ahdg = message.ahdg
+            if (message.ahdg > 0) flight.llz = false
+        }
+        if (message.direct !== undefined) flight.direct = message.direct || undefined
         flight.lastUpdate = Date.now()
 
         // Auto-detect stand from position if not already set
@@ -2581,7 +2832,24 @@ class FlightStore {
         }
         let clearAirborneScratch: string | undefined
         let clearAirborneHs = false
-        if (!wasAirborne && message.altitude > airborneThreshold) {
+        const gsRaw = message.groundSpeed ?? flight.groundSpeed
+        const gsKnown = gsRaw !== undefined && Number.isFinite(gsRaw)
+        const gs = gsKnown ? (gsRaw as number) : undefined
+        const preDepGs = ['', 'NSTS', 'ONFREQ', 'DE-ICE', 'STUP', 'PUSH', 'TAXI', 'PARK']
+        // PARK always; or known-slow + still in gate/pre-push GS (baro alone often > field+200 on stand)
+        const gateLike =
+            flight.groundstate === 'PARK' ||
+            (gsKnown &&
+                gs! <= groundSpeedThreshold &&
+                preDepGs.includes(flight.groundstate ?? ''))
+        if (gateLike) {
+            flight.airborne = false
+        } else if (
+            !wasAirborne &&
+            message.altitude > airborneThreshold &&
+            gsKnown &&
+            gs! > groundSpeedThreshold
+        ) {
             flight.airborne = true
             // Airborne again after a landing stamp = go-around (or new dep) — clear ATA
             if (flight.ata) flight.ata = undefined
@@ -2599,7 +2867,12 @@ class FlightStore {
                 flight.hs = undefined
                 clearAirborneHs = true
             }
-        } else if (wasAirborne && message.altitude <= airborneThreshold && (message.groundSpeed <= groundSpeedThreshold || message.altitude <= defNotAirborneThreshold)) {
+        } else if (
+            wasAirborne &&
+            message.altitude <= airborneThreshold &&
+            ((!gsKnown || gs! <= groundSpeedThreshold) ||
+                message.altitude <= defNotAirborneThreshold)
+        ) {
             // Aircraft has landed
             flight.airborne = false
             if (!flight.ata && destMine && !flight.missedApproach) {
@@ -2627,9 +2900,14 @@ class FlightStore {
         return bay?.sections.find(s => s.id === sectionId)
     }
 
-    /** TAXI / PÅ TAXI (and multi-airport *_taxi). */
+    /** TAXI / PÅ TAXI / RTC TAXIWAY (twy / *_twy / *_taxi). */
     private isTaxiSectionId(sectionId: string): boolean {
-        return sectionId === 'taxi' || sectionId.endsWith('_taxi')
+        return (
+            sectionId === 'taxi' ||
+            sectionId.endsWith('_taxi') ||
+            sectionId === 'twy' ||
+            sectionId.endsWith('_twy')
+        )
     }
 
     /** Headerless bay above PÅ BANAN (CTR ARR / manual RWY sequence). */
@@ -3294,7 +3572,7 @@ class FlightStore {
     }
 
     /**
-     * PÅ TAXI insert side on first entry into the section:
+     * Mixed-stack insert side (PÅ TAXI / RTC TWY / RTC RWY):
      * arrivals (and taxi-in locals) → top; departures (and taxi-out locals) → bottom.
      * After that, appearance `position` sticks (manual drag / same-slot updates).
      */
@@ -3318,10 +3596,13 @@ class FlightStore {
      */
     private getNewStripPosition(bayId: string, sectionId: string, flight?: Flight): number {
         const section = this.findSectionConfig(bayId, sectionId)
-        // Default: add from top. Runway L/U flow always appends (first cleared toward top).
+        // Default: add from top.
         let addFromTop = section?.addFromTop ?? true
-        if (isRunwayOrderSectionId(sectionId)) addFromTop = false
-        // TAXI: arr top / dep bottom (mixed stack); ignores section addFromTop
+        // RUNWAY: without flight, append (L/U flow). With flight: arr top / dep bottom.
+        if (isRunwayOrderSectionId(sectionId)) {
+            addFromTop = flight ? this.taxiStripAddFromTop(flight) : false
+        }
+        // TAXI / RTC TWY: arr top / dep bottom (mixed stack); ignores section addFromTop
         if (flight && this.isTaxiSectionId(sectionId)) {
             addFromTop = this.taxiStripAddFromTop(flight)
         }
@@ -3348,16 +3629,17 @@ class FlightStore {
      */
     private shiftPositionsDown(bayId: string, sectionId: string): string[] {
         const shifted: string[] = []
-        this.stripAssignments.forEach((assignment, callsign) => {
+        this.stripAssignments.forEach((assignment, stripId) => {
             if (assignment.bayId === bayId &&
                 assignment.sectionId === sectionId &&
                 !assignment.bottom) {  // Only shift top zone strips
                 // Skip deleted flights - they should not affect active strip positions
                 // and must not appear in shiftedCallsigns (would briefly un-delete them)
-                const flight = this.flights.get(callsign)
+                const cs = parseStripAirportId(stripId)?.callsign ?? stripId
+                const flight = this.flights.get(cs)
                 if (flight?.deleted) return
                 assignment.position += 1
-                shifted.push(callsign)
+                shifted.push(stripId)
             }
         })
         // Also increment the counter
@@ -3390,11 +3672,12 @@ class FlightStore {
      */
     private getNextPosition(bayId: string, sectionId: string): number {
         let maxPos = -1
-        this.stripAssignments.forEach((assignment, id) => {
+        this.stripAssignments.forEach((assignment, stripId) => {
             if (assignment.bayId !== bayId || assignment.sectionId !== sectionId || assignment.bottom) {
                 return
             }
-            const flight = this.flights.get(id)
+            const cs = parseStripAirportId(stripId)?.callsign ?? stripId
+            const flight = this.flights.get(cs)
             if (flight?.deleted) return
             if (assignment.position > maxPos) maxPos = assignment.position
         })
@@ -3434,9 +3717,13 @@ class FlightStore {
         // Convert flight rules
         const flightRules = this.parseFlightRules(flight)
 
-        // Format flight level
-        const rfl = flight.rfl ? this.formatFlightLevel(flight.rfl) : undefined
-        const xfl = flight.xfl && flight.xfl > 0 ? this.formatFlightLevel(flight.xfl) : undefined
+        // Format flight level (CFL-menu / TopSkyAirspace TA rules)
+        const taAirport =
+            stripType === 'arrival' || stripType === 'local'
+                ? flight.destination
+                : flight.origin
+        const rfl = flight.rfl ? this.formatFlightLevel(flight.rfl, taAirport) : undefined
+        const xfl = flight.xfl && flight.xfl > 0 ? this.formatFlightLevel(flight.xfl, taAirport) : undefined
         const clearedAltitude = (() => {
             if (flight.cfl === 1) {
                 const t = (flight.approachType || '').toUpperCase()
@@ -3449,7 +3736,7 @@ class FlightStore {
                 if (t && t !== 'CA' && t !== 'VA') return t
                 return 'VA'
             }
-            if (flight.cfl && flight.cfl > 2) return this.formatFlightLevel(flight.cfl)
+            if (flight.cfl && flight.cfl > 2) return this.formatFlightLevel(flight.cfl, taAirport)
             return undefined
         })()
 
@@ -3544,16 +3831,31 @@ class FlightStore {
                     if (action === 'ASSUME') {
                         actions = ['ASSUME']
                     } else if (action === 'ROF') {
-                        // ROF is for other-owned traffic only; ignore here
+                        // ROF is for other-owned only — untracked still gets ASSUME
+                        actions = ['ASSUME']
                     } else if (action) {
                         actions = [action, 'ASSUME']
+                    } else {
+                        // No matching rule — still ASSUME when untracked
+                        actions = ['ASSUME']
                     }
-                    // No matching rule → no actions (e.g., transferred departures in CTR DEP)
                 }
             } else if (!isUntracked && !isTrackedByMe && actionConfig.isController) {
                 // Tracked by someone else — ROF only (ASSUME is for untracked / handoff-to-me above)
                 // Keep ROF visible while pink (cooldown); re-press resets the 2 min timer
-                const action = determineActionForFlight(flight, sectionId, actionConfig)
+                let action = determineActionForFlight(flight, sectionId, actionConfig)
+                // RTC: other-owned ARR/CTR always get ROF until handoff (rules may miss DEL/GND roles)
+                if (
+                    action !== 'ROF' &&
+                    isMultiAirportConfig(actionConfig) &&
+                    !isHandoffToMe &&
+                    (stripType === 'arrival' || stripType === 'local')
+                ) {
+                    const logical = logicalSectionId(sectionId)
+                    if (logical === 'arr' || logical === 'app') {
+                        action = 'ROF'
+                    }
+                }
                 if (action === 'ROF') {
                     actions = ['ROF']
                 }
@@ -3874,7 +4176,11 @@ class FlightStore {
             xfl,
             squawk: flight.squawk,
             clearedAltitude,
-            assignedHeading: flight.ahdg && flight.ahdg > 0 ? String(flight.ahdg).padStart(3, '0') : undefined,
+            assignedHeading: flight.llz
+                ? 'LLZ'
+                : flight.ahdg && flight.ahdg > 0
+                  ? String(flight.ahdg).padStart(3, '0')
+                  : undefined,
             assignedSpeed: flight.asp ? String(flight.asp) : undefined,
             stand: flight.stand,
             runway: stripType === 'departure' || stripType === 'local'
@@ -4078,14 +4384,11 @@ class FlightStore {
     }
 
     /**
-     * Format altitude in feet to FL or altitude string
+     * Format altitude like the CFL menu (TopSkyAirspace TA):
+     * ≤ TA → A50; > TA → 090 (no F/FL prefix).
      */
-    private formatFlightLevel(feet: number): string {
-        if (feet >= 10000) {
-            return `FL${Math.round(feet / 100)}`
-        } else {
-            return `A${String(Math.round(feet / 100)).padStart(3, '0')}`
-        }
+    private formatFlightLevel(feet: number, airport?: string | null): string {
+        return formatCflMenuLabel(feet, getTransitionAltitudeFt(airport)) || String(Math.round(feet / 100))
     }
 
     /**
@@ -4186,7 +4489,18 @@ class FlightStore {
                 flight.alternate = (fp.alternate || "").toUpperCase() || flight.alternate
             }
             if (!fromEs || !flight.aircraftType) {
-                flight.aircraftType = (fp.aircraft_short || fp.aircraft || "").toUpperCase() || flight.aircraftType
+                const short = (fp.aircraft_short || "").toUpperCase()
+                const full = (fp.aircraft || "").toUpperCase()
+                // Prefer short type; full string often includes /M-EQUIP/SUR
+                flight.aircraftType =
+                    short ||
+                    full.split("/")[0]?.replace(/^\W+/, "") ||
+                    flight.aircraftType
+            }
+            // VATSIM aircraft field often carries full ICAO TYPE/WTC-EQUIP/SUR (e.g. B738/M-VW/C)
+            if (fp.aircraft && (!flight.equipment || !flight.surveillance)) {
+                const parsed = parseAircraftInfo(fp.aircraft, flight.capabilities, flight.rvsm)
+                applyParsedEquipment(flight, parsed, fp.aircraft)
             }
             if (!fromEs || !flight.flightRules) {
                 const fr = (fp.flight_rules || "").toUpperCase()
@@ -4332,6 +4646,7 @@ class FlightStore {
         if (flags.airborne !== undefined) flight.airborne = flags.airborne
         if (flags.groundstate !== undefined) {
             flight.groundstate = flags.groundstate
+            if (flags.groundstate === 'PARK') flight.airborne = false
             if (flags.groundstate === '') {
                 flight.groundstateClearedUntil = Date.now() + 3000
                 flight.groundstateHoldUntil = undefined
@@ -4491,22 +4806,27 @@ class FlightStore {
         const multi = isMultiAirportConfig(this.config)
         const stripAirport = multi ? primaryAirport : undefined
 
-        if (targetBayId && targetSectionId) {
+        /** RTC defaults: VFR DEP → DEP (addFromTop:false = bottom); ARR/CRS → ARR top */
+        const defaultLogicalForSpecial = (): string =>
+            stripType === 'vfrDep' ? 'dep' : 'arr'
+
+        if (multi && stripAirport) {
+            const airportBayId = resolveBayForAirport(stripAirport, this.config.columnAirports)
+            // Honour drop target only when it is already in the selected airport's column
+            if (targetBayId && targetSectionId && targetBayId === airportBayId) {
+                bayId = targetBayId
+                sectionId = targetSectionId
+                pos = position ?? this.getNewStripPosition(bayId, sectionId, flight)
+            } else {
+                bayId = airportBayId
+                sectionId = prefixedSectionId(bayId, defaultLogicalForSpecial())
+                bottom = false
+                pos = this.getNewStripPosition(bayId, sectionId, flight)
+            }
+        } else if (targetBayId && targetSectionId) {
             bayId = targetBayId
             sectionId = targetSectionId
             pos = position ?? this.getNewStripPosition(bayId, sectionId, flight)
-        } else if (multi && stripAirport) {
-            const scoped = withAirportScope(this.config, stripAirport)
-            const targetSection = determineSectionForFlight(flight, scoped)
-            bayId = resolveBayForAirport(stripAirport, this.config.columnAirports)
-            if (targetSection) {
-                // Map logical section onto this airport's bay
-                const logical = logicalSectionId(targetSection.sectionId)
-                sectionId = prefixedSectionId(bayId, logical)
-            } else {
-                sectionId = prefixedSectionId(bayId, 'app')
-            }
-            pos = this.getNewStripPosition(bayId, sectionId, flight)
         } else {
             const targetSection = determineSectionForFlight(flight, this.config)
             if (!targetSection) {

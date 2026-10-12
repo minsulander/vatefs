@@ -31,7 +31,8 @@ export const COLUMN_COLORS = [
     "#64b5f6",
 ] as const
 
-export const MIN_COLUMN_COUNT = 2
+/** 1 column = vertical / single-airport RTC on small displays */
+export const MIN_COLUMN_COUNT = 1
 export const MAX_COLUMN_COUNT = 6
 
 export function isMultiAirportConfig(config: EfsStaticConfig): boolean {

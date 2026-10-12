@@ -21,6 +21,23 @@ export interface Flight {
     wakeTurbulence?: string   // L/M/H/J
     /** EuroScope engine type: P piston, T turboprop, J jet, E electric, ? unknown */
     engineType?: string
+    /** Raw EuroScope GetAircraftInfo — ICAO (A20N/M-VW/C) or FAA (PC24/G) */
+    aircraftInfo?: string
+    /** EuroScope GetCapibilities letter (FAA-style: G/W/R/…) */
+    capabilities?: string
+    /** EuroScope IsRvsm() */
+    rvsm?: boolean
+    /** ICAO field 10a equipment (e.g. VW or SG) — parsed/converted */
+    equipment?: string
+    /** ICAO field 10b surveillance (e.g. C) — parsed/converted */
+    surveillance?: string
+    /**
+     * EQUIP box when FAA-sourced — TopSky form e.g. "G (SDFGRY/H)".
+     * When unset, UI shows ICAO equipment + surveillance in the split boxes.
+     */
+    equipmentDisplay?: string
+    /** FAA equipment letter when format is faa (edit value; conversion is display-only) */
+    faaEquipment?: string
     flightRules?: string      // I/V/Y/Z
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
@@ -28,9 +45,19 @@ export interface Flight {
     /** Filed cruise TAS (N0448 / M078) — from FPL route group or VATSIM cruise_tas */
     tas?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
-    ete?: number               // ES prediction points ≈ minutes to destination
+    /** DOF from item 18 (YYMMDD) when present */
+    eobd?: string
+    /** Filed EET from FPL (HHmm) — GetEnrouteHours/Minutes */
+    filedEet?: string
+    /** Fuel endurance from FPL item 19 (HHmm) */
+    endurance?: string
+    /** Pilot-in-command name (item 19 C/ or EuroScope GetPilotName) */
+    pilotName?: string
+    ete?: number               // ES prediction points ≈ minutes (ETB approx)
     /** Flight plan item 18 remarks (from EuroScope GetRemarks) */
     fplRemarks?: string
+    /** Previous assigned SSR before last change (PSSR) */
+    previousSquawk?: string
 
     // Route assignments
     sid?: string              // Standard Instrument Departure
@@ -77,6 +104,8 @@ export interface Flight {
     mach?: number             // Assigned mach number
     arc?: number              // Assigned rate of climb/descent
     ahdg?: number             // Assigned heading (0 = no heading)
+    /** TopSky AHD special: localizer (`/LLZ/` scratch) — strip shows LLZ */
+    llz?: boolean
     direct?: string           // Direct to waypoint (empty = no direct)
 
     // DCL (Data-Link Clearance) state
@@ -125,6 +154,8 @@ export interface Flight {
     hp?: string
     /** Hold short — VCH strip annotation 4 (TAG_STRIP_ANNO_HOS), max 5 chars */
     hs?: string
+    /** ACC coordination done — scratchpad `.COO` (RTC NeedsCoordination airports) */
+    coo?: boolean
     /** True after controller manually clears an auto-SLOW remark — do not re-add */
     autoSlowDismissed?: boolean
     /** True when SLOW remarks were added by tryAutoSlowRemark (safe to auto-clear on ATYP change) */
@@ -222,6 +253,12 @@ export interface FlightPlanDataUpdateMessage {
     wakeTurbulence?: string   // L/M/H/J
     /** EuroScope engine type: P/T/J/E/? */
     engineType?: string
+    /** Raw EuroScope GetAircraftInfo — ICAO or FAA (PC24/G) */
+    aircraftInfo?: string
+    /** EuroScope GetCapibilities letter */
+    capabilities?: string
+    /** EuroScope IsRvsm() */
+    rvsm?: boolean
     flightRules?: string      // I/V/Y/Z
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
@@ -231,6 +268,12 @@ export interface FlightPlanDataUpdateMessage {
      */
     tas?: number | string
     eobt?: string              // Estimated Off Block Time (HHmm)
+    /** Filed EET HHmm from GetEnrouteHours/Minutes */
+    filedEet?: string
+    /** Fuel endurance HHmm from GetFuelHours/Minutes */
+    endurance?: string
+    /** Pilot name from GetPilotName */
+    pilotName?: string
     ete?: number               // ES prediction points ≈ minutes to destination
     /** Filed cruise altitude from FPL (feet) — used when RFL/CAD final is unset */
     altitude?: number

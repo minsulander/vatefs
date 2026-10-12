@@ -17,15 +17,18 @@ bayTemplate:
       title: CTR
       addFromTop: true
     rwy:
-      title: RWY
+      title: RUNWAY
+      # Runtime: arr top / dep bottom (see getNewStripPosition)
       addFromTop: false
     twy:
-      title: TWY
+      title: TAXIWAY
+      # Runtime: arr top / dep bottom (isTaxiSectionId includes twy)
+      addFromTop: true
     dep:
       title: DEP
       addFromTop: false
 
-# Default number of visible column slots (togglable 2–6 at runtime)
+# Default number of visible column slots (togglable 1–6 at runtime; 1 = vertical / small display)
 columnCount: 4
 
 sectionRules:
@@ -81,6 +84,15 @@ sectionRules:
     priority: 5
 
   # === CTR (inside CTR arrivals + airborne dep / local / missed) ===
+  # CA/VA/CAT/OS — pull to CTR even outside withinCtr (same idea as ESSA/ESGG)
+  app_arr_approach_clearance:
+    sectionId: app
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    approachClearance: true
+    priority: 91
+
   app_arr_within_ctr:
     sectionId: app
     direction: arrival
@@ -108,7 +120,7 @@ sectionRules:
     airborne: true
     priority: 100
 
-  # === TWY (taxi + push/start) ===
+  # === TWY (only start/push or taxi — CLR alone stays in DEP) ===
   twy_push_start:
     sectionId: twy
     direction: departure
@@ -120,14 +132,14 @@ sectionRules:
     sectionId: twy
     direction: local
     airborne: false
-    groundstates: [DE-ICE, STUP, PUSH]
+    groundstates: [STUP, PUSH]
     priority: 60
 
   twy_taxi_dep:
     sectionId: twy
     direction: departure
     airborne: false
-    groundstates: [TAXI, TXIN]
+    groundstates: [TAXI]
     priority: 30
 
   twy_taxi_dep_local:
@@ -152,11 +164,39 @@ sectionRules:
     priority: 30
 
   # === DEP (pending + cleared) ===
+  # False-airborne at gate/pre-push — keep in DEP (beats CTR 100).
+  # Do not include ''/NSTS here: real airborne deps often keep empty GS after takeoff.
+  dep_gate_false_airborne:
+    sectionId: dep
+    direction: departure
+    airborne: true
+    groundstates: [ONFREQ, DE-ICE, STUP, PUSH, PARK]
+    priority: 110
+
+  dep_gate_false_airborne_local:
+    sectionId: dep
+    direction: local
+    airborne: true
+    groundstates: [ONFREQ, DE-ICE, STUP, PUSH, PARK]
+    priority: 110
+
+  dep_parked:
+    sectionId: dep
+    direction: departure
+    groundstates: [PARK]
+    priority: 110
+
+  dep_parked_local:
+    sectionId: dep
+    direction: local
+    groundstates: [PARK]
+    priority: 110
+
   dep_pending:
     sectionId: dep
     direction: departure
     airborne: false
-    groundstates: ['', NSTS, ONFREQ]
+    groundstates: ['', NSTS, ONFREQ, PARK]
     clearance: false
     priority: 40
 
@@ -165,14 +205,14 @@ sectionRules:
     direction: departure
     airborne: false
     clearance: true
-    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    groundstates: ['', NSTS, ONFREQ, DE-ICE, PARK]
     priority: 50
 
   dep_pending_local:
     sectionId: dep
     direction: local
     airborne: false
-    groundstates: ['', NSTS, ONFREQ]
+    groundstates: ['', NSTS, ONFREQ, DE-ICE, PARK]
     clearance: false
     priority: 40
 
@@ -181,7 +221,7 @@ sectionRules:
     direction: local
     airborne: false
     clearance: true
-    groundstates: ['', NSTS, ONFREQ]
+    groundstates: ['', NSTS, ONFREQ, DE-ICE, PARK]
     priority: 50
 
   dep_fallback_departure:
@@ -278,20 +318,39 @@ actionRules:
     nextControllerRole: [GND]
     priority: 110
 
+  # ROF for pending ARR / CTR arrivals owned by another position (before handoff).
+  # No myRole/airborne gates — section + ownership is enough (DEL/GND must see ROF too).
+  rof_arr:
+    action: ROF
+    sectionId: arr
+    direction: either
+    controller: not_myself
+    handoffInitiated: false
+    priority: 120
+
+  rof_arr_ctr:
+    action: ROF
+    sectionId: app
+    direction: either
+    controller: not_myself
+    handoffInitiated: false
+    priority: 120
+
+  # ASSUME only after handoff initiated (ROF covers pre-transfer)
   assume_arr:
     action: ASSUME
     sectionId: arr
-    direction: arrival
+    direction: either
     controller: not_myself
-    myRole: [TWR, APP, CTR]
+    handoffInitiated: true
     priority: 100
 
   assume_arr_ctr:
     action: ASSUME
     sectionId: app
-    direction: arrival
+    direction: either
     controller: not_myself
-    myRole: [TWR, APP, CTR]
+    handoffInitiated: true
     priority: 100
 
   ctl_arr:
@@ -324,7 +383,7 @@ actionRules:
 
   goa_ctr_arr:
     action: GOA
-    sectionId: ctr_arr
+    sectionId: app
     direction: either
     controller: myself
     airborne: true

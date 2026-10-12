@@ -139,6 +139,7 @@ function onContainerClick() {
   border: 2px solid var(--bay-accent, #444);
   border-top-width: 5px;
   border-radius: 0;
+  /* Uses dimmable --efs-bay-bg from bay brightness slider */
   background: var(--efs-bay-bg, #3b3c41);
 }
 

@@ -15,7 +15,7 @@ console.log = (...args: unknown[]) => { fs.writeSync(1, formatArgs(args) + "\n")
 console.warn = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 console.error = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
 
-import { constants, isClientMessage, parseGapKey, resolveEssaRwyConfigId } from "@vatefs/common"
+import { constants, isClientMessage, parseAltitudeToFeet, parseGapKey, resolveEssaRwyConfigId } from "@vatefs/common"
 import type {
     LayoutMessage,
     StripMessage,
@@ -41,10 +41,16 @@ import type {
     AirportAtisInfo,
     UiSettings,
 } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS } from "@vatefs/common"
-import type { FlightStrip, Gap, Section } from "@vatefs/common"
+import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode } from "@vatefs/common"
+import type { AutoLopSsrMode, FlightStrip, Gap, Section } from "@vatefs/common"
 import { store } from "./store.js"
-import { flightStore, hasValidAssignedSquawk } from "./flightStore.js"
+import {
+    flightStore,
+    hasValidAssignedSquawk,
+    normalizeAssignedSquawk,
+    parseAircraftInfo,
+    applyParsedEquipment,
+} from "./flightStore.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
 import type { EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
@@ -63,7 +69,13 @@ import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-
 import type { ConfigFileInfo } from "./config-loader.js"
 import { isMultiAirportConfig } from "./multi-airport.js"
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
-import { loadSidData, getSidDataHealth, getSidsForRunway, resolveSidAltitude } from "./sid-data.js"
+import {
+    loadSidData,
+    getSidDataHealth,
+    getSidsForRunway,
+    resolveSidAltitude,
+    pickEseSidForRouteExit,
+} from "./sid-data.js"
 import { isSlowAircraft, isPropellerEngine } from "./slow-aircraft.js"
 import { standRequiresStartupInsteadOfPush } from "./essa-push-stands.js"
 import {
@@ -72,6 +84,8 @@ import {
     hasVectRemark,
     isIfrSidEligible,
     isTrackSidName,
+    parseRflToFeet,
+    resolveLopAutoDirect,
     sidsMatch,
     withSlowRemark,
     withVectRemark,
@@ -104,7 +118,12 @@ import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "
 import { loadCtrData, checkCtrAtPosition, getCtrHealth } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
 import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
-import { loadTopSkyAirspace, getAppClrTypes, getTopSkyAirspaceHealth } from "./topsky-airspace.js"
+import {
+    loadTopSkyAirspace,
+    getAppClrTypes,
+    getTopSkyAirspaceHealth,
+    getTransitionAltitudeFt,
+} from "./topsky-airspace.js"
 import type { DclTemplateData } from "./hoppie-config.js"
 import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
@@ -334,7 +353,8 @@ if (EUROSCOPE_DIR) {
     // Initialize user settings persistence
     initUserSettings(EUROSCOPE_DIR)
     const savedSettings = loadUserSettings()
-    if (savedSettings.activeConfig) {
+    // Explicit `--config` wins over last-used layout (dev / forced RTC etc.)
+    if (savedSettings.activeConfig && !cliArgs.config) {
         const configInfo = availableConfigs.find(c => c.file === savedSettings.activeConfig)
         if (configInfo) {
             console.log(`Restoring saved config: ${configInfo.name} (${savedSettings.activeConfig})`)
@@ -350,6 +370,8 @@ if (EUROSCOPE_DIR) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
         }
+    } else if (cliArgs.config) {
+        console.log(`Keeping CLI config (${activeConfigFile}); skipping saved-config restore`)
     }
     if (savedSettings.dclMode) {
         console.log(`Restoring saved DCL mode: ${savedSettings.dclMode}`)
@@ -361,13 +383,7 @@ if (EUROSCOPE_DIR) {
     if (savedSettings.columnCount && isMultiAirportConfig(staticConfig)) {
         setColumnCount(savedSettings.columnCount)
     }
-    if (savedSettings.columnAirports && isMultiAirportConfig(staticConfig)) {
-        for (let i = 0; i < savedSettings.columnAirports.length; i++) {
-            const icao = savedSettings.columnAirports[i]
-            if (icao) setColumnAirport(i, icao)
-        }
-        console.log(`Restoring column airports: ${savedSettings.columnAirports.map(a => a ?? "-").join(", ")}`)
-    }
+    // RTC: never restore column airport selections — always start with empty columns
     if (isEssaRolesConfig(staticConfig)) {
         const roles = normalizeEssaRoles(savedSettings.essaRoles)
         restoreEssaRolesFromSettings(roles, savedSettings.essaRolesManual)
@@ -610,6 +626,7 @@ type OutboundPluginCommand =
     | { type: "assignArrivalRunway"; callsign: string; runway: string }
     | { type: "assignSid"; callsign: string; sid: string }
     | { type: "assignHeading"; callsign: string; heading: number }
+    | { type: "assignDirect"; callsign: string; point: string }
     | { type: "assignCfl"; callsign: string; altitude: number }
     | { type: "createFlightPlan"; callsign: string; stripType: "vfrDep" | "vfrArr" | "cross"; origin: string; destination: string; aircraftType: string; flightRules: string }
     | { type: "goaround"; callsign: string }
@@ -628,6 +645,31 @@ type OutboundPluginCommand =
     | { type: "setAsrt"; callsign: string; asrt: string }
     | { type: "setTsac"; callsign: string; tsac: string }
     | { type: "setCtoc"; callsign: string; ctoc: string }
+    | {
+          type: "amendFlightPlan"
+          callsign: string
+          flightRules?: string
+          aircraftType?: string
+          wakeTurbulence?: string
+          numberOfAircraft?: number
+          equipment?: string
+          surveillance?: string
+          faaEquipment?: string
+          origin?: string
+          destination?: string
+          alternate?: string
+          alternate2?: string
+          eobd?: string
+          eobt?: string
+          tas?: string
+          rfl?: string | number
+          eet?: string
+          route?: string
+          fplRemarks?: string
+          supl?: string
+          squawk?: string
+          cfl?: string | number
+      }
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -1718,6 +1760,40 @@ function resolvePreferredSidForFlight(flight: Flight): string | undefined {
     )
 }
 
+/**
+ * ESE SID matching first significant route fix (any airport with SID data).
+ * Used when clearing DCT at e.g. ESNU where there is no preferred-SID table.
+ */
+function resolveEseSidForFlight(flight: Flight): string | undefined {
+    const airport = (flight.origin || "").toUpperCase()
+    const runway =
+        flight.depRwy ||
+        (() => {
+            const first = (flight.route || "").trim().split(/\s+/)[0] || ""
+            const slash = first.indexOf("/")
+            if (slash > 0 && /^[A-Z]{4}$/i.test(first.slice(0, slash))) {
+                return first.slice(slash + 1).toUpperCase()
+            }
+            return undefined
+        })()
+    if (!airport || !runway) return undefined
+    const tokens = (flight.route || "").trim().split(/\s+/).filter(Boolean)
+    // Skip ADEP/rwy and ICAO speed/level groups for exit
+    let exit: string | undefined
+    for (const raw of tokens) {
+        const u = raw.toUpperCase()
+        if (!u || u === "DCT") continue
+        if (u.includes("/")) continue
+        if (/^\d{1,2}[LRC]?$/i.test(u)) continue
+        if (/^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(u)) continue
+        if (/^[A-Z]{2,3}$/.test(u) || /^[A-Z]{5}$/.test(u)) {
+            exit = u
+            break
+        }
+    }
+    return pickEseSidForRouteExit(airport, runway, exit)
+}
+
 /** Pending TopSky ROF → EFS-native fallback timers (callsign → timeout). */
 const topSkyRofFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const TOPSKY_ROF_TIMEOUT_MS = 3500
@@ -1805,6 +1881,7 @@ function assumeCdDelKlareringDep(
     flight.handoffOptimisticUntil = undefined
     flight.ownershipOptimisticUntil = Date.now() + 5000
     console.log(`[KLARERING] ${flight.callsign}: ASSUME (CD/DEL, ${reason})`)
+    maybeAutoPrepOnAssume(flight.callsign)
     return true
 }
 
@@ -1852,6 +1929,71 @@ function scheduleTopSkyRofFallback(callsign: string) {
 }
 
 /**
+ * LOP airport-specific auto DCT (ESMT/ESTA MIKNA·BEDOS, ESMK BEDOS, …).
+ * Same cleanup as assignDirect set — clears SID/AHD; does not invent VECT.
+ */
+function applyLopAutoDirectIfNeeded(flight: Flight, logTag: string): boolean {
+    if ((flight.direct || "").trim()) return false
+    if ((flight.ahdg || 0) > 0 || hasVectRemark(flight.remarks)) return false
+    if (!isIfrSidEligible(flight.flightRules)) return false
+
+    const sug = resolveLopAutoDirect({
+        adep: flight.origin || "",
+        ades: flight.destination,
+        route: flight.route,
+        rflFeet: parseRflToFeet(flight.rfl),
+        runway: flight.depRwy,
+        isProp: isPropellerEngine(flight.engineType),
+    })
+    if (!sug || sug.mode !== "auto") return false
+
+    const point = sug.point
+    flight.direct = point
+    flight.sidDisplayOverride = undefined
+    flight.sid = undefined
+    flight.ahdg = 0
+
+    sendUdp(
+        JSON.stringify({
+            type: "assignHeading",
+            callsign: flight.callsign,
+            heading: 0,
+        } satisfies OutboundPluginCommand),
+    )
+
+    const route = flight.route || ""
+    if (hasForcedSidInRoute(route)) {
+        const tokens = route.trim().split(/\s+/).filter(Boolean)
+        tokens.shift()
+        flight.route = tokens.join(" ")
+        sendUdp(
+            JSON.stringify({
+                type: "assignDepartureRunway",
+                callsign: flight.callsign,
+                runway: "",
+            } satisfies OutboundPluginCommand),
+        )
+        sendUdp(
+            JSON.stringify({
+                type: "assignSid",
+                callsign: flight.callsign,
+                sid: "",
+            } satisfies OutboundPluginCommand),
+        )
+    }
+
+    sendUdp(
+        JSON.stringify({
+            type: "assignDirect",
+            callsign: flight.callsign,
+            point,
+        } satisfies OutboundPluginCommand),
+    )
+    console.log(`[${logTag}] LOP auto DCT ${point} for ${flight.callsign} (${sug.reason})`)
+    return true
+}
+
+/**
  * Attempt to automatically assign preferred SID, CFL and squawk (DCL AUTO / new-dep setting).
  * Replicates the clearance dialog's applyPreferredSid + applyDefaultCfl + applyDefaultSquawk.
  *
@@ -1859,11 +2001,14 @@ function scheduleTopSkyRofFallback(callsign: string) {
  * TopSky AllocateSSR while ASSR is still unknown (FPD+radar often precede CAD).
  */
 function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferredSquawk?: boolean } {
+    // Airport-specific LOP DCT before SID force (FPL airports / RFL-split)
+    const lopDct = applyLopAutoDirectIfNeeded(flight, logTag)
+
     const slow =
         isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType) ||
         hasSlowRemark(flight.remarks) ||
         isTrackSidName(flight.sid)
-    const preferred = resolvePreferredSidForFlight(flight)
+    const preferred = lopDct ? undefined : resolvePreferredSidForFlight(flight)
 
     // Force SID only when ES already has a GetSid/ESE designator that mismatches preferred.
     // Empty SID → leave for ESE prio; do not invent an assignSid.
@@ -1956,14 +2101,45 @@ function clearAutoDepPrepSession() {
     autoDepPrepDoneCallsigns.clear()
 }
 
+function isTrackedByMeFlight(flight: Flight): boolean {
+    const myCs = staticConfig.myCallsign
+    const mySi = (staticConfig.myPositionId || "").toUpperCase()
+    const ownerCs = flight.controller
+    const ownerSi = (flight.controllerId || "").toUpperCase()
+    const csEq = (a: string | undefined, b: string | undefined) =>
+        !!a && !!b && a.toUpperCase() === b.toUpperCase()
+    return csEq(ownerCs, myCs) || (!!mySi && !!ownerSi && mySi === ownerSi)
+}
+
+/** Untracked or tracked by me — never push SID/CFL/SSR onto another controller's ES ownership. */
+function isAvailableForEsAssign(flight: Flight): boolean {
+    const ownerCs = flight.controller
+    const untracked =
+        (!ownerCs || ownerCs === "") && (!flight.controllerId || flight.controllerId === "")
+    return isTrackedByMeFlight(flight) || untracked
+}
+
+function autoLopSsrMode(): AutoLopSsrMode {
+    return isAutoLopSsrMode(currentUiSettings.autoLopSsr)
+        ? currentUiSettings.autoLopSsr
+        : DEFAULT_UI_SETTINGS.autoLopSsr
+}
+
+/** Shared gates for Instant / On assume (Manual never auto-preps). */
 function isAutoDepPrepEligible(strip: FlightStrip, flight: Flight): boolean {
-    if (!currentUiSettings.autoDepSquawkCfl) return false
-    if (!isCdOrDelRole()) return false
+    const mode = autoLopSsrMode()
+    if (mode === "manual") return false
     if (strip.stripType !== "departure" && strip.stripType !== "local") return false
     if (!isIfrSidEligible(strip.flightRules)) return false
     const origin = (flight.origin || strip.adep || "").toUpperCase()
     if (!staticConfig.myAirports.some((a) => a.toUpperCase() === origin)) return false
     if (strip.clearance) return false
+    // Instant: untracked or own; Assume: only after we own the track
+    if (mode === "assume") {
+        if (!isTrackedByMeFlight(flight)) return false
+    } else if (!isAvailableForEsAssign(flight)) {
+        return false
+    }
     return true
 }
 
@@ -2055,12 +2231,12 @@ function flushDeferredAutoDepPrep(callsign: string) {
 }
 
 /**
- * When autoDepSquawkCfl is on, prep squawk + CFL for a newly created departure strip.
- * CD / DEL role only — GND/TWR do not auto-prep.
+ * Instant mode: prep on strip connect/spawn.
+ * Only untracked or own-tracked flights (never another controller's assumed traffic).
  * Defers TopSky SSR until ES assigned data is seen so reload cannot re-allocate existing ASSR.
- * Does not force SID into the FPL (CLR window / RWY change still handle force-if-wrong).
  */
 function maybeAutoPrepNewDeparture(strip: FlightStrip, flight: Flight) {
+    if (autoLopSsrMode() !== "instant") return
     if (!isAutoDepPrepEligible(strip, flight)) return
     const key = flight.callsign.toUpperCase()
     if (flight.autoDepPrepDone || autoDepPrepDoneCallsigns.has(key)) {
@@ -2069,11 +2245,34 @@ function maybeAutoPrepNewDeparture(strip: FlightStrip, flight: Flight) {
     }
     // Already have ASSR or CAD — safe to run immediately
     if (flight.controllerAssignedSeen || hasValidAssignedSquawk(flight.squawk)) {
-        runAutoDepPrep(key)
+        runAutoDepPrep(key, "DEP PREP instant")
         return
     }
     // Strip appeared before CAD (common on cold start / .efs refresh / store.clear+reingest)
     console.log(`[DEP PREP] Deferring prep for ${key} until ES assigned data`)
+    scheduleDeferredAutoDepPrep(key)
+}
+
+/**
+ * On-assume mode: prep when this controller assumes the flight.
+ * Safe to call repeatedly — autoDepPrepDone prevents re-allocate.
+ */
+function maybeAutoPrepOnAssume(callsign: string) {
+    if (autoLopSsrMode() !== "assume") return
+    const key = callsign.toUpperCase()
+    const flight = flightStore.getFlight(key)
+    if (!flight) return
+    const strip = findStripForCallsign(key)
+    if (!strip || !isAutoDepPrepEligible(strip, flight)) return
+    if (flight.autoDepPrepDone || autoDepPrepDoneCallsigns.has(key)) {
+        flight.autoDepPrepDone = true
+        return
+    }
+    if (flight.controllerAssignedSeen || hasValidAssignedSquawk(flight.squawk)) {
+        runAutoDepPrep(key, "DEP PREP assume")
+        return
+    }
+    console.log(`[DEP PREP] Deferring assume-prep for ${key} until ES assigned data`)
     scheduleDeferredAutoDepPrep(key)
 }
 
@@ -2794,6 +2993,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetControllerId = undefined
                         flight.handoffOptimisticUntil = undefined
                         flight.ownershipOptimisticUntil = Date.now() + 5000
+                        maybeAutoPrepOnAssume(flight.callsign)
                     }
                     stateChanged = true
                     console.log(
@@ -2815,6 +3015,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flight.handoffTargetControllerId = undefined
                     flight.handoffOptimisticUntil = undefined
                     flight.ownershipOptimisticUntil = Date.now() + 5000
+                    maybeAutoPrepOnAssume(flight.callsign)
                     if (assumeViaTaxiToSequence && message.isBottom) {
                         // Accept into pin tray — stay pinned until drag to main / runway
                         flightStore.clearAppTransferPinned(result.strip.callsign)
@@ -3807,6 +4008,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 flight.groundstate = pinExitGs
                                 flightStore.releaseGndTaxiPinToMainTop(strip.callsign)
                             }
+                            maybeAutoPrepOnAssume(flight.callsign)
                             break
                         case "REFUSE":
                             flight.handoffTargetController = ""
@@ -3924,6 +4126,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetController = ""
                         flight.handoffOptimisticUntil = undefined
                         flight.ownershipOptimisticUntil = Date.now() + 5000
+                        maybeAutoPrepOnAssume(flight.callsign)
                         // ESGG paper: ASSUME while PÅ TAXI pinned → set GS + unpin to top of main
                         if (
                             staticConfig.look === "paper" &&
@@ -3993,6 +4196,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         pluginCommand = { type: "assignSid", callsign: strip.callsign, sid: message.value }
                         if (message.value) {
                             const flightForSid = flightStore.getFlight(strip.callsign)
+                            // Real SID replaces DCT
+                            if (flightForSid?.direct) {
+                                flightForSid.direct = undefined
+                                sendUdp(JSON.stringify({
+                                    type: "assignDirect",
+                                    callsign: strip.callsign,
+                                    point: "",
+                                } satisfies OutboundPluginCommand))
+                            }
                             // Keep custom CFL when already assigned (cfl > 2); same guard as preferred-SID path
                             const hasCustomCfl =
                                 flightForSid?.cfl != null && flightForSid.cfl > 2
@@ -4013,6 +4225,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     case "assignHeading":
                         pluginCommand = { type: "assignHeading", callsign: strip.callsign, heading: parseInt(message.value, 10) || 0 }
                         break
+                    case "assignDirect": {
+                        // Empty = clear immediately. Non-empty DCT is sent AFTER SID/route
+                        // cleanup below so AmendFlightPlan does not wipe the FLEG update.
+                        const point = (message.value || "").trim().toUpperCase()
+                        if (!point) {
+                            pluginCommand = { type: "assignDirect", callsign: strip.callsign, point: "" }
+                        }
+                        break
+                    }
                     case "assignCfl":
                         pluginCommand = { type: "assignCfl", callsign: strip.callsign, altitude: parseInt(message.value, 10) || 0 }
                         break
@@ -4122,52 +4343,165 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flightForAssign.arrRwy = message.value || undefined
                 }
                 if (flightForAssign && message.assignType === "assignHeading") {
-                    const hdg = parseInt(message.value, 10) || 0
-                    flightForAssign.ahdg = hdg
-                    if (hdg > 0) {
-                        // Kill any pending preferred-SID-after-RWY (must not undo VECT)
-                        cancelPreferredSidAfterDepRwy(strip.id)
-                        // AHD: clear SID (preferred + assigned) and ensure VECT flag
-                        flightForAssign.sidDisplayOverride = undefined
-                        flightForAssign.sid = undefined
-                        if (!hasVectRemark(flightForAssign.remarks)) {
-                            flightForAssign.remarks = withVectRemark(flightForAssign.remarks, true) || undefined
-                            console.log(`[REMARKS] ${strip.callsign}: set VECT (AHD ${String(hdg).padStart(3, "0")})`)
-                        }
+                    const rawHdg = (message.value || "").trim().toUpperCase()
+                    // TopSky AHD special: LLZ → scratch /LLZ/ (no numeric heading, no VECT)
+                    if (rawHdg === "LLZ") {
+                        flightForAssign.llz = true
+                        flightForAssign.ahdg = 0
+                        flightForAssign.direct = undefined
+                        sendUdp(JSON.stringify({
+                            type: "assignDirect",
+                            callsign: strip.callsign,
+                            point: "",
+                        } satisfies OutboundPluginCommand))
                         flightStore.holdScratchFields(flightForAssign, 3000)
-                        const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
                         sendUdp(JSON.stringify({
                             type: "setScratch",
                             callsign: strip.callsign,
-                            value: scratchValue,
+                            value: "/LLZ/",
                         } satisfies OutboundPluginCommand))
-                        // Vector: only drop a forced SID/rwy (or bare SID) prefix — never inject ADEP/rwy
+                        console.log(`[ASSIGN] AHD LLZ on ${strip.callsign}`)
+                    } else {
+                        const hdg = parseInt(message.value, 10) || 0
+                        const hadLlz = !!flightForAssign.llz
+                        flightForAssign.llz = false
+                        flightForAssign.ahdg = hdg
+                        // VECT + SID wipe: IFR DEP/local on ground only — never ARR / airborne
+                        const vectCapable =
+                            (strip.stripType === "departure" || strip.stripType === "local") &&
+                            isIfrSidEligible(strip.flightRules || flightForAssign.flightRules)
+                        const autoVect = vectCapable && flightForAssign.airborne !== true
+                        if (hdg > 0) {
+                            cancelPreferredSidAfterDepRwy(strip.id)
+                            flightForAssign.direct = undefined
+                            sendUdp(JSON.stringify({
+                                type: "assignDirect",
+                                callsign: strip.callsign,
+                                point: "",
+                            } satisfies OutboundPluginCommand))
+                            if (autoVect) {
+                                flightForAssign.sidDisplayOverride = undefined
+                                flightForAssign.sid = undefined
+                                if (!hasVectRemark(flightForAssign.remarks)) {
+                                    flightForAssign.remarks = withVectRemark(flightForAssign.remarks, true) || undefined
+                                    console.log(`[REMARKS] ${strip.callsign}: set VECT (AHD ${String(hdg).padStart(3, "0")})`)
+                                }
+                                flightStore.holdScratchFields(flightForAssign, 3000)
+                                const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
+                                sendUdp(JSON.stringify({
+                                    type: "setScratch",
+                                    callsign: strip.callsign,
+                                    value: scratchValue,
+                                } satisfies OutboundPluginCommand))
+                                const route = flightForAssign.route || ""
+                                if (hasForcedSidInRoute(route)) {
+                                    const tokens = route.trim().split(/\s+/).filter(Boolean)
+                                    tokens.shift()
+                                    flightForAssign.route = tokens.join(" ")
+                                    sendUdp(JSON.stringify({
+                                        type: "assignDepartureRunway",
+                                        callsign: strip.callsign,
+                                        runway: "",
+                                    } satisfies OutboundPluginCommand))
+                                    console.log(`[ASSIGN] AHD: dropped forced SID from FPL for ${strip.callsign}`)
+                                }
+                            } else if (hadLlz) {
+                                // Leaving LLZ for a numeric ARR heading — restore remarks scratch
+                                flightStore.holdScratchFields(flightForAssign, 3000)
+                                sendUdp(JSON.stringify({
+                                    type: "setScratch",
+                                    callsign: strip.callsign,
+                                    value: buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp),
+                                } satisfies OutboundPluginCommand))
+                            }
+                        } else {
+                            let restoreScratch = hadLlz
+                            if (vectCapable && hasVectRemark(flightForAssign.remarks)) {
+                                flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
+                                console.log(`[REMARKS] ${strip.callsign}: clear VECT (AHD cleared)`)
+                                restoreScratch = true
+                            }
+                            if (restoreScratch) {
+                                flightStore.holdScratchFields(flightForAssign, 3000)
+                                sendUdp(JSON.stringify({
+                                    type: "setScratch",
+                                    callsign: strip.callsign,
+                                    value: buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp),
+                                } satisfies OutboundPluginCommand))
+                            }
+                        }
+                    }
+                }
+                if (flightForAssign && message.assignType === "assignDirect") {
+                    const point = (message.value || "").trim().toUpperCase()
+                    flightForAssign.direct = point || undefined
+                    if (point) {
+                        cancelPreferredSidAfterDepRwy(strip.id)
+                        // FPR/DCT: clear SID and AHD (no VECT — following filed route)
+                        flightForAssign.sidDisplayOverride = undefined
+                        flightForAssign.sid = undefined
+                        flightForAssign.ahdg = 0
+                        flightForAssign.llz = false
+                        if (hasVectRemark(flightForAssign.remarks)) {
+                            flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
+                            console.log(`[REMARKS] ${strip.callsign}: clear VECT (DCT ${point})`)
+                            flightStore.holdScratchFields(flightForAssign, 3000)
+                            const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
+                            sendUdp(JSON.stringify({
+                                type: "setScratch",
+                                callsign: strip.callsign,
+                                value: scratchValue,
+                            } satisfies OutboundPluginCommand))
+                        }
+                        sendUdp(JSON.stringify({
+                            type: "assignHeading",
+                            callsign: strip.callsign,
+                            heading: 0,
+                        } satisfies OutboundPluginCommand))
+                        // Drop forced SID/rwy prefix — never inject ADEP/rwy.
+                        // ADEP/rwy alone is runway-only (not a SID) — leave it for DCT.
                         const route = flightForAssign.route || ""
-                        if (hasForcedSidInRoute(route)) {
+                        const hadForcedSid = hasForcedSidInRoute(route)
+                        if (hadForcedSid) {
                             const tokens = route.trim().split(/\s+/).filter(Boolean)
                             tokens.shift()
                             flightForAssign.route = tokens.join(" ")
-                            // Empty runway = drop SID/rwy prefix only (plugin); no ADEP/rwy write
                             sendUdp(JSON.stringify({
                                 type: "assignDepartureRunway",
                                 callsign: strip.callsign,
                                 runway: "",
                             } satisfies OutboundPluginCommand))
-                            console.log(`[ASSIGN] AHD: dropped forced SID from FPL for ${strip.callsign}`)
+                            // Also clear SID via assignSid (drops SID/rwy; ADEP/rwy left alone)
+                            sendUdp(JSON.stringify({
+                                type: "assignSid",
+                                callsign: strip.callsign,
+                                sid: "",
+                            } satisfies OutboundPluginCommand))
+                            console.log(`[ASSIGN] DCT: dropped forced SID from FPL for ${strip.callsign}`)
                         } else {
-                            console.log(`[ASSIGN] AHD: FPL unchanged (no forced SID) for ${strip.callsign}`)
+                            console.log(`[ASSIGN] DCT: FPL unchanged (no forced SID) for ${strip.callsign}`)
                         }
-                    } else if (hasVectRemark(flightForAssign.remarks)) {
-                        // Clearing AHD removes auto VECT
-                        flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
-                        console.log(`[REMARKS] ${strip.callsign}: clear VECT (AHD cleared)`)
-                        flightStore.holdScratchFields(flightForAssign, 3000)
-                        const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
+                        // DCT last — SetDirectToPointName + scratch flash updates FLEG
                         sendUdp(JSON.stringify({
-                            type: "setScratch",
+                            type: "assignDirect",
                             callsign: strip.callsign,
-                            value: scratchValue,
+                            point,
                         } satisfies OutboundPluginCommand))
+                        console.log(`[ASSIGN] DCT ${point} for ${strip.callsign}`)
+                    } else {
+                        // Cleared DCT — restore ESE SID for strip display (not forced into FPL).
+                        // ESSA/ESMS/ESGG use preferred tables; other ES airports use ESE exit match
+                        // (e.g. ESNU/32 + DEDIT → DEDIT2L).
+                        flightForAssign.sidDisplayOverride = undefined
+                        const preferred =
+                            resolvePreferredSidForFlight(flightForAssign) ||
+                            resolveEseSidForFlight(flightForAssign)
+                        if (preferred) {
+                            flightForAssign.sid = preferred
+                            console.log(
+                                `[ASSIGN] DCT cleared — restore ESE SID ${preferred} for ${strip.callsign}`,
+                            )
+                        }
                     }
                 }
 
@@ -4190,6 +4524,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 break
                             case "assignHeading":
                                 flight.ahdg = parseInt(message.value, 10) || 0
+                                if ((flight.ahdg || 0) > 0) flight.direct = undefined
+                                break
+                            case "assignDirect":
+                                flight.direct = (message.value || "").trim().toUpperCase() || undefined
+                                if (flight.direct) {
+                                    flight.sid = undefined
+                                    flight.sidDisplayOverride = undefined
+                                    flight.ahdg = 0
+                                } else {
+                                    flight.sidDisplayOverride = undefined
+                                    const preferred =
+                                        resolvePreferredSidForFlight(flight) ||
+                                        resolveEseSidForFlight(flight)
+                                    if (preferred) flight.sid = preferred
+                                }
                                 break
                             case "assignCfl": {
                                 const feet = parseInt(message.value, 10) || 0
@@ -4236,6 +4585,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (
                     message.assignType === "assignSid" ||
                     message.assignType === "assignHeading" ||
+                    message.assignType === "assignDirect" ||
                     message.assignType === "assignDepartureRunway" ||
                     message.assignType === "assignArrivalRunway" ||
                     message.assignType === "assignCfl" ||
@@ -4499,9 +4849,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.autoParkEnabled = incoming.autoParkEnabled
                 update.autoParkEnabled = incoming.autoParkEnabled
             }
-            if (typeof incoming.autoDepSquawkCfl === "boolean") {
-                currentUiSettings.autoDepSquawkCfl = incoming.autoDepSquawkCfl
-                update.autoDepSquawkCfl = incoming.autoDepSquawkCfl
+            if (isAutoLopSsrMode(incoming.autoLopSsr)) {
+                currentUiSettings.autoLopSsr = incoming.autoLopSsr
+                update.autoLopSsr = incoming.autoLopSsr
             }
             if (typeof incoming.showTobtSetByA === "boolean") {
                 currentUiSettings.showTobtSetByA = incoming.showTobtSetByA
@@ -4697,8 +5047,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 if (strip) {
                     console.log(
                         `[CREATE] Note strip ${strip.id} created` +
-                            (strip.paperInfoKind ? ` (${strip.paperInfoKind})` : "")
+                            (strip.paperInfoKind ? ` (${strip.paperInfoKind})` : "") +
+                            ` -> ${strip.sectionId}`
                     )
+                    // Top-insert may have shifted peers — push their new positions first
+                    if (message.position === undefined && !message.isBottom) {
+                        for (const peer of store.getStripsForSection(strip.bayId, strip.sectionId, false)) {
+                            if (peer.id !== strip.id) broadcastStrip(peer)
+                        }
+                    }
                     broadcastStrip(strip)
                 }
             } else if (message.stripType === "vehicle") {
@@ -4708,9 +5065,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.position,
                     message.isBottom,
                     message.airport,
+                    message.callsign,
                 )
                 if (strip) {
-                    console.log(`[CREATE] Vehicle strip ${strip.id} created`)
+                    console.log(
+                        `[CREATE] Vehicle strip ${strip.id} (${strip.callsign}) -> ${strip.sectionId}`,
+                    )
                     broadcastStrip(strip)
                 }
             } else {
@@ -4878,6 +5238,89 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "amendFlightPlan": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip) break
+            if (!staticConfig.isController) break
+            const callsign = strip.callsign
+            const {
+                type: _t,
+                stripId: _id,
+                ...fields
+            } = message
+
+            // Normalize levels to feet for the plugin when possible
+            const cmd: OutboundPluginCommand = {
+                type: "amendFlightPlan",
+                callsign,
+                ...fields,
+            }
+            if (fields.rfl !== undefined) {
+                const feet = parseAltitudeToFeet(fields.rfl)
+                if (feet != null) cmd.rfl = feet
+            }
+            if (fields.cfl !== undefined) {
+                const feet = parseAltitudeToFeet(fields.cfl)
+                if (feet != null) cmd.cfl = feet
+            }
+            if (fields.squawk !== undefined) {
+                const sq = String(fields.squawk).replace(/^A/i, "").trim()
+                const n = normalizeAssignedSquawk(sq)
+                if (n !== undefined) cmd.squawk = n
+                else delete (cmd as { squawk?: string }).squawk
+            }
+            sendUdp(JSON.stringify(cmd))
+
+            // Optimistic local patch until ES echoes FPD/CAD
+            const flight = flightStore.getFlight(callsign)
+            if (flight) {
+                if (fields.flightRules !== undefined) flight.flightRules = fields.flightRules || undefined
+                if (fields.aircraftType !== undefined) flight.aircraftType = fields.aircraftType || undefined
+                if (fields.wakeTurbulence !== undefined) flight.wakeTurbulence = fields.wakeTurbulence || undefined
+                if (fields.origin !== undefined) flight.origin = fields.origin || undefined
+                if (fields.destination !== undefined) flight.destination = fields.destination || undefined
+                if (fields.alternate !== undefined) flight.alternate = fields.alternate || undefined
+                if (fields.eobt !== undefined) flight.eobt = fields.eobt || undefined
+                if (fields.eobd !== undefined) flight.eobd = fields.eobd || undefined
+                if (fields.tas !== undefined) flight.tas = fields.tas || undefined
+                if (fields.route !== undefined) flight.route = fields.route || undefined
+                if (fields.fplRemarks !== undefined) flight.fplRemarks = fields.fplRemarks || undefined
+                if (fields.eet !== undefined) flight.filedEet = fields.eet || undefined
+                if (typeof cmd.rfl === "number") flight.rfl = cmd.rfl
+                if (typeof cmd.cfl === "number") flight.cfl = cmd.cfl
+                if (fields.faaEquipment !== undefined) {
+                    const type = fields.aircraftType || flight.aircraftType || "ZZZZ"
+                    const letter = String(fields.faaEquipment).trim().toUpperCase().slice(0, 1)
+                    applyParsedEquipment(
+                        flight,
+                        parseAircraftInfo(`${type}/${letter}`, letter, flight.rvsm),
+                        `${type}/${letter}`,
+                    )
+                } else if (fields.equipment !== undefined || fields.surveillance !== undefined) {
+                    if (fields.equipment !== undefined) flight.equipment = fields.equipment || undefined
+                    if (fields.surveillance !== undefined) flight.surveillance = fields.surveillance || undefined
+                    flight.faaEquipment = undefined
+                    flight.equipmentDisplay = undefined
+                }
+                if (cmd.squawk !== undefined) {
+                    flight.squawk = cmd.squawk || undefined
+                }
+                if (fields.supl !== undefined) {
+                    const em = String(fields.supl).match(/\bE\/(\d{4})\b/i)
+                    if (em) flight.endurance = em[1]
+                    const cm = String(fields.supl).match(/\bC\/([^\n/]+?)(?=\s+[A-Z]\/|$)/i)
+                    if (cm) flight.pilotName = cm[1].trim()
+                }
+                const updated = flightStore.regenerateStrip(callsign)
+                if (updated) {
+                    store.updateStripFromFlight(updated)
+                    broadcastStrip(updated)
+                }
+            }
+            console.log(`[FPL] amendFlightPlan ${callsign}`)
+            break
+        }
+
         case "updateNote": {
             const updatedStrip = store.updateNoteText(message.stripId, message.text)
             if (updatedStrip) {
@@ -4927,28 +5370,29 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(`[VIFF] Invalid EOBT "${message.eobt}" for ${eobtStrip.callsign}`)
                 break
             }
+            const flight = flightStore.getFlight(eobtStrip.callsign)
+            if (!flight) break
+            // ES-first (works without vIFF); network DPI is best-effort
+            sendUdp(JSON.stringify({
+                type: "setEobt",
+                callsign: eobtStrip.callsign,
+                eobt,
+            } satisfies OutboundPluginCommand))
+            flight.eobt = eobt
+            if (flight.cdmSts?.startsWith("FLS")) {
+                flight.cdmSts = undefined
+            }
+            const updated = flightStore.regenerateStrip(eobtStrip.callsign)
+            if (updated) {
+                store.updateStripFromFlight(updated)
+                broadcastStrip(updated)
+            }
+            console.log(`[EOBT] ${eobtStrip.callsign} → ${eobt}`)
             const ok = await viffService.updateEobt(eobtStrip.callsign, eobt)
-            if (ok) {
-                const flight = flightStore.getFlight(eobtStrip.callsign)
-                if (flight) {
-                    flight.eobt = eobt
-                    // Clear FLS optimistically; next poll reconciles
-                    if (flight.cdmSts?.startsWith("FLS")) {
-                        flight.cdmSts = undefined
-                    }
-                    sendUdp(JSON.stringify({
-                        type: "setEobt",
-                        callsign: eobtStrip.callsign,
-                        eobt,
-                    } satisfies OutboundPluginCommand))
-                    const updated = flightStore.regenerateStrip(eobtStrip.callsign)
-                    if (updated) {
-                        store.updateStripFromFlight(updated)
-                        broadcastStrip(updated)
-                    }
-                    console.log(`[VIFF] EOBT updated ${eobtStrip.callsign} → ${eobt}`)
-                    viffService.pollSoon()
-                }
+            if (!ok) {
+                console.warn(`[VIFF] EOBT network sync failed for ${eobtStrip.callsign} (ES already updated)`)
+            } else {
+                viffService.pollSoon()
             }
             break
         }
@@ -5217,13 +5661,27 @@ app.get("/api/flights", (req, res) => {
     res.json(flights)
 })
 
-app.get("/api/flight/:callsign", (req, res) => {
-    const flight = flightStore.getFlight(req.params.callsign)
-    if (flight) {
-        res.json(flight)
-    } else {
+app.get("/api/flight/:callsign", async (req, res) => {
+    const callsign = String(req.params.callsign || "").trim().toUpperCase()
+    const flight = flightStore.getFlight(callsign)
+    if (!flight) {
         res.status(404).json({ error: "Flight not found" })
+        return
     }
+    // Fill EQUIP/SUR from VATSIM aircraft string when EuroScope has not sent aircraftInfo yet
+    if (!flight.equipment || !flight.surveillance) {
+        try {
+            const { lookupVatsimPilot } = await import("./vatsim-flights.js")
+            const pilot = await lookupVatsimPilot(callsign)
+            const ac = pilot?.flight_plan?.aircraft
+            if (ac) {
+                applyParsedEquipment(flight, parseAircraftInfo(ac, flight.capabilities, flight.rvsm), ac)
+            }
+        } catch {
+            // ignore network errors — return flight as-is
+        }
+    }
+    res.json(flight)
 })
 
 /** Local flight store first, then VATSIM network FPL (for paper print callsign entry). */
@@ -5348,6 +5806,12 @@ app.get("/api/appclr", (req, res) => {
         return
     }
     res.json({ types: getAppClrTypes(airport, runway || undefined) })
+})
+
+/** Transition altitude (ft) from TopSkyAirspace.txt for CFL menu / FPL PEL·CFL. */
+app.get("/api/transition-altitude", (req, res) => {
+    const airport = typeof req.query.airport === "string" ? req.query.airport : ""
+    res.json({ feet: getTransitionAltitudeFt(airport || null), airport: airport || null })
 })
 
 app.get("/api/sids", (req, res) => {
@@ -5890,59 +6354,85 @@ udpIn.on("message", (msg, rinfo) => {
                 setMyPositionId(msg.position)
             }
 
-            // Extract airports from rwyconfig - any airport with arr or dep set
-            // Checks both airport-level flags and runway-level flags
+            // Extract airports from rwyconfig.
+            // Plugin sets airport-level arr/dep via IsElementActive (ES "active" flag),
+            // and runway-level arr/dep via runway IsElementActive (selected RWY).
             if (msg.rwyconfig) {
-                const discoveredAirports: string[] = []
-                // Check airport-level flags first
-                for (const airport of Object.keys(msg.rwyconfig)) {
-                    const airportData = msg.rwyconfig[airport]
-                    if (airportData.arr || airportData.dep) {
-                        discoveredAirports.push(airport)
+                const rwyconfig = msg.rwyconfig as Record<string, Record<string, unknown>>
+
+                /** ES airport active flag only (boolean arr/dep) — not runway selection. */
+                const fromAirportFlags: string[] = []
+                for (const airport of Object.keys(rwyconfig)) {
+                    const airportData = rwyconfig[airport]
+                    if (!airportData) continue
+                    if (airportData.arr === true || airportData.dep === true) {
+                        fromAirportFlags.push(airport)
                     }
                 }
-                // Fall back to checking runway-level flags
-                if (discoveredAirports.length == 0) {
-                    for (const airport of Object.keys(msg.rwyconfig)) {
-                        const airportData = msg.rwyconfig[airport]
-                        for (const key of Object.keys(airportData)) {
-                            const val = airportData[key]
-                            if (typeof val === "object" && val !== null && (val.arr || val.dep)) {
-                                discoveredAirports.push(airport)
-                                break
-                            }
+
+                /** Runway-selected airports (fallback for single-airport configs). */
+                const fromRunwayFlags: string[] = []
+                for (const airport of Object.keys(rwyconfig)) {
+                    const airportData = rwyconfig[airport]
+                    if (!airportData) continue
+                    for (const key of Object.keys(airportData)) {
+                        if (key === "arr" || key === "dep") continue
+                        const val = airportData[key]
+                        if (
+                            typeof val === "object" &&
+                            val !== null &&
+                            ((val as { arr?: boolean; dep?: boolean }).arr ||
+                                (val as { arr?: boolean; dep?: boolean }).dep)
+                        ) {
+                            fromRunwayFlags.push(airport)
+                            break
                         }
                     }
                 }
-                // Only include airports that exist in airports.csv (skip small/uncontrolled fields)
-                const knownAirports = discoveredAirports.filter((a) => getAirportByIcao(a))
-                if (knownAirports.length > 0) {
-                    if (isMultiAirportConfig(staticConfig)) {
-                        // RTC: merge ES rwyselect into active set — never wipe user-selected
-                        // airports that are not (yet) active in EuroScope.
-                        const fromEs = [...new Set(knownAirports.map(a => a.toUpperCase()))]
-                        esRwySelectAirports = fromEs
-                        const current = staticConfig.activeAirports ?? []
-                        const added = fromEs.filter(a => !current.includes(a))
-                        let changed = false
-                        if (added.length > 0) {
-                            setActiveAirports([...current, ...added])
-                            console.log(`[MULTI] Active airports from rwyselect: +${added.join(", ")}`)
-                            changed = true
-                        }
-                        if (pruneOrphanUserAirports()) changed = true
-                        if (changed) {
-                            applyMultiAirportViewChange({ reprocess: true })
-                        }
-                    } else {
+
+                if (isMultiAirportConfig(staticConfig)) {
+                    // RTC: only ES-active airports (airport-level flag). A selected RWY alone
+                    // must not put e.g. ESGG on the top bar when the airport is not active.
+                    const fromEs = [
+                        ...new Set(
+                            fromAirportFlags
+                                .filter((a) => getAirportByIcao(a))
+                                .map((a) => a.toUpperCase()),
+                        ),
+                    ]
+                    const prevEsKey = esRwySelectAirports.join(",")
+                    esRwySelectAirports = fromEs
+                    const esChanged = fromEs.join(",") !== prevEsKey
+                    const current = staticConfig.activeAirports ?? []
+                    const added = fromEs.filter((a) => !current.includes(a))
+                    let changed = false
+                    if (added.length > 0) {
+                        setActiveAirports([...current, ...added])
+                        console.log(`[MULTI] Active airports from ES active flag: +${added.join(", ")}`)
+                        changed = true
+                    }
+                    // Drop stale saved airports (e.g. ESGG from runway-only discovery)
+                    if (pruneOrphanUserAirports()) changed = true
+                    if (changed) {
+                        applyMultiAirportViewChange({ reprocess: true })
+                    } else if (esChanged) {
+                        broadcastStatus()
+                    }
+                } else {
+                    const discovered =
+                        fromAirportFlags.length > 0 ? fromAirportFlags : fromRunwayFlags
+                    const knownAirports = discovered.filter((a) => getAirportByIcao(a))
+                    if (knownAirports.length > 0) {
                         const previousAirports = [...staticConfig.myAirports].sort()
                         const nextAirports = [...knownAirports].sort()
-                        const airportsChanged = JSON.stringify(previousAirports) !== JSON.stringify(nextAirports)
+                        const airportsChanged =
+                            JSON.stringify(previousAirports) !== JSON.stringify(nextAirports)
 
                         setMyAirports(knownAirports)
-                        if (airportsChanged) console.log(`Airports discovered from rwyconfig: ${knownAirports.join(", ")}`)
+                        if (airportsChanged) {
+                            console.log(`Airports discovered from rwyconfig: ${knownAirports.join(", ")}`)
+                        }
 
-                        // If airports changed, we need to refresh
                         if (airportsChanged && previousAirports.length > 0) {
                             console.log(`Airports changed, clearing store`)
                             store.clear()
@@ -5950,12 +6440,11 @@ udpIn.on("message", (msg, rinfo) => {
                             broadcastUserSettings()
                         }
                     }
-
                 }
 
-                // Extract active runways per airport
+                // Extract active runways per airport (runway-level selection)
                 const previousRunways = JSON.stringify(staticConfig.activeRunways ?? {})
-                const activeRunways = extractActiveRunways(msg.rwyconfig as Record<string, Record<string, unknown>>)
+                const activeRunways = extractActiveRunways(rwyconfig)
                 setActiveRunways(activeRunways)
                 const runwaysChanged = JSON.stringify(activeRunways) !== previousRunways
 
@@ -6045,7 +6534,7 @@ udpIn.on("message", (msg, rinfo) => {
                 else clear()
             }
             // Plugin message was processed - only broadcast/log if there was an actual change
-            if (result.transferSound && currentUiSettings.showStripOwnership && currentUiSettings.transferSoundsEnabled) {
+            if (result.transferSound && currentUiSettings.transferSoundsEnabled) {
                 playTransferSound(result.transferSound)
             }
             if (result.deletedStripIds && result.deletedStripIds.length > 0) {
@@ -6110,9 +6599,19 @@ udpIn.on("message", (msg, rinfo) => {
                     }
                 }
                 for (const strip of result.strips) {
+                    // Multi-airport: per-strip autoMoved (single-airport path sets this on result.sectionChanged)
+                    const u = result.multiUpdates?.find((mu) => mu.strip?.id === strip.id)
+                    const autoMoved =
+                        !!u &&
+                        !u.isNew &&
+                        !u.restored &&
+                        !!(u.sectionChanged || u.allowPositionChange)
+                    const opts: { autoMoved?: boolean; cleanReprint?: boolean } = {}
+                    if (autoMoved) opts.autoMoved = true
+                    if (result.cleanReprint) opts.cleanReprint = true
                     broadcastStrip(
                         strip,
-                        result.cleanReprint ? { cleanReprint: true } : undefined,
+                        opts.autoMoved || opts.cleanReprint ? opts : undefined,
                     )
                 }
                 console.log(`Strips updated: ${result.strips.map(s => s.id).join(", ")}`)
@@ -6177,6 +6676,10 @@ udpIn.on("message", (msg, rinfo) => {
                     console.log(`Strip ${result.strip.callsign} moved -> ${result.strip.sectionId}`)
                 } else {
                     console.log(`Strip ${result.strip.callsign} updated [${(data as { type: string }).type}]`)
+                }
+                // ES ownership → me (handoff accept / StartTracking): On-assume mode prep
+                if (!result.isNew && result.strip.isAssumed) {
+                    maybeAutoPrepOnAssume(result.strip.callsign)
                 }
 
                 if (result.setScratchValue !== undefined) {

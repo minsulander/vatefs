@@ -87,6 +87,8 @@ export interface FlightStrip {
     hp?: string
     /** Hold short — VCH strip annotation 4 (H/S), max 5 chars */
     hs?: string
+    /** ACC coordination — scratchpad `.COO` (RTC NeedsCoordination) */
+    coo?: boolean
 
     // Strip metadata
     stripType: StripType
@@ -264,14 +266,26 @@ export function isPaperInfoKind(value: unknown): value is PaperInfoKind {
     )
 }
 
+/**
+ * Auto LOP+SSR timing:
+ * - instant — on strip connect/spawn
+ * - assume — when the flight is assumed by me
+ * - manual — only when opening the clearance dialog
+ */
+export type AutoLopSsrMode = 'instant' | 'assume' | 'manual'
+
+export function isAutoLopSsrMode(value: unknown): value is AutoLopSsrMode {
+    return value === 'instant' || value === 'assume' || value === 'manual'
+}
+
 /** UI preferences persisted in VatEFSsettings.json (local backend). */
 export interface UiSettings {
     dclSoundEnabled: boolean
     flashChangedTimes: boolean
     flashTsatWindow: boolean
-    /** Show tracking controller SI on strips */
+    /** @deprecated Unused (paper/SAAB strips); kept for VatEFSsettings.json compat */
     showStripOwnership: boolean
-    /** Dim strips assumed by other positions */
+    /** @deprecated Unused; kept for VatEFSsettings.json compat */
     dimOtherOwnedStrips: boolean
     /** Play EuroScope handoff sounds for transfer request / accept / refuse */
     transferSoundsEnabled: boolean
@@ -286,11 +300,10 @@ export interface UiSettings {
      */
     autoParkEnabled: boolean
     /**
-     * When a new departure strip appears, auto-assign TopSky squawk and initial climb (CFL)
-     * without opening the clearance window. Off by default.
-     * When on, the strip action shows ACK CLR (never CLR) and voice-acks set the clearance flag.
+     * Auto LOP+SSR: assign LOP DCT / preferred SID, CFL and TopSky squawk for untracked/own
+     * IFR departures. Instant/assume show ACK CLR; manual applies on CLR dialog open.
      */
-    autoDepSquawkCfl: boolean
+    autoLopSsr: AutoLopSsrMode
     /**
      * Show the "A" (ATC) marker next to TOBT when TOBT was set by ATC.
      * Pilot "P" always shows when applicable. Default on.
@@ -318,7 +331,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     transferSoundsEnabled: false,
     showAppDepXcFrequency: false,
     autoParkEnabled: true,
-    autoDepSquawkCfl: false,
+    autoLopSsr: 'instant',
     showTobtSetByA: true,
     stripPrintSound: 'short',
     stripPrintMode: 'auto',

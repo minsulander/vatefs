@@ -42,7 +42,7 @@
           <span class="clnc-field-value">{{ strip.runway || '---' }}</span>
         </button>
         <button type="button" class="efs-popup-item clnc-field-row" @click="onSidClick">
-          <span class="clnc-field-label">SID</span>
+          <span class="clnc-field-label">{{ clearanceSidLabel }}</span>
           <span class="clnc-field-value">{{ clearanceSidName || '---' }}</span>
         </button>
         <button
@@ -52,7 +52,7 @@
           @click="onAhdClick"
         >
           <span class="clnc-field-label">AHDG</span>
-          <span class="clnc-field-value">{{ strip.direct || (strip.assignedHeading ? 'H' + strip.assignedHeading : '---') }}</span>
+          <span class="clnc-field-value">{{ strip.assignedHeading ? 'H' + strip.assignedHeading : '---' }}</span>
         </button>
         <button
           type="button"
@@ -159,8 +159,11 @@ import {
   formatTrackSidDisplay,
   hasForcedSidInRoute,
   hasSlowRemark,
+  hasVectRemark,
   isIfrSidEligible,
   isTrackSidName,
+  parseRflToFeet,
+  resolveLopAutoDirect,
   sidsMatch,
   withSlowRemark,
 } from '@vatefs/common'
@@ -300,12 +303,20 @@ function normSidKey(s: string): string {
   return s.toUpperCase().replace(/\s+/g, '').replace(/[•*]/g, '·')
 }
 
+/** SID row label — DCT when a direct-to is set (FPR/DCT). */
+const clearanceSidLabel = computed(() =>
+  (props.strip.direct || '').trim() ? 'DCT' : 'SID',
+)
+
 /**
- * SID row: same preferred preview as the strip when FPL has no forced SID,
- * shown as exact ESE technical name (not PETEV 3G / 120veBABAP display form).
+ * SID/DCT row: DCT waypoint when set; else preferred/SID preview like the strip.
  * With AHD set: show ve{TMA exit} (preferred/SID cleared).
  */
 const clearanceSidName = computed(() => {
+  // FPR/DCT — show under SID/DCT, not AHDG
+  const dct = (props.strip.direct || '').trim().toUpperCase()
+  if (dct) return dct
+
   // Vector mode — same as strip (ignore GetSid until SID/rwy forced)
   if (props.strip.assignedHeading && !hasForcedSidInRoute(props.strip.route)) {
     return store.displaySidForStrip(props.strip) || ''
@@ -345,7 +356,9 @@ function sidIsTrack(sid: string | undefined | null): boolean {
 
 /** Hide AHDG when a slow/track SID is set or expected, unless a heading is already assigned. */
 const showAhdgRow = computed(() => {
-  if (props.strip.direct || props.strip.assignedHeading) return true
+  // DCT is shown on the SID/DCT row — do not open AHDG for directs alone
+  if (props.strip.assignedHeading) return true
+  if ((props.strip.direct || '').trim()) return false
   if (isSlowForClr()) return false
   if (sidIsTrack(clearanceSidName.value) || sidIsTrack(props.strip.sid)) return false
   if (sidIsTrack(preferredSidMatched.value)) return false
@@ -565,14 +578,40 @@ function onCflClick(event: MouseEvent) {
   openFieldMenu(event, 'cfl')
 }
 
+/** LOP airport auto DCT (ESMT/ESTA/ESMK/…) — before preferred SID. */
+function applyLopAutoDirect(): boolean {
+  if (props.strip.clearance || !props.strip.canEditClearance) return false
+  if ((props.strip.direct || '').trim()) return false
+  if (props.strip.assignedHeading || hasVectRemark(props.strip.remarks)) return false
+  if (!isIfrSidEligible(props.strip.flightRules)) return false
+  if (props.strip.stripType !== 'departure' && props.strip.stripType !== 'local') return false
+
+  const sug = resolveLopAutoDirect({
+    adep: props.strip.adep,
+    ades: props.strip.ades,
+    route: props.strip.route,
+    rflFeet: parseRflToFeet(props.strip.rfl),
+    runway: props.strip.runway,
+    isProp: !!props.strip.isSlow,
+  })
+  if (!sug || sug.mode !== 'auto') return false
+  store.applyAssignedDirect(props.strip.id, sug.point)
+  return true
+}
+
 async function runClearancePrep() {
   preferredSidSortGroup.value = []
   preferredSidMatched.value = null
   fetchDestinationName()
   fetchDepartureName()
   await fetchSids()
-  const preferredSid = await applyPreferredSid()
-  await applyDefaultCfl(preferredSid)
+  const lopDct = applyLopAutoDirect()
+  if (!lopDct) {
+    const preferredSid = await applyPreferredSid()
+    await applyDefaultCfl(preferredSid)
+  } else {
+    await applyDefaultCfl()
+  }
   applyDefaultSquawk()
 }
 

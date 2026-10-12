@@ -1,5 +1,5 @@
 /**
- * EuroScope scratchpad ↔ VatEFS remarks + holding point (HP).
+ * EuroScope scratchpad ↔ VatEFS remarks + holding point (HP) + COO flag.
  *
  * VCH hold short (HS) is NOT stored here — strip annotation 4.
  *
@@ -9,9 +9,11 @@
  *   /Y2            — HP only (single alphanumeric token)
  *   .SLOW          — slow flag (leading dot, same as other remarks)
  *   SLOW           — bare TopSky form still accepted when reading
+ *   .COO           — ACC coordination flag (RTC)
+ *   .COO SLOW /Y2  — COO + remarks + HP
  *
  * TopSky protocol scratches (/ROF/…, /LAM/ROF/…, /RJC/…, etc.) must not
- * touch remarks or HP — return null to leave existing fields unchanged.
+ * touch remarks, HP, or COO — return null to leave existing fields unchanged.
  */
 
 import { groundstateFromScratch, isGroundstateToken } from "./groundstate.js"
@@ -23,9 +25,16 @@ export const isSwedishGroundstateScratch = isGroundstateToken
 export function buildCombinedScratch(
     remarks: string | undefined,
     hp: string | undefined,
+    coo?: boolean,
 ): string {
     const r = remarks?.trim()
     const h = hp?.trim().toUpperCase()
+    if (coo) {
+        if (r && h) return `.COO ${r} /${h}`
+        if (h) return `.COO /${h}`
+        if (r) return `.COO ${r}`
+        return `.COO`
+    }
     if (r && h) return `.${r} /${h}`
     if (h) return `/${h}`
     if (r) return `.${r}`
@@ -46,27 +55,14 @@ export function isProtocolScratch(scratch: string): boolean {
     return false
 }
 
-/**
- * Parse scratch into remarks + HP.
- * `null` = leave existing flight field unchanged (special TopSky ops).
- */
-export function parseCombinedScratch(scratch: string): {
-    remarks: string | undefined | null
-    hp: string | undefined | null
+function parseRemarksAndHp(body: string): {
+    remarks: string | undefined
+    hp: string | undefined
 } {
-    if (isProtocolScratch(scratch)) {
-        return { remarks: null, hp: null }
-    }
+    const trimmed = body.trim()
+    if (!trimmed) return { remarks: undefined, hp: undefined }
 
-    if (scratch === "") {
-        return { remarks: undefined, hp: undefined }
-    }
-
-    if (scratch.toUpperCase() === "SLOW") {
-        return { remarks: "SLOW", hp: undefined }
-    }
-
-    const combined = scratch.match(/^\.(.*?)\s+\/([A-Z0-9]+)\s*$/i)
+    const combined = trimmed.match(/^(.*?)\s+\/([A-Z0-9]+)\s*$/i)
     if (combined) {
         return {
             remarks: combined[1]!.trim() || undefined,
@@ -74,23 +70,64 @@ export function parseCombinedScratch(scratch: string): {
         }
     }
 
-    if (scratch.startsWith(".")) {
-        return {
-            remarks: scratch.substring(1).trim() || undefined,
-            hp: undefined,
-        }
+    const hpOnly = trimmed.match(/^\/([A-Z0-9]+)\s*$/i)
+    if (hpOnly) {
+        return { remarks: undefined, hp: hpOnly[1]!.toUpperCase() }
     }
 
-    // HP only: /Y2 (already validated by isProtocolScratch)
+    return { remarks: trimmed || undefined, hp: undefined }
+}
+
+/**
+ * Parse scratch into remarks + HP + COO.
+ * `null` = leave existing flight field unchanged (special TopSky ops).
+ * `undefined` coo = cleared (no COO token).
+ */
+export function parseCombinedScratch(scratch: string): {
+    remarks: string | undefined | null
+    hp: string | undefined | null
+    coo: boolean | undefined | null
+} {
+    if (isProtocolScratch(scratch)) {
+        return { remarks: null, hp: null, coo: null }
+    }
+
+    if (scratch === "") {
+        return { remarks: undefined, hp: undefined, coo: undefined }
+    }
+
+    if (scratch.toUpperCase() === "SLOW") {
+        return { remarks: "SLOW", hp: undefined, coo: false }
+    }
+
+    if (scratch.startsWith(".")) {
+        const afterDot = scratch.substring(1)
+        const upper = afterDot.toUpperCase()
+        if (upper === "COO" || upper.startsWith("COO ") || upper.startsWith("COO/")) {
+            const afterCoo =
+                upper === "COO"
+                    ? ""
+                    : upper.startsWith("COO/")
+                      ? afterDot.slice(3) // keep leading /
+                      : afterDot.slice(4).trimStart()
+            const { remarks, hp } = parseRemarksAndHp(afterCoo)
+            return { remarks, hp, coo: true }
+        }
+        const { remarks, hp } = parseRemarksAndHp(afterDot)
+        return { remarks, hp, coo: false }
+    }
+
+    // HP only: /Y2
     const hpOnly = scratch.match(/^\/([A-Z0-9]+)\s*$/i)
     if (hpOnly) {
         return {
             remarks: undefined,
             hp: hpOnly[1]!.toUpperCase(),
+            coo: false,
         }
     }
 
-    return { remarks: undefined, hp: undefined }
+    return { remarks: undefined, hp: undefined, coo: false }
 }
 
 /** Remarks-only parse (ignores HP). Prefer parseCombinedScratch. */
