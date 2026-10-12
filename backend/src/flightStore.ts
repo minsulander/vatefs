@@ -102,6 +102,41 @@ export function hasValidAssignedSquawk(raw: string | undefined | null): boolean 
 /**
  * Result of processing a plugin message
  */
+/** Dev spoof payload — `""` / null clears; omit leaves unchanged. */
+export interface DevSpoofFields {
+    clearAll?: boolean
+    tobt?: string | null
+    tsat?: string | null
+    ttot?: string | null
+    ctot?: string | null
+    ctotReason?: string | null
+    asrt?: string | null
+    tsac?: string | null
+    ctoc?: string | null
+    tobtSetBy?: 'P' | 'A' | '' | null
+    cdmSts?: string | null
+}
+
+export interface DevSpoofSnapshot {
+    callsign: string
+    origin?: string
+    destination?: string
+    flightRules?: string
+    groundstate?: string
+    tobt?: string
+    tsat?: string
+    ttot?: string
+    ctot?: string
+    ctotReason?: string
+    ctotCancelled?: boolean
+    cdmSts?: string
+    asrt?: string
+    tsac?: string
+    ctoc?: string
+    tobtSetBy?: string
+    localCdmAt?: number
+}
+
 export interface ProcessMessageResult {
     /** The updated or created flight (if any) */
     flight?: Flight
@@ -2170,11 +2205,25 @@ class FlightStore {
                     changed = true
                 }
             }
-            // Only apply CTOT when non-empty — empty file field must not wipe HTTP CTOT
-            const ctot = this.normalizeCdmHhmm(entry.ctot)
-            if (ctot && ctot !== flight.ctot) {
-                flight.ctot = ctot
-                changed = true
+            // CTOT: non-empty applies (+ pins against HTTP wipe); explicit '' clears local CTOT.
+            // Omitted/undefined leaves CTOT unchanged (torn ES file must not wipe HTTP CTOT).
+            if (entry.ctot !== undefined) {
+                const ctot = entry.ctot === '' ? undefined : this.normalizeCdmHhmm(entry.ctot)
+                if (ctot) {
+                    flight.localCdmAt = now
+                    if (ctot !== flight.ctot || flight.ctotCancelled || flight.ctotClearedAt) {
+                        flight.ctot = ctot
+                        flight.ctotCancelled = undefined
+                        flight.ctotClearedAt = undefined
+                        changed = true
+                    }
+                } else if (flight.ctot || flight.ctotCancelled || flight.ctotClearedAt || flight.ctotReason) {
+                    flight.ctot = undefined
+                    flight.ctotCancelled = undefined
+                    flight.ctotClearedAt = undefined
+                    flight.ctotReason = undefined
+                    changed = true
+                }
             }
             if (entry.ctotReason !== undefined && entry.ctotReason !== flight.ctotReason) {
                 flight.ctotReason = entry.ctotReason || undefined
@@ -2191,6 +2240,150 @@ class FlightStore {
             if (strip) strips.push(strip)
         }
         return strips.length > 0 ? { strips } : {}
+    }
+
+    /**
+     * Dev/test: set or clear CDM times on any known flight (no ESSA eligibility gate).
+     * Pins localCdmAt so the HTTP CDM poll does not wipe values for ~2 min.
+     * Pass `""` / null to clear a field; omit to leave unchanged.
+     */
+    applyDevSpoof(callsign: string, fields: DevSpoofFields): FlightStrip | undefined {
+        const key = callsign.trim().toUpperCase()
+        const flight = this.flights.get(key)
+        if (!flight) return undefined
+
+        const now = Date.now()
+        let changed = false
+        let pin = false
+
+        const applyHhmm = (
+            raw: string | null | undefined,
+            getter: () => string | undefined,
+            setter: (v: string | undefined) => void,
+            alsoPinLocal?: (v: string) => void,
+        ) => {
+            if (raw === undefined) return
+            if (raw === null || raw === '') {
+                if (getter() !== undefined) {
+                    setter(undefined)
+                    changed = true
+                }
+                return
+            }
+            const hhmm = this.normalizeCdmHhmm(raw)
+            if (!hhmm) return
+            pin = true
+            alsoPinLocal?.(hhmm)
+            if (getter() !== hhmm) {
+                setter(hhmm)
+                changed = true
+            }
+        }
+
+        applyHhmm(
+            fields.tobt,
+            () => flight.tobt,
+            (v) => { flight.tobt = v },
+            (v) => { flight.localCdmTobt = v },
+        )
+        applyHhmm(
+            fields.tsat,
+            () => flight.tsat,
+            (v) => { flight.tsat = v },
+            (v) => { flight.localCdmTsat = v },
+        )
+        applyHhmm(
+            fields.ttot,
+            () => flight.ttot,
+            (v) => { flight.ttot = v },
+            (v) => { flight.localCdmTtot = v },
+        )
+        applyHhmm(
+            fields.ctot,
+            () => flight.ctot,
+            (v) => {
+                flight.ctot = v
+                flight.ctotCancelled = undefined
+                flight.ctotClearedAt = undefined
+                // Clearing CTOT also drops reason unless explicitly re-set below
+                if (!v && fields.ctotReason === undefined) {
+                    flight.ctotReason = undefined
+                }
+            },
+        )
+        applyHhmm(fields.asrt, () => flight.asrt, (v) => { flight.asrt = v })
+        applyHhmm(fields.tsac, () => flight.tsac, (v) => { flight.tsac = v })
+        applyHhmm(fields.ctoc, () => flight.ctoc, (v) => { flight.ctoc = v })
+
+        if (fields.ctotReason !== undefined) {
+            const reason = fields.ctotReason === null || fields.ctotReason === ''
+                ? undefined
+                : fields.ctotReason
+            if (flight.ctotReason !== reason) {
+                flight.ctotReason = reason
+                changed = true
+            }
+        }
+        if (fields.tobtSetBy !== undefined) {
+            const setBy = fields.tobtSetBy === null || fields.tobtSetBy === ''
+                ? undefined
+                : fields.tobtSetBy === 'P' || fields.tobtSetBy === 'A'
+                    ? fields.tobtSetBy
+                    : undefined
+            if (flight.tobtSetBy !== setBy) {
+                flight.tobtSetBy = setBy
+                flight.tobtSetByAt = setBy === 'A' ? now : undefined
+                changed = true
+            }
+        }
+        if (fields.cdmSts !== undefined) {
+            const sts = fields.cdmSts === null || fields.cdmSts === ''
+                ? undefined
+                : fields.cdmSts
+            if (flight.cdmSts !== sts) {
+                flight.cdmSts = sts
+                changed = true
+            }
+        }
+
+        if (fields.clearAll) {
+            if (this.clearCdmFields(flight)) changed = true
+            if (flight.ctot !== undefined) { flight.ctot = undefined; changed = true }
+            if (flight.ctotCancelled) { flight.ctotCancelled = undefined; changed = true }
+            if (flight.ctotClearedAt !== undefined) { flight.ctotClearedAt = undefined; changed = true }
+            if (flight.ctotReason !== undefined) { flight.ctotReason = undefined; changed = true }
+        }
+
+        if (pin) flight.localCdmAt = now
+        if (!changed && !pin) return this.regenerateStrip(key)
+
+        flight.lastUpdate = now
+        return this.regenerateStrip(key)
+    }
+
+    /** Snapshot of CDM-related fields for the spoof REPL / API. */
+    getDevSpoofSnapshot(callsign: string): DevSpoofSnapshot | undefined {
+        const flight = this.flights.get(callsign.trim().toUpperCase())
+        if (!flight) return undefined
+        return {
+            callsign: flight.callsign,
+            origin: flight.origin,
+            destination: flight.destination,
+            flightRules: flight.flightRules,
+            groundstate: flight.groundstate,
+            tobt: flight.tobt,
+            tsat: flight.tsat,
+            ttot: flight.ttot,
+            ctot: flight.ctot,
+            ctotReason: flight.ctotReason,
+            ctotCancelled: flight.ctotCancelled,
+            cdmSts: flight.cdmSts,
+            asrt: flight.asrt,
+            tsac: flight.tsac,
+            ctoc: flight.ctoc,
+            tobtSetBy: flight.tobtSetBy,
+            localCdmAt: flight.localCdmAt,
+        }
     }
 
     /**

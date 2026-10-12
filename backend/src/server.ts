@@ -50,7 +50,9 @@ import {
     normalizeAssignedSquawk,
     parseAircraftInfo,
     applyParsedEquipment,
+    type DevSpoofFields,
 } from "./flightStore.js"
+import { startSpoofRepl } from "./spoof-cli.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
 import type { EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
@@ -196,8 +198,28 @@ function isPrimedFrequency(frequency: number | undefined | null): boolean {
     return Math.abs(frequency - 199.998) > 0.001
 }
 
-/** ESSA wins over ESGG when both appear in rwyconfig. */
-function configFileForDiscoveredAirports(airports: string[]): string | undefined {
+/** True when we should use RTC (multiairport) — ESSR login or online ESSR positions. */
+function isEssrRtcSession(callsign?: string | null): boolean {
+    const self = (callsign ?? staticConfig.myCallsign ?? "").toUpperCase()
+    if (self.startsWith("ESSR")) return true
+    const online = staticConfig.onlineControllers
+    if (!online) return false
+    for (const ctrl of online.values()) {
+        if (ctrl.callsign.toUpperCase().startsWith("ESSR")) return true
+    }
+    return false
+}
+
+/**
+ * Pick layout for the current session:
+ * - RTC only for ESSR (self or online ESSR positions)
+ * - else ESSA if in rwyconfig, else ESGG
+ */
+function configFileForDiscoveredAirports(
+    airports: string[],
+    callsign?: string | null,
+): string | undefined {
+    if (isEssrRtcSession(callsign)) return "multiairport.yml"
     const set = new Set(airports.map((a) => a.toUpperCase()))
     if (set.has("ESSA")) return "essa.yml"
     if (set.has("ESGG")) return "esgg.yml"
@@ -362,10 +384,8 @@ if (EUROSCOPE_DIR) {
                 const config = loadConfig(configInfo.fullPath)
                 applyConfig(config)
                 activeConfigFile = savedSettings.activeConfig
-                // RTC stays; ESSA/ESGG may still be corrected on first primed myselfUpdate
-                if (isMultiAirportConfig(staticConfig) || /multi/i.test(activeConfigFile)) {
-                    configAutoSelectPending = false
-                }
+                // Keep auto-select pending: first primed myselfUpdate may switch
+                // RTC→ESSA/ESGG (or to RTC when ESSR is online). Manual switch still locks.
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
@@ -1274,26 +1294,26 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
 }
 
 /**
- * First primed myselfUpdate with ESSA/ESGG in rwyconfig → pick matching layout once.
+ * First primed myselfUpdate → pick ESSA / ESGG / RTC once.
+ * RTC only when self or online controllers are ESSR_*; otherwise ESSA/ESGG from rwyconfig.
  * No-op after manual switchConfig or when `--config` was used.
+ * May leave a restored RTC layout if the session is not ESSR.
  */
 function maybeAutoSelectConfigFromAirports(
     airports: string[],
     frequency: number | undefined,
+    callsign?: string | null,
 ): void {
     if (!configAutoSelectPending || configManuallySelected || cliArgs.config) {
         configAutoSelectPending = false
         return
     }
-    // RTC / multi-airport is an intentional mode — do not yank to ESSA/ESGG
-    if (isMultiAirportConfig(staticConfig) || /multi/i.test(activeConfigFile)) {
-        configAutoSelectPending = false
-        return
-    }
     if (!isPrimedFrequency(frequency)) return
-    if (airports.length === 0) return
+    // ESSR RTC needs callsign/online list; ESSA/ESGG need discovered airports
+    const essr = isEssrRtcSession(callsign)
+    if (!essr && airports.length === 0) return
 
-    const file = configFileForDiscoveredAirports(airports)
+    const file = configFileForDiscoveredAirports(airports, callsign)
     if (!file) return
     if (!availableConfigs.some((c) => c.file === file)) {
         console.warn(`[CONFIG] Auto-select skipped — ${file} not in config directory`)
@@ -1306,8 +1326,11 @@ function maybeAutoSelectConfigFromAirports(
         console.log(`[CONFIG] Auto-select OK — already on ${file}`)
         return
     }
+    const reason = essr
+        ? "ESSR position online / logged in"
+        : `airports [${airports.join(", ")}]`
     console.log(
-        `[CONFIG] Auto-select ${file} from airports [${airports.join(", ")}] (primed ${frequency!.toFixed(3)})`,
+        `[CONFIG] Auto-select ${file} (${reason}, primed ${frequency!.toFixed(3)})`,
     )
     switchConfig(file)
 }
@@ -5654,11 +5677,66 @@ wsServer.on("connection", (socket) => {
 
 const app = express()
 app.use(logRequests("dev"))
+app.use(express.json({ limit: "64kb" }))
+
+function isLocalDevRequest(req: express.Request): boolean {
+    const ip = req.socket.remoteAddress || ""
+    return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1"
+}
+
+function applyDevSpoofAndBroadcast(callsign: string, fields: DevSpoofFields) {
+    if (!flightStore.getFlight(callsign)) {
+        return { error: `Flight not found: ${callsign}` as const }
+    }
+    const strip = flightStore.applyDevSpoof(callsign, fields)
+    if (strip) {
+        const applied = store.updateStripFromFlight(strip)
+        broadcastStrip(applied ?? strip)
+    }
+    const snap = flightStore.getDevSpoofSnapshot(callsign)
+    return snap ?? { error: `Flight not found: ${callsign}` as const }
+}
 
 // REST API endpoints
 app.get("/api/flights", (req, res) => {
     const flights = flightStore.getAllFlights()
     res.json(flights)
+})
+
+/** Dev: read CDM spoof snapshot (localhost only). */
+app.get("/api/dev/spoof/:callsign", (req, res) => {
+    if (!isLocalDevRequest(req)) {
+        res.status(403).json({ error: "Localhost only" })
+        return
+    }
+    const snap = flightStore.getDevSpoofSnapshot(String(req.params.callsign || ""))
+    if (!snap) {
+        res.status(404).json({ error: "Flight not found" })
+        return
+    }
+    res.json(snap)
+})
+
+/** Dev: set/clear CTOT/TOBT/… (localhost only). Body: { callsign, ctot?, tobt?, clearAll?, … }. */
+app.post("/api/dev/spoof", (req, res) => {
+    if (!isLocalDevRequest(req)) {
+        res.status(403).json({ error: "Localhost only" })
+        return
+    }
+    const body = req.body as DevSpoofFields & { callsign?: string }
+    const callsign = String(body.callsign || "").trim().toUpperCase()
+    if (!callsign) {
+        res.status(400).json({ error: "Missing callsign" })
+        return
+    }
+    const { callsign: _cs, ...fields } = body
+    const result = applyDevSpoofAndBroadcast(callsign, fields)
+    if ("error" in result) {
+        res.status(404).json(result)
+        return
+    }
+    console.log(`[spoof] ${callsign} via API`)
+    res.json(result)
 })
 
 app.get("/api/flight/:callsign", async (req, res) => {
@@ -6134,7 +6212,16 @@ let publicDir = path.resolve(__dirname, "../public")
 if (!fs.existsSync(publicDir)) publicDir = path.resolve(__dirname, "public")
 app.use(serveStatic(publicDir))
 app.get("/*splat", (req, res) => res.sendFile(publicDir + "/index.html"))
-const server = app.listen(port, "0.0.0.0", () => console.log(`EFS backend ${constants.version} listening at http://0.0.0.0:${port}`))
+const server = app.listen(port, "0.0.0.0", () => {
+    console.log(`EFS backend ${constants.version} listening at http://0.0.0.0:${port}`)
+    startSpoofRepl({
+        apply: (callsign, fields) => {
+            const result = applyDevSpoofAndBroadcast(callsign, fields)
+            return result
+        },
+        show: (callsign) => flightStore.getDevSpoofSnapshot(callsign),
+    })
+})
 server.on("upgrade", (request, socket, head) => {
     wsServer.handleUpgrade(request, socket, head, (socket) => {
         wsServer.emit("connection", socket, request)
@@ -6466,12 +6553,13 @@ udpIn.on("message", (msg, rinfo) => {
                 ensureAupR16Service()
             }
 
-            // First primed session: ESSA → essa.yml, else ESGG → esgg.yml (waits for freq ≠ 199.998)
+            // First primed session: ESSR→RTC, ESSA→essa.yml, else ESGG→esgg.yml
             maybeAutoSelectConfigFromAirports(
                 staticConfig.activeAirports?.length
                     ? staticConfig.activeAirports
                     : staticConfig.myAirports,
                 msg.frequency ?? staticConfig.myFrequency,
+                msg.callsign ?? staticConfig.myCallsign,
             )
 
             // Broadcast updated status to all clients
@@ -6989,6 +7077,8 @@ function applyViffPoll(result: ViffPollResult) {
                     flight.ctotClearedAt = undefined
                     changed = true
                 }
+            } else if (flight.ctot && localFresh) {
+                // Keep recent local ES CTOT while local CDM pin is fresh
             } else if (flight.ctot) {
                 flight.ctot = undefined
                 if (isSlc) {
