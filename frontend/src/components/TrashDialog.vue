@@ -37,7 +37,7 @@
         >
           <div class="trash-row-main">
             <div class="trash-row-top">
-              <span class="trash-callsign">{{ item.callsign || '(note)' }}</span>
+              <span class="trash-callsign">{{ item.callsign || '(strip)' }}</span>
               <span
                 v-if="item.pilotDisconnected || item.disconnectKind"
                 class="trash-disconnect"

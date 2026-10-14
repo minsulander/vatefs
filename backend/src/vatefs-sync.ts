@@ -8,6 +8,7 @@
 import type { FeedStatusItem, FlightStrip, ScribbleStrokePayload, UiSettings } from "@vatefs/common"
 import WebSocket from "ws"
 import * as scribbleStore from "./scribble-store.js"
+import { anonymousSpecialStripKind } from "./multi-airport.js"
 
 export type ScribbleRealm = "live" | "sweatbox" | "playback" | "local"
 
@@ -18,6 +19,11 @@ export interface StripSyncMeta {
     paperInfoKind?: string
     airport?: string
     callsign?: string
+    /** Anonymous VFR/CROSS recreate */
+    aircraftType?: string
+    adep?: string
+    ades?: string
+    flightRules?: string
     /** Bay placement — synced for note/vehicle create and all strip drags */
     bayId?: string
     sectionId?: string
@@ -175,6 +181,7 @@ function syncKeyForStrip(strip: FlightStrip): string {
 /**
  * Strip meta on PUT:
  * - note/vehicle: create-on-receive + placement + text fields
+ * - anonymous VFR/CROSS (empty callsign): create-on-receive via strip id key
  * - flight: placement + EFS-only flags (ES-native CLR/CTL/CTO/G/A stay on EuroScope)
  */
 function stripMeta(strip: FlightStrip): StripSyncMeta {
@@ -198,6 +205,17 @@ function stripMeta(strip: FlightStrip): StripSyncMeta {
         return {
             kind: "vehicle",
             std: strip.std ?? "",
+            ...placement,
+        }
+    }
+    const anonKind = anonymousSpecialStripKind(strip.syncKey || strip.id)
+    if (anonKind) {
+        return {
+            kind: anonKind,
+            aircraftType: strip.aircraftType || undefined,
+            adep: strip.adep || undefined,
+            ades: strip.ades || undefined,
+            flightRules: strip.flightRules || undefined,
             ...placement,
         }
     }
@@ -256,6 +274,7 @@ async function putRemote(
     if (!base) return false
     const strip = getStripById(stripId)
     if (!strip) return false
+    // Key by syncKey/id — never require callsign (anonymous VFR/CROSS use vfrdep:uuid etc.)
     const apt = (strip.airport || getAirports()[0] || "").toUpperCase()
     if (!apt) return false
     if (body.strokes === undefined && body.strip === undefined) return false

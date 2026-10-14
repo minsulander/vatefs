@@ -499,7 +499,7 @@
             >{{ isArrLayout ? '' : paperTas }}</div>
             <div class="pg-meta">
               <span class="pg-frul">{{ isPaperEmptyFlightHolder ? '' : (strip.flightRules || 'I') }}</span>
-              <span class="pg-atyp-wtc">{{ strip.aircraftType }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence"> <span
+              <span class="pg-atyp-wtc" :class="{ ghost: !strip.aircraftType?.trim() }">{{ strip.aircraftType?.trim() || '' }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence && strip.aircraftType?.trim()"> <span
                   class="pg-wtc"
                   :class="{ 'pg-wtc-circled': wtcPaperCircled, 'pg-wtc-yellow': wtcYellowHighlight }"
                 ><svg
@@ -643,8 +643,16 @@
           <div
             v-if="!isArrLayout"
             class="pg-sid pg-vline"
-            :class="{ ghost: !store.displaySidForStrip(strip), editable: canEditAssignedData }"
-            :title="paperTip(sidCellLabel, `Departure route / ${sidCellLabel}`)"
+            :class="{
+              ghost: !store.displaySidForStrip(strip),
+              editable: canEditAssignedData,
+              'sid-mdi-box': essaMdi2MinSidBox,
+            }"
+            :title="
+              essaMdi2MinSidBox
+                ? 'MDI 2 MIN'
+                : paperTip(sidCellLabel, `Departure route / ${sidCellLabel}`)
+            "
             @click.stop="onSidClick"
           >
             <span class="pg-sid-val">{{ store.displaySidForStrip(strip) || '' }}</span>
@@ -1084,10 +1092,11 @@
                 boxed: atypThickBorder,
                 plain: !atypThickBorder && !atypYellowHighlight,
                 'atyp-yellow': atypYellowHighlight,
+                ghost: !strip.aircraftType?.trim(),
               }"
               title="Compact size"
               @click.stop="onSizeCompact"
-            >{{ strip.aircraftType }}</span>
+            >{{ strip.aircraftType?.trim() || 'ATYP' }}</span>
             <span
               class="wtc-box fit-font"
               :class="{
@@ -1298,7 +1307,20 @@
               </svg>
               <span v-if="triangleTimeText" class="cto-ctot">{{ triangleTimeText }}</span>
             </div>
-            <div class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
+            <!-- Compact G/A: CFL replaces STD; otherwise stand -->
+            <div
+              v-if="compactArrGoAround"
+              class="cell cell-std cell-cfl fit-font"
+              :class="{
+                ghost: !displayCfl,
+                'clr-pending-hl': unclearedFieldHighlight && !!displayCfl,
+                editable: canEditAssignedData,
+                'arr-cfl-ghost': !displayCfl,
+              }"
+              title="Cleared flight level"
+              @click.stop="onCflClick"
+            >{{ displayCfl || 'CFL' }}</div>
+            <div v-else class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
           </template>
           <template v-else>
             <!-- Compact: CFTO/ATD △ replaces STD (CTOT stays in ASSR slot) -->
@@ -1359,26 +1381,20 @@
             title="Cleared flight level"
             @click.stop="onCflClick"
           >{{ displayCfl || 'CFL' }}</div>
-          <!-- Compact ARR: CTL/ATA △ in AHD slot; G/A restores AHD (heading more useful) -->
+          <!-- Compact ARR G/A: editable AHD; otherwise empty spacer (no ghost). Compact DEP / full-height unchanged. -->
           <div
-            v-if="compactShowArrTriangle"
-            class="cell cell-ahd cell-cto cell-compact-cto"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              preserveAspectRatio="none"
-              class="clearance-triangle landing mini"
-              :class="{
-                active: showArrCtlTriangle,
-                'green-border': arrTriangleGreenOutline,
-              }"
-              aria-hidden="true"
-            >
-              <path d="M2.5 0.8 H21.5 Q23.6 0.8 22.2 3.2 L13.2 21.2 Q12 23.4 10.8 21.2 L1.8 3.2 Q0.4 0.8 2.5 0.8 Z" />
-            </svg>
-          </div>
+            v-if="compactArrGoAround"
+            class="cell cell-ahd fit-font"
+            :class="{
+              ghost: !strip.assignedHeading,
+              'clr-pending-hl': unclearedFieldHighlight && !!strip.assignedHeading,
+              editable: canEditAssignedData,
+            }"
+            title="Assigned heading"
+            @click.stop="onAhdClick"
+          >{{ strip.assignedHeading || 'AHD' }}</div>
           <div
-            v-else-if="isCompactBay && isArrLayout && !strip.missedApproach"
+            v-else-if="isCompactBay && isArrLayout"
             class="cell cell-ahd cell-compact-spacer"
             aria-hidden="true"
           />
@@ -1404,9 +1420,10 @@
             :class="{
               ghost: !store.displaySidForStrip(strip),
               'sid-highlight': sidHighlight,
+              'sid-mdi-box': essaMdi2MinSidBox,
               editable: canEditAssignedData,
             }"
-            :title="`Departure route / ${sidCellLabel}`"
+            :title="essaMdi2MinSidBox ? 'MDI 2 MIN' : `Departure route / ${sidCellLabel}`"
             @click.stop="onSidClick"
           >{{ store.displaySidForStrip(strip) || sidCellLabel }}</div>
           <!-- RTC ARR: empty framed SID slot (no data / no edit) -->
@@ -1555,6 +1572,7 @@ import {
   isIfrSidEligible,
   isTrackSidName,
   isVectorSidName,
+  needsEssaMdi2MinSidBox,
   normalizeEssaRwy,
   requiresAccCoordination,
   sidFieldLabel,
@@ -2766,6 +2784,20 @@ const sidHighlight = computed(() => {
   if (/\d{3}(·\d{3})?ve[A-Z]{2,}/i.test(shown)) return true
   return false
 })
+
+/**
+ * ESSA DEP 19R + TOVRI/BABAP — black SID box (MDI 2 MIN reminder).
+ * Uses display SID so FPR-forced / override SIDs still match.
+ */
+const essaMdi2MinSidBox = computed(() =>
+  needsEssaMdi2MinSidBox({
+    adep: props.strip.adep,
+    depRwy: props.strip.runway,
+    displaySid: store.displaySidForStrip(props.strip),
+    stripType: props.strip.stripType,
+    flightRules: props.strip.flightRules,
+  }),
+)
 
 const hasRofRequest = computed(() => !!props.strip.rofRequestCallsign || !!props.strip.rofRequestSi)
 /** Inbound: ROF sent to us (we track). Outbound: we sent ROF (pink window). */
@@ -4094,16 +4126,9 @@ const arrTriangleGreenOutline = computed(() => {
   return gs === 'ARR' || gs === 'TXIN' || gs === 'PARK' || !gs
 })
 
-/** Compact ARR: green landing △ in AHD slot when CTL or ATA. */
-const compactShowArrTriangle = computed(
-  () =>
-    isCompactBay.value &&
-    isArrLayout.value &&
-    !props.strip.missedApproach &&
-    (!!props.strip.ata ||
-      !!props.strip.clearedToLand ||
-      showArrCtlTriangle.value ||
-      arrTriangleGreenOutline.value),
+/** Compact ARR missed approach (G/A): CFL in STD slot + AHD; no landing △. */
+const compactArrGoAround = computed(
+  () => isCompactBay.value && isArrLayout.value && !!props.strip.missedApproach,
 )
 
 function onDepArrowCtotClick(event: MouseEvent) {
@@ -6235,6 +6260,10 @@ function onGroundStateClick(action: string) {
   padding: 0 calc(2px * var(--strip-scale));
   cursor: pointer;
 }
+/* ESSA 19R TOVRI/BABAP — black SID box (MDI 2 MIN) on paper look */
+.pg-sid.sid-mdi-box:not(.ghost) {
+  box-shadow: inset 0 0 0 3px #111;
+}
 
 .pg-sid-val {
   grid-row: 2;
@@ -6996,9 +7025,10 @@ function onGroundStateClick(action: string) {
   height: 100%;
   box-sizing: border-box;
 }
-/* Match strip-main column tracks so RMK starts under CFL (coo half-width track) */
+/* Match strip-main column tracks so RMK starts under CFL (AHD track = col 4) */
 .exp-bottom-main-dep {
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  /* SAAB ESSA DEP: keep AHD at 0.72fr (shared with EST/coo). RTC overrides to 0.36fr. */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
 }
 .exp-bottom-main-arr {
   grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
@@ -7273,7 +7303,7 @@ function onGroundStateClick(action: string) {
   line-height: 1.15;
   cursor: pointer;
 }
-.callsign-no-match { color: #999; font-style: italic; }
+.callsign-no-match { color: #999; }
 .comm-suffix { font-size: 0.7em; color: #b45309; margin-left: 1px; }
 .owner-si { font-size: 0.62em; font-weight: 700; color: #003399; margin-left: 0.25em; }
 /* Callsign: JS sets px to fit box; max tracks --strip-scale */
@@ -7638,8 +7668,12 @@ function onGroundStateClick(action: string) {
   box-sizing: border-box;
 }
 .strip-grid-dep .strip-main {
-  /* empty col left of HS; RWY slightly wider than HS/HP; EST (coo) ~half former width */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  /*
+   * SAAB ESSA DEP (default): col 4 is AHD (bottom) + EST/coo (top).
+   * Keep 0.72fr so AHD matches pre-DepC width. RTC narrows this track for EST only
+   * (RTC AHD sits in the RWY column, so that override is safe).
+   */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
   grid-template-areas:
     'cs  cs  xfl coo .   hs  hp  rwy'
     'std cto cfl ahd sid sid sid sid';
@@ -7661,9 +7695,11 @@ function onGroundStateClick(action: string) {
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
 }
 .flight-strip.rtc-layout .exp-bottom-main-dep {
+  /* RTC: EST/coo half-width track (AHD is in RWY col, not here) */
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
 }
 .flight-strip.rtc-layout .strip-grid-dep .strip-main {
+  /* RTC: EST/coo ~half; AHD uses RWY column — leave 0.36fr */
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
     'cs  cs  xfl coo .   hp  rwy'
@@ -8105,6 +8141,13 @@ function onGroundStateClick(action: string) {
 }
 .cell-sid:not(.ghost) {
   font-size: var(--fs-data-lg);
+}
+/* ESSA 19R TOVRI/BABAP — black SID box (MDI 2 MIN); cell-sid has border:none */
+.cell-sid.sid-mdi-box:not(.ghost) {
+  box-shadow: inset 0 0 0 3px #111;
+}
+.flight-strip.rtc-layout .strip-main .cell-sid.sid-mdi-box:not(.ghost)::after {
+  border: 3px solid #111;
 }
 /* Uncleared XFL/CFL/AHD/SID (value present) — same amber as pending transfer */
 .cell-xfl.clr-pending-hl:not(.ghost),

@@ -14,7 +14,7 @@
             ref="callsignInput"
             v-model="callsign"
             class="dialog-input"
-            :class="{ 'input-error': !isVehicle && callsign.length > 0 && callsign.length < 2 }"
+            :class="{ 'input-error': !isVehicle && !isOptionalCallsign && callsign.length > 0 && callsign.length < 2 }"
             :placeholder="isVehicle ? '' : 'e.g. SEKFH'"
             maxlength="10"
             @input="onCallsignInput"
@@ -118,6 +118,10 @@ let searchDebounce: ReturnType<typeof setTimeout> | undefined
 
 const isNote = computed(() => props.stripType === 'note')
 const isVehicle = computed(() => props.stripType === 'vehicle')
+/** VFR DEP/ARR/CROSS — callsign and ATYP may be blank */
+const isOptionalCallsign = computed(
+  () => props.stripType === 'vfrDep' || props.stripType === 'vfrArr' || props.stripType === 'cross',
+)
 
 /**
  * Airports for manual strip creation.
@@ -194,8 +198,11 @@ const isValid = computed(() => {
   if (isNote.value) {
     return !showAirportSelector.value || !!selectedAirport.value
   }
-  // Vehicle callsign is optional; other types need ≥2 chars
-  if (!isVehicle.value && callsign.value.length < 2) return false
+  // Vehicle / VFR / CROSS: callsign optional; if typed, need ≥2 chars for FPL match
+  if (!isVehicle.value && !isOptionalCallsign.value && callsign.value.length < 2) return false
+  if ((isVehicle.value || isOptionalCallsign.value) && callsign.value.length > 0 && callsign.value.length < 2) {
+    return false
+  }
   if (showAirportSelector.value && !selectedAirport.value) return false
   return true
 })

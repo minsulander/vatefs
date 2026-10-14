@@ -17,6 +17,10 @@ export type StripMeta = {
   paperInfoKind?: string
   airport?: string
   callsign?: string
+  aircraftType?: string
+  adep?: string
+  ades?: string
+  flightRules?: string
   bayId?: string
   sectionId?: string
   position?: number
@@ -215,6 +219,10 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
           paperInfoKind: typeof s.paperInfoKind === "string" ? s.paperInfoKind : undefined,
           airport: typeof s.airport === "string" ? s.airport.toUpperCase() : undefined,
           callsign: typeof s.callsign === "string" ? s.callsign : undefined,
+          aircraftType: typeof s.aircraftType === "string" ? s.aircraftType : undefined,
+          adep: typeof s.adep === "string" ? s.adep : undefined,
+          ades: typeof s.ades === "string" ? s.ades : undefined,
+          flightRules: typeof s.flightRules === "string" ? s.flightRules : undefined,
           bayId: typeof s.bayId === "string" ? s.bayId : undefined,
           sectionId: typeof s.sectionId === "string" ? s.sectionId : undefined,
           position: typeof s.position === "number" && Number.isFinite(s.position) ? s.position : undefined,

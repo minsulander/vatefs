@@ -9,7 +9,15 @@ import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessage
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
 import { buildTrashMeta, pruneTrashMap, type TrashMeta } from "./trash-meta.js"
-import { getVisibleLayout, IDLE_BAY_ID, isMultiAirportConfig, resolveBayForAirport, prefixedSectionId } from "./multi-airport.js"
+import {
+    getVisibleLayout,
+    IDLE_BAY_ID,
+    isMultiAirportConfig,
+    resolveBayForAirport,
+    prefixedSectionId,
+    isAnonymousSpecialStripId,
+    anonymousSpecialStripKind,
+} from "./multi-airport.js"
 import {
     filterEssaLayout,
     isEssaRolesConfig,
@@ -1090,14 +1098,15 @@ class EfsStore {
     }
 
     /**
-     * Materialize a note/vehicle strip from remote scribble sync (same syncKey/id).
+     * Materialize a note/vehicle/anonymous-VFR strip from remote scribble sync (same syncKey/id).
      */
     ensureSyncedSpecialStrip(opts: {
         syncKey: string
-        kind: 'note' | 'vehicle'
+        kind: 'note' | 'vehicle' | 'vfrDep' | 'vfrArr' | 'cross'
         paperInfoKind?: PaperInfoKind
         airport?: string
         callsign?: string
+        aircraftType?: string
         bayId?: string
         sectionId?: string
         position?: number
@@ -1121,24 +1130,47 @@ class EfsStore {
             this.strips.set(moved.id, moved)
             return moved
         }
-        const strip = this.createVehicleStrip(
+        if (opts.kind === 'vehicle') {
+            const strip = this.createVehicleStrip(
+                opts.bayId,
+                opts.sectionId,
+                opts.position,
+                opts.bottom,
+                opts.airport,
+                opts.callsign,
+            )
+            if (!strip) return undefined
+            this.strips.delete(strip.id)
+            const moved: FlightStrip = {
+                ...strip,
+                id: opts.syncKey,
+                syncKey: opts.syncKey,
+                callsign: opts.callsign || strip.callsign,
+            }
+            this.strips.set(moved.id, moved)
+            return moved
+        }
+        // Anonymous VFR DEP / ARR / CROSS (empty callsign) — create via flightStore with forced id
+        const result = flightStore.createSpecialStrip(
+            opts.kind,
+            opts.callsign ?? '',
+            opts.aircraftType,
+            opts.airport,
             opts.bayId,
             opts.sectionId,
             opts.position,
             opts.bottom,
-            opts.airport,
-            opts.callsign,
+            opts.syncKey,
         )
-        if (!strip) return undefined
-        this.strips.delete(strip.id)
-        const moved: FlightStrip = {
-            ...strip,
-            id: opts.syncKey,
-            syncKey: opts.syncKey,
-            callsign: opts.callsign || strip.callsign,
+        if (!result) return undefined
+        const strip = result.strip
+        const flight = flightStore.getFlight(strip.id)
+        if (flight) {
+            flight.deleted = false
+            flight.manuallyDeleted = false
         }
-        this.strips.set(moved.id, moved)
-        return moved
+        this.strips.set(strip.id, strip)
+        return strip
     }
 
     /**
@@ -1261,7 +1293,10 @@ class EfsStore {
         if (!strip) return undefined
 
         // Mark the flight as manually deleted so it won't be auto-restored
-        const flight = flightStore.getFlight(strip.callsign)
+        // Anonymous VFR/CROSS: flight is keyed by strip id (`vfrdep:uuid`), not empty callsign
+        const flight =
+            flightStore.getFlight(strip.callsign) ||
+            (isAnonymousSpecialStripId(strip.id) ? flightStore.getFlight(strip.id) : undefined)
         if (flight) {
             flight.deleted = true
             flight.manuallyDeleted = true
@@ -1287,7 +1322,13 @@ class EfsStore {
                         ? '(note)'
                         : strip.stripType === 'vehicle'
                           ? '(vehicle)'
-                          : strip.id),
+                          : anonymousSpecialStripKind(strip.id) === 'vfrDep'
+                            ? '(VFR DEP)'
+                            : anonymousSpecialStripKind(strip.id) === 'vfrArr'
+                              ? '(VFR ARR)'
+                              : anonymousSpecialStripKind(strip.id) === 'cross'
+                                ? '(CROSS)'
+                                : strip.id),
                 stripType: strip.stripType,
                 adep: strip.adep,
                 ades: strip.ades,
@@ -1317,7 +1358,9 @@ class EfsStore {
         this.deletedStrips.delete(stripId)
 
         let clearedPark = false
-        const flight = flightStore.getFlight(saved.callsign)
+        const flight =
+            flightStore.getFlight(saved.callsign) ||
+            (isAnonymousSpecialStripId(saved.id) ? flightStore.getFlight(saved.id) : undefined)
         if (flight) {
             flight.deleted = false
             flight.manuallyDeleted = false

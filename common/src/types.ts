@@ -12,7 +12,7 @@ export interface FlightStrip {
 
     // Aircraft info
     aircraftType: string        // e.g., "A320", "B738"
-    wakeTurbulence: WakeCategory
+    wakeTurbulence?: WakeCategory
     flightRules: FlightRules
     /**
      * Non-voice EuroScope communication suffix shown after callsign ("/t" or "/r").
@@ -183,7 +183,7 @@ export interface FlightStrip {
     noteText?: string            // Text content for note strips
     /**
      * Stable key for cross-controller scribble sync (usually same as id for flights;
-     * note:/veh: UUID ids for specials).
+     * note:/veh:/vfrdep:/vfrarr:/cross: UUID ids for specials with no callsign).
      */
     syncKey?: string
     /**

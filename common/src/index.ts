@@ -119,8 +119,14 @@ export {
     normalizeEsmsAutoCoordRwy,
     isEsmsAutoCoordSid,
     isEsmsAutoCoordReplyAltitude,
+    sidMatchesEssaMdi2MinExit,
+    needsEssaMdi2MinSidBox,
 } from "./airport-rules.js"
-export type { SsrCoordinationOpts, EssaHeavyPreferredDepRwyInput } from "./airport-rules.js"
+export type {
+    SsrCoordinationOpts,
+    EssaHeavyPreferredDepRwyInput,
+    EssaMdi2MinSidBoxInput,
+} from "./airport-rules.js"
 
 export {
     normalizeAircraftTypeDesignator,

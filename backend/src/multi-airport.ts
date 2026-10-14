@@ -52,6 +52,29 @@ export function parseStripAirportId(stripId: string): { callsign: string; airpor
     }
 }
 
+/** Synthetic VFR DEP/ARR/CROSS strip ids when callsign was left blank (`vfrdep:uuid`, …). */
+const ANON_SPECIAL_ID_RE = /^(vfrdep|vfrarr|cross):/i
+
+export function isAnonymousSpecialStripId(stripId: string): boolean {
+    const key = parseStripAirportId(stripId)?.callsign ?? stripId
+    return ANON_SPECIAL_ID_RE.test(key)
+}
+
+export function anonymousSpecialStripKind(
+    stripId: string,
+): "vfrDep" | "vfrArr" | "cross" | undefined {
+    const key = (parseStripAirportId(stripId)?.callsign ?? stripId).toLowerCase()
+    if (key.startsWith("vfrdep:")) return "vfrDep"
+    if (key.startsWith("vfrarr:")) return "vfrArr"
+    if (key.startsWith("cross:")) return "cross"
+    return undefined
+}
+
+export function newAnonymousSpecialStripId(stripType: "vfrDep" | "vfrArr" | "cross"): string {
+    const prefix = stripType === "vfrDep" ? "vfrdep" : stripType === "vfrArr" ? "vfrarr" : "cross"
+    return `${prefix}:${crypto.randomUUID()}`
+}
+
 export function logicalSectionId(sectionId: string): string {
     // bay1_app -> app, idle_rwy -> rwy, plain "app" -> app
     const parts = sectionId.split("_")

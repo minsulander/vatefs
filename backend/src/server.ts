@@ -102,7 +102,11 @@ import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
 import type { ConfigFileInfo } from "./config-loader.js"
-import { isMultiAirportConfig, normalizeColumnAirports } from "./multi-airport.js"
+import {
+    isMultiAirportConfig,
+    normalizeColumnAirports,
+    isAnonymousSpecialStripId,
+} from "./multi-airport.js"
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import {
     loadSidData,
@@ -2904,6 +2908,7 @@ function applyRemoteScribble(
               paperInfoKind?: string
               airport?: string
               callsign?: string
+              aircraftType?: string
               bayId?: string
               sectionId?: string
               position?: number
@@ -2929,7 +2934,12 @@ function applyRemoteScribble(
             return
         }
         const local = strip || store.getStrip(syncKey)
-        if (local && (local.stripType === "note" || local.stripType === "vehicle")) {
+        if (
+            local &&
+            (local.stripType === "note" ||
+                local.stripType === "vehicle" ||
+                isAnonymousSpecialStripId(local.id))
+        ) {
             const deletedId = store.manualDeleteStrip(local.id)
             if (deletedId) {
                 scribbleStore.clearScribbles(deletedId)
@@ -2982,6 +2992,24 @@ function applyRemoteScribble(
             const clientStrip = stripForClient(strip)
             if (clientStrip) broadcastStrip(clientStrip)
         }
+    } else if (
+        applyMeta &&
+        !strip &&
+        (meta?.kind === "vfrDep" || meta?.kind === "vfrArr" || meta?.kind === "cross")
+    ) {
+        strip = store.ensureSyncedSpecialStrip({
+            syncKey,
+            kind: meta.kind,
+            airport: meta.airport,
+            callsign: meta.callsign,
+            aircraftType: meta.aircraftType,
+            ...place,
+        })
+        if (strip) {
+            stripId = strip.id
+            const clientStrip = stripForClient(strip)
+            if (clientStrip) broadcastStrip(clientStrip)
+        }
     } else if (!strip) {
         // Flight strip not local yet — stash scribbles under syncKey until strip appears
         stripId = syncKey
@@ -3008,7 +3036,11 @@ function applyRemoteScribble(
             )
             if (moved) {
                 // Sticky until ES groundstate / ownership / airborne / CLR changes
-                if (moved.strip.stripType !== "note" && moved.strip.stripType !== "vehicle") {
+                if (
+                    moved.strip.stripType !== "note" &&
+                    moved.strip.stripType !== "vehicle" &&
+                    !isAnonymousSpecialStripId(moved.strip.id)
+                ) {
                     flightStore.markManualPlacement(moved.strip.id)
                 }
                 broadcastStrip(moved.strip)
@@ -5811,14 +5843,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     void pushStripToRemote(strip.id)
                 }
             } else {
-                // VFR DEP / VFR ARR / CROSS
-                if (!message.callsign) {
-                    console.log(`[CREATE] Missing callsign for ${message.stripType}`)
-                    break
-                }
+                // VFR DEP / VFR ARR / CROSS — callsign optional (blank → synthetic id)
+                const cs = (message.callsign ?? "").trim().toUpperCase()
                 const result = flightStore.createSpecialStrip(
                     message.stripType,
-                    message.callsign,
+                    cs,
                     message.aircraftType,
                     message.airport,
                     message.targetBayId,
@@ -5831,45 +5860,52 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         allowPositionChange: true,
                     })
                     broadcastStrip(created)
-                    console.log(`[CREATE] ${message.stripType} strip for ${message.callsign} -> ${created.sectionId}`)
+                    console.log(
+                        `[CREATE] ${message.stripType} strip for ${cs || created.id} -> ${created.sectionId}`,
+                    )
 
-                    // Send createFlightPlan command to EuroScope plugin to create/amend flight plan
-                    if (message.stripType === "vfrDep") {
-                        sendUdp(JSON.stringify({
-                            type: "createFlightPlan",
-                            callsign: message.callsign,
-                            stripType: "vfrDep",
-                            origin: result.strip.adep,
-                            destination: result.strip.ades,
-                            aircraftType: result.strip.aircraftType,
-                            flightRules: "V",
-                        } satisfies OutboundPluginCommand))
-                    } else if (message.stripType === "vfrArr") {
-                        sendUdp(JSON.stringify({
-                            type: "createFlightPlan",
-                            callsign: message.callsign,
-                            stripType: "vfrArr",
-                            origin: result.strip.adep,
-                            destination: result.strip.ades,
-                            aircraftType: result.strip.aircraftType,
-                            flightRules: "V",
-                        } satisfies OutboundPluginCommand))
-                    } else if (message.stripType === "cross" && !result.strip.hasMatchingFlight) {
-                        sendUdp(JSON.stringify({
-                            type: "createFlightPlan",
-                            callsign: message.callsign,
-                            stripType: "cross",
-                            origin: "ZZZZ",
-                            destination: "ZZZZ",
-                            aircraftType: "UNKN",
-                            flightRules: "I",
-                        } satisfies OutboundPluginCommand))
+                    // EuroScope FPL only when a real callsign was entered
+                    if (cs) {
+                        if (message.stripType === "vfrDep") {
+                            sendUdp(JSON.stringify({
+                                type: "createFlightPlan",
+                                callsign: cs,
+                                stripType: "vfrDep",
+                                origin: result.strip.adep,
+                                destination: result.strip.ades,
+                                aircraftType: result.strip.aircraftType || "UNKN",
+                                flightRules: "V",
+                            } satisfies OutboundPluginCommand))
+                        } else if (message.stripType === "vfrArr") {
+                            sendUdp(JSON.stringify({
+                                type: "createFlightPlan",
+                                callsign: cs,
+                                stripType: "vfrArr",
+                                origin: result.strip.adep,
+                                destination: result.strip.ades,
+                                aircraftType: result.strip.aircraftType || "UNKN",
+                                flightRules: "V",
+                            } satisfies OutboundPluginCommand))
+                        } else if (message.stripType === "cross" && !result.strip.hasMatchingFlight) {
+                            sendUdp(JSON.stringify({
+                                type: "createFlightPlan",
+                                callsign: cs,
+                                stripType: "cross",
+                                origin: "ZZZZ",
+                                destination: "ZZZZ",
+                                aircraftType: result.strip.aircraftType || "UNKN",
+                                flightRules: "I",
+                            } satisfies OutboundPluginCommand))
+                        }
+                    } else {
+                        // Anonymous strips won't appear from EuroScope — create-sync like notes
+                        void pushStripToRemote(created.id)
                     }
 
                     // Broadcast shifted strips (from add-from-top)
                     if (result.shiftedCallsigns && result.shiftedCallsigns.length > 0) {
-                        for (const cs of result.shiftedCallsigns) {
-                            const shifted = flightStore.regenerateStrip(cs)
+                        for (const shiftedId of result.shiftedCallsigns) {
+                            const shifted = flightStore.regenerateStrip(shiftedId)
                             if (shifted) {
                                 const applied = store.updateStripFromFlight(shifted, {
                                     allowPositionChange: true,

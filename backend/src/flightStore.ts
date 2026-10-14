@@ -69,6 +69,8 @@ import {
     isMultiAirportConfig,
     parseStripAirportId,
     stripIdForAirport,
+    isAnonymousSpecialStripId,
+    newAnonymousSpecialStripId,
     withAirportScope,
     logicalSectionId,
     prefixedSectionId,
@@ -2027,7 +2029,7 @@ class FlightStore {
         if (!isEssaAutoSlowHours()) return false
 
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '', flight.engineType)) return false
+        if (!isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return false
 
         flight.remarks = 'SLOW'
         flight.autoSlowApplied = true
@@ -2047,7 +2049,7 @@ class FlightStore {
         }
 
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '', flight.engineType)) return false
+        if (isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return false
 
         flight.remarks = undefined
         flight.autoSlowApplied = false
@@ -2069,7 +2071,7 @@ class FlightStore {
 
         flight.autoSlowApplied = false
         const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (!isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '', flight.engineType)) return
+        if (!isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return
 
         flight.autoSlowDismissed = true
         console.log(`[REMARKS] ${flight.callsign}: auto-SLOW dismissed`)
@@ -4722,7 +4724,7 @@ class FlightStore {
         // Slow aircraft detection — V / Z never get auto-SLOW SID rules or SLOW flag
         const isSlow =
             (isIfrSidEligible(flightRules) &&
-                isSlowAircraft(wakeTurbulence, flight.aircraftType ?? '', flight.engineType)) ||
+                isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) ||
             undefined
 
         // Highlight actions: determine which action buttons should be highlighted yellow
@@ -4794,14 +4796,20 @@ class FlightStore {
                 ? extractTmaExitPoint(undefined, flight.extractedRoute || flight.route)
                 : undefined
 
-        const stripId = airport ? stripIdForAirport(flight.callsign, airport) : flight.callsign
+        // Anonymous VFR/CROSS: flight.callsign holds stable id (vfrdep:uuid); never use callsign@ICAO
+        const anon = isAnonymousSpecialStripId(flight.callsign)
+        const stripId = anon
+            ? flight.callsign
+            : airport
+              ? stripIdForAirport(flight.callsign, airport)
+              : flight.callsign
         return {
             id: stripId,
             syncKey: stripId,
-            callsign: flight.callsign,
-            rtfCallsign: getRtfCallsign(flight.callsign, flight.fplRemarks),
-            communicationSuffix: formatCommunicationSuffix(flight.communicationType),
-            aircraftType: flight.aircraftType ?? 'UNKN',
+            callsign: anon ? '' : flight.callsign,
+            rtfCallsign: anon ? undefined : getRtfCallsign(flight.callsign, flight.fplRemarks),
+            communicationSuffix: anon ? undefined : formatCommunicationSuffix(flight.communicationType),
+            aircraftType: flight.aircraftType ?? (anon ? '' : 'UNKN'),
             wakeTurbulence,
             flightRules,
             adep: flight.origin ?? '????',
@@ -4984,13 +4992,14 @@ class FlightStore {
      * Parse wake turbulence category
      * First tries explicit value from plugin, then falls back to aircraft type lookup
      */
-    private parseWakeCategory(aircraftType?: string, explicit?: string): WakeCategory {
+    private parseWakeCategory(aircraftType?: string, explicit?: string): WakeCategory | undefined {
         // Use explicit value if valid
         if (explicit && ['L', 'M', 'H', 'J'].includes(explicit)) {
             return explicit as WakeCategory
         }
 
-        if (!aircraftType) return 'M'
+        // No ATYP and no explicit WTC — do not invent a default category
+        if (!aircraftType) return undefined
 
         // Heavy aircraft (simplified lookup table)
         const heavyTypes = ['B744', 'B748', 'B77W', 'B772', 'B773', 'B788', 'B789', 'B78X',
@@ -5485,7 +5494,9 @@ class FlightStore {
 
     /**
      * Create a special strip (VFR DEP, VFR ARR, CROSS) by creating a synthetic flight.
-     * If a matching flight already exists, uses its data instead.
+     * Callsign/aircraft type may be empty — then a stable `vfrdep:` / `vfrarr:` / `cross:` id is used.
+     * If a matching flight already exists (non-empty callsign), uses its data instead.
+     * `forcedId` reuses a remote sync key when materializing from VatIRIS.
      */
     createSpecialStrip(
         stripType: 'vfrDep' | 'vfrArr' | 'cross',
@@ -5495,9 +5506,19 @@ class FlightStore {
         targetBayId?: string,
         targetSectionId?: string,
         position?: number,
-        isBottom?: boolean
+        isBottom?: boolean,
+        forcedId?: string,
     ): { strip: FlightStrip; shiftedCallsigns?: string[] } | undefined {
-        const existingFlight = this.flights.get(callsign)
+        const cs = (callsign ?? '').trim().toUpperCase()
+        const anonymous = !cs
+        const flightKey =
+            anonymous
+                ? (forcedId && isAnonymousSpecialStripId(forcedId)
+                    ? (parseStripAirportId(forcedId)?.callsign ?? forcedId)
+                    : newAnonymousSpecialStripId(stripType))
+                : cs
+
+        const existingFlight = anonymous ? undefined : this.flights.get(cs)
         const hasMatchingFlight = !!existingFlight
 
         // Determine origin/destination based on strip type
@@ -5517,13 +5538,15 @@ class FlightStore {
             destination = existingFlight?.destination ?? 'ZZZZ'
         }
 
-        // Create or update the flight record
-        const flight = existingFlight ?? this.getOrCreateFlight(callsign)
+        const atyp = (aircraftType ?? '').trim().toUpperCase()
+
+        // Create or update the flight record (anonymous: keyed by synthetic id)
+        const flight = existingFlight ?? this.getOrCreateFlight(flightKey)
         if (!existingFlight) {
             // Synthetic flight - fill in minimal data
             flight.origin = origin
             flight.destination = destination
-            flight.aircraftType = aircraftType ?? 'UNKN'
+            flight.aircraftType = atyp
             flight.flightRules = stripType === 'cross' ? 'I' : 'V'
             flight.synthetic = true
             flight.lastUpdate = Date.now()
@@ -5534,6 +5557,7 @@ class FlightStore {
             } else if (stripType === 'vfrArr') {
                 flight.destination = destination
             }
+            if (atyp && !flight.aircraftType) flight.aircraftType = atyp
         }
 
         // Pre-populate default runway from active runway configuration if not already set.
@@ -5599,14 +5623,15 @@ class FlightStore {
         }
 
         // User-initiated create counts as a print
-        this.markStripPrinted(callsign)
+        this.markStripPrinted(flightKey)
 
-        // Record the assignment (multi-airport: key by callsign@ICAO)
-        const assignmentKey = stripAirport ? stripIdForAirport(callsign, stripAirport) : callsign
+        // Record assignment — anonymous strips use stable id (no callsign@ICAO)
+        const assignmentKey =
+            anonymous ? flightKey : stripAirport ? stripIdForAirport(cs, stripAirport) : cs
         this.stripAssignments.set(assignmentKey, { bayId, sectionId, position: pos, bottom })
         flight.lastSectionRule = 'manual'
 
-        // Create the strip (always attach airport in multi mode)
+        // Create the strip (airport field set in multi mode; anon id ignores @ICAO)
         const strip = this.createStrip(
             flight,
             bayId,
@@ -5622,8 +5647,17 @@ class FlightStore {
             strip.stripType = 'cross'
         }
 
-        // Set the matching flight indicator
-        strip.hasMatchingFlight = hasMatchingFlight
+        // Matching flight / empty identity
+        strip.hasMatchingFlight = anonymous ? false : hasMatchingFlight
+        if (anonymous) {
+            strip.callsign = ''
+            strip.syncKey = strip.id
+        }
+        // No ATYP entered → no invented ATYP/WTC
+        if (!atyp) {
+            strip.aircraftType = ''
+            strip.wakeTurbulence = undefined
+        }
 
         const shiftedCallsigns = this.getLastShiftedCallsigns()
         return {

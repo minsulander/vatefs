@@ -6,6 +6,11 @@ export interface StripMeta {
   paperInfoKind?: string
   airport?: string
   callsign?: string
+  /** Anonymous VFR/CROSS recreate */
+  aircraftType?: string
+  adep?: string
+  ades?: string
+  flightRules?: string
   bayId?: string
   sectionId?: string
   position?: number
