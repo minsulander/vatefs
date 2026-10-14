@@ -1584,6 +1584,11 @@ import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { STRIP_FLIP_DURATION_MS, markStripDragEnded } from '@/composables/useStripOrderFlip'
 import {
+  afterLayoutSettle,
+  driveAnimationWallClock,
+  type WallClockAnimHandle,
+} from '@/composables/wallClockAnimation'
+import {
   claimStripContextMenu,
   releaseStripContextMenu,
 } from '@/composables/stripContextMenuShared'
@@ -1707,19 +1712,31 @@ const isPrinting = computed(() => store.printingStripIds.has(props.strip.id))
 /** True while this instance owns the body-level fly-clone (not the origin unmount). */
 let autoMoveCloneOwned = false
 let autoMoveCloneEl: HTMLElement | null = null
+let autoMoveSettleCancel: (() => void) | null = null
+let autoMoveAnimHandle: WallClockAnimHandle | null = null
 
 /** Paper print: BR-corner reveal then fly to bay slot. */
 let printAnimOwned = false
 let printAnimCloneEl: HTMLElement | null = null
 let printAnimSlotEl: HTMLElement | null = null
+let printSettleCancel: (() => void) | null = null
+let printAnimHandle: WallClockAnimHandle | null = null
 
 function finishAutoMove() {
+  autoMoveSettleCancel?.()
+  autoMoveSettleCancel = null
+  autoMoveAnimHandle?.cancel()
+  autoMoveAnimHandle = null
   autoMoveCloneOwned = false
   autoMoveCloneEl = null
   store.endAutoMove(props.strip.id)
 }
 
 function finishPrintAnim() {
+  printSettleCancel?.()
+  printSettleCancel = null
+  printAnimHandle?.cancel()
+  printAnimHandle = null
   printAnimOwned = false
   printAnimCloneEl?.remove()
   printAnimSlotEl?.remove()
@@ -1763,36 +1780,39 @@ function tryAutoMoveAnimation() {
   clone.style.visibility = 'visible'
   document.body.appendChild(clone)
 
-  // Double rAF: let section FLIP / gap shifts settle, then measure destination
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (!autoMoveCloneOwned || !stripElement.value) {
-        clone.remove()
-        if (autoMoveCloneOwned) finishAutoMove()
-        return
-      }
-      const newRect = stripElement.value.getBoundingClientRect()
+  // Double rAF when painting; wall-clock fallback so hidden tabs still measure + fly
+  autoMoveSettleCancel = afterLayoutSettle(() => {
+    autoMoveSettleCancel = null
+    if (!autoMoveCloneOwned || !stripElement.value) {
+      clone.remove()
+      if (autoMoveCloneOwned) finishAutoMove()
+      return
+    }
+    const newRect = stripElement.value.getBoundingClientRect()
 
-      // Skip if no visible movement
-      if (Math.abs(oldRect.left - newRect.left) < 1 && Math.abs(oldRect.top - newRect.top) < 1) {
-        clone.remove()
-        finishAutoMove()
-        return
-      }
+    // Skip if no visible movement
+    if (Math.abs(oldRect.left - newRect.left) < 1 && Math.abs(oldRect.top - newRect.top) < 1) {
+      clone.remove()
+      finishAutoMove()
+      return
+    }
 
-      const anim = clone.animate([
+    const anim = clone.animate(
+      [
         { left: `${oldRect.left}px`, top: `${oldRect.top}px` },
-        { left: `${newRect.left}px`, top: `${newRect.top}px` }
-      ], {
+        { left: `${newRect.left}px`, top: `${newRect.top}px` },
+      ],
+      {
         duration: AUTO_MOVE_DURATION,
         easing: 'ease-in-out',
-        fill: 'forwards'
-      })
+        fill: 'forwards',
+      },
+    )
 
-      anim.onfinish = () => {
-        clone.remove()
-        finishAutoMove()
-      }
+    autoMoveAnimHandle = driveAnimationWallClock(anim, AUTO_MOVE_DURATION, () => {
+      autoMoveAnimHandle = null
+      clone.remove()
+      finishAutoMove()
     })
   })
 }
@@ -1811,99 +1831,104 @@ function tryPrintAnimation() {
 
   printAnimOwned = true
 
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (!printAnimOwned || !stripElement.value) {
-        finishPrintAnim()
-        return
-      }
+  printSettleCancel = afterLayoutSettle(() => {
+    printSettleCancel = null
+    if (!printAnimOwned || !stripElement.value) {
+      finishPrintAnim()
+      return
+    }
 
-      const destEl = stripElement.value
-      const destRect = destEl.getBoundingClientRect()
-      const w = destRect.width
-      const h = destRect.height
-      if (w < 2 || h < 2) {
-        finishPrintAnim()
-        return
-      }
+    const destEl = stripElement.value
+    const destRect = destEl.getBoundingClientRect()
+    const w = destRect.width
+    const h = destRect.height
+    if (w < 2 || h < 2) {
+      finishPrintAnim()
+      return
+    }
 
-      const clone = destEl.cloneNode(true) as HTMLElement
-      clone.classList.remove('print-anim-hidden', 'auto-move-hidden')
-      clone.removeAttribute('data-strip-id')
-      clone.style.opacity = '1'
-      clone.style.visibility = 'visible'
-      clone.style.pointerEvents = 'none'
-      clone.style.margin = '0'
-      clone.style.transition = 'none'
-      clone.style.boxSizing = 'border-box'
+    const clone = destEl.cloneNode(true) as HTMLElement
+    clone.classList.remove('print-anim-hidden', 'auto-move-hidden')
+    clone.removeAttribute('data-strip-id')
+    clone.style.opacity = '1'
+    clone.style.visibility = 'visible'
+    clone.style.pointerEvents = 'none'
+    clone.style.margin = '0'
+    clone.style.transition = 'none'
+    clone.style.boxSizing = 'border-box'
 
-      const pad = 12
-      const bar = document.querySelector('.efs-bottom-bar') as HTMLElement | null
-      const barTop = bar?.getBoundingClientRect().top ?? window.innerHeight
-      const startLeft = Math.max(pad, window.innerWidth - w - pad)
-      const startTop = Math.max(pad, barTop - h - pad)
+    const pad = 12
+    const bar = document.querySelector('.efs-bottom-bar') as HTMLElement | null
+    const barTop = bar?.getBoundingClientRect().top ?? window.innerHeight
+    const startLeft = Math.max(pad, window.innerWidth - w - pad)
+    const startTop = Math.max(pad, barTop - h - pad)
 
-      const slot = document.createElement('div')
-      slot.style.cssText = [
-        'position:fixed',
-        `left:${startLeft}px`,
-        `top:${startTop}px`,
-        `width:${w}px`,
-        `height:${h}px`,
-        'overflow:hidden',
-        'z-index:9999',
-        'pointer-events:none',
-      ].join(';')
+    const slot = document.createElement('div')
+    slot.style.cssText = [
+      'position:fixed',
+      `left:${startLeft}px`,
+      `top:${startTop}px`,
+      `width:${w}px`,
+      `height:${h}px`,
+      'overflow:hidden',
+      'z-index:9999',
+      'pointer-events:none',
+    ].join(';')
 
-      clone.style.position = 'absolute'
-      clone.style.left = '0'
-      clone.style.top = '0'
-      clone.style.width = `${w}px`
-      clone.style.height = `${h}px`
-      /* Feed out along strip length (from printer on the right) */
-      clone.style.transform = 'translateX(100%)'
+    clone.style.position = 'absolute'
+    clone.style.left = '0'
+    clone.style.top = '0'
+    clone.style.width = `${w}px`
+    clone.style.height = `${h}px`
+    /* Feed out along strip length (from printer on the right) */
+    clone.style.transform = 'translateX(100%)'
 
-      slot.appendChild(clone)
-      document.body.appendChild(slot)
-      printAnimCloneEl = clone
-      printAnimSlotEl = slot
+    slot.appendChild(clone)
+    document.body.appendChild(slot)
+    printAnimCloneEl = clone
+    printAnimSlotEl = slot
 
-      const printMs = store.getPrintAnimDurationMs(props.strip.id)
+    const printMs = store.getPrintAnimDurationMs(props.strip.id)
 
-      const printAnim = clone.animate(
-        [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }],
-        { duration: printMs, easing: 'linear', fill: 'forwards' },
+    const printAnim = clone.animate(
+      [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }],
+      { duration: printMs, easing: 'linear', fill: 'forwards' },
+    )
+
+    const startFly = () => {
+      if (!printAnimOwned) return
+
+      // Lift clone to body at printer position, then fly to bay slot
+      clone.style.position = 'fixed'
+      clone.style.left = `${startLeft}px`
+      clone.style.top = `${startTop}px`
+      clone.style.transform = ''
+      clone.style.zIndex = '9999'
+      document.body.appendChild(clone)
+      slot.remove()
+      printAnimSlotEl = null
+
+      const live = stripElement.value?.getBoundingClientRect()
+      const toLeft = live?.left ?? destRect.left
+      const toTop = live?.top ?? destRect.top
+
+      const fly = clone.animate(
+        [
+          { left: `${startLeft}px`, top: `${startTop}px` },
+          { left: `${toLeft}px`, top: `${toTop}px` },
+        ],
+        { duration: AUTO_MOVE_DURATION, easing: 'ease-in-out', fill: 'forwards' },
       )
 
-      printAnim.onfinish = () => {
-        if (!printAnimOwned) return
+      printAnimHandle = driveAnimationWallClock(fly, AUTO_MOVE_DURATION, () => {
+        printAnimHandle = null
+        finishPrintAnim()
+      })
+    }
 
-        // Lift clone to body at printer position, then fly to bay slot
-        clone.style.position = 'fixed'
-        clone.style.left = `${startLeft}px`
-        clone.style.top = `${startTop}px`
-        clone.style.transform = ''
-        clone.style.zIndex = '9999'
-        document.body.appendChild(clone)
-        slot.remove()
-        printAnimSlotEl = null
-
-        const live = stripElement.value?.getBoundingClientRect()
-        const toLeft = live?.left ?? destRect.left
-        const toTop = live?.top ?? destRect.top
-
-        const fly = clone.animate(
-          [
-            { left: `${startLeft}px`, top: `${startTop}px` },
-            { left: `${toLeft}px`, top: `${toTop}px` },
-          ],
-          { duration: AUTO_MOVE_DURATION, easing: 'ease-in-out', fill: 'forwards' },
-        )
-
-        fly.onfinish = () => {
-          finishPrintAnim()
-        }
-      }
+    printAnimHandle = driveAnimationWallClock(printAnim, printMs, () => {
+      printAnimHandle = null
+      startFly()
     })
   })
 }

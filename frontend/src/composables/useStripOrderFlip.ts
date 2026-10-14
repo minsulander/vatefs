@@ -4,6 +4,10 @@ import {
   STRIP_FLIP_DURATION_MS,
   isStripFlipSuppressed,
 } from '@/composables/stripFlipShared'
+import {
+  afterLayoutSettle,
+  driveAnimationWallClock,
+} from '@/composables/wallClockAnimation'
 
 export { STRIP_FLIP_DURATION_MS, markStripDragEnded } from '@/composables/stripFlipShared'
 
@@ -69,7 +73,7 @@ function playStripFlip(container: HTMLElement, first: Map<string, DOMRect>) {
     const dy = oldRect.top - newRect.top
     if (Math.abs(dx) < MIN_DELTA_PX && Math.abs(dy) < MIN_DELTA_PX) continue
 
-    el.animate(
+    const anim = el.animate(
       [
         { transform: `translate(${dx}px, ${dy}px)` },
         { transform: 'translate(0px, 0px)' },
@@ -81,6 +85,10 @@ function playStripFlip(container: HTMLElement, first: Map<string, DOMRect>) {
         id: STRIP_FLIP_ANIM_ID,
       },
     )
+    // Wall-clock drive so neighbor FLIP completes in background tabs
+    driveAnimationWallClock(anim, STRIP_FLIP_DURATION_MS, () => {
+      /* fill:none — nothing to clean up */
+    })
   }
 }
 
@@ -134,11 +142,10 @@ export function useStripOrderFlip(
       prevIds = ids.slice()
 
       await nextTick()
-      // Settle layout (gaps / info strips / stick-bottom spacer) before Last
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          playStripFlip(container, first)
-        })
+      // Settle layout (gaps / info strips / stick-bottom spacer) before Last.
+      // Wall-clock fallback so hidden tabs still FLIP (rAF is paused in bg).
+      afterLayoutSettle(() => {
+        playStripFlip(container, first)
       })
     },
     { flush: 'pre' },

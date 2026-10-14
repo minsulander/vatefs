@@ -36,6 +36,7 @@ import {
     getStripPrintDurationMs,
     isStripPrintSound,
 } from "@/composables/useStripPrintSound"
+import { driveAnimationWallClock } from "@/composables/wallClockAnimation"
 import {
     clearStripScribbles,
     pushRisingDiagonalLeftCol,
@@ -955,7 +956,8 @@ export const useEfsStore = defineStore("efs", () => {
 
         const prev = strips.value.get(strip.id)
 
-        // Capture old position and clone for fly-across animation before updating
+        // Capture old position and clone for fly-across animation before updating.
+        // Fly is wall-clock driven so it still completes when the tab is backgrounded.
         if (autoMoved) {
             const el = document.querySelector(`[data-strip-id="${strip.id}"]`) as HTMLElement | null
             if (el) {
@@ -988,8 +990,13 @@ export const useEfsStore = defineStore("efs", () => {
         const isPaperInfoTemplate = !!(strip.paperInfoKind && strip.stripType === 'note')
         const wantPrintAnim =
             !!playPrintAnim || ((isNew || !!cleanReprint) && !isPaperInfoTemplate)
-        // Paper: print with sound length; Off → appear instantly
-        if (wantPrintAnim && isPaperLook.value && Date.now() >= suppressPrintSoundUntil) {
+        // Paper: print with sound length; Off → appear instantly.
+        // Print/fly is wall-clock driven so it still completes when the tab is backgrounded.
+        if (
+            wantPrintAnim &&
+            isPaperLook.value &&
+            Date.now() >= suppressPrintSoundUntil
+        ) {
             const mode = stripPrintSound.value
             if (mode !== 'off') {
                 const playedMs = playStripPrintSound(mode)
@@ -1055,6 +1062,7 @@ export const useEfsStore = defineStore("efs", () => {
         trash.classList.add('trash-receiving')
         const clearReceiving = () => trash.classList.remove('trash-receiving')
 
+        const trashMs = 480
         const anim = clone.animate(
             [
                 {
@@ -1070,16 +1078,12 @@ export const useEfsStore = defineStore("efs", () => {
                     opacity: 0.25,
                 },
             ],
-            { duration: 480, easing: 'ease-in', fill: 'forwards' },
+            { duration: trashMs, easing: 'ease-in', fill: 'forwards' },
         )
-        anim.onfinish = () => {
+        driveAnimationWallClock(anim, trashMs, () => {
             clone.remove()
             clearReceiving()
-        }
-        anim.oncancel = () => {
-            clone.remove()
-            clearReceiving()
-        }
+        })
     }
 
     // Handle strip delete message from server
