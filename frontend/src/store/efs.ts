@@ -16,11 +16,14 @@ import {
     DEFAULT_TRANSITION_ALTITUDE_FT,
     hasForcedSidInRoute,
     hasVectRemark,
+    isEsmsAutoCoordReplyAltitude,
+    isEsmsAutoCoordSid,
     isIfrSidEligible,
     isTrackSidName,
     isLopFprDepAirport,
     fprDepDisplayFix,
     hasSlowRemark,
+    requiresSsrCoordination,
     sidsMatch,
     withVectRemark,
 } from "@vatefs/common"
@@ -33,7 +36,14 @@ import {
     getStripPrintDurationMs,
     isStripPrintSound,
 } from "@/composables/useStripPrintSound"
-import { clearStripScribbles, pushRisingDiagonalLeftCol } from "@/composables/useStripScribbles"
+import {
+    clearStripScribbles,
+    pushRisingDiagonalLeftCol,
+    setStripScribbles,
+    getStripScribbles,
+    type ScribbleStroke,
+} from "@/composables/useStripScribbles"
+import type { ScribbleStrokePayload } from "@vatefs/common"
 
 function isStripPrintMode(value: unknown): value is StripPrintMode {
     return value === 'auto' || value === 'manual'
@@ -64,8 +74,37 @@ export const useEfsStore = defineStore("efs", () => {
     type SectionSortMode = 'time' | 'man'
     const sectionSortModes = ref<Map<string, SectionSortMode>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
-    /** Soft-deleted strips for trash recovery */
-    const deletedStrips = ref<DeletedStripInfo[]>([])
+    /** Soft-deleted strips for trash recovery (also mirrored to localStorage for WS reconnect). */
+    const DELETED_STRIPS_STORAGE_KEY = 'efs/deletedStrips'
+    const deletedStrips = ref<DeletedStripInfo[]>(loadPersistedDeletedStrips())
+
+    function loadPersistedDeletedStrips(): DeletedStripInfo[] {
+        try {
+            const raw = localStorage.getItem(DELETED_STRIPS_STORAGE_KEY)
+            if (!raw) return []
+            const parsed = JSON.parse(raw)
+            if (!Array.isArray(parsed)) return []
+            return parsed.filter(
+                (s): s is DeletedStripInfo =>
+                    !!s && typeof s === 'object' && typeof s.stripId === 'string' && typeof s.deletedAt === 'number',
+            )
+        } catch {
+            return []
+        }
+    }
+
+    function persistDeletedStrips(list: DeletedStripInfo[]) {
+        try {
+            localStorage.setItem(DELETED_STRIPS_STORAGE_KEY, JSON.stringify(list))
+        } catch {
+            /* quota / private mode — ignore */
+        }
+    }
+
+    function applyDeletedStrips(list: DeletedStripInfo[]) {
+        deletedStrips.value = list
+        persistDeletedStrips(list)
+    }
 
     const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
     const SECTION_SORT_MODE_PREFIX = 'efs/sectionSortMode/'
@@ -254,6 +293,31 @@ export const useEfsStore = defineStore("efs", () => {
     const esggRolesMode = ref(false)
     const esggRoles = ref<string[]>([])
     const esggRolesManual = ref(false)
+
+    /** How many bay columns fit in the ESGG window (2–5); scroll pans the rest. */
+    const ESGG_VISIBLE_COLS_KEY = 'vatefs-esgg-visible-columns'
+    const esggVisibleColumns = ref(loadEsggVisibleColumns())
+
+    function loadEsggVisibleColumns(): number {
+        try {
+            const n = parseInt(localStorage.getItem(ESGG_VISIBLE_COLS_KEY) || '', 10)
+            if (n >= 2 && n <= 5) return n
+        } catch {
+            /* ignore */
+        }
+        return 4
+    }
+
+    function adjustEsggVisibleColumns(delta: number) {
+        const next = Math.min(5, Math.max(2, esggVisibleColumns.value + delta))
+        if (next === esggVisibleColumns.value) return
+        esggVisibleColumns.value = next
+        try {
+            localStorage.setItem(ESGG_VISIBLE_COLS_KEY, String(next))
+        } catch {
+            /* ignore */
+        }
+    }
 
     /** Manual ESSA RWY combination id (Appendix A/B); cleared when ES runways change */
     const essaRwyConfigId = ref<string | null>(null)
@@ -464,14 +528,34 @@ export const useEfsStore = defineStore("efs", () => {
     const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
     const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
     const autoLopSsr = ref<AutoLopSsrMode>(DEFAULT_UI_SETTINGS.autoLopSsr)
+    const rtcAssrSimulation = ref(DEFAULT_UI_SETTINGS.rtcAssrSimulation)
+    const contactMeEnabled = ref(DEFAULT_UI_SETTINGS.contactMeEnabled)
+    /** Strip ids that left verbal-SSR hide mode (show live ES ASSR). */
+    const ssrCoordOverrideIds = ref(new Set<string>())
+    /** Manual (non-ES) SSR codes while in coordination hide mode. */
+    const manualSsrByStripId = ref(new Map<string, string>())
     const showTobtSetByA = ref(DEFAULT_UI_SETTINGS.showTobtSetByA)
     const stripPrintSound = ref<StripPrintSound>(DEFAULT_UI_SETTINGS.stripPrintSound)
     const stripPrintMode = ref<StripPrintMode>(DEFAULT_UI_SETTINGS.stripPrintMode)
+    const fspServerEnabled = ref(DEFAULT_UI_SETTINGS.fspServerEnabled)
+    const scribbleSyncEnabled = ref(DEFAULT_UI_SETTINGS.scribbleSyncEnabled)
+    const stripSyncEnabled = ref(DEFAULT_UI_SETTINGS.stripSyncEnabled)
+    const scribbleSyncUrl = ref(DEFAULT_UI_SETTINGS.scribbleSyncUrl)
+    const vatsimCid = ref(DEFAULT_UI_SETTINGS.vatsimCid)
+    const scribbleSyncRealm = ref(DEFAULT_UI_SETTINGS.scribbleSyncRealm)
+    /** True after first userSettings apply — used for one-shot CID prompt */
+    const userSettingsLoaded = ref(false)
+    const vatIrisSignInOpen = ref(false)
+    const vatIrisSignInDetail = ref<string | undefined>()
     /** Strip chrome from active config (`paper` = ESGG FPS print features) */
     const stripLook = ref<StripLook>('saab')
     const pendingPrintFlights = ref<PendingPrintFlightInfo[]>([])
     /** Backend: any myAirport has GNG stand data */
     const autoParkAvailable = ref(false)
+
+    const cidDialogOpen = ref(false)
+    const cidDialogSuggested = ref<string | undefined>()
+    const cidDialogReason = ref<'missing' | 'command' | undefined>()
 
     const isPaperLook = computed(() => stripLook.value === 'paper')
 
@@ -496,6 +580,19 @@ export const useEfsStore = defineStore("efs", () => {
         autoLopSsr.value = isAutoLopSsrMode(settings.autoLopSsr)
             ? settings.autoLopSsr
             : DEFAULT_UI_SETTINGS.autoLopSsr
+        {
+            const legacy = (settings as UiSettings & { rtcSsrSimulation?: boolean }).rtcSsrSimulation
+            rtcAssrSimulation.value =
+                typeof settings.rtcAssrSimulation === 'boolean'
+                    ? settings.rtcAssrSimulation
+                    : typeof legacy === 'boolean'
+                      ? legacy
+                      : DEFAULT_UI_SETTINGS.rtcAssrSimulation
+        }
+        contactMeEnabled.value =
+            typeof settings.contactMeEnabled === 'boolean'
+                ? settings.contactMeEnabled
+                : DEFAULT_UI_SETTINGS.contactMeEnabled
         showTobtSetByA.value =
             typeof settings.showTobtSetByA === 'boolean'
                 ? settings.showTobtSetByA
@@ -506,7 +603,34 @@ export const useEfsStore = defineStore("efs", () => {
         stripPrintMode.value = isStripPrintMode(settings.stripPrintMode)
             ? settings.stripPrintMode
             : DEFAULT_UI_SETTINGS.stripPrintMode
+        fspServerEnabled.value =
+            typeof settings.fspServerEnabled === 'boolean'
+                ? settings.fspServerEnabled
+                : DEFAULT_UI_SETTINGS.fspServerEnabled
+        scribbleSyncEnabled.value =
+            typeof settings.scribbleSyncEnabled === 'boolean'
+                ? settings.scribbleSyncEnabled
+                : DEFAULT_UI_SETTINGS.scribbleSyncEnabled
+        stripSyncEnabled.value =
+            typeof settings.stripSyncEnabled === 'boolean'
+                ? settings.stripSyncEnabled
+                : DEFAULT_UI_SETTINGS.stripSyncEnabled
+        scribbleSyncUrl.value =
+            typeof settings.scribbleSyncUrl === 'string'
+                ? settings.scribbleSyncUrl
+                : DEFAULT_UI_SETTINGS.scribbleSyncUrl
+        vatsimCid.value =
+            typeof settings.vatsimCid === 'string' ? settings.vatsimCid : DEFAULT_UI_SETTINGS.vatsimCid
+        scribbleSyncRealm.value =
+            settings.scribbleSyncRealm === 'live' ||
+            settings.scribbleSyncRealm === 'sweatbox' ||
+            settings.scribbleSyncRealm === 'playback' ||
+            settings.scribbleSyncRealm === 'local' ||
+            settings.scribbleSyncRealm === 'auto'
+                ? settings.scribbleSyncRealm
+                : DEFAULT_UI_SETTINGS.scribbleSyncRealm
         if (typeof available === 'boolean') autoParkAvailable.value = available
+        userSettingsLoaded.value = true
     }
 
     /** Update one or more UI settings (optimistic local apply + persist via backend). */
@@ -520,10 +644,82 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
         if (isAutoLopSsrMode(partial.autoLopSsr)) autoLopSsr.value = partial.autoLopSsr
+        if (typeof partial.rtcAssrSimulation === 'boolean') rtcAssrSimulation.value = partial.rtcAssrSimulation
+        if (typeof partial.contactMeEnabled === 'boolean') contactMeEnabled.value = partial.contactMeEnabled
         if (typeof partial.showTobtSetByA === 'boolean') showTobtSetByA.value = partial.showTobtSetByA
         if (isStripPrintSound(partial.stripPrintSound)) stripPrintSound.value = partial.stripPrintSound
         if (isStripPrintMode(partial.stripPrintMode)) stripPrintMode.value = partial.stripPrintMode
+        if (typeof partial.fspServerEnabled === 'boolean') fspServerEnabled.value = partial.fspServerEnabled
+        if (typeof partial.scribbleSyncEnabled === 'boolean') scribbleSyncEnabled.value = partial.scribbleSyncEnabled
+        if (typeof partial.stripSyncEnabled === 'boolean') stripSyncEnabled.value = partial.stripSyncEnabled
+        if (typeof partial.scribbleSyncUrl === 'string') scribbleSyncUrl.value = partial.scribbleSyncUrl
+        if (typeof partial.vatsimCid === 'string') vatsimCid.value = partial.vatsimCid
+        if (
+            partial.scribbleSyncRealm === 'auto' ||
+            partial.scribbleSyncRealm === 'live' ||
+            partial.scribbleSyncRealm === 'sweatbox' ||
+            partial.scribbleSyncRealm === 'playback' ||
+            partial.scribbleSyncRealm === 'local'
+        ) {
+            scribbleSyncRealm.value = partial.scribbleSyncRealm
+        }
         sendMessage({ type: 'updateUserSettings', settings: partial })
+    }
+
+    function applyScribbleUpdate(stripId: string, strokes: ScribbleStrokePayload[]) {
+        const local: ScribbleStroke[] = strokes.map((s) => {
+            const color =
+                s.color === 'red' || s.color === 'black' || s.color === 'blue' ? s.color : 'blue'
+            const tag =
+                s.tag === 'clr-read' ||
+                s.tag === 'clr-correct' ||
+                s.tag === 'cto' ||
+                s.tag === 'ctl' ||
+                s.tag === 'goa' ||
+                s.tag === 'atd' ||
+                s.tag === 'xfer-refuse' ||
+                s.tag === 'xfer-app'
+                    ? s.tag
+                    : undefined
+            return tag ? { points: s.points, color, tag } : { points: s.points, color }
+        })
+        setStripScribbles(stripId, local)
+    }
+
+    /** Persist local strokes to backend (+ fanout); optionally push to remote sync. */
+    function syncStripScribbles(stripId: string, pushRemote = true) {
+        const strokes = getStripScribbles(stripId)
+        sendMessage({ type: 'scribbleSet', stripId, strokes })
+        if (pushRemote && scribbleSyncEnabled.value) {
+            sendMessage({ type: 'scribbleSyncPush', stripId })
+        }
+    }
+
+    function openCidDialog(suggested?: string, reason?: 'missing' | 'command') {
+        cidDialogSuggested.value = suggested
+        cidDialogReason.value = reason
+        cidDialogOpen.value = true
+        if (!suggested) sendMessage({ type: 'requestCidSuggest' })
+    }
+
+    function closeCidDialog() {
+        cidDialogOpen.value = false
+    }
+
+    function submitVatsimCid(cid: string) {
+        const trimmed = cid.trim()
+        sendMessage({ type: 'setVatsimCid', cid: trimmed })
+        vatsimCid.value = trimmed
+        cidDialogOpen.value = false
+    }
+
+    function openVatIrisSignIn(detail?: string) {
+        vatIrisSignInDetail.value = detail
+        vatIrisSignInOpen.value = true
+    }
+
+    function closeVatIrisSignIn() {
+        vatIrisSignInOpen.value = false
     }
     function connect() {
         if (connected.value && socket?.readyState == WebSocket.OPEN) return
@@ -538,6 +734,8 @@ export const useEfsStore = defineStore("efs", () => {
             connected.value = true
             // Server sends initial state on connect — don't print-sound the backlog
             suppressStripPrintSounds(2500)
+            // Re-request trash in case the connect snapshot raced; localStorage already hydrated
+            listDeletedStrips()
         }
         socket.onclose = () => {
             console.log("socket closed")
@@ -573,7 +771,12 @@ export const useEfsStore = defineStore("efs", () => {
                         handleLayoutMessage(message.layout)
                         break
                     case 'strip':
-                        handleStripMessage(message.strip, message.autoMoved, message.cleanReprint)
+                        handleStripMessage(
+                            message.strip,
+                            message.autoMoved,
+                            message.cleanReprint,
+                            message.playPrintAnim,
+                        )
                         break
                     case 'stripDelete':
                         handleStripDeleteMessage(message.stripId)
@@ -627,10 +830,26 @@ export const useEfsStore = defineStore("efs", () => {
                         showNotify(message.text, message.level)
                         break
                     case 'deletedStrips':
-                        deletedStrips.value = message.strips
+                        applyDeletedStrips(message.strips)
                         break
                     case 'pendingPrintList':
                         pendingPrintFlights.value = message.flights
+                        break
+                    case 'scribbleUpdate':
+                        applyScribbleUpdate(message.stripId, message.strokes)
+                        break
+                    case 'openCidDialog':
+                        openCidDialog(message.suggestedCid, message.reason)
+                        break
+                    case 'cidSuggest':
+                        if (message.suggestedCid) cidDialogSuggested.value = message.suggestedCid
+                        break
+                    case 'openVatIrisSignIn':
+                        openVatIrisSignIn(
+                            typeof (message as { detail?: string }).detail === 'string'
+                                ? (message as { detail?: string }).detail
+                                : undefined,
+                        )
                         break
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
@@ -721,11 +940,16 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Handle strip message from server
-    function handleStripMessage(strip: FlightStrip, autoMoved?: boolean, cleanReprint?: boolean) {
+    function handleStripMessage(
+        strip: FlightStrip,
+        autoMoved?: boolean,
+        cleanReprint?: boolean,
+        playPrintAnim?: boolean,
+    ) {
         console.log("received strip:", strip.callsign)
 
-        // G/A APP-assume: new inbound strip reuses callsign id — wipe freehand ink
-        if (cleanReprint) {
+        // Paper G/A APP-assume reprint: wipe freehand ink (SAAB keeps scribbles)
+        if (cleanReprint && isPaperLook.value) {
             clearStripScribbles(strip.id)
         }
 
@@ -760,12 +984,12 @@ export const useEfsStore = defineStore("efs", () => {
         // Clear pending Print-dialog callsign mark (manual queue / printStrip)
         const csKey = strip.callsign?.trim().toUpperCase()
         if (csKey && pendingPrintAnimCallsigns.has(csKey)) pendingPrintAnimCallsigns.delete(csKey)
-        // Paper: new / clean-reprint strips print with sound length; Off → appear instantly
-        if (
-            (isNew || cleanReprint) &&
-            isPaperLook.value &&
-            Date.now() >= suppressPrintSoundUntil
-        ) {
+        // Bottom-bar blank/info templates appear instantly; FSP API always prints with anim
+        const isPaperInfoTemplate = !!(strip.paperInfoKind && strip.stripType === 'note')
+        const wantPrintAnim =
+            !!playPrintAnim || ((isNew || !!cleanReprint) && !isPaperInfoTemplate)
+        // Paper: print with sound length; Off → appear instantly
+        if (wantPrintAnim && isPaperLook.value && Date.now() >= suppressPrintSoundUntil) {
             const mode = stripPrintSound.value
             if (mode !== 'off') {
                 const playedMs = playStripPrintSound(mode)
@@ -1886,6 +2110,20 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'setCtoc', stripId, ctoc })
     }
 
+    /** Set or clear ATD (UTC HHmm). Empty string clears. EFS-only — not CDM. */
+    function setAtd(stripId: string, atd: string) {
+        const strip = strips.value.get(stripId)
+        const normalized = atd.trim().replace(/\D/g, '').slice(0, 4)
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                atd: normalized || undefined,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'setAtd', stripId, atd: normalized })
+    }
+
     /** Record QNH (+ optional ATIS letter) given to pilot, or clear with null. */
     function setQnhGiven(stripId: string, qnh: number | null, atis?: string | null) {
         const strip = strips.value.get(stripId)
@@ -1905,6 +2143,64 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    /**
+     * Long-hold QNH: acknowledge ATIS QNH change and stamp qnhGiven (+ ATIS) on every
+     * strip for that airport (DEP uses adep, ARR uses ades).
+     */
+    function stampQnhGivenForAirport(airport: string) {
+        const icao = airport.trim().toUpperCase()
+        if (!icao) return
+        const info = atisInfo.value.find((a) => a.airport === icao)
+        if (!info) return
+        const qnh = info.qnh
+        if (qnh == null || !Number.isFinite(qnh)) return
+        acknowledgeQnh(icao)
+        const atisLetter = (info.atis || info.depAtis || info.arrAtis || '').trim() || undefined
+        for (const strip of strips.value.values()) {
+            if (strip.stripType === 'note' || strip.stripType === 'vehicle') continue
+            const relevant =
+                strip.stripType === 'arrival'
+                    ? strip.ades === icao
+                    : strip.adep === icao || strip.airport === icao
+            if (!relevant) continue
+            setQnhGiven(strip.id, qnh, atisLetter)
+        }
+    }
+
+    /** Hide live ES ASSR (manual/coordination mode) for this strip. */
+    function isSsrCoordinationActive(strip: FlightStrip): boolean {
+        if (!rtcAssrSimulation.value) return false
+        if (!requiresSsrCoordination(strip.adep, { stripType: strip.stripType })) return false
+        if (ssrCoordOverrideIds.value.has(strip.id)) return false
+        return true
+    }
+
+    /** ASSR shown on strip: manual code while coordinating, else live ES. */
+    function displayAssrForStrip(strip: FlightStrip): string {
+        if (!isSsrCoordinationActive(strip)) return strip.squawk || ''
+        return manualSsrByStripId.value.get(strip.id) || ''
+    }
+
+    function setManualSsr(stripId: string, code: string) {
+        const digits = code.replace(/\D/g, '').slice(0, 4)
+        const next = new Map(manualSsrByStripId.value)
+        if (digits) next.set(stripId, digits)
+        else next.delete(stripId)
+        manualSsrByStripId.value = next
+        stripsVersion.value++
+    }
+
+    /** Leave hide mode — show live ES ASSR (after double-click generate/override). */
+    function overrideSsrCoordination(stripId: string) {
+        const next = new Set(ssrCoordOverrideIds.value)
+        next.add(stripId)
+        ssrCoordOverrideIds.value = next
+        const manuals = new Map(manualSsrByStripId.value)
+        manuals.delete(stripId)
+        manualSsrByStripId.value = manuals
+        stripsVersion.value++
+    }
+
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
     }
@@ -1918,17 +2214,6 @@ export const useEfsStore = defineStore("efs", () => {
             essaRolesManual.value = false
         }
         sendMessage({ type: 'setEssaRoles', roles, manual })
-    }
-
-    /** Set ESGG roles manually, or pass manual=false to return to auto-detect. */
-    function setEsggRoles(roles: string[], manual: boolean) {
-        if (manual) {
-            esggRoles.value = [...roles]
-            esggRolesManual.value = true
-        } else {
-            esggRolesManual.value = false
-        }
-        sendMessage({ type: 'setEsggRoles', roles, manual })
     }
 
     /**
@@ -2178,11 +2463,14 @@ export const useEfsStore = defineStore("efs", () => {
             return formatAhdVectorSidDisplay(exit)
         }
 
-        // FPR airports: first FPL fix when ES/FPL has DEP RWY (no DCT). Blank if no RWY.
-        // strip.runway may be active-runway fallback — do not use it as the gate.
+        // FPR airports: first FPL fix when DEP RWY is set (ES GetDepartureRwy,
+        // FPL ADEP/rwy, or strip.runway from ES-active DEP — same as RWY cell).
+        // VFR/Z: never auto-preview FPR — only show an entered SID (e.g. VFR·NORTH).
         if (isLopFprDepAirport(strip.adep) && !hasForcedSidInRoute(strip.route)) {
-            const fromFpl = fprDepDisplayFix(strip.adep, strip.route, null)
-            // Backend fills strip.sid from ES depRwy + FPR path
+            if (strip.flightRules === 'V' || strip.flightRules === 'Z') {
+                return formatSidForDisplay(strip.sid || '', strip.tmaExit, isPaperLook.value)
+            }
+            const fromFpl = fprDepDisplayFix(strip.adep, strip.route, strip.runway, strip.flightRules)
             return formatSidForDisplay(
                 fromFpl || strip.sid || '',
                 strip.tmaExit,
@@ -2433,7 +2721,8 @@ export const useEfsStore = defineStore("efs", () => {
 
     /** Print a blank or paper info strip (paper look). */
     function printPaperInfoStrip(kind: PaperInfoKind) {
-        createStrip('note', undefined, undefined, undefined, undefined, undefined, undefined, undefined, kind)
+        const airport = myAirports.value[0] || undefined
+        createStrip('note', undefined, undefined, airport, undefined, undefined, undefined, undefined, kind)
     }
 
     function updateNote(stripId: string, text: string) {
@@ -2502,6 +2791,83 @@ export const useEfsStore = defineStore("efs", () => {
             type: 'updateHp',
             stripId,
             text: normalized,
+        })
+    }
+
+    /** Departure Coordination flag → strip annotation 6 ("DepC") */
+    /**
+     * EuroScope COPX/XFL exit coordination request (not clearance / DepC flag).
+     * Plugin calls InitiateCoordination toward next/ACC.
+     */
+    function initiateXflCoordination(
+        stripId: string,
+        opts?: { altitudeFeet?: number; point?: string; targetController?: string },
+    ) {
+        sendMessage({
+            type: 'initiateXflCoordination',
+            stripId,
+            altitudeFeet: opts?.altitudeFeet,
+            point: opts?.point,
+            targetController: opts?.targetController,
+        })
+    }
+
+    /**
+     * Accept inbound ACC coordination proposal (exit XFL/COPX or entry PEL/COPN).
+     * Normally does not set DepC (only ACC accepting our outbound DEP does).
+     * Exception: ESMS eligible SID + ACC reply ~4000 → backend sets DepC; optimistic here too.
+     */
+    function acceptCoordination(stripId: string) {
+        const strip = strips.value.get(stripId)
+        if (strip?.exitCoordPending) {
+            const pendingAlt = strip.exitCoordAltitude
+            const esmsAutoDepC =
+                isIfrSidEligible(strip.flightRules) &&
+                (strip.stripType === 'departure' || strip.stripType === 'local') &&
+                isEsmsAutoCoordSid(strip.adep, strip.sid, strip.runway) &&
+                isEsmsAutoCoordReplyAltitude(pendingAlt)
+            strips.value.set(stripId, {
+                ...strip,
+                exitCoordPending: undefined,
+                exitCoordPoint: undefined,
+                exitCoordAltitude: undefined,
+                ...(esmsAutoDepC ? { coo: true, exitCoordRefused: undefined } : {}),
+            })
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'acceptCoordination', stripId })
+    }
+
+    /** Reject ACC exit-coordination counter-proposal */
+    function refuseCoordination(stripId: string) {
+        const strip = strips.value.get(stripId)
+        if (strip?.exitCoordPending) {
+            strips.value.set(stripId, {
+                ...strip,
+                exitCoordPending: undefined,
+                exitCoordPoint: undefined,
+                exitCoordAltitude: undefined,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'refuseCoordination', stripId })
+    }
+
+    function setCoo(stripId: string, coo: boolean) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                coo: coo || undefined,
+                // DepC checkmark clears amber refuse highlight
+                ...(coo ? { exitCoordRefused: undefined } : {}),
+            })
+            stripsVersion.value++
+        }
+        sendMessage({
+            type: 'setCoo',
+            stripId,
+            coo,
         })
     }
 
@@ -2609,7 +2975,8 @@ export const useEfsStore = defineStore("efs", () => {
         esggRolesMode,
         esggRoles,
         esggRolesManual,
-        setEsggRoles,
+        esggVisibleColumns,
+        adjustEsggVisibleColumns,
         essaRwyConfigId,
         essaRwyConfigManual,
         essaRwyConfigIdResolved,
@@ -2628,6 +2995,7 @@ export const useEfsStore = defineStore("efs", () => {
         isPreferredCflPending,
         isXflPending,
         displaySidForStrip,
+        xflFeetForStrip,
         displayXflForStrip,
         displayCflForStrip,
         refreshEssaPreferredSids,
@@ -2702,6 +3070,7 @@ export const useEfsStore = defineStore("efs", () => {
         viffReadyTobt,
         setTsac,
         setCtoc,
+        setAtd,
         setQnhGiven,
         availableConfigs,
         activeConfig,
@@ -2716,6 +3085,10 @@ export const useEfsStore = defineStore("efs", () => {
         updateVehicleStrip,
         updateRemarks,
         updateHp,
+        setCoo,
+        initiateXflCoordination,
+        acceptCoordination,
+        refuseCoordination,
         updateHs,
         amendFlightPlan,
         autoMoveData,
@@ -2736,9 +3109,34 @@ export const useEfsStore = defineStore("efs", () => {
         showAppDepXcFrequency,
         autoParkEnabled,
         autoLopSsr,
+        rtcAssrSimulation,
+        contactMeEnabled,
+        isSsrCoordinationActive,
+        displayAssrForStrip,
+        setManualSsr,
+        overrideSsrCoordination,
+        stampQnhGivenForAirport,
         autoParkAvailable,
         stripPrintSound,
         stripPrintMode,
+        fspServerEnabled,
+        scribbleSyncEnabled,
+        stripSyncEnabled,
+        scribbleSyncUrl,
+        vatsimCid,
+        scribbleSyncRealm,
+        userSettingsLoaded,
+        cidDialogOpen,
+        cidDialogSuggested,
+        cidDialogReason,
+        openCidDialog,
+        closeCidDialog,
+        submitVatsimCid,
+        vatIrisSignInOpen,
+        vatIrisSignInDetail,
+        openVatIrisSignIn,
+        closeVatIrisSignIn,
+        syncStripScribbles,
         stripLook,
         isPaperLook,
         pendingPrintFlights,

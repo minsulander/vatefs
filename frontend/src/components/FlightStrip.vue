@@ -1,6 +1,18 @@
 <template>
   <ClearanceDialog v-model="clncDialogOpen" :strip="strip" />
   <FlightplanDialog v-model="fplDialogOpen" :strip="strip" />
+  <DepCoordDialog
+    v-model="depCoordDialogOpen"
+    :strip="strip"
+    :assumed-before-open="depCoordAssumedBeforeOpen"
+  />
+  <AtdDialog v-model="atdDialogOpen" :strip="strip" @confirm="onAtdDialogConfirm" />
+  <TsacDialog
+    v-model="tsacDialogOpen"
+    :strip="strip"
+    :initial="tsacDialogInitial"
+  />
+  <CoordProposalDialog v-model="coordProposalDialogOpen" :strip="strip" />
   <StripZoomOverlay
     v-if="!isLargeView"
     v-model="largeViewOpen"
@@ -35,6 +47,13 @@
         <button v-if="isDeparture && canEditAssignedData && !isPaperEmptyFlightHolder" type="button" class="efs-popup-item" @click="onClncMenuClick">Clearance</button>
         <button v-if="!isLocalOnlyStrip" type="button" class="efs-popup-item" @click="onFplClick">Flightplan</button>
         <button
+          v-if="canShowContactMe"
+          type="button"
+          class="efs-popup-item"
+          @click="onContactMeClick"
+          title="EuroScope .contactme (needs ES window focus)"
+        >Contact me</button>
+        <button
           v-if="canAssumeFromMenu"
           type="button"
           class="efs-popup-item"
@@ -54,22 +73,48 @@
           class="efs-popup-item"
           @click.stop="groundStateMenuOpen = true"
         >State: {{ groundStateLabel }}</button>
-        <button v-if="!isLocalOnlyStrip && canEditAssignedData" type="button" class="efs-popup-item" @click="onRemarksMenuClick">Remarks</button>
         <button
           v-if="canOpenReadyTobt"
           type="button"
           class="efs-popup-item"
           @click="openTobtMenuFromContext"
         >Ready TOBT…</button>
-        <button
-          v-if="canOpenEobtMenu"
-          type="button"
-          class="efs-popup-item"
-          @click="openEobtMenuFromContext"
-        >EOBT…</button>
         <button v-if="canSendRea" type="button" class="efs-popup-item" @click="onSendReaClick">Set REA</button>
         <button v-if="canClearRea" type="button" class="efs-popup-item" @click="onClearReaClick">Remove REA</button>
+        <button
+          v-if="canCompactStrip && !isLargeView"
+          type="button"
+          class="efs-popup-item"
+          @click.stop="sizeMenuOpen = true"
+        >Size</button>
         <button type="button" class="efs-popup-item" @click="onDeleteClick">Delete</button>
+      </div>
+    </div>
+  </v-menu>
+
+  <!-- Size submenu -->
+  <v-menu v-model="sizeMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
+    <div class="efs-popup-menu" @click.stop>
+      <div class="efs-popup-header">Size</div>
+      <div class="efs-popup-list">
+        <button
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: isSizeExpanded }"
+          @click="onSizeExpanded"
+        >Expanded</button>
+        <button
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: !isCompact && !isSizeExpanded }"
+          @click="onSizeNormal"
+        >Normal</button>
+        <button
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: isCompact }"
+          @click="onSizeCompact"
+        >Compact</button>
       </div>
     </div>
   </v-menu>
@@ -138,9 +183,35 @@
           class="efs-popup-item efs-popup-item--stack"
           @click="onTransferClick(ctrl.callsign)"
         >
-          <span class="efs-popup-item-title">{{ ctrl.callsign }}</span>
+          <span class="efs-popup-item-title">
+            <template v-if="ctrl.positionId">{{ ctrl.positionId }} · </template>{{ ctrl.callsign }}
+          </span>
           <span class="efs-popup-item-sub transfer-freq">{{ ctrl.frequency }}</span>
         </button>
+      </div>
+    </div>
+  </v-menu>
+
+  <!-- POB entry (RTC V/Z) -->
+  <v-menu v-model="pobMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="false">
+    <div class="efs-popup-menu" @click.stop>
+      <div class="efs-popup-header">POB</div>
+      <div class="efs-popup-search">
+        <input
+          ref="pobInputEl"
+          v-model="pobEditText"
+          class="efs-popup-search-input"
+          type="text"
+          inputmode="numeric"
+          maxlength="3"
+          placeholder="000"
+          @keydown.enter.prevent="onPobConfirm"
+          @keydown.escape.prevent="pobMenuOpen = false"
+        />
+      </div>
+      <div class="efs-popup-list">
+        <button type="button" class="efs-popup-item" @click="onPobConfirm">Set</button>
+        <button v-if="strip.pob" type="button" class="efs-popup-item" @click="onPobClear">Clear</button>
       </div>
     </div>
   </v-menu>
@@ -148,6 +219,7 @@
   <SidRouteMenu v-model="sidRouteMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <RwyMenu v-model="rwyMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <CflMenu v-model="cflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <XflMenu v-model="xflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <AhdMenu v-model="ahdMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
 
   <div ref="stripElement" class="flight-strip"
@@ -168,9 +240,10 @@
         (!isNote && !isVehicle && !isArrLayout) ||
         paperInfoKind === 'empty_dep' ||
         paperInfoKind === 'empty_frame',
-      'top-expanded': topExpanded,
-      'bottom-expanded': bottomExpanded,
+      'top-expanded': topExpanded && !isCompactBay,
+      'bottom-expanded': bottomExpanded && !isCompactBay,
       'is-large-view': isLargeView,
+      'strip-compact': isCompactBay,
       'dimmed-data': dimmedData,
       'no-drag': !canDragStrip && !isLargeView,
       'rtc-layout': store.multiAirport,
@@ -367,6 +440,7 @@
 
     <!-- Paper FPS strip (ESGG) — VatFSP field grid in SAAB outer size -->
     <template v-else-if="store.isPaperLook || isPaperEmptyFlightHolder">
+      <div class="paper-with-actions">
       <div
         class="paper-flight"
         :class="isArrLayout ? 'paper-flight-arr' : 'paper-flight-dep'"
@@ -427,9 +501,9 @@
               <span class="pg-frul">{{ isPaperEmptyFlightHolder ? '' : (strip.flightRules || 'I') }}</span>
               <span class="pg-atyp-wtc">{{ strip.aircraftType }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence"> <span
                   class="pg-wtc"
-                  :class="{ 'pg-wtc-circled': wtcHighlight }"
+                  :class="{ 'pg-wtc-circled': wtcPaperCircled, 'pg-wtc-yellow': wtcYellowHighlight }"
                 ><svg
-                    v-if="wtcHighlight"
+                    v-if="wtcPaperCircled"
                     class="pg-wtc-scribble"
                     viewBox="0 0 32 32"
                     aria-hidden="true"
@@ -570,7 +644,7 @@
             v-if="!isArrLayout"
             class="pg-sid pg-vline"
             :class="{ ghost: !store.displaySidForStrip(strip), editable: canEditAssignedData }"
-            :title="paperTip('SID', 'Departure route / SID')"
+            :title="paperTip(sidCellLabel, `Departure route / ${sidCellLabel}`)"
             @click.stop="onSidClick"
           >
             <span class="pg-sid-val">{{ store.displaySidForStrip(strip) || '' }}</span>
@@ -776,12 +850,13 @@
           :title="paperTip('Stand', 'GRP stand')"
         >{{ strip.stand }}</div>
       </div>
+      </div>
     </template>
 
     <!-- SAAB-style strip -->
     <template v-else>
       <!-- Top menu: fully hidden until ▲ opens it; collapse arrow lives here when open -->
-      <div v-if="topExpanded" class="strip-expander strip-expander-top" @click.stop>
+      <div v-if="topExpanded && !isCompactBay" class="strip-expander strip-expander-top" @click.stop>
         <button
           type="button"
           class="ctrl-arrow expander-arrow mirrored"
@@ -799,15 +874,16 @@
             v-if="store.multiAirport && currentAtisLetter"
             type="button"
             class="exp-chip"
-            :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhStale }"
-            :disabled="!canStampAtisQnh"
-            :title="`ATIS ${currentAtisLetter}`"
+            :class="{ 'exp-qnh-ok': atisGivenMatches, 'exp-qnh-stale': atisStale }"
+            :disabled="!canStampAtisQnh && !atisGivenMatches && !atisStale"
+            :title="atisChipTitle"
             @click.stop="onExpAtis"
           >ATIS {{ currentAtisLetter }}</button>
           <button
-            v-else-if="store.multiAirport"
+            v-if="store.multiAirport"
             type="button"
             class="exp-chip"
+            :class="{ 'exp-qnh-ok': !!strip.weatherGiven }"
             title="TopSky WEATHER manual alert"
             @click.stop="onExpMet"
           >MET</button>
@@ -815,7 +891,8 @@
             type="button"
             class="exp-chip"
             :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhStale }"
-            :disabled="!canSetQnh"
+            :disabled="!canSetQnh && !qnhGivenMatches && !qnhStale"
+            :title="qnhChipTitle"
             @click.stop="onExpQnh"
           >QNH</button>
           <template v-if="!isArrLayout">
@@ -843,9 +920,36 @@
               type="button"
               class="exp-chip"
               :class="clrChipClass"
+              :title="clrChipLabel === 'DCL' ? 'Data-link clearance' : 'Clearance'"
               @click.stop="onClncMenuClick"
-            >CLR</button>
+            >{{ clrChipLabel }}</button>
           </template>
+        </div>
+        <!-- DEP|POB (dep/local) or ARR|POB (arr — ARR greyed placeholder for layout parity) -->
+        <div class="exp-dep-pob">
+          <button
+            v-if="!isArrLayout"
+            type="button"
+            class="exp-chip exp-dep-btn"
+            :class="{ 'exp-dep-green': isDepDeparted }"
+            :disabled="!canEditAssignedData"
+            title="DEP — enter ATD then cleared for takeoff"
+            @click.stop="onExpDep"
+          >DEP</button>
+          <button
+            v-else
+            type="button"
+            class="exp-chip exp-arr-btn inert"
+            disabled
+            title="ARR"
+          >ARR</button>
+          <button
+            type="button"
+            class="exp-chip exp-pob-btn"
+            :disabled="!canEditPob"
+            :title="canEditPob ? (strip.pob ? `POB ${strip.pob}` : 'Persons on board') : 'POB (RTC V/Z only)'"
+            @click.stop="onExpPob"
+          >POB</button>
         </div>
         <svg
           v-if="showStripScribbles"
@@ -903,10 +1007,30 @@
             :stroke-width="bayScribbleStrokeWidth"
           />
         </svg>
-        <!-- Left 3×3: col1 ▲/FRUL/▼ · col2 ATYP · col3 WTC · times span col2–3 -->
-        <div class="strip-left" :class="{ 'wtc-hl': wtcHighlight }">
+        <!-- Left 3×3: col1 ▲/FRUL/▼ · col2 ATYP · col3 WTC · times span col2–3
+             Compact: gutter (arrow width) + stacked times; same total left width -->
+        <div class="strip-left" :class="{ 'wtc-hl': wtcRtcBorder, 'strip-left-compact': isCompactBay }">
           <button
-            v-if="!topExpanded"
+            v-if="isCompactBay"
+            type="button"
+            class="compact-gutter"
+            title="Normal size"
+            @click.stop="onSizeNormal"
+          >
+            <!-- Match ▲/▼ highlight (REA green / QNH·TSAC stale amber) on restore clickzone -->
+            <span
+              class="compact-gutter-half compact-gutter-top"
+              :class="topArrowClass"
+              :title="topArrowTitle !== 'Top menu' && topArrowTitle !== 'Close top menu' ? topArrowTitle : undefined"
+            />
+            <span
+              class="compact-gutter-half compact-gutter-bot"
+              :class="{ 'arrow-stale': showTsacStaleArrow }"
+              :title="showTsacStaleArrow ? 'TSAT changed - expand strip to confirm TSAC' : undefined"
+            />
+          </button>
+          <button
+            v-else-if="!topExpanded"
             type="button"
             class="ctrl-arrow strip-left-up"
             :class="topArrowClass"
@@ -948,43 +1072,65 @@
             </template>
           </div>
 
-          <span
-            class="ctrl-ident fit-font"
-            title="Toggle menus"
-            @click.stop="onFrulClick"
-          >{{ strip.flightRules || 'I' }}</span>
-          <span
-            class="atyp-box fit-font"
-            :class="{ boxed: atypSlowFrame, plain: !atypSlowFrame }"
-          >{{ strip.aircraftType }}</span>
-          <span class="wtc-box fit-font" :class="{ boxed: wtcHighlight, plain: !wtcHighlight }">{{ strip.wakeTurbulence }}</span>
+          <template v-if="!isCompactBay">
+            <span
+              class="ctrl-ident fit-font"
+              title="Toggle menus"
+              @click.stop="onFrulClick"
+            >{{ strip.flightRules || 'I' }}</span>
+            <span
+              class="atyp-box fit-font"
+              :class="{
+                boxed: atypThickBorder,
+                plain: !atypThickBorder && !atypYellowHighlight,
+                'atyp-yellow': atypYellowHighlight,
+              }"
+              title="Compact size"
+              @click.stop="onSizeCompact"
+            >{{ strip.aircraftType }}</span>
+            <span
+              class="wtc-box fit-font"
+              :class="{
+                boxed: wtcRtcBorder,
+                plain: !wtcRtcBorder && !wtcYellowHighlight,
+                'wtc-yellow': wtcYellowHighlight,
+              }"
+              title="Compact size"
+              @click.stop="onSizeCompact"
+            >{{ strip.wakeTurbulence }}</span>
 
-          <!-- ▼ when collapsed; TSAC (like P/A) between FRUL and ▼ when bottom expander open -->
-          <button
-            v-if="!bottomExpanded"
-            type="button"
-            class="ctrl-arrow strip-left-dn"
-            :class="{ 'arrow-stale': showTsacStaleArrow }"
-            :title="showTsacStaleArrow ? 'TSAT changed - open bottom menu and click TSAC box' : 'Bottom menu'"
-            @click.stop="bottomExpanded = true"
-          ><span class="arrow-glyph">▼</span></button>
-          <button
-            v-else-if="showTsacBox"
-            type="button"
-            class="tsac-box strip-left-dn"
-            :class="tsacBoxClass"
-            :title="tsacTooltip"
-            @click.stop="onTsacClick($event)"
-          />
+            <!-- ▼ when collapsed; TSAC (like P/A) between FRUL and ▼ when bottom expander open -->
+            <button
+              v-if="!bottomExpanded"
+              type="button"
+              class="ctrl-arrow strip-left-dn"
+              :class="{ 'arrow-stale': showTsacStaleArrow }"
+              :title="showTsacStaleArrow ? 'TSAT changed - open bottom menu and click TSAC box' : 'Bottom menu'"
+              @click.stop="bottomExpanded = true"
+            ><span class="arrow-glyph">▼</span></button>
+            <button
+              v-else-if="showTsacBox"
+              type="button"
+              class="tsac-box strip-left-dn"
+              :class="tsacBoxClass"
+              :title="tsacTooltip"
+              @click.stop="onTsacClick($event)"
+            />
+          </template>
           <div
             class="strip-time strip-time-bot fit-font"
             :class="[
               {
                 ghost: !secondaryTimeValue,
                 'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
-                'squawk-empty': secondaryTimeKind === 'assr' && !strip.squawk && strip.canResetSquawk,
+                'squawk-empty':
+                  secondaryTimeKind === 'assr' &&
+                  !displayAssr &&
+                  (ssrCoordActive || strip.canResetSquawk),
                 'squawk-resettable':
-                  secondaryTimeKind === 'assr' && !!strip.squawk && strip.canResetSquawk,
+                  secondaryTimeKind === 'assr' &&
+                  !!displayAssr &&
+                  (ssrCoordActive || strip.canResetSquawk),
               },
               secondaryTimeKind === 'tsat' ? tsatColorClass : undefined,
             ]"
@@ -992,8 +1138,24 @@
             @click.stop="onSecondaryTimeClick"
             @dblclick.stop="onSecondaryTimeDblClick"
           >
-            <span v-if="secondaryTimeLabel" class="strip-time-lbl">{{ secondaryTimeLabel }}</span>
-            <span class="strip-time-val">{{ secondaryTimeValue || '----' }}</span>
+            <template v-if="secondaryTimeKind === 'assr' && assrEditing">
+              <input
+                ref="assrEditInput"
+                v-model="assrEditText"
+                class="assr-edit-input"
+                type="text"
+                inputmode="numeric"
+                maxlength="4"
+                @click.stop
+                @blur="onAssrEditBlur"
+                @keydown.enter="onAssrEditBlur"
+                @keydown.escape="onAssrEditCancel"
+              />
+            </template>
+            <template v-else>
+              <span v-if="secondaryTimeLabel" class="strip-time-lbl">{{ secondaryTimeLabel }}</span>
+              <span class="strip-time-val">{{ secondaryTimeValue || '----' }}</span>
+            </template>
           </div>
         </div>
 
@@ -1020,13 +1182,46 @@
             </span>
           </div>
           <div
-            v-if="!isArrLayout"
-            class="cell cell-xfl fit-font"
-            :class="{ ghost: !displayXfl, 'clr-pending-hl': unclearedFieldHighlight && !!displayXfl }"
-            title="EuroScope XFL (exit coordination)"
-          >{{ displayXfl || 'XFL' }}</div>
+            v-if="showXflCell"
+            class="cell cell-xfl"
+            :class="{
+              'fit-font': !showArrCoordPendingC,
+              ghost: !showArrCoordPendingC && !displayXfl,
+              editable:
+                (canEditAssignedData && isRtcCoordUi && !isArrLayout) ||
+                showArrCoordPendingC,
+              proposal: showArrCoordPendingC,
+              'clr-pending-hl':
+                !showArrCoordPendingC &&
+                unclearedFieldHighlight &&
+                !!displayXfl &&
+                !xflCoordPink &&
+                !xflCoordAmber,
+              'xfl-coord-pink': xflCoordPink || showArrCoordPendingC,
+              'xfl-coord-amber': !showArrCoordPendingC && xflCoordAmber,
+            }"
+            :title="xflCellTitle"
+            @click.stop="onXflClick"
+          >{{ showArrCoordPendingC ? 'C' : displayXfl || levelCellPlaceholder }}</div>
           <div
-            v-if="!store.multiAirport"
+            v-if="showCooCell"
+            class="cell cell-coo"
+            :class="{
+              ghost: !strip.coo && !showEstCoordC,
+              editable: canEditAssignedData || showEstCoordC,
+              proposal: showEstCoordC,
+              'coo-coord-pink': showEstCoordC,
+            }"
+            :title="cooCellTitle"
+            @pointerdown.stop="onCooPointerDown"
+            @pointerup.stop="onCooPointerUp"
+            @pointercancel.stop="onCooPointerCancel"
+            @pointerleave="onCooPointerUp"
+            @click.stop="onCooClick"
+            @contextmenu.prevent.stop="onCooContextMenu"
+          >{{ showEstCoordC ? 'C' : strip.coo ? '✓' : 'C' }}</div>
+          <div
+            v-if="!isCompactBay && !store.multiAirport"
             class="cell cell-hs"
             :class="{
               ghost: !strip.hs && !hsEditing,
@@ -1053,6 +1248,7 @@
             <template v-else>{{ strip.hs || 'HS' }}</template>
           </div>
           <div
+            v-if="!isCompactBay"
             class="cell cell-hp"
             :class="{
               ghost: !strip.hp && !hpEditing,
@@ -1086,7 +1282,7 @@
           >{{ strip.runway || 'RWY' }}</div>
 
           <template v-if="isArrLayout">
-            <div class="cell cell-cto" :class="{ 'has-ctot': !!triangleTimeText }">
+            <div v-if="!isCompactBay" class="cell cell-cto" :class="{ 'has-ctot': !!triangleTimeText }">
               <svg
                 viewBox="0 0 24 24"
                 preserveAspectRatio="none"
@@ -1105,8 +1301,27 @@
             <div class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
           </template>
           <template v-else>
-            <div class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
+            <!-- Compact: CFTO/ATD △ replaces STD (CTOT stays in ASSR slot) -->
             <div
+              v-if="compactShowDepTriangle"
+              class="cell cell-std cell-cto cell-compact-cto"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                preserveAspectRatio="none"
+                class="clearance-triangle takeoff mini"
+                :class="{
+                  active: strip.clearedForTakeoff && !strip.atd,
+                  'green-border': !!strip.atd,
+                }"
+                aria-hidden="true"
+              >
+                <path d="M2.5 23.2 H21.5 Q23.6 23.2 22.2 20.8 L13.2 2.8 Q12 0.6 10.8 2.8 L1.8 20.8 Q0.4 23.2 2.5 23.2 Z" />
+              </svg>
+            </div>
+            <div v-else class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
+            <div
+              v-if="!isCompactBay"
               class="cell cell-cto"
               :class="{ 'has-ctot': !!triangleTimeText || !!depArrowCtot }"
               @click.stop="onDepArrowCtotClick"
@@ -1133,7 +1348,7 @@
             </div>
           </template>
           <div
-            v-if="!hideArrGroundAssignFields"
+            v-if="!isCompactBay && !hideArrGroundAssignFields"
             class="cell cell-cfl fit-font"
             :class="{
               ghost: !displayCfl,
@@ -1144,8 +1359,31 @@
             title="Cleared flight level"
             @click.stop="onCflClick"
           >{{ displayCfl || 'CFL' }}</div>
+          <!-- Compact ARR: CTL/ATA △ in AHD slot; G/A restores AHD (heading more useful) -->
           <div
-            v-if="!hideArrGroundAssignFields"
+            v-if="compactShowArrTriangle"
+            class="cell cell-ahd cell-cto cell-compact-cto"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              preserveAspectRatio="none"
+              class="clearance-triangle landing mini"
+              :class="{
+                active: showArrCtlTriangle,
+                'green-border': arrTriangleGreenOutline,
+              }"
+              aria-hidden="true"
+            >
+              <path d="M2.5 0.8 H21.5 Q23.6 0.8 22.2 3.2 L13.2 21.2 Q12 23.4 10.8 21.2 L1.8 3.2 Q0.4 0.8 2.5 0.8 Z" />
+            </svg>
+          </div>
+          <div
+            v-else-if="isCompactBay && isArrLayout && !strip.missedApproach"
+            class="cell cell-ahd cell-compact-spacer"
+            aria-hidden="true"
+          />
+          <div
+            v-else-if="isCompactBay || !hideArrGroundAssignFields"
             class="cell cell-ahd fit-font"
             :class="{
               ghost: !strip.assignedHeading,
@@ -1156,19 +1394,24 @@
             @click.stop="onAhdClick"
           >{{ strip.assignedHeading || 'AHD' }}</div>
           <div
-            v-if="!isArrLayout"
+            v-if="isCompactBay && isArrLayout"
+            class="cell cell-sid cell-compact-spacer"
+            aria-hidden="true"
+          />
+          <div
+            v-else-if="!isArrLayout"
             class="cell cell-sid fit-font"
             :class="{
               ghost: !store.displaySidForStrip(strip),
               'sid-highlight': sidHighlight,
               editable: canEditAssignedData,
             }"
-            title="Departure route / SID"
+            :title="`Departure route / ${sidCellLabel}`"
             @click.stop="onSidClick"
-          >{{ store.displaySidForStrip(strip) || 'SID' }}</div>
+          >{{ store.displaySidForStrip(strip) || sidCellLabel }}</div>
           <!-- RTC ARR: empty framed SID slot (no data / no edit) -->
           <div
-            v-else-if="store.multiAirport && !hideArrGroundAssignFields"
+            v-else-if="!isCompactBay && store.multiAirport && !hideArrGroundAssignFields"
             class="cell cell-sid cell-sid-arr-empty"
             aria-hidden="true"
           />
@@ -1176,10 +1419,17 @@
 
         <div v-if="store.isController" class="strip-actions" :class="{ 'multi-action': effectiveActionCount > 1 }">
           <button
-            v-for="action in (strip.actions || [])"
+            v-for="action in displayActions"
             :key="action"
             class="action-button"
-            :class="actionButtonClass(action)"
+            :class="[
+              actionButtonClass(action),
+              {
+                'fit-font': isCompactBay,
+                'action-ack-clr': isCompactBay && action === 'CLNC' && showAckClrLabel,
+              },
+            ]"
+            :title="action === 'CONTACTME' ? 'EuroScope .contactme (needs ES window focus)' : undefined"
             @click.stop="() => onActionClick(action)"
             @touchend.stop="(e) => onActionTouch(e, action)"
           >
@@ -1190,7 +1440,7 @@
       </div>
 
       <!-- Bottom: [▼ TSAC? RMK FPL][ASSR ADEP | remarks under CFL→][TMA] -->
-      <div v-if="bottomExpanded" class="strip-expander strip-expander-bottom" @click.stop>
+      <div v-if="bottomExpanded && !isCompactBay" class="strip-expander strip-expander-bottom" @click.stop>
         <div class="exp-bottom-left">
           <button
             type="button"
@@ -1205,16 +1455,32 @@
         <div class="exp-bottom-main" :class="isArrLayout ? 'exp-bottom-main-arr' : 'exp-bottom-main-dep'">
           <div class="exp-pre-rmk">
             <span
+              v-if="showBottomExpAssr"
               class="exp-assr"
               :class="{
-                ghost: !strip.squawk,
-                'squawk-empty': !strip.squawk && strip.canResetSquawk,
-                'squawk-resettable': !!strip.squawk && strip.canResetSquawk,
+                ghost: !displayAssr,
+                'squawk-empty': !displayAssr && (ssrCoordActive || strip.canResetSquawk),
+                'squawk-resettable': !!displayAssr && (ssrCoordActive || strip.canResetSquawk),
               }"
               :title="assrTitle"
               @click.stop="onAssrClick"
               @dblclick.stop="onAssrDblClick"
-            >{{ strip.squawk || '----' }}</span>
+            >
+              <input
+                v-if="assrEditing"
+                ref="assrEditInput"
+                v-model="assrEditText"
+                class="assr-edit-input"
+                type="text"
+                inputmode="numeric"
+                maxlength="4"
+                @click.stop
+                @blur="onAssrEditBlur"
+                @keydown.enter="onAssrEditBlur"
+                @keydown.escape="onAssrEditCancel"
+              />
+              <template v-else>{{ displayAssr || '----' }}</template>
+            </span>
             <span
               class="exp-ades"
               :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
@@ -1279,14 +1545,20 @@ import {
   DEFAULT_TRANSITION_ALTITUDE_FT,
   extractTmaExitPoint,
   formatEfsLevel,
+  formatStripAltitude,
   formatTrackSidDisplay,
   getEssaRwyCombination,
   hasSlowRemark,
   hasVectRemark,
+  isHeavyAsLeaderAircraftType,
+  isThickAtypBorderAircraftType,
   isIfrSidEligible,
   isTrackSidName,
   isVectorSidName,
   normalizeEssaRwy,
+  requiresAccCoordination,
+  sidFieldLabel,
+  withPobInRemarks,
   withSlowRemark,
   withVectRemark,
 } from '@vatefs/common'
@@ -1300,10 +1572,12 @@ import {
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 import {
   SCRIBBLE_INK_HEX,
+  elementToScribbleRect,
   hasClrScribble,
   hasShapeMatchedPaperScribble,
   pushRisingDiagonalLeftCol,
   removeClrScribbles,
+  removeScribblesOverlappingRect,
   scribbleBandViewBox,
   scribbleStrokeWidthCss,
   useStripScribbles,
@@ -1315,12 +1589,18 @@ import {
   collapseStripExpanders,
   useStripExpanders,
 } from '@/composables/useStripExpanders'
+import { useStripSizeMode } from '@/composables/useStripSizeMode'
 import { useZoomStripScalePercent } from '@/composables/useStripZoomScale'
 import ClearanceDialog from './ClearanceDialog.vue'
+import DepCoordDialog from './DepCoordDialog.vue'
+import AtdDialog from './AtdDialog.vue'
+import TsacDialog from './TsacDialog.vue'
+import CoordProposalDialog from './CoordProposalDialog.vue'
 import FlightplanDialog from './FlightplanDialog.vue'
 import SidRouteMenu from './SidRouteMenu.vue'
 import RwyMenu from './RwyMenu.vue'
 import CflMenu from './CflMenu.vue'
+import XflMenu from './XflMenu.vue'
 import TobtMenu, { type TobtMenuKind } from './TobtMenu.vue'
 import AhdMenu from './AhdMenu.vue'
 import StripZoomOverlay from './StripZoomOverlay.vue'
@@ -1360,6 +1640,7 @@ const {
   atdScribbleCount,
 } = useStripScribbles(stripIdRef)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripIdRef)
+const { isCompact } = useStripSizeMode(stripIdRef)
 // IFR DEP spawn: both expanders open (once per strip id)
 applySpawnExpanderDefaults(props.strip.id, {
   ifrDeparture:
@@ -1367,8 +1648,28 @@ applySpawnExpanderDefaults(props.strip.id, {
     props.strip.flightRules !== 'V' &&
     props.strip.flightRules !== 'Z',
 })
+
+/** SAAB flight strips that support half-height compact mode. */
+const canCompactStrip = computed(() => {
+  if (store.isPaperLook) return false
+  const t = props.strip.stripType
+  return t === 'departure' || t === 'arrival' || t === 'local' || t === 'vfr'
+})
+
+/** Bay half-height layout — never applied inside zoom overlay (zoom stays normal height). */
+const isCompactBay = computed(
+  () => canCompactStrip.value && isCompact.value && !props.isLargeView,
+)
+
+/** Context-menu “Expanded”: both expanders open on a normal-height strip. */
+const isSizeExpanded = computed(
+  () => !isCompact.value && topExpanded.value && bottomExpanded.value,
+)
+
 const showStripScribbles = computed(
-  () => stripScribbles.value.length > 0 || !!props.activeScribbleStroke,
+  () =>
+    !isCompactBay.value &&
+    (stripScribbles.value.length > 0 || !!props.activeScribbleStroke),
 )
 
 /** SAAB look always draws black; paper uses per-stroke blue/red. */
@@ -1484,7 +1785,11 @@ function tryPrintAnimation() {
   if (!store.printingStripIds.has(props.strip.id)) return
 
   const el = stripElement.value
-  if (!el) return
+  // Not mounted yet / zero-size (e.g. off-scroll bay): don't leave strip forever hidden
+  if (!el) {
+    finishPrintAnim()
+    return
+  }
 
   printAnimOwned = true
 
@@ -1603,15 +1908,26 @@ const overlayMenuZ = computed(() => (props.isLargeView ? 2600 : 2000))
 const sidRouteMenuOpen = ref(false)
 const rwyMenuOpen = ref(false)
 const cflMenuOpen = ref(false)
+const xflMenuOpen = ref(false)
 const ahdMenuOpen = ref(false)
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
+const sizeMenuOpen = ref(false)
+const pobMenuOpen = ref(false)
+const pobEditText = ref('')
+const pobInputEl = ref<HTMLInputElement | null>(null)
 const ctotMenuOpen = ref(false)
 const tsacMenuOpen = ref(false)
+const tsacDialogOpen = ref(false)
+const tsacDialogInitial = ref('')
 const reaMenuOpen = ref(false)
 
 function closeStripContextMenu() {
   menuOpen.value = false
+  sizeMenuOpen.value = false
+  groundStateMenuOpen.value = false
+  transferMenuOpen.value = false
+  pobMenuOpen.value = false
 }
 
 watch(menuOpen, (open) => {
@@ -1619,15 +1935,35 @@ watch(menuOpen, (open) => {
   else releaseStripContextMenu(closeStripContextMenu)
 })
 
+watch(pobMenuOpen, (open) => {
+  if (open) {
+    pobEditText.value = props.strip.pob || ''
+    nextTick(() => pobInputEl.value?.focus())
+  }
+})
+
 onUnmounted(() => {
   releaseStripContextMenu(closeStripContextMenu)
 })
 
-// Ground state options: code (shown in menu), label, action (sent to backend), groundstate (for highlighting current)
+const sidCellLabel = computed(() =>
+  sidFieldLabel(props.strip.adep, store.multiAirport),
+)
+
+/** CFTO / ATD / DEPA — green frame on top-expander DEP (not ▲ highlight). */
+const isDepDeparted = computed(
+  () =>
+    !!props.strip.clearedForTakeoff ||
+    !!props.strip.atd ||
+    (props.strip.groundstate || '').toUpperCase() === 'DEPA',
+)
+
+// Ground state: DEP/local flow then ARR flow (NSTS → … → DEPA | ARR → TXIN → PARK)
 const groundStateOptions = [
+  { code: '---', label: 'No State', action: 'NOGS', groundstate: '' },
   { code: 'FRQ', label: 'On Freq', action: 'FRQ', groundstate: 'ONFREQ' },
-  { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },
   { code: 'RDY', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
+  { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },
   { code: 'S/P', label: 'Push', action: 'PUSH', groundstate: 'PUSH' },
   { code: 'TXO', label: 'Taxi Out', action: 'TXO', groundstate: 'TAXI' },
   { code: 'L/U', label: 'Lineup', action: 'LU', groundstate: 'LINEUP' },
@@ -1637,7 +1973,6 @@ const groundStateOptions = [
   { code: 'CTL', label: 'Cleared to Land', action: 'CTL_GS', groundstate: 'ARR', extra: true },
   { code: 'TXI', label: 'Taxi In', action: 'TXI', groundstate: 'TXIN' },
   { code: 'PRK', label: 'Parked', action: 'PARK', groundstate: 'PARK' },
-  { code: '---', label: 'No State', action: 'NOGS', groundstate: '' },
 ]
 
 const groundStateLabel = computed(() => {
@@ -1648,6 +1983,11 @@ const groundStateLabel = computed(() => {
 
 // Dialog state
 const clncDialogOpen = ref(false)
+const depCoordDialogOpen = ref(false)
+/** ASSUME was sent in openDepCoordDialog() immediately before opening DEP COORD. */
+const depCoordAssumedBeforeOpen = ref(false)
+const atdDialogOpen = ref(false)
+const coordProposalDialogOpen = ref(false)
 const fplDialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
 const largeViewOpen = ref(false)
@@ -1663,6 +2003,30 @@ function openLargeView() {
     largeViewAnchor.value = null
   }
   largeViewOpen.value = true
+}
+
+function onSizeExpanded() {
+  menuOpen.value = false
+  if (props.isLargeView) return
+  isCompact.value = false
+  topExpanded.value = true
+  bottomExpanded.value = true
+  nextTick(() => scheduleStripScale(true))
+}
+
+function onSizeNormal() {
+  menuOpen.value = false
+  isCompact.value = false
+  collapseStripExpanders(props.strip.id)
+  nextTick(() => scheduleStripScale(true))
+}
+
+function onSizeCompact() {
+  menuOpen.value = false
+  if (!canCompactStrip.value || props.isLargeView) return
+  collapseStripExpanders(props.strip.id)
+  isCompact.value = true
+  nextTick(() => scheduleStripScale(true))
 }
 
 /**
@@ -1765,6 +2129,12 @@ function fitAllBoxFonts() {
   const root = stripElement.value
   if (!root) return
   fitCallsignFont()
+  // Compact action .fit-font may leave inline sizes — clear when back to normal
+  if (!isCompactBay.value) {
+    root.querySelectorAll<HTMLElement>('.strip-actions .action-button').forEach((el) => {
+      el.style.fontSize = ''
+    })
+  }
   root.querySelectorAll<HTMLElement>('.fit-font').forEach((el) => {
     fitFontToBox(el, FIT_FONT_MIN)
   })
@@ -2262,6 +2632,64 @@ const dimmedData = computed(() => {
 const canEditAssignedData = computed(
   () => store.isController && !props.strip.ownedByOther,
 )
+
+/** POB: RTC only + V/Z flight rules. */
+const canEditPob = computed(
+  () =>
+    store.multiAirport &&
+    canEditAssignedData.value &&
+    (props.strip.flightRules === 'V' || props.strip.flightRules === 'Z'),
+)
+
+function onExpDep() {
+  if (!canEditAssignedData.value) return
+  // Open ATD dialog first; CTO/DEPA only on confirm (cancel leaves strip unchanged)
+  atdDialogOpen.value = true
+}
+
+/** After ATD OK: apply existing DEP/CTO (groundstate DEPA / CFTO). */
+function onAtdDialogConfirm(_atd: string) {
+  store.sendStripAction(props.strip.id, 'CTO')
+}
+
+function onExpPob() {
+  if (!canEditPob.value) return
+  const el = stripElement.value?.querySelector('.exp-pob-btn') as HTMLElement | null
+  if (el) {
+    const r = el.getBoundingClientRect()
+    menuPosition.value = [r.left, r.bottom]
+  }
+  pobMenuOpen.value = true
+}
+
+async function fetchFplRemarks(): Promise<string> {
+  try {
+    const res = await fetch(`/api/flight/${encodeURIComponent(props.strip.callsign)}`)
+    if (!res.ok) return ''
+    const data = (await res.json()) as { fplRemarks?: string }
+    return data.fplRemarks || ''
+  } catch {
+    return ''
+  }
+}
+
+async function onPobConfirm() {
+  const digits = pobEditText.value.replace(/\D/g, '').slice(0, 3)
+  if (!digits) {
+    await onPobClear()
+    return
+  }
+  const current = await fetchFplRemarks()
+  store.amendFlightPlan(props.strip.id, { fplRemarks: withPobInRemarks(current, digits) })
+  pobMenuOpen.value = false
+}
+
+async function onPobClear() {
+  const current = await fetchFplRemarks()
+  store.amendFlightPlan(props.strip.id, { fplRemarks: withPobInRemarks(current, null) })
+  pobMenuOpen.value = false
+}
+
 /** Context menu ASSUME — untracked / inbound handoff only (not when already assumed by me) */
 const canAssumeFromMenu = computed(
   () =>
@@ -2270,6 +2698,34 @@ const canAssumeFromMenu = computed(
     !props.strip.isAssumed &&
     !store.isStripOwnedByOther(props.strip),
 )
+
+/** Contact me — setting on, non-assumed arrivals only (controller, real flight strips) */
+const canShowContactMe = computed(
+  () =>
+    store.contactMeEnabled &&
+    store.isController &&
+    !isLocalOnlyStrip.value &&
+    !isPaperEmptyFlightHolder.value &&
+    props.strip.stripType === 'arrival' &&
+    !props.strip.isAssumed,
+)
+
+/**
+ * Visible action keys: strip.actions plus CONTACTME paired with ASSUME on non-assumed arrivals.
+ * Also ensures ASSUME when the context menu would offer it (empty/missing actions).
+ */
+const displayActions = computed(() => {
+  let actions = [...(props.strip.actions || [])]
+  if (canAssumeFromMenu.value && !actions.includes('ASSUME')) {
+    actions = [...actions, 'ASSUME']
+  }
+  if (canShowContactMe.value && actions.includes('ASSUME') && !actions.includes('CONTACTME')) {
+    const i = actions.indexOf('ASSUME')
+    actions = [...actions]
+    actions.splice(i + 1, 0, 'CONTACTME')
+  }
+  return actions
+})
 
 /**
  * Drag: notes/vehicles always; own/untracked flights when controller.
@@ -2494,17 +2950,151 @@ const rwyCellTitle = computed(() => {
   return rwyNonStandard.value ? `${base} (non-standard)` : base
 })
 
-const wtcHighlight = computed(() => {
+/** B757 / Tu204 family — WTC M on strip, treated as H when leading. */
+const heavyAsLeaderType = computed(() =>
+  isHeavyAsLeaderAircraftType(props.strip.aircraftType),
+)
+
+/**
+ * RTC only: thick WTC cell border when wake is not Medium.
+ * (M stays plain; B757/Tu204 use yellow instead — see wtcYellowHighlight.)
+ */
+const wtcRtcBorder = computed(() => {
+  if (!store.multiAirport) return false
   const w = props.strip.wakeTurbulence
   return !!w && w !== 'M'
 })
 
-/** Thick ATYP frame for slow aircraft types — DEP strips only (not ARR). */
-const atypSlowFrame = computed(
-  () => !!props.strip.isSlow && !isArrLayout.value && !isLocalOnlyStrip.value,
+/** Paper look: red kulspetspenna circle around non-M WTC (unchanged ESGG cue). */
+const wtcPaperCircled = computed(() => {
+  if (!store.isPaperLook) return false
+  const w = props.strip.wakeTurbulence
+  return !!w && w !== 'M'
+})
+
+/**
+ * SAAB / paper look (all views): yellow WTC cell for B757 & Tu204 family.
+ * Letter stays "M"; fill matches non-standard RWY (#fddf5f).
+ */
+const wtcYellowHighlight = computed(
+  () => store.isPaperLook && heavyAsLeaderType.value,
 )
-const displayXfl = computed(() => store.displayXflForStrip(props.strip))
+
+/**
+ * Thick ATYP frame for slow aircraft — DEP only, not in RTC
+ * (RTC suppresses ATYP frames except B757/Tu204 yellow + heavy thick border).
+ */
+const atypSlowFrame = computed(
+  () =>
+    !store.multiAirport &&
+    !!props.strip.isSlow &&
+    !isArrLayout.value &&
+    !isLocalOnlyStrip.value,
+)
+
+/**
+ * Always thick ATYP border for super/heavy types (A388/A124/B748/…).
+ * Global wherever the digital ATYP cell exists (SAAB + RTC); not yellow fill.
+ */
+const atypHeavyThickFrame = computed(() =>
+  isThickAtypBorderAircraftType(props.strip.aircraftType),
+)
+
+/** Thick ATYP border: slow-DEP frame and/or heavy take-off types. */
+const atypThickBorder = computed(() => atypSlowFrame.value || atypHeavyThickFrame.value)
+
+/** RTC only: yellow ATYP for B757 / Tu204 (same heavy-as-leader set). */
+const atypYellowHighlight = computed(
+  () => store.multiAirport && heavyAsLeaderType.value,
+)
+/**
+ * RTC coordination UI only (`multiAirport` / multiairport.yml).
+ * ESSA SAAB and ESGG paper must not get XFL edit / EST / pink pending.
+ */
+const isRtcCoordUi = computed(() => store.multiAirport)
+
+/** Prefer ACC-proposed XFL while inbound pending; else EuroScope / SID preview. */
+const displayXfl = computed(() => {
+  if (
+    isRtcCoordUi.value &&
+    props.strip.exitCoordPending &&
+    props.strip.exitCoordAltitude
+  ) {
+    return (
+      formatStripAltitude(props.strip.exitCoordAltitude, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
+    )
+  }
+  return store.displayXflForStrip(props.strip)
+})
 const displayCfl = computed(() => store.displayCflForStrip(props.strip))
+
+/** RTC: pink XFL for outbound REQUESTED_BY_ME or inbound REQUESTED_BY_OTHER. */
+const xflCoordPink = computed(
+  () =>
+    isRtcCoordUi.value &&
+    !!(props.strip.exitCoordPending || props.strip.exitCoordOutbound),
+)
+
+/**
+ * RTC: amber XFL after ACC refused our outbound request.
+ * Lower priority than pink; overrides CLR-pending amber even when clearance set.
+ */
+const xflCoordAmber = computed(
+  () =>
+    isRtcCoordUi.value &&
+    !xflCoordPink.value &&
+    !!props.strip.exitCoordRefused,
+)
+
+/**
+ * RTC DEP/local: pink C on EST for inbound REQUESTED_BY_OTHER.
+ * EST is force-shown while pending even when coordination-exempt.
+ * ARR uses pink C in the PEL slot instead (see showArrCoordPendingC).
+ */
+const showEstCoordC = computed(
+  () =>
+    isRtcCoordUi.value &&
+    !isArrLayout.value &&
+    !!props.strip.exitCoordPending,
+)
+
+/**
+ * RTC ARR only: pink C in the PEL grid slot (same cell-xfl area as DEP XFL)
+ * for inbound ACC proposal. Accept/Refuse only — no send / XflMenu / DepCoord.
+ */
+const showArrCoordPendingC = computed(
+  () => isRtcCoordUi.value && isArrLayout.value && !!props.strip.exitCoordPending,
+)
+
+/** DEP: always show XFL (non-compact). ARR: only the pending pink-C PEL slot on RTC. */
+const showXflCell = computed(() => {
+  if (isCompactBay.value) return false
+  if (isArrLayout.value) return showArrCoordPendingC.value
+  return true
+})
+
+/** Strip level cell label: XFL (DEP) vs PEL (ARR). */
+const levelCellPlaceholder = computed(() => (isArrLayout.value ? 'PEL' : 'XFL'))
+
+const xflCellTitle = computed(() => {
+  if (isArrLayout.value) {
+    if (showArrCoordPendingC.value) {
+      return 'ACC PEL proposal — click to Accept/Reject'
+    }
+    return 'EuroScope PEL'
+  }
+  if (!isRtcCoordUi.value) return 'EuroScope XFL'
+  if (props.strip.exitCoordPending) {
+    return 'ACC XFL proposal — click to Accept/Reject'
+  }
+  if (props.strip.exitCoordOutbound) {
+    return 'Outbound XFL coordination pending'
+  }
+  if (props.strip.exitCoordRefused) {
+    return 'Outbound XFL coordination refused — set Departure Coordination or re-coordinate'
+  }
+  return 'EuroScope XFL — click to request exit coordination'
+})
 /**
  * Top-expander CLR chip colors.
  * Green = clearance flag only (never Hoppie-online, never arrow-rea).
@@ -2514,9 +3104,76 @@ const clrChipClass = computed(() => {
   const s = props.strip.dclStatus
   if (s === 'REQUEST') return 'dcl-request'
   if (s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED') return 'dcl-err'
+  if (s === 'SENT' || s === 'DONE' || s === 'WILCO') return 'exp-clr-ok'
   if (props.strip.clearance) return 'exp-clr-ok'
   return ''
 })
+
+/** ESSA: show DCL when Hoppie flow is active or pilot is online on Hoppie. */
+const hoppieOnlineForClr = ref(false)
+let hoppieOnlineCheckSeq = 0
+
+const showEssaDclLabel = computed(() => {
+  if (!store.essaRolesMode) return false
+  const s = props.strip.dclStatus
+  if (
+    s === 'REQUEST' ||
+    s === 'SENT' ||
+    s === 'DONE' ||
+    s === 'WILCO' ||
+    s === 'INVALID' ||
+    s === 'UNABLE' ||
+    s === 'REJECTED'
+  ) {
+    return true
+  }
+  return store.dclStatus === 'connected' && hoppieOnlineForClr.value
+})
+
+const clrChipLabel = computed(() => (showEssaDclLabel.value ? 'DCL' : 'CLR'))
+
+async function refreshHoppieOnlineForClr() {
+  const seq = ++hoppieOnlineCheckSeq
+  if (!store.essaRolesMode || store.dclStatus !== 'connected') {
+    hoppieOnlineForClr.value = false
+    return
+  }
+  const status = props.strip.dclStatus
+  if (status === 'REQUEST' || status === 'SENT' || status === 'DONE' || status === 'WILCO') {
+    // Label already DCL from status — skip network check
+    return
+  }
+  try {
+    const res = await fetch(`/api/hoppie/online/${encodeURIComponent(props.strip.callsign)}`)
+    if (!res.ok || seq !== hoppieOnlineCheckSeq) return
+    const data = (await res.json()) as { online?: boolean }
+    if (seq !== hoppieOnlineCheckSeq) return
+    hoppieOnlineForClr.value = !!data.online
+  } catch {
+    if (seq === hoppieOnlineCheckSeq) hoppieOnlineForClr.value = false
+  }
+}
+
+watch(
+  () =>
+    [
+      topExpanded.value,
+      isCompactBay.value,
+      store.essaRolesMode,
+      store.dclStatus,
+      props.strip.callsign,
+      props.strip.dclStatus,
+    ] as const,
+  ([expanded, compact]) => {
+    if (!store.essaRolesMode) {
+      hoppieOnlineForClr.value = false
+      return
+    }
+    // Expander chip or compact CLNC action needs Hoppie-online for DCL label
+    if (expanded || compact) void refreshHoppieOnlineForClr()
+    else hoppieOnlineForClr.value = false
+  },
+)
 
 function onExpRea() {
   if (!canEditAssignedData.value) return
@@ -2546,6 +3203,7 @@ const currentAtisLetter = computed(() => {
   return letter || undefined
 })
 
+/** Amber only when acknowledged value differs from current (changed since last click). */
 const qnhStale = computed(() => {
   const given = props.strip.qnhGiven
   const cur = currentQnh.value
@@ -2556,6 +3214,25 @@ const qnhGivenMatches = computed(() => {
   const given = props.strip.qnhGiven
   const cur = currentQnh.value
   return given != null && cur != null && given === cur
+})
+
+/**
+ * ATIS amber when the stamped letter/QNH pair no longer matches current
+ * (changed since last ATIS click). Not amber for QNH-only stamps.
+ */
+const atisStale = computed(() => {
+  const given = (props.strip.atisGiven || '').trim().toUpperCase()
+  if (!given) return false
+  const cur = currentAtisLetter.value
+  const letterChanged = !!cur && given !== cur
+  return letterChanged || qnhStale.value
+})
+
+/** Green ATIS: both letter and QNH still match what was acknowledged. */
+const atisGivenMatches = computed(() => {
+  const letter = (props.strip.atisGiven || '').trim().toUpperCase()
+  const curLetter = currentAtisLetter.value
+  return !!letter && !!curLetter && letter === curLetter && qnhGivenMatches.value
 })
 
 const canSetQnh = computed(() =>
@@ -2570,7 +3247,8 @@ const paperAtisQnhStamp = computed(() => {
   return letter ? `${letter}${qnh}` : String(qnh)
 })
 
-const paperAtisQnhStale = computed(() => qnhStale.value)
+/** Paper stamp amber if QNH or ATIS letter changed since ack. */
+const paperAtisQnhStale = computed(() => qnhStale.value || atisStale.value)
 
 const canStampAtisQnh = computed(
   () =>
@@ -2579,23 +3257,45 @@ const canStampAtisQnh = computed(
     !!currentAtisLetter.value,
 )
 
+const atisChipTitle = computed(() => {
+  if (atisStale.value) {
+    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) — click to acknowledge`
+  }
+  if (atisGivenMatches.value) return `ATIS ${currentAtisLetter.value} given — click to clear`
+  return `ATIS ${currentAtisLetter.value || ''}`
+})
+
+const qnhChipTitle = computed(() => {
+  if (qnhStale.value) {
+    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) — click to acknowledge`
+  }
+  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given — click to clear`
+  return currentQnh.value != null ? `QNH ${currentQnh.value}` : 'QNH'
+})
+
 function onPaperAtisQnhClick() {
   if (isArrLayout.value || isPaperEmptyFlightHolder.value) return
   if (!canUsePaperClickspots.value || !canEditAssignedData.value) return
   const curQnh = currentQnh.value
   const curAtis = currentAtisLetter.value
-  const given = props.strip.qnhGiven
-  if (given != null && curQnh != null && given === curQnh) {
+  // Green (both match) → white (clear)
+  if (
+    props.strip.qnhGiven != null &&
+    curQnh != null &&
+    props.strip.qnhGiven === curQnh &&
+    (props.strip.atisGiven || '').trim().toUpperCase() === (curAtis || '')
+  ) {
     store.setQnhGiven(props.strip.id, null)
     return
   }
+  // Amber or white → green (acknowledge current)
   if (curQnh == null || !curAtis) return
   store.setQnhGiven(props.strip.id, curQnh, curAtis)
 }
 
-/** Top ▲: QNH stale (orange) overrides REA (green) */
+/** Top ▲: QNH/ATIS stale (orange) overrides REA (green) */
 const topArrowClass = computed(() => {
-  if (qnhStale.value) return { 'arrow-stale': true }
+  if (qnhStale.value || atisStale.value) return { 'arrow-stale': true }
   if (isRea.value) return { 'arrow-rea': true }
   return {}
 })
@@ -2603,6 +3303,9 @@ const topArrowClass = computed(() => {
 const topArrowTitle = computed(() => {
   if (qnhStale.value) {
     return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) - open menu & press QNH`
+  }
+  if (atisStale.value) {
+    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) - open menu & press ATIS`
   }
   if (isRea.value) return 'REA set'
   return topExpanded.value ? 'Close top menu' : 'Top menu'
@@ -2626,23 +3329,35 @@ const callsignBoxTitle = computed(() => {
   return rtf ? `${rtf} - ${mode}` : mode
 })
 
+/**
+ * QNH key: green → white (clear); amber/white → green (ack current).
+ * Amber only when qnhGiven differs from current QNH.
+ */
 function onExpQnh() {
-  if (!canSetQnh.value || currentQnh.value == null) return
-  store.setQnhGiven(props.strip.id, currentQnh.value)
-}
-
-/** RTC: stamp ATIS letter + QNH (same as paper ATIS/QNH clickspot) */
-function onExpAtis() {
-  if (!canStampAtisQnh.value || currentQnh.value == null || !currentAtisLetter.value) return
-  const given = props.strip.qnhGiven
-  if (given != null && given === currentQnh.value) {
+  if (!canEditAssignedData.value) return
+  if (qnhGivenMatches.value) {
     store.setQnhGiven(props.strip.id, null)
     return
   }
+  if (currentQnh.value == null) return
+  store.setQnhGiven(props.strip.id, currentQnh.value)
+}
+
+/**
+ * ATIS key: green → white; amber/white → green (stamp letter + QNH).
+ * Amber when ATIS letter (or QNH) changed since last ack.
+ */
+function onExpAtis() {
+  if (!canEditAssignedData.value) return
+  if (atisGivenMatches.value) {
+    store.setQnhGiven(props.strip.id, null)
+    return
+  }
+  if (currentQnh.value == null || !currentAtisLetter.value) return
   store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
 }
 
-/** RTC: TopSky WEATHER manual alert flag */
+/** RTC: TopSky WEATHER manual alert (ARR + DEP); UI green via weatherGiven */
 function onExpMet() {
   if (!canEditAssignedData.value) return
   store.sendStripAction(props.strip.id, 'WEATHER')
@@ -2695,7 +3410,7 @@ function onExpVect() {
   if (!canEditAssignedData.value) return
   store.updateRemarks(props.strip.id, withVectRemark(props.strip.remarks, !hasVectRemarkFlag.value))
 }
-const effectiveActionCount = computed(() => props.strip.actions?.length ?? 0)
+const effectiveActionCount = computed(() => displayActions.value.length)
 
 // Remarks state
 const remarksEditing = ref(false)
@@ -2709,7 +3424,23 @@ const hsEditing = ref(false)
 const hsEditText = ref('')
 const hsInput = ref<HTMLInputElement | null>(null)
 
+function clearScribblesInCell(sel: string): boolean {
+  const root = stripElement.value
+  if (!root || store.isPaperLook) return false
+  const el = root.querySelector(sel) as HTMLElement | null
+  if (!el) return false
+  const rect = elementToScribbleRect(el, root)
+  if (!rect) return false
+  const n = removeScribblesOverlappingRect(props.strip.id, rect, 0.25)
+  if (n > 0) {
+    store.syncStripScribbles(props.strip.id)
+    return true
+  }
+  return false
+}
+
 function onHsClick() {
+  if (clearScribblesInCell('.cell-hs')) return
   if (!canEditAssignedData.value) return
   if (hsEditing.value) {
     nextTick(() => hsInput.value?.focus())
@@ -2755,6 +3486,7 @@ const hpEditText = ref('')
 const hpInput = ref<HTMLInputElement | null>(null)
 
 function onHpClick() {
+  if (clearScribblesInCell('.cell-hp')) return
   if (!canEditAssignedData.value) return
   if (hpEditing.value) {
     nextTick(() => hpInput.value?.focus())
@@ -2798,6 +3530,134 @@ function onHpEditBlur() {
 const tmaExitPoint = computed(
   () => props.strip.tmaExit || extractTmaExitPoint(undefined, props.strip.route),
 )
+
+/**
+ * RTC DEP/local EST cell only (not ARR — inbound ARR uses pink C on PEL).
+ * Ground IFR when ADEP needs ACC coordination, or inbound pending.
+ * Never ESSA (not multiAirport) or paper look.
+ */
+const showCooCell = computed(() => {
+  if (!isRtcCoordUi.value) return false
+  if (isCompactBay.value || isArrLayout.value) return false
+  if (props.strip.airborne) return false
+  if (!isIfrSidEligible(props.strip.flightRules)) return false
+  const t = props.strip.stripType
+  if (t !== 'departure' && t !== 'local') return false
+  // Inbound ACC proposal: always show EST so pink C / Accept-Reject has a home
+  // (even when ADEP/exit is coordination-exempt, e.g. some ESNU TMA exits).
+  if (props.strip.exitCoordPending) return true
+  return requiresAccCoordination(props.strip.adep, tmaExitPoint.value)
+})
+
+/** ESSB/ESMS invert EST gestures: short → DEP COORD, long → toggle EST. */
+function isEssbEsmsAdep(): boolean {
+  const adep = (props.strip.adep || '').toUpperCase()
+  return adep === 'ESSB' || adep === 'ESMS'
+}
+
+/**
+ * Open DEP COORD. If the strip is not assumed by me and we can assume,
+ * send ASSUME first (same path as the ASSUME button), then open.
+ * If owned by another controller and we cannot assume, do not open.
+ */
+function openDepCoordDialog() {
+  let assumedBeforeOpen = false
+  if (canAssumeFromMenu.value) {
+    store.sendStripAction(props.strip.id, 'ASSUME')
+    assumedBeforeOpen = true
+  } else if (store.isStripOwnedByOther(props.strip)) {
+    return
+  }
+  depCoordAssumedBeforeOpen.value = assumedBeforeOpen
+  depCoordDialogOpen.value = true
+}
+
+const cooCellTitle = computed(() => {
+  if (props.strip.exitCoordPending) {
+    if (isEssbEsmsAdep()) {
+      return 'ACC coordination proposal — click to Accept/Reject · hold: Departure Coordination · right-click: Departure Coordination'
+    }
+    return 'ACC coordination proposal — click to Accept/Reject · hold/right-click: Departure Coordination'
+  }
+  if (isEssbEsmsAdep()) {
+    return 'Left-click: XFL coordination to ACC · Hold: Departure Coordination · Right-click: Departure Coordination'
+  }
+  return 'Left-click: Departure Coordination · Hold/right-click: XFL coordination to ACC'
+})
+
+/**
+ * ~600ms hold on EST.
+ * Default airports: DEP COORD (same as right-click); suppress following click toggle.
+ * ESSB/ESMS: toggle EST instead; suppress following click DEP COORD.
+ */
+const EST_LONG_HOLD_MS = 600
+let estLongPressTimer: number | null = null
+let estLongHeld = false
+
+function clearEstLongPress() {
+  if (estLongPressTimer != null) {
+    clearTimeout(estLongPressTimer)
+    estLongPressTimer = null
+  }
+}
+
+function onCooPointerDown(e: PointerEvent) {
+  if (e.button != null && e.button !== 0) return
+  if (!canEditAssignedData.value || !showCooCell.value) return
+  estLongHeld = false
+  clearEstLongPress()
+  estLongPressTimer = window.setTimeout(() => {
+    estLongPressTimer = null
+    estLongHeld = true
+    if (isEssbEsmsAdep()) {
+      store.setCoo(props.strip.id, !props.strip.coo)
+    } else {
+      openDepCoordDialog()
+    }
+  }, EST_LONG_HOLD_MS)
+}
+
+function onCooPointerUp() {
+  clearEstLongPress()
+}
+
+function onCooPointerCancel() {
+  clearEstLongPress()
+  estLongHeld = false
+}
+
+function onCooClick() {
+  if (estLongHeld) {
+    estLongHeld = false
+    return
+  }
+  if (!showCooCell.value) return
+  // Inbound ACC proposal Accept/Reject — all airports (incl. ESSB/ESMS)
+  if (props.strip.exitCoordPending) {
+    if (!store.isController) return
+    coordProposalDialogOpen.value = true
+    return
+  }
+  if (!canEditAssignedData.value) return
+  if (isEssbEsmsAdep()) {
+    openDepCoordDialog()
+    return
+  }
+  store.setCoo(props.strip.id, !props.strip.coo)
+}
+
+/** Right-click EST → DEP COORD (all airports, incl. ESSB/ESMS). */
+function onCooContextMenu() {
+  if (!canEditAssignedData.value || !showCooCell.value) return
+  clearEstLongPress()
+  estLongHeld = false
+  openDepCoordDialog()
+}
+
+onUnmounted(() => {
+  clearEstLongPress()
+  estLongHeld = false
+})
 
 function onNoteClick() {
   if (props.isLargeView) {
@@ -3159,20 +4019,6 @@ const primaryTimeLabel = computed(() => {
   }
 })
 
-/**
- * Bottom time window:
- * - ESSA DEP: TSAT until PUSH&START; then ASSR (CTOT/SCL live in dep arrow)
- * - ARR / other airports: ASSR (squawk)
- */
-const secondaryTimeKind = computed((): SecondaryTimeKind => {
-  if (isArrLayout.value) return 'assr'
-  if (isEssaDep.value) {
-    if (!isPushStartOrLater.value) return 'tsat'
-    return 'assr'
-  }
-  return 'assr'
-})
-
 /** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled) */
 const depArrowCtot = computed(() => {
   if (isArrLayout.value || props.strip.atd || !showCtot.value || props.strip.clearedForTakeoff) return ''
@@ -3180,14 +4026,39 @@ const depArrowCtot = computed(() => {
   return formatHhmmColon(props.strip.ctot)
 })
 
-/** Time shown in triangle: ATD (dep) / ATA (arr) / else CTOT on dep */
+/**
+ * Bottom time window:
+ * - ESSA DEP: TSAT until PUSH&START; then ASSR (CTOT/SCL live in dep arrow)
+ * - Compact DEP: CTOT/SCL replaces ASSR (no CTOT-only triangle)
+ * - ARR / other airports: ASSR (squawk)
+ */
+const secondaryTimeKind = computed((): SecondaryTimeKind => {
+  if (isArrLayout.value) return 'assr'
+  if (isEssaDep.value && !isPushStartOrLater.value) return 'tsat'
+  // Compact: CTOT/SCL in ASSR slot (triangle only for CFTO/ATD green)
+  if (isCompactBay.value && depArrowCtot.value) {
+    return depArrowCtot.value === 'SCL' ? 'scl' : 'ctot'
+  }
+  return 'assr'
+})
+
+/** Time shown in triangle: ATD (dep) / ATA (arr) / else CTOT on dep — hidden in compact */
 const triangleTimeText = computed(() => {
+  if (isCompactBay.value) return '' // ATA/ATD indicated by outline only
   if (isArrLayout.value) {
     return props.strip.ata ? formatHhmmColon(props.strip.ata) : ''
   }
   if (props.strip.atd) return formatHhmmColon(props.strip.atd)
   return depArrowCtot.value
 })
+
+/** Compact DEP: green takeoff △ in STD slot when CFTO or ATD (not CTOT-only). */
+const compactShowDepTriangle = computed(
+  () =>
+    isCompactBay.value &&
+    !isArrLayout.value &&
+    (!!props.strip.clearedForTakeoff || !!props.strip.atd),
+)
 
 /** Arrival strip is in a runway section (geo hold / CTL). */
 const onRunwaySection = computed(() => {
@@ -3223,6 +4094,18 @@ const arrTriangleGreenOutline = computed(() => {
   return gs === 'ARR' || gs === 'TXIN' || gs === 'PARK' || !gs
 })
 
+/** Compact ARR: green landing △ in AHD slot when CTL or ATA. */
+const compactShowArrTriangle = computed(
+  () =>
+    isCompactBay.value &&
+    isArrLayout.value &&
+    !props.strip.missedApproach &&
+    (!!props.strip.ata ||
+      !!props.strip.clearedToLand ||
+      showArrCtlTriangle.value ||
+      arrTriangleGreenOutline.value),
+)
+
 function onDepArrowCtotClick(event: MouseEvent) {
   if (props.strip.atd || !depArrowCtot.value) return
   onCtotClick(event)
@@ -3237,7 +4120,7 @@ const secondaryTimeValue = computed(() => {
     case 'scl':
       return 'SCL'
     case 'assr':
-      return props.strip.squawk || ''
+      return displayAssr.value
     default:
       return ''
   }
@@ -3246,8 +4129,8 @@ const secondaryTimeValue = computed(() => {
 const secondaryTimeLabel = computed(() => {
   switch (secondaryTimeKind.value) {
     case 'tsat': return secondaryTimeValue.value ? 'TS' : ''
-    case 'ctot': return 'CTOT'
-    case 'scl': return 'CTOT'
+    case 'ctot': return 'CT' // compact: CT 20:55 (same short style as TS/TB)
+    case 'scl': return 'CT'
     case 'assr': return '' // squawk only, no "ASSR" prefix
     default: return ''
   }
@@ -3263,7 +4146,23 @@ const secondaryTimeTitle = computed(() => {
   return undefined
 })
 
+const ssrCoordActive = computed(() => store.isSsrCoordinationActive(props.strip))
+const displayAssr = computed(() => store.displayAssrForStrip(props.strip))
+
+/** RTC: ASSR lives in the main strip only — never duplicate in bottom expander */
+const showBottomExpAssr = computed(() => !store.multiAirport)
+
+const assrEditing = ref(false)
+const assrEditText = ref('')
+const assrEditInput = ref<HTMLInputElement | null>(null)
+
 const assrTitle = computed(() => {
+  if (ssrCoordActive.value) {
+    const shown = displayAssr.value
+    return shown
+      ? `ASSR ${shown} (manual) - double-click for TopSky / ES`
+      : 'ASSR - click to enter (manual) · double-click TopSky'
+  }
   if (!props.strip.canResetSquawk) {
     return props.strip.squawk ? `ASSR ${props.strip.squawk}` : 'ASSR'
   }
@@ -3274,12 +4173,43 @@ const assrTitle = computed(() => {
 /** Paper FPS: short ASSR tooltip only */
 const paperAssrTitle = computed(() => (store.isPaperLook ? 'ASSR' : assrTitle.value))
 
+function startAssrManualEdit() {
+  assrEditText.value = displayAssr.value || ''
+  assrEditing.value = true
+  nextTick(() => {
+    assrEditInput.value?.focus()
+    assrEditInput.value?.select()
+  })
+}
+
+function onAssrEditBlur() {
+  if (!assrEditing.value) return
+  const digits = assrEditText.value.replace(/\D/g, '').slice(0, 4)
+  assrEditing.value = false
+  // Local/manual only — never assignSquawk / resetSquawk
+  store.setManualSsr(props.strip.id, digits)
+}
+
+function onAssrEditCancel() {
+  assrEditing.value = false
+}
+
 function onAssrClick() {
+  if (ssrCoordActive.value) {
+    startAssrManualEdit()
+    return
+  }
   if (!props.strip.canResetSquawk) return
   if (!props.strip.squawk) onResetSquawk()
 }
 
 function onAssrDblClick() {
+  if (ssrCoordActive.value) {
+    assrEditing.value = false
+    store.overrideSsrCoordination(props.strip.id)
+    if (!props.strip.squawk && props.strip.canResetSquawk) onResetSquawk()
+    return
+  }
   if (!props.strip.canResetSquawk) return
   if (props.strip.squawk) onResetSquawk()
 }
@@ -3597,11 +4527,12 @@ const canClearCtoc = computed(() =>
 
 /**
  * TSAC confirmation box: only with bottom expander open + CD ALL / TSAT.
- * Never on minimized strips (breaks left-column layout).
+ * Never on compact half-height strips (expanders hidden; left column is gutter+times).
  * Show when TSAT is known (editable) or TSAC is already set (even if TSAT briefly missing).
  */
 const showTsacBox = computed(
   () =>
+    !isCompactBay.value &&
     bottomExpanded.value &&
     showTsacCtoc.value &&
     showCdm.value &&
@@ -3705,10 +4636,9 @@ function onTsacClear() {
 function onEditTsacMenuClick() {
   tsacMenuOpen.value = false
   if (!canEditTsac.value) return
-  timeEditMode.value = 'tsac'
-  timeEditText.value = normalizeHhmmDisplay(props.strip.tsac) || displayTsat.value || ''
-  timeEditing.value = true
-  nextTick(() => timeEditInput.value?.focus())
+  tsacDialogInitial.value =
+    normalizeHhmmDisplay(props.strip.tsac) || displayTsat.value || ''
+  tsacDialogOpen.value = true
 }
 
 function onRemoveTsacMenuClick() {
@@ -3905,12 +4835,18 @@ const showAckClrLabel = computed(
 
 /** Strip label for action codes (internal codes unchanged for rules/handlers). */
 function actionLabel(action: string): string {
+  // Compact + two keys: shorten ASSUME / LINE UP; single key keeps full text
+  const compactPair = isCompactBay.value && effectiveActionCount.value > 1
   switch (action) {
-    case 'CLNC': return showAckClrLabel.value ? 'ACK CLR' : 'CLR'
+    case 'CLNC':
+      if (showEssaDclLabel.value) return 'DCL'
+      return showAckClrLabel.value ? 'ACK CLR' : 'CLR'
     case 'TXO':
     case 'TXI':
     case 'TAXI': return 'TAXI'
-    case 'LU': return 'LINE UP'
+    case 'LU': return compactPair ? 'L/U' : 'LINE UP'
+    case 'ASSUME': return compactPair ? 'ASSU' : 'ASSUME'
+    case 'CONTACTME': return compactPair ? 'C ME' : 'C ME'
     case 'CTO': return 'CFTO'
     case 'XFER': return 'TRANS'
     case 'PARK': return 'TERM'
@@ -4023,13 +4959,20 @@ function onDragAreaTouchStart(event: TouchEvent) {
     target.closest('.pg-atis-qnh') ||
     target.closest('.remarks-input') ||
     target.closest('.eobt-edit-input') ||
+    target.closest('.assr-edit-input') ||
     target.closest('.hp-edit-input') ||
     target.closest('.hs-edit-input') ||
     target.closest('.cell-hp') ||
     target.closest('.cell-hs') ||
+    target.closest('.cell-coo') ||
+    target.closest('.cell-xfl') ||
     target.closest('.cell-sid') ||
     target.closest('.cell-rwy') ||
-    target.closest('.cell-cfl')
+    target.closest('.cell-cfl') ||
+    target.closest('.cell-ahd') ||
+    target.closest('.atyp-box') ||
+    target.closest('.wtc-box') ||
+    target.closest('.compact-gutter')
   ) return
 
   touchStarted = true
@@ -4399,6 +5342,7 @@ function onContextMenu(event: MouseEvent) {
   sidRouteMenuOpen.value = false
   rwyMenuOpen.value = false
   cflMenuOpen.value = false
+  xflMenuOpen.value = false
   claimStripContextMenu(closeStripContextMenu)
   menuOpen.value = true
 }
@@ -4439,6 +5383,7 @@ function closeAssignmentMenus() {
   sidRouteMenuOpen.value = false
   rwyMenuOpen.value = false
   cflMenuOpen.value = false
+  xflMenuOpen.value = false
   ahdMenuOpen.value = false
 }
 
@@ -4461,6 +5406,28 @@ function onCflClick(event: MouseEvent) {
   menuPosition.value = menuCoordsFromEvent(event)
   closeAssignmentMenus()
   cflMenuOpen.value = true
+}
+
+/**
+ * RTC level cell click.
+ * ARR (PEL): inbound pending → CoordProposalDialog only (no send / XflMenu).
+ * DEP (XFL): pending → Accept/Reject; else XflMenu outbound initiate.
+ * Pending Accept/Reject overrides ownedByOther (C only — rest of strip stays locked).
+ */
+function onXflClick(event: MouseEvent) {
+  if (!isRtcCoordUi.value || isNote.value) return
+  if (props.strip.exitCoordPending) {
+    if (!store.isController) return
+    closeAssignmentMenus()
+    coordProposalDialogOpen.value = true
+    return
+  }
+  if (!canEditAssignedData.value) return
+  // ARR: Accept/Refuse only — never open XflMenu or initiate outbound
+  if (isArrLayout.value) return
+  menuPosition.value = menuCoordsFromEvent(event)
+  closeAssignmentMenus()
+  xflMenuOpen.value = true
 }
 
 function onAhdClick(event: MouseEvent) {
@@ -4492,6 +5459,13 @@ function onCallsignTouch(event: TouchEvent) {
 function onFplClick() {
   fplDialogOpen.value = true
   menuOpen.value = false
+}
+
+/** Brittle: plugin ESC → callsign → ASEL → HOME → ASEL → EuroScope .contactme */
+function onContactMeClick() {
+  menuOpen.value = false
+  if (isLocalOnlyStrip.value) return
+  store.sendStripAction(props.strip.id, 'CONTACTME')
 }
 
 function onClncMenuClick() {
@@ -4589,7 +5563,7 @@ function onGroundStateClick(action: string) {
   /* Raised key chrome — soft BR shade; kept small so it fits inside the type frame */
   --strip-key-shadow: 1px 1px 0 #aaa, 1px 2px 0 rgba(0, 0, 0, 0.10);
   /* Room inside the blue/type border for key box-shadow (matches max shadow offset) */
-  --strip-key-shadow-pad-x: 1px;
+  --strip-key-shadow-pad-x: 2px;
   --strip-key-shadow-pad-y: 2px;
   /* HP column ≈ square, slightly wider than one body row */
   /* HS / HP ≈ square; RWY just a bit wider */
@@ -4743,6 +5717,18 @@ function onGroundStateClick(action: string) {
   background-clip: border-box;
 }
 
+/* Paper body height shell (no SAAB action keys — assume via pin drag / ES) */
+.paper-with-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  height: var(--strip-body-h);
+  min-height: var(--strip-body-h);
+  max-height: var(--strip-body-h);
+}
+
 .paper-flight {
   /* Sans with open zeros (no slash) — match prior FPS print look */
   --pg-print: "Microsoft Sans Serif", "Segoe UI", Arial, Helvetica, sans-serif;
@@ -4758,9 +5744,9 @@ function onGroundStateClick(action: string) {
   align-items: stretch;
   flex: 1;
   min-width: 0;
-  height: var(--strip-body-h);
-  min-height: var(--strip-body-h);
-  max-height: var(--strip-body-h);
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   background: #fff;
   color: #000;
   /* Clip FPL route (etc.) at inner edge of colour frame — may still span into CTOT col */
@@ -4929,6 +5915,12 @@ function onGroundStateClick(action: string) {
   color: #000;
   letter-spacing: 0;
   vertical-align: baseline;
+}
+/* B757 / Tu204: WTC letter stays M; yellow fill = heavy-as-leader (same as non-std RWY) */
+.pg-wtc.pg-wtc-yellow {
+  padding: 0 0.12em;
+  background: #fddf5f;
+  box-shadow: inset 0 0 0 1px #c9a82a;
 }
 
 .pg-wtc-scribble {
@@ -5708,11 +6700,8 @@ function onGroundStateClick(action: string) {
   background: #fff;
 }
 
-/* Vehicle strips: dark grey type frame; RTC uses red */
+/* Vehicle strips: red type frame (1/2RWY4BAY, RTC, paper) */
 .strip-vehicle {
-  --strip-type: #4a4a4a;
-}
-.flight-strip.rtc-layout.strip-vehicle {
   --strip-type: #c62828;
 }
 
@@ -5930,6 +6919,10 @@ function onGroundStateClick(action: string) {
   overflow: hidden;
   box-sizing: border-box;
 }
+/* Top: DEP|POB flush to action-key right edge (same pad-x as strip-grid / action keys) */
+.strip-expander-top {
+  padding-right: var(--strip-key-shadow-pad-x);
+}
 .strip-expander-top,
 .strip-expander-bottom { border: none; }
 .exp-chips {
@@ -5939,6 +6932,35 @@ function onGroundStateClick(action: string) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+}
+/* Top expander: DEP|POB fill action-key width, 50/50 — independent of ▲ highlight */
+.exp-dep-pob {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: var(--actions-w);
+  min-width: var(--actions-w);
+  max-width: var(--actions-w);
+  height: var(--ctrl-arrow-h);
+  max-height: var(--ctrl-arrow-h);
+  flex-shrink: 0;
+  gap: 0;
+  box-sizing: border-box;
+}
+.exp-dep-pob .exp-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  padding: 0;
+  font-size: var(--fs-action-sm);
+}
+.exp-dep-pob .exp-dep-btn.exp-dep-green {
+  box-shadow: inset 0 0 0 2px #12b33a, var(--strip-key-shadow);
+  border-color: #0a8a2a;
+}
+.exp-dep-pob .exp-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 /* Bottom: [▼ RMK FPL | …][ASSR ADEP | remarks under CFL→][TMA] */
 .strip-expander-bottom {
@@ -5974,9 +6996,9 @@ function onGroundStateClick(action: string) {
   height: 100%;
   box-sizing: border-box;
 }
-/* Match strip-main column tracks so RMK starts under CFL */
+/* Match strip-main column tracks so RMK starts under CFL (coo half-width track) */
 .exp-bottom-main-dep {
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
 }
 .exp-bottom-main-arr {
   grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
@@ -6129,15 +7151,15 @@ function onGroundStateClick(action: string) {
   background: #d4d4d4;
 }
 .exp-chip:disabled { opacity: 0.55; cursor: default; }
-.exp-chip.active { background: var(--strip-amber); }
+.exp-chip.active { background: var(--strip-amber); color: #fff; }
 .exp-chip.exp-rea { background: #12b33a; color: #fff; border-color: #0a8a2a; }
 .exp-chip.exp-qnh-ok { background: #12b33a; color: #fff; border-color: #0a8a2a; }
 .exp-chip.exp-qnh-stale { background: var(--strip-amber); color: #fff; border-color: #b06a00; }
 .exp-chip.inert { opacity: 0.55; cursor: default; }
-.exp-chip.dcl-request { background: #fdd835; }
-/* Clearance green — chip only; must not style .expander-arrow / .arrow-rea */
-.exp-chip.exp-clr-ok { background: var(--strip-ok-green); color: #000; }
-.exp-chip.dcl-err { background: #e53935; color: #000; }
+.exp-chip.dcl-request { background: #fdd835; color: #000; }
+/* Clearance green / amber / error — white text on highlight (chip + ▲ arrows already white) */
+.exp-chip.exp-clr-ok { background: var(--strip-ok-green); color: #fff; }
+.exp-chip.dcl-err { background: #e53935; color: #fff; }
 .exp-remarks {
   font-size: calc(9px * var(--strip-scale));
   color: #2244aa;
@@ -6228,8 +7250,16 @@ function onGroundStateClick(action: string) {
 .flight-strip.dimmed-data .exp-tma-exit {
   color: #c5c5c5 !important;
 }
-.flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard {
+.flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard,
+.flight-strip.dimmed-data .strip-left .atyp-box.atyp-yellow,
+.flight-strip.dimmed-data .strip-left .wtc-box.wtc-yellow {
   color: #000 !important;
+}
+/* Inbound pink C: keep full pink even when strip data is dimmed / ownedByOther */
+.flight-strip.dimmed-data .strip-main .cell.proposal,
+.flight-strip.dimmed-data .strip-main .cell.xfl-coord-pink.proposal,
+.flight-strip.dimmed-data .strip-main .cell.coo-coord-pink {
+  color: #dc7cae !important;
 }
 .cell-cfl.arr-cfl-ghost {
   color: #b0b0b0 !important;
@@ -6398,12 +7428,14 @@ function onGroundStateClick(action: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
 }
 .strip-left .wtc-box {
   grid-area: wtc;
   padding: 0 calc(2px * var(--strip-scale));
   font-size: var(--fs-left-sm);
   overflow: hidden;
+  cursor: pointer;
 }
 /* Keep middle-row frame even when WTC is plain (M); thick black highlight only on WTC */
 .strip-left .wtc-box.plain {
@@ -6414,7 +7446,13 @@ function onGroundStateClick(action: string) {
   border: 2px solid #111;
   margin: 0;
 }
-/* Slow ATYP (DEP only): same thick frame as non-M WTC */
+/* B757 / Tu204 WTC yellow (paper look also uses .pg-wtc-yellow; digital if ever enabled) */
+.strip-left .wtc-box.wtc-yellow {
+  background: #fddf5f;
+  border: 1px solid #c9a82a;
+  margin: 1px;
+}
+/* Slow ATYP (DEP) + heavy types (A388/A124/…): thick frame like non-M WTC */
 .strip-left .atyp-box.plain {
   border: 1px solid #d8d8d8;
   padding: 0 calc(2px * var(--strip-scale));
@@ -6422,6 +7460,12 @@ function onGroundStateClick(action: string) {
 .strip-left .atyp-box.boxed {
   border: 2px solid #111;
   margin: 0;
+}
+/* RTC: yellow ATYP for B757 / Tu204 heavy-as-leader types */
+.strip-left .atyp-box.atyp-yellow {
+  background: #fddf5f;
+  border: 1px solid #c9a82a;
+  margin: 1px;
 }
 /* Expander arrows: compact key; strip-bg fill + light raised shade */
 .strip-left .ctrl-arrow {
@@ -6594,10 +7638,10 @@ function onGroundStateClick(action: string) {
   box-sizing: border-box;
 }
 .strip-grid-dep .strip-main {
-  /* empty col left of HS; RWY slightly wider than HS/HP; XFL/CFL a bit wider */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  /* empty col left of HS; RWY slightly wider than HS/HP; EST (coo) ~half former width */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
   grid-template-areas:
-    'cs  cs  xfl .   .   hs  hp  rwy'
+    'cs  cs  xfl coo .   hs  hp  rwy'
     'std cto cfl ahd sid sid sid sid';
 }
 .strip-grid-arr .strip-main {
@@ -6606,22 +7650,161 @@ function onGroundStateClick(action: string) {
     'cs  cs  .   .   .   hs  hp  rwy'
     'cto std cfl ahd .   .   .   .';
 }
-/* RTC: no HS (ESSA-only); STD|triangle; SID|AHD; SID framed */
+/* RTC: no HS (ESSA-only); STD|triangle; SID|AHD; SID framed; PEL slot = xfl area (pink C when pending) */
 .flight-strip.rtc-layout .strip-grid-arr .strip-main {
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
-  grid-template-areas:
-    'cs  cs  .   .   .   hp  rwy'
-    'std cto cfl sid sid sid ahd';
-}
-.flight-strip.rtc-layout .exp-bottom-main-arr,
-.flight-strip.rtc-layout .exp-bottom-main-dep {
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
-}
-.flight-strip.rtc-layout .strip-grid-dep .strip-main {
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
     'cs  cs  xfl .   .   hp  rwy'
     'std cto cfl sid sid sid ahd';
+}
+.flight-strip.rtc-layout .exp-bottom-main-arr {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
+}
+.flight-strip.rtc-layout .exp-bottom-main-dep {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
+}
+.flight-strip.rtc-layout .strip-grid-dep .strip-main {
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
+  grid-template-areas:
+    'cs  cs  xfl coo .   hp  rwy'
+    'std cto cfl sid sid sid ahd';
+}
+
+/* ── Compact half-height SAAB (ARR + DEP share columns) ── */
+.flight-strip.strip-compact {
+  --strip-body-h: calc(25px * var(--bay-scale, var(--strip-scale)));
+  /*
+   * HP/RWY tracks are derived from body height. Freeze them to the full-strip
+   * (50×scale) sizes so fr columns — especially C/S — match normal width.
+   */
+  --hp-col: calc(25px * var(--strip-scale) + 4px * var(--strip-scale));
+  --rwy-col: calc(var(--hp-col) + 12px * var(--strip-scale));
+}
+.flight-strip.strip-compact .strip-left.strip-left-compact {
+  --strip-left-arrow: var(--left-arrow-w);
+  grid-template-columns: var(--left-arrow-w) calc(var(--left-atyp-w) + var(--left-wtc-w));
+  grid-template-rows: 1fr 1fr;
+  grid-template-areas:
+    'gutter timeT'
+    'gutter timeB';
+}
+.flight-strip.strip-compact .compact-gutter {
+  grid-area: gutter;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  align-self: stretch;
+  justify-self: stretch;
+  overflow: hidden;
+}
+.flight-strip.strip-compact .compact-gutter-half {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.flight-strip.strip-compact .compact-gutter:hover .compact-gutter-half:not(.arrow-rea):not(.arrow-stale) {
+  background: rgba(0, 0, 0, 0.04);
+}
+/* Same fills as expander ▲/▼ keys */
+.flight-strip.strip-compact .compact-gutter-half.arrow-rea {
+  background: #12b33a;
+}
+.flight-strip.strip-compact .compact-gutter-half.arrow-stale {
+  background: var(--strip-amber);
+}
+/*
+ * Compact main: same column tracks as normal DEP so C/S (span 2) and RWY
+ * match normal strip width; ARR uses the same tracks (AHD/SID empty).
+ */
+.flight-strip.strip-compact .strip-grid-dep .strip-main,
+.flight-strip.strip-compact .strip-grid-arr .strip-main {
+  grid-template-rows: 1fr;
+  /* minmax(0,…) so △ / text cannot widen fr tracks and squeeze C/S */
+  grid-template-columns:
+    minmax(0, 0.72fr) minmax(0, 0.92fr) minmax(0, 0.68fr) minmax(0, 0.72fr)
+    minmax(0, 0.87fr) var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-areas: 'cs cs std ahd sid sid sid rwy';
+}
+.flight-strip.strip-compact.rtc-layout .strip-grid-dep .strip-main,
+.flight-strip.strip-compact.rtc-layout .strip-grid-arr .strip-main {
+  grid-template-rows: 1fr;
+  grid-template-columns:
+    minmax(0, 0.72fr) minmax(0, 0.92fr) minmax(0, 0.68fr) minmax(0, 0.72fr)
+    minmax(0, 0.87fr) var(--hp-col) var(--rwy-col);
+  grid-template-areas: 'cs cs std ahd sid sid rwy';
+}
+.flight-strip.strip-compact .strip-main .callsign-box {
+  grid-area: cs;
+  align-self: stretch;
+}
+.flight-strip.strip-compact .strip-main .cell-std { grid-area: std; }
+.flight-strip.strip-compact .strip-main .cell-ahd { grid-area: ahd; }
+.flight-strip.strip-compact .strip-main .cell-sid { grid-area: sid; }
+.flight-strip.strip-compact .strip-main .cell-rwy { grid-area: rwy; }
+.flight-strip.strip-compact .cell-compact-spacer {
+  pointer-events: none;
+  border: none !important;
+  outline: none !important;
+  margin: 0;
+  background: transparent;
+}
+/* Compact CTL/CFTO △ — square in cell, no frame, must not inflate grid tracks */
+.flight-strip.strip-compact .cell-compact-cto {
+  position: relative;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  border: none !important;
+  outline: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  pointer-events: none;
+  background: transparent;
+  min-width: 0;
+  max-width: 100%;
+  z-index: 0;
+}
+.flight-strip.strip-compact .cell-compact-cto::after {
+  content: none !important;
+  display: none !important;
+}
+.flight-strip.strip-compact .cell-compact-cto .clearance-triangle,
+.flight-strip.strip-compact .cell-compact-cto .clearance-triangle.mini {
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  display: block;
+  flex: 0 0 auto;
+  /*
+   * Same proportions as normal CTO cell: ~0.92fr wide × half body tall
+   * (≈1.8∶1 at design scale). Cap by cell so tracks stay stable.
+   */
+  --compact-cto-h: calc(var(--strip-body-h) - 6px);
+  --compact-cto-aspect: 1.8;
+  width: min(100%, calc(var(--compact-cto-h) * var(--compact-cto-aspect))) !important;
+  height: auto !important;
+  aspect-ratio: 1.8 / 1;
+  max-height: var(--compact-cto-h);
+  max-width: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+  box-sizing: border-box;
+}
+.flight-strip.strip-compact .strip-left .atyp-box,
+.flight-strip.strip-compact .strip-left .wtc-box {
+  cursor: pointer;
 }
 .flight-strip.rtc-layout .strip-main .cell-sid {
   position: relative;
@@ -6644,6 +7827,7 @@ function onGroundStateClick(action: string) {
  * ::after draws the visible frame with extra vertical padding inside the cell.
  */
 .strip-main .cell-xfl,
+.strip-main .cell-coo,
 .strip-main .cell-hs,
 .strip-main .cell-hp,
 .strip-main .cell-rwy {
@@ -6659,6 +7843,7 @@ function onGroundStateClick(action: string) {
   outline: none !important;
 }
 .strip-main .cell-xfl::after,
+.strip-main .cell-coo::after,
 .strip-main .cell-hs::after,
 .strip-main .cell-hp::after,
 .strip-main .cell-rwy::after,
@@ -6683,8 +7868,55 @@ function onGroundStateClick(action: string) {
   font-weight: 700;
   border: none !important;
 }
+.cell-xfl.editable {
+  cursor: pointer;
+}
 .cell-xfl:not(.ghost) {
   font-size: var(--fs-mid);
+}
+/* RTC: pink XFL while outbound/inbound coordination pending (same pink as ROF) */
+.cell-xfl.xfl-coord-pink {
+  color: #dc7cae;
+  font-weight: 800;
+}
+/* RTC: amber XFL after ACC refused our outbound request (overrides CLR highlight) */
+.cell-xfl.xfl-coord-amber {
+  color: var(--strip-amber);
+  font-weight: 800;
+}
+/* Pink C proposal: no cell frame (ARR PEL C / DEP EST C) */
+.strip-main .cell-xfl.proposal::after,
+.strip-main .cell-coo.proposal::after {
+  content: none;
+  border: none;
+}
+.cell-xfl.proposal,
+.cell-coo.proposal {
+  cursor: pointer;
+}
+/* ARR PEL pink C: match DEP EST C (--fs-data / 800); skip .fit-font while showing C */
+.cell-xfl.proposal {
+  font-size: var(--fs-data);
+  font-weight: 800;
+}
+.cell-coo {
+  grid-area: coo;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  border: none !important;
+  line-height: 1;
+}
+.cell-coo.editable {
+  cursor: pointer;
+}
+.cell-coo:not(.ghost) {
+  font-size: var(--fs-data);
+}
+/* RTC: pink C on EST for inbound ACC proposal */
+.cell-coo.coo-coord-pink {
+  color: #dc7cae;
+  font-size: var(--fs-data);
+  font-weight: 800;
 }
 .cell-hs {
   grid-area: hs;
@@ -6728,8 +7960,8 @@ function onGroundStateClick(action: string) {
   isolation: isolate;
 }
 .strip-main .cell-rwy.rwy-nonstandard::after {
-  background: #e8e84a;
-  border-color: #b0b020;
+  background: #fddf5f;
+  border-color: #c9a82a;
   z-index: -1;
 }
 .cell-std {
@@ -6905,6 +8137,26 @@ function onGroundStateClick(action: string) {
   font-size: var(--fs-base);
   padding: 0 calc(2px * var(--strip-scale));
 }
+.assr-edit-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #666;
+  background: #fff;
+  color: #000;
+  caret-color: #000;
+  -webkit-text-fill-color: #000;
+  font-family: inherit;
+  font-size: var(--fs-time);
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 0 calc(2px * var(--strip-scale));
+  box-sizing: border-box;
+  outline: none;
+}
 .cell-hs.hs-editing,
 .cell-hp.hp-editing {
   overflow: visible;
@@ -6978,6 +8230,45 @@ function onGroundStateClick(action: string) {
 /* Two (or more) actions: hairline separator, no gap */
 .strip-actions.multi-action .action-button:not(:last-child) {
   border-bottom: 1px solid #c8c8c8;
+}
+/*
+ * Compact action keys: keep normal --fs-action when it fits (e.g. TAXI/CFTO/ASSUME);
+ * labels stay one row; .fit-font shrinks only on overflow. ACK CLR starts smaller.
+ */
+.flight-strip.strip-compact .action-button {
+  padding: 0 calc(1px * var(--strip-scale));
+  letter-spacing: 0.1px;
+  line-height: 1.05;
+  overflow: hidden;
+}
+.flight-strip.strip-compact .action-text {
+  white-space: nowrap;
+}
+.flight-strip.strip-compact .action-button.action-ack-clr {
+  font-size: calc(7.5px * var(--strip-scale));
+  letter-spacing: 0;
+}
+.flight-strip.strip-compact .action-button.action-ack-clr .action-text {
+  white-space: normal; /* ACK / CLR may stack */
+}
+.flight-strip.strip-compact .action-freq {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Compact: two actions side-by-side (first/top action on the left) */
+.flight-strip.strip-compact .strip-actions.multi-action {
+  flex-direction: row;
+}
+.flight-strip.strip-compact .strip-actions.multi-action .action-button {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+}
+.flight-strip.strip-compact .strip-actions.multi-action .action-button:not(:last-child) {
+  border-bottom: none;
+  border-right: 1px solid #c8c8c8;
 }
 .action-button:hover { background: #e0e0e0; }
 .action-button:active { background: #d4d4d4; }

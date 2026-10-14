@@ -8,6 +8,7 @@ import type { ProcessMessageResult } from "./flightStore.js"
 import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
+import { buildTrashMeta, pruneTrashMap, type TrashMeta } from "./trash-meta.js"
 import { getVisibleLayout, IDLE_BAY_ID, isMultiAirportConfig, resolveBayForAirport, prefixedSectionId } from "./multi-airport.js"
 import {
     filterEssaLayout,
@@ -85,6 +86,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "adepName",
     "adesName",
     "route",
+    "extractedRoute",
     "sid",
     "rfl",
     "xfl",
@@ -101,6 +103,12 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "remarks",
     "hp",
     "hs",
+    "coo",
+    "exitCoordPending",
+    "exitCoordOutbound",
+    "exitCoordRefused",
+    "exitCoordPoint",
+    "exitCoordAltitude",
     "stripType",
     "bayId",
     "sectionId",
@@ -130,6 +138,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "ctoc",
     "qnhGiven",
     "atisGiven",
+    "weatherGiven",
     "cdmSts",
     "ctot",
     "ctotCancelled",
@@ -192,8 +201,7 @@ export interface SetGapResult {
 type DeletedStripEntry = {
     strip: FlightStrip
     deletedAt: number
-    reason?: string
-}
+} & TrashMeta
 
 class EfsStore {
     private layout: EfsLayout
@@ -210,19 +218,26 @@ class EfsStore {
         this.gaps = new Map()
     }
 
-    private stashDeletedStrip(strip: FlightStrip, reason?: string) {
+    private resolveTrashMeta(metaOrCode?: TrashMeta | string): TrashMeta {
+        if (metaOrCode && typeof metaOrCode === 'object') return metaOrCode
+        return buildTrashMeta(typeof metaOrCode === 'string' ? metaOrCode : undefined)
+    }
+
+    private stashDeletedStrip(strip: FlightStrip, metaOrCode?: TrashMeta | string) {
+        const meta = this.resolveTrashMeta(metaOrCode)
         this.deletedStrips.set(strip.id, {
             strip: { ...strip },
             deletedAt: Date.now(),
-            reason,
+            ...meta,
         })
+        pruneTrashMap(this.deletedStrips)
     }
 
     /**
      * Soft-delete active strips for a callsign into trash (e.g. Auto PARK → delete_parked).
      * Returns the strip ids removed.
      */
-    softDeleteCallsignToTrash(callsign: string, reason?: string): string[] {
+    softDeleteCallsignToTrash(callsign: string, metaOrCode?: TrashMeta | string): string[] {
         // Empty callsign would match every local note/vehicle strip — never mass-delete those
         if (!callsign) return []
         const matches = [...this.strips.values()].filter(
@@ -233,7 +248,7 @@ class EfsStore {
         )
         const ids: string[] = []
         for (const strip of matches) {
-            this.stashDeletedStrip(strip, reason)
+            this.stashDeletedStrip(strip, metaOrCode)
             this.strips.delete(strip.id)
             ids.push(strip.id)
         }
@@ -304,7 +319,6 @@ class EfsStore {
         deletedGapKeys?: string[]
         setScratchValue?: string
         clearHs?: boolean
-        assignDepRwy?: string
         clearScratchpadCallsign?: string
         clearScratchpadDelayMs?: number
         transferSound?: ProcessMessageResult['transferSound']
@@ -391,7 +405,6 @@ class EfsStore {
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
                 clearHs: result.clearHs,
-                assignDepRwy: result.assignDepRwy,
                 ...scratchClear,
                 ...goaReprint,
                 transferSound,
@@ -554,7 +567,6 @@ class EfsStore {
                 deletedGapKeys: deletedGapKeys && deletedGapKeys.length > 0 ? deletedGapKeys : undefined,
                 setScratchValue: result.setScratchValue,
                 clearHs: result.clearHs,
-                assignDepRwy: result.assignDepRwy,
                 ...scratchClear,
                 transferSound
             }
@@ -641,9 +653,12 @@ class EfsStore {
         }
 
         if (isEsggRolesConfig(staticConfig)) {
-            // Restore YAML bay mapping first, then apply GND/CD remap if needed
+            // Staffed roles (not covering): KLARERING bay5 only when GND/CD open
             syncSectionToBayFromLayout(staticConfig.sectionToBay, staticConfig.layout)
-            withHeights = applyEsggRoleLayout(withHeights, staticConfig.esggRoles ?? [])
+            withHeights = applyEsggRoleLayout(
+                withHeights,
+                staticConfig.esggLayoutRoles ?? staticConfig.esggRoles ?? [],
+            )
             syncSectionToBayFromLayout(staticConfig.sectionToBay, withHeights)
         }
 
@@ -785,37 +800,41 @@ class EfsStore {
         targetBayId: string,
         targetSectionId: string,
         position?: number,
-        isBottom: boolean = false
+        isBottom: boolean = false,
+        opts?: { fromSync?: boolean },
     ): MoveStripResult | null {
         const strip = this.strips.get(stripId)
         if (!strip) return null
 
         // Other-assumed strips stay where rules placed them (notes/vehicles have no owner).
         // Ownership = ES tracking callsign and/or SI (live flight + strip). Paper: incoming transfer OK.
-        const flight = flightStore.getFlight(strip.callsign)
-        const liveOwner = flight?.controller?.trim()
-        const liveSi = flight?.controllerId?.trim()
-        const myCs = staticConfig.myCallsign?.trim()
-        const mySi = staticConfig.myPositionId?.trim()
-        const ownerCs = (strip.ownerCallsign || liveOwner || '').trim()
-        const trackedByMe =
-            (!!myCs && !!liveOwner && liveOwner.toUpperCase() === myCs.toUpperCase()) ||
-            (!!mySi && !!liveSi && liveSi.toUpperCase() === mySi.toUpperCase()) ||
-            !!strip.isAssumed
-        const liveOwnedByOther =
-            !trackedByMe && (!!liveOwner || !!liveSi || !!strip.ownedByOther || !!ownerCs)
-        const allowIncomingTransferDrag =
-            staticConfig.look === 'paper' && strip.transferPending === 'in'
-        if (
-            liveOwnedByOther &&
-            strip.stripType !== 'note' &&
-            strip.stripType !== 'vehicle' &&
-            !allowIncomingTransferDrag
-        ) {
-            console.log(
-                `[MOVE] rejected ${strip.callsign || stripId}: owned by ${ownerCs || liveOwner || liveSi || 'other'}`,
-            )
-            return null
+        // Peer vatefs-sync placement updates bypass ownership (shared bay view).
+        if (!opts?.fromSync) {
+            const flight = flightStore.getFlight(strip.callsign)
+            const liveOwner = flight?.controller?.trim()
+            const liveSi = flight?.controllerId?.trim()
+            const myCs = staticConfig.myCallsign?.trim()
+            const mySi = staticConfig.myPositionId?.trim()
+            const ownerCs = (strip.ownerCallsign || liveOwner || '').trim()
+            const trackedByMe =
+                (!!myCs && !!liveOwner && liveOwner.toUpperCase() === myCs.toUpperCase()) ||
+                (!!mySi && !!liveSi && liveSi.toUpperCase() === mySi.toUpperCase()) ||
+                !!strip.isAssumed
+            const liveOwnedByOther =
+                !trackedByMe && (!!liveOwner || !!liveSi || !!strip.ownedByOther || !!ownerCs)
+            const allowIncomingTransferDrag =
+                staticConfig.look === 'paper' && strip.transferPending === 'in'
+            if (
+                liveOwnedByOther &&
+                strip.stripType !== 'note' &&
+                strip.stripType !== 'vehicle' &&
+                !allowIncomingTransferDrag
+            ) {
+                console.log(
+                    `[MOVE] rejected ${strip.callsign || stripId}: owned by ${ownerCs || liveOwner || liveSi || 'other'}`,
+                )
+                return null
+            }
         }
 
         const oldBayId = strip.bayId
@@ -925,7 +944,8 @@ class EfsStore {
     // Clear all data (called on refresh/reconnect)
     clear() {
         this.strips.clear()
-        this.deletedStrips.clear()
+        // Keep trash across reconnect / AoR clear (like activeRwyFlags) — only prune TTL/cap
+        pruneTrashMap(this.deletedStrips)
         this.gaps.clear()
         flightStore.clear()
         // Reload layout from config
@@ -936,10 +956,11 @@ class EfsStore {
     /**
      * Re-process all flights with current rules (used after config switch).
      * Clears strips/gaps and re-evaluates all flights, keeping flight data intact.
+     * Trash is preserved (pruned only) so reconnect/config switch does not wipe recovery.
      */
     reprocessAllFlights() {
         this.strips.clear()
-        this.deletedStrips.clear()
+        pruneTrashMap(this.deletedStrips)
         this.gaps.clear()
         // Reload layout from new config
         this.layout = JSON.parse(JSON.stringify(staticConfig.layout))
@@ -997,7 +1018,7 @@ class EfsStore {
         airport?: string,
         paperInfoKind?: PaperInfoKind,
     ): FlightStrip | undefined {
-        const stripId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const stripId = `note:${crypto.randomUUID()}`
         const icao = airport?.toUpperCase()
 
         // Determine bay/section
@@ -1047,6 +1068,7 @@ class EfsStore {
 
         const strip: FlightStrip = {
             id: stripId,
+            syncKey: stripId,
             callsign: '',
             aircraftType: '',
             wakeTurbulence: 'M',
@@ -1065,6 +1087,58 @@ class EfsStore {
 
         this.strips.set(stripId, strip)
         return strip
+    }
+
+    /**
+     * Materialize a note/vehicle strip from remote scribble sync (same syncKey/id).
+     */
+    ensureSyncedSpecialStrip(opts: {
+        syncKey: string
+        kind: 'note' | 'vehicle'
+        paperInfoKind?: PaperInfoKind
+        airport?: string
+        callsign?: string
+        bayId?: string
+        sectionId?: string
+        position?: number
+        bottom?: boolean
+    }): FlightStrip | undefined {
+        const existing = this.strips.get(opts.syncKey)
+        if (existing) return existing
+        if (opts.kind === 'note') {
+            const strip = this.createNoteStrip(
+                opts.bayId,
+                opts.sectionId,
+                opts.position,
+                opts.bottom,
+                opts.airport,
+                opts.paperInfoKind,
+            )
+            if (!strip) return undefined
+            // Re-key to remote syncKey
+            this.strips.delete(strip.id)
+            const moved: FlightStrip = { ...strip, id: opts.syncKey, syncKey: opts.syncKey }
+            this.strips.set(moved.id, moved)
+            return moved
+        }
+        const strip = this.createVehicleStrip(
+            opts.bayId,
+            opts.sectionId,
+            opts.position,
+            opts.bottom,
+            opts.airport,
+            opts.callsign,
+        )
+        if (!strip) return undefined
+        this.strips.delete(strip.id)
+        const moved: FlightStrip = {
+            ...strip,
+            id: opts.syncKey,
+            syncKey: opts.syncKey,
+            callsign: opts.callsign || strip.callsign,
+        }
+        this.strips.set(moved.id, moved)
+        return moved
     }
 
     /**
@@ -1089,7 +1163,7 @@ class EfsStore {
         airport?: string,
         callsign?: string,
     ): FlightStrip | undefined {
-        const stripId = `vehicle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const stripId = `veh:${crypto.randomUUID()}`
         const icao = airport?.toUpperCase()
         const cs = (callsign ?? '').trim().toUpperCase()
 
@@ -1147,6 +1221,7 @@ class EfsStore {
             adep: '',
             ades: '',
             stripType: 'vehicle',
+            syncKey: stripId,
             bayId,
             sectionId,
             position: pos,
@@ -1202,8 +1277,9 @@ class EfsStore {
 
     /** List soft-deleted strips for trash recovery UI (newest first). */
     getDeletedStripInfos(): DeletedStripInfo[] {
+        pruneTrashMap(this.deletedStrips)
         return [...this.deletedStrips.values()]
-            .map(({ strip, deletedAt, reason }) => ({
+            .map(({ strip, deletedAt, reason, ruleId, ruleName, pilotDisconnected, disconnectKind }) => ({
                 stripId: strip.id,
                 callsign:
                     strip.callsign ||
@@ -1221,6 +1297,10 @@ class EfsStore {
                 noteText: strip.noteText,
                 deletedAt,
                 reason,
+                ruleId,
+                ruleName,
+                pilotDisconnected,
+                disconnectKind,
             }))
             .sort((a, b) => b.deletedAt - a.deletedAt)
     }
@@ -1244,10 +1324,19 @@ class EfsStore {
             flight.deletedByBeyondRange = false
             flight.lastDeleteRule = undefined
             flight.noSectionFound = false
-            // Restoring a PARK'd strip must clear PARK or delete_parked hides it immediately
-            if (flight.groundstate === 'PARK') {
-                flight.groundstate = ''
-                flight.groundstateClearedUntil = Date.now() + 3000
+            // Restoring a PARK/TERM soft-delete: clear PARK, sync NOSTATE to ES, and
+            // suppress delete_parked / Auto PARK until explicit TERM (ES may still report PARK).
+            const parkTrash =
+                entry.ruleId === 'delete_parked' ||
+                entry.ruleId === 'delete_parked_local' ||
+                flight.groundstate === 'PARK' ||
+                saved.groundstate === 'PARK'
+            if (parkTrash) {
+                if (flight.groundstate === 'PARK') {
+                    flight.groundstate = ''
+                }
+                flight.groundstateClearedUntil = Date.now() + 15_000
+                flight.suppressParkDelete = true
                 clearedPark = true
             }
         }

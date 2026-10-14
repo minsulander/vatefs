@@ -530,6 +530,45 @@ export function removeClrScribbles(stripId: string, tag: PaperScribbleTag) {
   setStripScribbles(stripId, next)
 }
 
+/**
+ * Map a DOM element’s screen box into canonical scribble space via measured bands.
+ */
+export function elementToScribbleRect(
+  el: HTMLElement,
+  root: HTMLElement,
+): ScribbleRect | null {
+  const bands = measureScribbleBands(root)
+  if (!bands.length) return null
+  const r = el.getBoundingClientRect()
+  if (r.width <= 0 || r.height <= 0) return null
+  const tl = clientToScribble(r.left, r.top, bands)
+  const br = clientToScribble(r.right, r.bottom, bands)
+  if (!tl || !br) return null
+  return {
+    x0: Math.min(tl.x, br.x),
+    y0: Math.min(tl.y, br.y),
+    x1: Math.max(tl.x, br.x),
+    y1: Math.max(tl.y, br.y),
+  }
+}
+
+/**
+ * Remove strokes mostly/partially inside a cell rect (HS/HP click-to-clear).
+ * Returns how many strokes were removed. No ES actions — ink only.
+ */
+export function removeScribblesOverlappingRect(
+  stripId: string,
+  r: ScribbleRect,
+  minFraction = 0.25,
+): number {
+  const prev = getStripScribbles(stripId)
+  if (!prev.length) return 0
+  const next = prev.filter((s) => !strokeMatchesClrBox(s.points, r, minFraction))
+  const removed = prev.length - next.length
+  if (removed > 0) setStripScribbles(stripId, next)
+  return removed
+}
+
 /** Reactive strokes for a strip (bay + zoom share this). */
 export function useStripScribbles(stripId: Ref<string> | string) {
   const strokes = computed(() => getStripScribbles(unref(stripId)))

@@ -548,8 +548,14 @@ export interface EfsStaticConfig {
     /** True when essaRoles were set manually (skip auto-detect until cleared) */
     essaRolesManual?: boolean
 
-    /** Selected ESGG paper positions (CD / GND / TWR) */
+    /** ESGG covering roles (CD / GND / TWR) — what you act as */
     esggRoles?: Array<'CD' | 'GND' | 'TWR'>
+
+    /**
+     * ESGG staffed positions for bay layout (your login + online DEL/GND/TWR).
+     * KLARERING → bay5 only when GND or CD is staffed — not solo TWR covering.
+     */
+    esggLayoutRoles?: Array<'CD' | 'GND' | 'TWR'>
 
     /** True when esggRoles were set manually (skip auto-detect until cleared) */
     esggRolesManual?: boolean

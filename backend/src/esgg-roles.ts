@@ -1,5 +1,15 @@
 /**
  * ESGG paper role picker: CD / GND / TWR (maps to DEL / GND / TWR for rules).
+ *
+ * Covering roles (esggRoles) = what you act as (TWR alone → CD+GND+TWR).
+ * Layout roles (esggLayoutRoles) = who is STAFFED (your login + online GND/DEL/TWR).
+ *
+ * Bay board (same for every client — not the UI ± visible-width setting):
+ *   TWR only (no GND/DEL open) → YAML 4 (KLARERING packed with S/P)
+ *   GND and/or DEL open        → always 5: INBOUND | ops | taxi | S/P | KLARERING (bay5)
+ *
+ * Frontend: when bay5 exists, columns are ¼ window width with horizontal scroll.
+ * Covering GND + 5-col board: default scroll pans right (INBOUND out of view).
  */
 
 import type { Bay, EfsLayout, Section } from "@vatefs/common"
@@ -53,7 +63,7 @@ export function highestEsggControllerRole(roles: EsggPositionRole[]): Controller
     return undefined
 }
 
-/** Auto roles from effective ControllerRoles at ESGG. */
+/** Auto covering roles from effective ControllerRoles at ESGG. */
 export function computeAutoEsggRoles(effective: ControllerRole[]): EsggPositionRole[] {
     const set = new Set<EsggPositionRole>()
     for (const r of effective) {
@@ -64,12 +74,37 @@ export function computeAutoEsggRoles(effective: ControllerRole[]): EsggPositionR
 }
 
 /**
- * GND and/or CD without TWR — pending ARR (INBOUND) unused;
- * shift ops left and put KLARERING alone on the far right.
+ * Staffed ESGG positions for bay layout: your login role + other online DEL/GND/TWR.
+ * Does NOT expand covering (TWR alone → [TWR], not CD+GND+TWR).
+ */
+export function computeEsggStaffedRoles(
+    myRole: ControllerRole | undefined,
+    onlineRolesAtEsgg: ControllerRole[],
+): EsggPositionRole[] {
+    const set = new Set<EsggPositionRole>()
+    const mine = myRole ? controllerRoleToEsggRole(myRole) : undefined
+    if (mine) set.add(mine)
+    for (const r of onlineRolesAtEsgg) {
+        const mapped = controllerRoleToEsggRole(r)
+        if (mapped) set.add(mapped)
+    }
+    return sortEsggRoles([...set])
+}
+
+/**
+ * True when GND or CD/DEL is staffed — triggers the shared 5-column board.
+ * (Legacy name; no longer means “hide INBOUND / 4-col GND-CD layout”.)
  */
 export function isEsggGndCdLayout(roles: EsggPositionRole[]): boolean {
-    if (roles.includes("TWR")) return false
     return roles.includes("GND") || roles.includes("CD")
+}
+
+/**
+ * True when GND is covering with TWR still selected — UI should default-pan
+ * so INBOUND is scrolled out of view (physical table: GND works the right bays).
+ */
+export function esggDefaultPanHideInbound(roles: EsggPositionRole[]): boolean {
+    return roles.includes("GND") && roles.includes("TWR")
 }
 
 function findSectionById(layout: EfsLayout, sectionId: string): Section | undefined {
@@ -90,36 +125,50 @@ function bayWith(id: string, sectionIds: string[], layout: EfsLayout): Bay | und
 
 /**
  * Headerless drop zone above START-UP & PUSH-BACK.
- * CD (not covering GND) dropping here → XFER to GND; cleared strips stay under KLARERING.
+ * CD→GND READY handoff pins here (stick-top); drag to non-pinned = ASSUME.
  */
 export const ESGG_ABOVE_PUSH_SECTION_ID = "above_push"
 
-/**
- * Remap ESGG bays for GND/CD (no TWR):
- *   bay1: ctr_arr / PÅ BANAN / UTFLYGNING  (was bay2)
- *   bay2: PÅ TAXI                          (was bay3)
- *   bay3: above_push (empty/transfer) + START-UP & PUSH-BACK
- *   bay4: pending_dep + cleared (KLARERING — cleared still below header)
- * Pending ARR (inbound) is dropped.
- */
-export function applyEsggRoleLayout(layout: EfsLayout, roles: EsggPositionRole[]): EfsLayout {
-    if (!isEsggGndCdLayout(roles)) return layout
+/** Extra KLARERING column id when the board splits to 5 bays (scroll-target). */
+export const ESGG_KLARERING_BAY_ID = "bay5"
 
+function buildPushBaySections(layout: EfsLayout): Section[] {
     const push = findSectionById(layout, "push_start")
-    const bay3Sections: Section[] = [
+    const sections: Section[] = [
         {
             id: ESGG_ABOVE_PUSH_SECTION_ID,
             title: "ABOVE PUSH",
             hideHeader: true,
         },
     ]
-    if (push) bay3Sections.push(push)
+    if (push) sections.push(push)
+    return sections
+}
 
+function buildKlareringBay(layout: EfsLayout, bayId: string): Bay | undefined {
+    const pending = findSectionById(layout, "pending_dep")
+    const cleared = findSectionById(layout, "cleared")
+    const sections = [pending, cleared].filter((s): s is Section => !!s)
+    if (sections.length === 0) return undefined
+    return { id: bayId, sections }
+}
+
+/**
+ * Remap ESGG bays by STAFFED roles (not covering) — see file header.
+ * Same 5-column board for every role whenever GND or DEL is open.
+ */
+export function applyEsggRoleLayout(layout: EfsLayout, roles: EsggPositionRole[]): EfsLayout {
+    // TWR-only (or nothing): keep YAML (KLARERING packed with S/P in bay4)
+    if (!isEsggGndCdLayout(roles)) return layout
+
+    const pushSections = buildPushBaySections(layout)
+    // Identical 5-bay board for all clients (TWR / GND / CD)
     const bays = [
-        bayWith("bay1", ["ctr_arr", "runway", "ctr_dep"], layout),
-        bayWith("bay2", ["taxi"], layout),
-        { id: "bay3", sections: bay3Sections },
-        bayWith("bay4", ["pending_dep", "cleared"], layout),
+        bayWith("bay1", ["inbound"], layout),
+        bayWith("bay2", ["ctr_arr", "runway", "ctr_dep"], layout),
+        bayWith("bay3", ["taxi"], layout),
+        { id: "bay4", sections: pushSections },
+        buildKlareringBay(layout, ESGG_KLARERING_BAY_ID),
     ].filter((b): b is Bay => !!b)
 
     return bays.length > 0 ? { bays } : layout

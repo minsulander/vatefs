@@ -153,8 +153,15 @@
         v-if="showPrintQueue"
         type="button"
         class="bar-icon-btn print-btn tiny-print-btn"
-        :class="{ 'has-pending': pendingPrintCount > 0 }"
-        title="Print strip"
+        :class="{
+          'has-pending': pendingPrintCount > 0,
+          'has-pending-pulse': pendingPrintCount > 0,
+        }"
+        :title="
+          pendingPrintCount > 0
+            ? `Print strip — ${pendingPrintCount} waiting`
+            : 'Print strip'
+        "
         @click="printOpen = true"
       >
         <v-icon :size="barIconSize">mdi-printer</v-icon>
@@ -164,7 +171,6 @@
       <template v-if="!store.isPaperLook">
         <div
           class="tiny-strip tiny-strip-vehicle"
-          :class="{ 'tiny-strip-vehicle-rtc': store.multiAirport }"
           draggable="true"
           @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
           @dragend="onTinyDragEnd"
@@ -774,25 +780,60 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 }
 
 .print-btn.has-pending {
-  color: #f6d365;
-  border-color: #a8842a;
+  color: #1a1408;
+  background: linear-gradient(180deg, #ffe08a 0%, #e6b422 55%, #c9920a 100%);
+  border-color: #f0c040;
+  box-shadow:
+    0 0 0 1px #fff3c4,
+    0 0 10px 2px rgba(255, 196, 48, 0.55);
+}
+
+.print-btn.has-pending-pulse {
+  animation: print-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes print-pending-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px #fff3c4,
+      0 0 8px 1px rgba(255, 196, 48, 0.45);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px #ffe9a0,
+      0 0 16px 4px rgba(255, 200, 40, 0.75);
+    transform: scale(1.08);
+  }
 }
 
 .print-badge {
   position: absolute;
-  top: calc(-4px * var(--bb));
-  right: calc(-6px * var(--bb));
-  min-width: calc(14px * var(--bb));
-  height: calc(14px * var(--bb));
-  padding: 0 3px;
-  border-radius: 7px;
-  background: #c9a227;
-  color: #1e2022;
-  font-size: calc(9px * var(--bb));
-  font-weight: 700;
-  line-height: calc(14px * var(--bb));
+  top: calc(-6px * var(--bb));
+  right: calc(-8px * var(--bb));
+  min-width: calc(16px * var(--bb));
+  height: calc(16px * var(--bb));
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: calc(10px * var(--bb));
+  font-weight: 800;
+  line-height: calc(16px * var(--bb));
   text-align: center;
-  box-shadow: 0 0 0 1px #35373c;
+  box-shadow: 0 0 0 2px #2b2d31;
+  animation: print-badge-pop 0.9s ease-in-out infinite;
+}
+
+@keyframes print-badge-pop {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
 }
 
 .info-strips-btn.has-restore {
@@ -919,8 +960,7 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 .tiny-strip-arr { --tiny-type: #daa520; }
 .tiny-strip-cross { --tiny-type: #881fe0; }
 .tiny-strip-note { --tiny-type: #888; }
-.tiny-strip-vehicle { --tiny-type: #4a4a4a; }
-.tiny-strip-vehicle-rtc { --tiny-type: #c62828; }
+.tiny-strip-vehicle { --tiny-type: #c62828; }
 
 .tiny-body {
   flex: 1 1 auto;

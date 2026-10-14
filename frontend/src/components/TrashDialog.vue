@@ -2,7 +2,7 @@
   <v-dialog
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
-    max-width="420"
+    max-width="480"
     content-class="trash-dialog-wrapper"
   >
     <div class="trash-dialog">
@@ -36,8 +36,21 @@
           @click="onRestore(item.stripId)"
         >
           <div class="trash-row-main">
-            <span class="trash-callsign">{{ item.callsign || '(note)' }}</span>
+            <div class="trash-row-top">
+              <span class="trash-callsign">{{ item.callsign || '(note)' }}</span>
+              <span
+                v-if="item.pilotDisconnected || item.disconnectKind"
+                class="trash-disconnect"
+                :title="disconnectTitle(item)"
+              >
+                {{ disconnectLabel(item) }}
+              </span>
+            </div>
             <span class="trash-meta">{{ rowMeta(item) }}</span>
+            <span v-if="item.reason" class="trash-reason">{{ item.reason }}</span>
+            <span v-if="item.ruleId || item.ruleName" class="trash-rule" :title="ruleDebug(item)">
+              Rule: {{ item.ruleName || item.ruleId }}
+            </span>
           </div>
           <span class="trash-restore">Restore</span>
         </button>
@@ -74,7 +87,7 @@ const filtered = computed(() => {
   const list = store.deletedStrips
   if (!q) return list
   return list.filter((s) => {
-    const hay = `${s.callsign} ${s.adep} ${s.ades} ${s.aircraftType} ${s.noteText ?? ''}`.toUpperCase()
+    const hay = `${s.callsign} ${s.adep} ${s.ades} ${s.aircraftType} ${s.noteText ?? ''} ${s.reason ?? ''} ${s.ruleId ?? ''}`.toUpperCase()
     return hay.includes(q)
   })
 })
@@ -87,6 +100,25 @@ function rowMeta(item: DeletedStripInfo): string {
   const route = [item.adep, item.ades].filter(Boolean).join('→')
   const type = item.aircraftType || ''
   return [item.stripType.toUpperCase(), type, route].filter(Boolean).join(' · ')
+}
+
+function disconnectLabel(item: DeletedStripInfo): string {
+  if (item.pilotDisconnected || item.disconnectKind === 'pilot') return 'Pilot disc.'
+  if (item.disconnectKind === 'flight_plan') return 'FP lost'
+  if (item.disconnectKind === 'radar') return 'Radar'
+  return 'Disc.'
+}
+
+function disconnectTitle(item: DeletedStripInfo): string {
+  if (item.pilotDisconnected || item.disconnectKind === 'pilot') return 'Pilot disconnected (flight plan disconnect)'
+  if (item.disconnectKind === 'flight_plan') return 'Flight plan / required data lost'
+  if (item.disconnectKind === 'radar') return 'Beyond radar / visibility range'
+  return 'Disconnect-related removal'
+}
+
+function ruleDebug(item: DeletedStripInfo): string {
+  const parts = [item.ruleId, item.ruleName].filter(Boolean)
+  return parts.length ? parts.join(' / ') : ''
 }
 
 function onRestore(stripId: string) {
@@ -165,7 +197,7 @@ function onRestore(stripId: string) {
 }
 
 .trash-list {
-  max-height: calc(320px * var(--s));
+  max-height: calc(380px * var(--s));
   overflow-y: auto;
   padding: 0 calc(8px * var(--s)) calc(10px * var(--s));
 }
@@ -206,11 +238,30 @@ function onRestore(stripId: string) {
   min-width: 0;
 }
 
+.trash-row-top {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--s));
+  min-width: 0;
+}
+
 .trash-callsign {
   font-weight: 700;
   font-size: calc(13px * var(--s));
   font-family: ui-monospace, monospace;
   letter-spacing: calc(0.4px * var(--s));
+}
+
+.trash-disconnect {
+  flex-shrink: 0;
+  font-size: calc(9px * var(--s));
+  font-weight: 700;
+  letter-spacing: calc(0.3px * var(--s));
+  text-transform: uppercase;
+  color: #fbbf24;
+  border: 1px solid #92400e;
+  background: #422006;
+  padding: calc(1px * var(--s)) calc(5px * var(--s));
 }
 
 .trash-meta {
@@ -219,7 +270,26 @@ function onRestore(stripId: string) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: calc(280px * var(--s));
+  max-width: calc(340px * var(--s));
+}
+
+.trash-reason {
+  font-size: calc(11px * var(--s));
+  color: #d1d5db;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(340px * var(--s));
+}
+
+.trash-rule {
+  font-size: calc(9px * var(--s));
+  color: #6b7280;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(340px * var(--s));
 }
 
 .trash-restore {

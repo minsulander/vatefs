@@ -1,6 +1,8 @@
 <template>
     <v-app theme="dark">
         <router-view />
+        <CidDialog />
+        <VatIrisSignInDialog />
     </v-app>
 </template>
 
@@ -9,6 +11,8 @@ import { watch } from "vue"
 import { useEfsStore } from "./store/efs"
 import { useEfsUiScale } from "./composables/useEfsUiScale"
 import { setBayBgRtcPalette, startBayBackground } from "./composables/useBayBackground"
+import CidDialog from "./components/CidDialog.vue"
+import VatIrisSignInDialog from "./components/VatIrisSignInDialog.vue"
 
 const efs = useEfsStore()
 useEfsUiScale()
@@ -18,6 +22,21 @@ watch(
   () => efs.multiAirport,
   (rtc) => setBayBgRtcPalette(!!rtc),
   { immediate: true },
+)
+
+/** Once after settings load: prompt for VATSIM CID if unset (sync auth). */
+let cidPromptedOnce = false
+watch(
+  () => [efs.userSettingsLoaded, efs.vatsimCid] as const,
+  ([loaded, cid]) => {
+    if (!loaded || cidPromptedOnce) return
+    if ((cid || '').trim()) {
+      cidPromptedOnce = true
+      return
+    }
+    cidPromptedOnce = true
+    efs.openCidDialog(undefined, 'missing')
+  },
 )
 </script>
 

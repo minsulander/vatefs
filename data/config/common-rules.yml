@@ -166,10 +166,12 @@ sectionRules:
     myRole: [TWR, APP, CTR]
     priority: 90
 
-  # CTR ARR: Approach clearance (CA/VA/CAT2/CAT3/OS) while owned by someone else
-  # Pulls from INBOUND APP onto final even outside CTR
+  # Approach clearance (CA/VA/CAT2/CAT3/OS) alone must NOT pull to CTR ARR.
+  # Only assumed (ctr_arr_assumed, 90) or inbound transfer (95) place strips there —
+  # otherwise APP-set CA briefly jumps INBOUND ↔ CTR ARR for the TWR view.
+  # Keep in INBOUND; ESGG overrides the same way. RTC uses its own app_arr_approach_clearance.
   ctr_arr_approach_clearance_other:
-    sectionId: ctr_arr
+    sectionId: inbound
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]

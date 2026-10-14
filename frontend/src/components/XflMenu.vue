@@ -1,0 +1,399 @@
+<template>
+  <v-menu
+    :model-value="modelValue"
+    :target="target"
+    location="center"
+    origin="center center"
+    :z-index="zIndex"
+    :close-on-content-click="false"
+    @update:model-value="onModelUpdate"
+  >
+    <div class="xfl-menu" @click.stop>
+      <button type="button" class="xfl-menu-top" title="Close" @click="closeMenu">
+        <div class="xfl-menu-header">XFL</div>
+        <div class="xfl-menu-callsign">{{ strip.callsign }}</div>
+      </button>
+      <div ref="listEl" class="xfl-menu-list">
+        <button
+          v-for="opt in xflOptions"
+          :key="opt.value"
+          type="button"
+          class="xfl-menu-item"
+          :class="{ selected: isLevelSelected(opt) }"
+          :data-xfl="opt.value"
+          @click="onSelectLevel(opt.value)"
+        >{{ opt.label }}</button>
+      </div>
+
+      <div class="xfl-menu-manual" @click.stop>
+        <input
+          ref="manualInput"
+          v-model="manualText"
+          class="xfl-menu-manual-input"
+          :class="{ invalid: manualText.length > 0 && !manualValid }"
+          maxlength="5"
+          placeholder=""
+          spellcheck="false"
+          autocomplete="off"
+          @input="onManualInput"
+          @keydown.enter.prevent="submitManual"
+          @keydown.escape.prevent="closeMenu"
+        />
+      </div>
+    </div>
+  </v-menu>
+</template>
+
+<script setup lang="ts">
+import { computed, nextTick, ref, watch } from 'vue'
+import {
+  buildCflMenuOptions,
+  DEFAULT_TRANSITION_ALTITUDE_FT,
+  parseManualCfl,
+  parseRflToFeet,
+  resolveLopAutoDirect,
+  resolveLopDirectHighlights,
+} from '@vatefs/common'
+import type { FlightStrip } from '@/types/efs'
+import { useEfsStore } from '@/store/efs'
+
+export interface XflOption {
+  label: string
+  value: string
+}
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean
+    strip: FlightStrip
+    target: [number, number]
+    zIndex?: number
+  }>(),
+  { zIndex: 2600 },
+)
+
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+}>()
+
+const store = useEfsStore()
+const listEl = ref<HTMLElement | null>(null)
+const manualInput = ref<HTMLInputElement | null>(null)
+const manualText = ref('')
+const transitionAltitudeFt = ref(DEFAULT_TRANSITION_ALTITUDE_FT)
+let ignoreCloseUntil = 0
+
+const manualValid = computed(() => parseManualCfl(manualText.value) != null)
+
+/** Same level ladder as CFL (TA-aware). */
+const xflOptions = computed<XflOption[]>(() => buildCflMenuOptions(transitionAltitudeFt.value))
+
+watch(
+  () => props.modelValue,
+  async (open) => {
+    if (open) {
+      ignoreCloseUntil = Date.now() + 450
+      manualText.value = ''
+      await fetchTransitionAltitude()
+      await nextTick()
+      scrollToSelected()
+      requestAnimationFrame(() => {
+        scrollToSelected()
+        manualInput.value?.focus()
+      })
+    } else {
+      manualText.value = ''
+    }
+  },
+)
+
+function onModelUpdate(open: boolean) {
+  if (!open && Date.now() < ignoreCloseUntil) {
+    nextTick(() => emit('update:modelValue', true))
+    return
+  }
+  emit('update:modelValue', open)
+}
+
+function closeMenu() {
+  ignoreCloseUntil = 0
+  emit('update:modelValue', false)
+}
+
+function onManualInput() {
+  let s = manualText.value.toUpperCase().replace(/[^A0-9.]/g, '')
+  if (s.includes('A')) {
+    const rest = s.replace(/A/g, '').replace(/\./g, '')
+    manualText.value = ('A' + rest).slice(0, 4)
+    return
+  }
+  const dot = s.indexOf('.')
+  if (dot >= 0) {
+    const whole = s.slice(0, dot).replace(/\./g, '').slice(0, 2)
+    const frac = s.slice(dot + 1).replace(/\./g, '').slice(0, 1)
+    manualText.value = frac.length > 0 || s.endsWith('.') ? `${whole}.${frac}` : whole
+    return
+  }
+  manualText.value = s.slice(0, 3)
+}
+
+function submitManual() {
+  const feet = parseManualCfl(manualText.value)
+  if (feet == null) return
+  sendXflCoordination(feet)
+  closeMenu()
+}
+
+function taAirportForStrip(): string {
+  const type = props.strip.stripType
+  const dest = (props.strip.ades || '').trim().toUpperCase()
+  const orig = (props.strip.adep || '').trim().toUpperCase()
+  if (type === 'arrival' || type === 'local') return dest
+  return orig || dest
+}
+
+async function fetchTransitionAltitude() {
+  const airport = taAirportForStrip()
+  if (!airport || airport === '????' || airport === 'ZZZZ') {
+    transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+    return
+  }
+  try {
+    const res = await fetch(`/api/transition-altitude?airport=${encodeURIComponent(airport)}`)
+    if (!res.ok) {
+      transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+      return
+    }
+    const data = (await res.json()) as { feet?: number }
+    transitionAltitudeFt.value =
+      typeof data.feet === 'number' && data.feet > 0 ? data.feet : DEFAULT_TRANSITION_ALTITUDE_FT
+  } catch {
+    transitionAltitudeFt.value = DEFAULT_TRANSITION_ALTITUDE_FT
+  }
+}
+
+function currentFeet(): number | undefined {
+  return store.xflFeetForStrip(props.strip)
+}
+
+function isLevelSelected(opt: XflOption): boolean {
+  const cur = currentFeet()
+  if (cur == null) return false
+  return cur === parseInt(opt.value, 10)
+}
+
+function scrollIntoCenter(container: HTMLElement, el: HTMLElement) {
+  const cRect = container.getBoundingClientRect()
+  const eRect = el.getBoundingClientRect()
+  const offset = eRect.top - cRect.top - (cRect.height / 2 - eRect.height / 2)
+  container.scrollTop += offset
+}
+
+function scrollToSelected() {
+  const container = listEl.value
+  if (!container) return
+  const selected = container.querySelector('.xfl-menu-item.selected') as HTMLElement | null
+  if (selected) {
+    scrollIntoCenter(container, selected)
+    return
+  }
+  const feet = currentFeet()
+  if (feet != null) {
+    const byData = container.querySelector(`[data-xfl="${feet}"]`) as HTMLElement | null
+    if (byData) {
+      scrollIntoCenter(container, byData)
+      return
+    }
+  }
+  const mid = container.querySelector('[data-xfl="5000"]') as HTMLElement | null
+  if (mid) scrollIntoCenter(container, mid)
+}
+
+/** LOP DCT fallback if ES refuses empty-point XFL-only (same as DepCoordDialog). */
+function lopFallbackPoint(): string | undefined {
+  const s = props.strip
+  const input = {
+    adep: s.adep || '',
+    ades: s.ades,
+    route: s.route,
+    rflFeet: parseRflToFeet(s.rfl),
+    runway: s.runway,
+  }
+  const auto = resolveLopAutoDirect(input)
+  if (auto?.point) return auto.point.toUpperCase()
+  const hi = resolveLopDirectHighlights(input)[0]
+  return hi?.point?.toUpperCase()
+}
+
+/**
+ * XFL-only InitiateCoordination — empty point first, LOP as plugin fallback.
+ * Does NOT set clearance or DepC.
+ */
+function sendXflCoordination(altitudeFeet: number) {
+  if (altitudeFeet <= 0) return
+  store.initiateXflCoordination(props.strip.id, {
+    altitudeFeet,
+    point: lopFallbackPoint(),
+  })
+}
+
+function onSelectLevel(value: string) {
+  const feet = parseInt(value, 10)
+  if (!Number.isFinite(feet) || feet <= 0) return
+  sendXflCoordination(feet)
+  closeMenu()
+}
+</script>
+
+<style scoped>
+.xfl-menu {
+  --xfl-strip-white: #ebebeb;
+  --s: var(--efs-scale, 1);
+  width: calc(88px * var(--s));
+  min-width: calc(88px * var(--s));
+  max-width: min(92vw, calc(100px * var(--s)));
+  background: #d8d8d8;
+  border: 1px solid #888;
+  border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  color: #000;
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+
+.xfl-menu-top {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #c0c0c0;
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+}
+
+.xfl-menu-top:hover {
+  background: #b0b0b0;
+}
+
+.xfl-menu-header {
+  padding: calc(6px * var(--s)) calc(8px * var(--s)) calc(2px * var(--s));
+  font-size: calc(9px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #000;
+  text-transform: uppercase;
+  text-align: center;
+  background: #c0c0c0;
+}
+
+.xfl-menu-callsign {
+  padding: 0 calc(8px * var(--s)) calc(6px * var(--s));
+  font-size: calc(12px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #000;
+  text-align: center;
+  text-transform: uppercase;
+  background: #c0c0c0;
+  border-bottom: 2px solid #555;
+}
+
+.xfl-menu-manual {
+  padding: calc(6px * var(--s)) calc(8px * var(--s));
+  background: #c8c8c8;
+  border-top: 3px solid #333;
+}
+
+.xfl-menu-manual-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: calc(5px * var(--s)) calc(6px * var(--s));
+  border: 1px solid #666;
+  border-radius: 0;
+  background: #fff;
+  color: #000;
+  font-size: calc(13px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-align: center;
+  text-transform: uppercase;
+  font-family: inherit;
+  outline: none;
+}
+
+.xfl-menu-manual-input:focus {
+  border-color: #1a3a6e;
+  box-shadow: inset 0 0 0 1px #1a3a6e;
+}
+
+.xfl-menu-manual-input.invalid {
+  border-color: #a30;
+  color: #800;
+}
+
+.xfl-menu-manual-input::placeholder {
+  color: #888;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: calc(10px * var(--s));
+}
+
+.xfl-menu-list {
+  display: flex;
+  flex-direction: column;
+  background: #d8d8d8;
+  max-height: min(40vh, calc(280px * var(--s)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.xfl-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  padding: calc(5px * var(--s)) calc(8px * var(--s));
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid #888;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #d8d8d8;
+  color: #000;
+  font-size: calc(12px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  text-align: center;
+  cursor: pointer;
+  line-height: 1.1;
+  white-space: nowrap;
+  min-height: max(28px, calc(28px * var(--s)));
+}
+
+.xfl-menu-list .xfl-menu-item:last-child {
+  border-bottom: none;
+}
+
+.xfl-menu-item.selected {
+  background: var(--xfl-strip-white);
+  color: #1a3a6e;
+  box-shadow: inset 0 0 0 2px #1a3a6e;
+}
+
+.xfl-menu-item:hover {
+  background: #1a3a6e;
+  color: var(--xfl-strip-white);
+  box-shadow: inset 0 0 0 2px #000;
+  position: relative;
+  z-index: 1;
+}
+</style>

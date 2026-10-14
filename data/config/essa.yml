@@ -98,6 +98,18 @@ sectionRules:
     groundstates: [TAXI]
     priority: 30
 
+  # ESSA: CA/VA/CAT/OS alone stay in INBOUND APP (same as common-rules / ESGG).
+  # CTR ARR only via assume (90) or inbound transfer (95) — not APP-set approach clearance.
+  # RTC keeps a separate app_arr_approach_clearance pull; do not mirror that here.
+  ctr_arr_approach_clearance_other:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    approachClearance: true
+    priority: 85
+
   # TWR + separate GND: pending inbound handoff → TAXI DEP (like CTR ARR pending transfer)
   taxi_dep_pending_inbound_transfer:
     sectionId: taxi_dep

@@ -24,6 +24,13 @@ function resolveAutoLopSsr(saved: UserSettings): AutoLopSsrMode {
     return DEFAULT_UI_SETTINGS.autoLopSsr
 }
 
+/** Prefer rtcAssrSimulation; migrate legacy rtcSsrSimulation. */
+function resolveRtcAssrSimulation(saved: UserSettings): boolean {
+    if (typeof saved.rtcAssrSimulation === "boolean") return saved.rtcAssrSimulation
+    if (typeof saved.rtcSsrSimulation === "boolean") return saved.rtcSsrSimulation
+    return DEFAULT_UI_SETTINGS.rtcAssrSimulation
+}
+
 export interface UserSettings {
     activeConfig?: string
     dclMode?: DclMode
@@ -41,15 +48,26 @@ export interface UserSettings {
     /** @deprecated Prefer autoLopSsr; true→instant, false→manual */
     autoDepSquawkCfl?: boolean
     autoLopSsr?: AutoLopSsrMode
+    /** @deprecated Prefer rtcAssrSimulation */
+    rtcSsrSimulation?: boolean
+    rtcAssrSimulation?: boolean
+    contactMeEnabled?: boolean
     showTobtSetByA?: boolean
     stripPrintSound?: StripPrintSound
     stripPrintMode?: StripPrintMode
+    /** Accept VatIRIS FSP print API (default off) */
+    fspServerEnabled?: boolean
     /** Manual ESSA role selection (physical positions) */
     essaRoles?: string[]
     essaRolesManual?: boolean
     /** Manual ESGG paper role selection (CD / GND / TWR) */
     esggRoles?: string[]
     esggRolesManual?: boolean
+    scribbleSyncEnabled?: boolean
+    stripSyncEnabled?: boolean
+    scribbleSyncUrl?: string
+    vatsimCid?: string
+    scribbleSyncRealm?: UiSettings["scribbleSyncRealm"]
 }
 
 let settingsPath: string | undefined
@@ -93,6 +111,7 @@ export function saveUserSettings(update: Partial<UserSettings>) {
     // Drop removed / migrated preferences if still present in older settings files
     delete merged.equalBayColumns
     if (merged.autoLopSsr !== undefined) delete merged.autoDepSquawkCfl
+    if (merged.rtcAssrSimulation !== undefined) delete merged.rtcSsrSimulation
     try {
         fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2), "utf-8")
     } catch (err) {
@@ -134,6 +153,11 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
                 ? saved.autoParkEnabled
                 : DEFAULT_UI_SETTINGS.autoParkEnabled,
         autoLopSsr: resolveAutoLopSsr(saved),
+        rtcAssrSimulation: resolveRtcAssrSimulation(saved),
+        contactMeEnabled:
+            typeof saved.contactMeEnabled === "boolean"
+                ? saved.contactMeEnabled
+                : DEFAULT_UI_SETTINGS.contactMeEnabled,
         showTobtSetByA:
             typeof saved.showTobtSetByA === "boolean"
                 ? saved.showTobtSetByA
@@ -144,5 +168,31 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
         stripPrintMode: isStripPrintMode(saved.stripPrintMode)
             ? saved.stripPrintMode
             : DEFAULT_UI_SETTINGS.stripPrintMode,
+        fspServerEnabled:
+            typeof saved.fspServerEnabled === "boolean"
+                ? saved.fspServerEnabled
+                : DEFAULT_UI_SETTINGS.fspServerEnabled,
+        scribbleSyncEnabled:
+            typeof saved.scribbleSyncEnabled === "boolean"
+                ? saved.scribbleSyncEnabled
+                : DEFAULT_UI_SETTINGS.scribbleSyncEnabled,
+        stripSyncEnabled:
+            typeof saved.stripSyncEnabled === "boolean"
+                ? saved.stripSyncEnabled
+                : DEFAULT_UI_SETTINGS.stripSyncEnabled,
+        scribbleSyncUrl:
+            typeof saved.scribbleSyncUrl === "string"
+                ? saved.scribbleSyncUrl
+                : DEFAULT_UI_SETTINGS.scribbleSyncUrl,
+        vatsimCid:
+            typeof saved.vatsimCid === "string" ? saved.vatsimCid : DEFAULT_UI_SETTINGS.vatsimCid,
+        scribbleSyncRealm:
+            saved.scribbleSyncRealm === "live" ||
+            saved.scribbleSyncRealm === "sweatbox" ||
+            saved.scribbleSyncRealm === "playback" ||
+            saved.scribbleSyncRealm === "local" ||
+            saved.scribbleSyncRealm === "auto"
+                ? saved.scribbleSyncRealm
+                : DEFAULT_UI_SETTINGS.scribbleSyncRealm,
     }
 }

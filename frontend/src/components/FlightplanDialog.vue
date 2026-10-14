@@ -518,7 +518,8 @@ function emptyDraft(): FplDraft {
 /** Leading NUMBER/ from EuroScope AircraftInfo (ICAO field 9), else 1. */
 function parseNracFromAircraftInfo(info: string): string {
   const m = String(info || '').trim().match(/^(\d{1,2})\//)
-  return m ? String(parseInt(m[1], 10)) : '1'
+  const n = m?.[1]
+  return n ? String(parseInt(n, 10)) : '1'
 }
 
 const draft = reactive<FplDraft>(emptyDraft())
@@ -568,7 +569,7 @@ function parseAltn2(remarks: string, altn1: string): string {
   return icao
 }
 
-/** SUP: E/HHmm endurance + C/pilot (ICAO item 19). */
+/** SUP: E/HHmm endurance + P/nnn + C/pilot (ICAO item 19 / ES-style). */
 function formatSupl(endurance: string, pilotName: string, remarks: string): string {
   const parts: string[] = []
   if (endurance) parts.push(`E/${endurance}`)
@@ -576,6 +577,8 @@ function formatSupl(endurance: string, pilotName: string, remarks: string): stri
     const em = remarks.match(/\bE\/(\d{4})\b/i)
     if (em) parts.push(`E/${em[1]}`)
   }
+  const pm = remarks.match(/\bP\/(\d{1,3})\b/i)
+  if (pm?.[1]) parts.push(`P/${pm[1].padStart(3, '0')}`)
   const pic =
     pilotName.trim() ||
     remarks.match(/\bC\/([^\n/]+?)(?=\s+[A-Z]\/|$)/i)?.[1]?.trim() ||

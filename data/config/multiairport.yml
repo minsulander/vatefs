@@ -84,7 +84,8 @@ sectionRules:
     priority: 5
 
   # === CTR (inside CTR arrivals + airborne dep / local / missed) ===
-  # CA/VA/CAT/OS — pull to CTR even outside withinCtr (same idea as ESSA/ESGG)
+  # RTC-only: CA/VA/CAT/OS pull into APP (CTR) even outside withinCtr.
+  # ESSA/ESGG intentionally do NOT — there only assume / inbound transfer → CTR ARR.
   app_arr_approach_clearance:
     sectionId: app
     direction: arrival

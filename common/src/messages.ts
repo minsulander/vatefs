@@ -1,6 +1,15 @@
 // WebSocket API message types
 
-import type { AirportAtisInfo, DclMode, EfsLayout, FlightStrip, Gap, Section, UiSettings } from "./types.js"
+import type {
+    AirportAtisInfo,
+    DclMode,
+    EfsLayout,
+    FlightStrip,
+    Gap,
+    ScribbleStrokePayload,
+    Section,
+    UiSettings,
+} from "./types.js"
 
 // Server -> Client messages
 
@@ -15,6 +24,8 @@ export interface StripMessage {
     autoMoved?: boolean
     /** G/A APP-assume reprint: clear local scribbles + play print anim */
     cleanReprint?: boolean
+    /** FSP / external print: always play print anim+sound (incl. blank/info strips) */
+    playPrintAnim?: boolean
 }
 
 export interface StripDeleteMessage {
@@ -64,6 +75,8 @@ export interface FeedsStatus {
     atis: FeedStatusItem
     afv: FeedStatusItem
     ctr: FeedStatusItem
+    /** VatEFS / VatIRIS scribble + strip sync */
+    irisSync: FeedStatusItem
     // Local / parsing
     euroscopeDir: FeedStatusItem
     hoppieConfig: FeedStatusItem
@@ -196,6 +209,8 @@ export interface ConfigListMessage {
 export interface ControllerInfo {
     callsign: string
     frequency: string  // Formatted frequency e.g. "118.505"
+    /** EuroScope position / SI (e.g. OS, TW, RTM) */
+    positionId?: string
 }
 
 export interface ControllersMessage {
@@ -229,7 +244,16 @@ export interface DeletedStripInfo {
     bayId: string
     noteText?: string
     deletedAt: number
+    /** Plain-text why the strip was removed */
     reason?: string
+    /** Delete rule id or synthetic cause code (debug) */
+    ruleId?: string
+    /** Rule / cause name for debug */
+    ruleName?: string
+    /** True when EuroScope sent flightPlanDisconnect */
+    pilotDisconnected?: boolean
+    /** Disconnect / data-loss extras (pilot FP disconnect, FP data lost, radar range) */
+    disconnectKind?: 'pilot' | 'flight_plan' | 'radar'
 }
 
 export interface DeletedStripsMessage {
@@ -254,7 +278,36 @@ export interface PendingPrintListMessage {
     flights: PendingPrintFlightInfo[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage
+/** Full scribble state for one strip (local multi-client + remote sync) */
+export interface ScribbleUpdateMessage {
+    type: 'scribbleUpdate'
+    stripId: string
+    strokes: ScribbleStrokePayload[]
+    /** Remote updatedAt when applied from sync server */
+    updatedAt?: string
+}
+
+/** Ask UI to open CID dialog (.efs cid or missing CID when enabling sync) */
+export interface OpenCidDialogMessage {
+    type: 'openCidDialog'
+    suggestedCid?: string
+    reason?: 'missing' | 'command'
+}
+
+/** Suggested CID from ES*.prf (for dialog prefill) */
+export interface CidSuggestMessage {
+    type: 'cidSuggest'
+    suggestedCid?: string
+}
+
+/** Sync auth failed — ask controller to sign in to VatIRIS once */
+export interface OpenVatIrisSignInMessage {
+    type: 'openVatIrisSignIn'
+    /** Optional detail (e.g. allowlist / network error) */
+    detail?: string
+}
+
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage
 
 // Client -> Server messages
 
@@ -417,11 +470,38 @@ export interface UpdateHsMessage {
     text: string
 }
 
-/** Toggle ACC coordination flag — scratchpad `.COO` */
+/** Toggle Departure Coordination — strip annotation 6 ("DepC"; legacy "EST") */
 export interface SetCooMessage {
     type: 'setCoo'
     stripId: string
     coo: boolean
+}
+
+/**
+ * Request EuroScope COPX/XFL exit coordination to the next/ACC controller.
+ * Does NOT set clearance flag, DepC annotation, or DEP state.
+ */
+export interface InitiateXflCoordinationMessage {
+    type: 'initiateXflCoordination'
+    stripId: string
+    /** Proposed exit level in feet (0 = point-only if supported) */
+    altitudeFeet?: number
+    /** COPX / TMA exit; plugin falls back to ES exit coordination point */
+    point?: string
+    /** Optional target controller callsign; plugin falls back to coordinated next / online CTR */
+    targetController?: string
+}
+
+/** Accept ACC exit-coordination counter-proposal */
+export interface AcceptCoordinationMessage {
+    type: 'acceptCoordination'
+    stripId: string
+}
+
+/** Reject ACC exit-coordination counter-proposal */
+export interface RefuseCoordinationMessage {
+    type: 'refuseCoordination'
+    stripId: string
 }
 
 export interface ReleaseStripMessage {
@@ -484,6 +564,14 @@ export interface SetCtocMessage {
     stripId: string
     /** HHmm to store, or empty to clear */
     ctoc: string
+}
+
+/** Set Actual Time of Departure (UTC HHmm) — EFS-only; empty clears */
+export interface SetAtdMessage {
+    type: 'setAtd'
+    stripId: string
+    /** HHmm to store, or empty to clear */
+    atd: string
 }
 
 /** Record QNH given to pilot (hPa), or clear with null */
@@ -598,7 +686,30 @@ export interface AmendFlightPlanMessage {
     cfl?: string | number
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage
+/** Replace local scribble strokes for a strip (fans out to other clients) */
+export interface ScribbleSetMessage {
+    type: 'scribbleSet'
+    stripId: string
+    strokes: ScribbleStrokePayload[]
+}
+
+/** Push current strokes for strip to remote sync server (zoom close) */
+export interface ScribbleSyncPushMessage {
+    type: 'scribbleSyncPush'
+    stripId: string
+}
+
+/** Request CID dialog / persist CID from UI */
+export interface SetVatsimCidMessage {
+    type: 'setVatsimCid'
+    cid: string
+}
+
+export interface RequestCidSuggestMessage {
+    type: 'requestCidSuggest'
+}
+
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage
 
 // Type guards for message parsing
 
@@ -612,7 +723,9 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'refresh' || type === 'status' || type === 'dclStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'configList' ||
            type === 'controllers' || type === 'userSettings' || type === 'notify' ||
-           type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags'
+           type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags' ||
+           type === 'scribbleUpdate' || type === 'openCidDialog' || type === 'cidSuggest' ||
+           type === 'openVatIrisSignIn'
 }
 
 export function isClientMessage(data: unknown): data is ClientMessage {
@@ -620,5 +733,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest'
 }

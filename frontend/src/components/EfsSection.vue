@@ -383,7 +383,10 @@ function isCtrArrSectionId(sectionId: string): boolean {
   return sectionId === 'ctr_arr' || sectionId.endsWith('_ctr_arr')
 }
 
-/** Paper: above KLARERING — CLR read at bottom, else EOBT against the header */
+/**
+ * Paper: above KLARERING — default EOBT (+ CLR read at bottom); drag sticks
+ * manual order; new prints still insert by EOBT without re-sorting the bay.
+ */
 const paperPendingKlarering = computed(
   () =>
     store.isPaperLook &&
@@ -1029,9 +1032,15 @@ const sectionSortMode = computed(() =>
   store.getSectionSortMode(props.bayId, props.section.id),
 )
 
-const timeModeName = computed(() =>
-  isClearedSectionId(props.section.id) ? 'TSAT' : 'TOBT',
-)
+/**
+ * ESSA roles (CDM): TOBT / TSAT. Classic 1RWY/2RWY4BAY (and non-CDM): EOBT only.
+ */
+const useCdmSortLabels = computed(() => store.essaRolesMode)
+
+const timeModeName = computed(() => {
+  if (!useCdmSortLabels.value) return 'EOBT'
+  return isClearedSectionId(props.section.id) ? 'TSAT' : 'TOBT'
+})
 
 /** Button label = active mode */
 const sortModeLabel = computed(() =>
@@ -1042,6 +1051,9 @@ const sortModeTitle = computed(() => {
   if (sectionSortMode.value === 'man') {
     return `Manual order - click for ${timeModeName.value}`
   }
+  if (!useCdmSortLabels.value) {
+    return 'Sort by EOBT - click for MAN'
+  }
   return isClearedSectionId(props.section.id)
     ? 'Sort by TSAT (else EOBT) - click for MAN'
     : 'Sort by TOBT (else EOBT) - click for MAN'
@@ -1049,11 +1061,12 @@ const sortModeTitle = computed(() => {
 
 /**
  * Fixed sort field per section:
- * - pending_dep (CD ALL): TOBT → EOBT
- * - cleared (TSAT): TSAT → EOBT
- * - other time-sort sections: TOBT → EOBT
+ * - Classic (non-ESSA): always EOBT
+ * - ESSA pending_dep (CD ALL): TOBT → EOBT
+ * - ESSA cleared (TSAT): TSAT → EOBT
  */
 function activeTimeSortField(): TimeSortField {
+  if (!useCdmSortLabels.value) return 'etobt'
   if (isClearedSectionId(props.section.id)) return 'tsat'
   if (isPendingDepSectionId(props.section.id)) return 'etobt'
   return 'etobt'
@@ -1064,13 +1077,15 @@ function activeTimeSortDir(): TimeSortDir {
 }
 
 /**
- * Sticky manual order: MAN mode on CD ALL/TSAT, or drag-sticky on other time-sort
- * sections (RTC dep). INBOUND APP / CTR DEP always auto-sort (never sticky).
+ * Sticky manual order: MAN mode on CD ALL/TSAT / paper pending KLARERING,
+ * or drag-sticky on other time-sort sections (RTC dep).
+ * INBOUND APP / CTR DEP always auto-sort (never sticky).
  * Other INBOUND (TWR/GND) use appearing order + sticky like taxi.
  */
 const preferManualOrder = computed(() => {
   if (etaSortEnabled.value || atdSortEnabled.value) return false
-  if (!timeSortEnabled.value) return false
+  // Paper above-KLARERING is a time-sort section (EOBT); drag → sticky MAN
+  if (!timeSortEnabled.value && !paperPendingKlarering.value) return false
   return store.hasManualOrder(props.bayId, props.section.id)
 })
 
@@ -1110,10 +1125,14 @@ function hhmmSortKey(hhmm: string | undefined, nowMin: number = utcNowMinutes())
 
 /**
  * Preferred departure time for the active sort mode:
- * - TSAT (cleared): TSAT → EOBT
- * - TOBT (pending_dep / RTC dep): TOBT → EOBT
+ * - Classic 1/2RWY4BAY: EOBT only (no CDM)
+ * - ESSA TSAT (cleared): TSAT → EOBT
+ * - ESSA TOBT (pending_dep / RTC dep): TOBT → EOBT
  */
 function preferredDepTime(strip: FlightStripData, field: TimeSortField): string | undefined {
+  if (!useCdmSortLabels.value) {
+    return strip.eobt || undefined
+  }
   if (field === 'tsat') {
     return strip.tsat || strip.eobt || undefined
   }
@@ -1329,8 +1348,12 @@ const topStrips = computed(() => {
   void sectionSortMode.value
   const list = collectTopStrips()
 
-  // Paper KLARERING (above header): CLR read at bottom, else EOBT
+  // Paper KLARERING (above header): EOBT (+ CLR read at bottom) until user
+  // drags — then sticky positions; new prints insert by EOBT without re-sort.
   if (paperPendingKlarering.value) {
+    if (preferManualOrder.value) {
+      return list.sort((a, b) => a.position - b.position)
+    }
     return sortByEobtEarliestBottom(list)
   }
 

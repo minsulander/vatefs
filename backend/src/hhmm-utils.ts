@@ -66,3 +66,91 @@ export function minutesUntilFlightEta(
 ): number | null {
     return minutesUntilHhmm(flightEtaHhmm(flight), nowMs)
 }
+
+/**
+ * Sort key relative to "now" with midnight wrap (±12h).
+ * Missing/invalid → +∞ (same as frontend `hhmmSortKey`).
+ */
+export function hhmmSortKey(hhmm: string | undefined, nowMin: number): number {
+    const abs = parseHhmmMinutes(hhmm)
+    if (abs == null) return Number.POSITIVE_INFINITY
+    let delta = abs - nowMin
+    if (delta > 720) delta -= 1440
+    if (delta < -720) delta += 1440
+    return nowMin + delta
+}
+
+/** Paper pending KLARERING: local CLR read (not yet ES CLR / correct). */
+export function stripHasClrReadAbove(flight: {
+    clearance?: boolean
+    clearanceReadback?: boolean
+    clearanceRead?: boolean
+}): boolean {
+    if (flight.clearance || flight.clearanceReadback) return false
+    return !!flight.clearanceRead
+}
+
+/**
+ * Compare for paper pending KLARERING insert/sort (matches frontend
+ * `sortByEobtEarliestBottom`): CLR-read at bottom; missing EOBT at top;
+ * earlier EOBT toward bay floor; callsign tiebreak.
+ * Negative → `a` before `b` (higher in the bay).
+ */
+export function comparePendingKlareringEobt(
+    a: {
+        eobt?: string
+        callsign?: string
+        clearance?: boolean
+        clearanceReadback?: boolean
+        clearanceRead?: boolean
+    },
+    b: {
+        eobt?: string
+        callsign?: string
+        clearance?: boolean
+        clearanceReadback?: boolean
+        clearanceRead?: boolean
+    },
+    nowMin: number = utcNowMinutes(),
+): number {
+    const aClr = stripHasClrReadAbove(a)
+    const bClr = stripHasClrReadAbove(b)
+    if (aClr !== bClr) return aClr ? 1 : -1
+    const ka = hhmmSortKey(a.eobt, nowMin)
+    const kb = hhmmSortKey(b.eobt, nowMin)
+    const aMiss = !Number.isFinite(ka)
+    const bMiss = !Number.isFinite(kb)
+    if (aMiss !== bMiss) return aMiss ? -1 : 1
+    const d = kb - ka
+    if (d !== 0) return d
+    return (a.callsign || "").localeCompare(b.callsign || "")
+}
+
+/**
+ * Insert index for a new pending-CLR strip among position-ordered existing
+ * flights — EOBT order without re-sorting the list.
+ */
+export function eobtInsertIndexAmong(
+    existingInPositionOrder: Array<{
+        eobt?: string
+        callsign?: string
+        clearance?: boolean
+        clearanceReadback?: boolean
+        clearanceRead?: boolean
+    }>,
+    incoming: {
+        eobt?: string
+        callsign?: string
+        clearance?: boolean
+        clearanceReadback?: boolean
+        clearanceRead?: boolean
+    },
+    nowMin: number = utcNowMinutes(),
+): number {
+    for (let i = 0; i < existingInPositionOrder.length; i++) {
+        if (comparePendingKlareringEobt(incoming, existingInPositionOrder[i], nowMin) < 0) {
+            return i
+        }
+    }
+    return existingInPositionOrder.length
+}

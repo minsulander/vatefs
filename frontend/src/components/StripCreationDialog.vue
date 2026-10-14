@@ -174,7 +174,7 @@ const headerIndicatorClass = computed(() => {
     case 'vfrDep': return 'indicator-dep'
     case 'vfrArr': return 'indicator-arr'
     case 'cross': return 'indicator-cross'
-    case 'vehicle': return store.multiAirport ? 'indicator-vehicle-rtc' : 'indicator-vehicle'
+    case 'vehicle': return 'indicator-vehicle'
     default: return 'indicator-note'
   }
 })
@@ -303,8 +303,7 @@ function onCancel() {
 .indicator-arr { background: #daa520; }
 .indicator-cross { background: #881fe0; }
 .indicator-note { background: #888; }
-.indicator-vehicle { background: #4a4a4a; }
-.indicator-vehicle-rtc { background: #c62828; }
+.indicator-vehicle { background: #c62828; }
 
 .dialog-header-title {
   font-size: calc(12px * var(--s));

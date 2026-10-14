@@ -557,6 +557,8 @@ function close() {
   penMode.value = false
   resetDrawPointerState()
   flushHotspotFlagsFromScribbles()
+  // Local WS fanout + remote VatEFS sync (zoom-close cadence)
+  store.syncStripScribbles(props.strip.id, true)
   emit('update:modelValue', false)
 }
 

@@ -86,6 +86,49 @@
                         Off: strips appear instantly. Default: Short.
                     </p>
                 </div>
+
+                <div class="scribble-mode-option mb-4">
+                    <div class="ui-scale-label">VatIRIS FSP server</div>
+                    <v-switch
+                        color="white"
+                        base-color="grey-darken-1"
+                        hide-details
+                        density="compact"
+                        label="Allow printing from IRIS"
+                        class="mt-1"
+                        :model-value="efs.fspServerEnabled"
+                        @update:model-value="onFspServerEnabled"
+                    />
+                    <p class="text-caption text-grey mt-1">
+                        Off by default. When on, VatIRIS can create paper strips via
+                        <code class="fsp-inline">POST /api/print/external</code>.
+                    </p>
+                    <div class="fsp-url-row" :class="{ 'fsp-url-row--disabled': !efs.fspServerEnabled }">
+                        <code class="fsp-url-value">{{ fspUrlDisplay }}</code>
+                        <v-btn
+                            size="small"
+                            variant="tonal"
+                            class="text-none"
+                            :disabled="!fspUrlDisplay"
+                            @click="copyFspUrl"
+                        >
+                            {{ fspCopied ? 'Copied' : 'Copy' }}
+                        </v-btn>
+                    </div>
+                    <p class="text-caption text-grey mt-1">
+                        Paste into VatIRIS → Settings → FSP Server URL (enable FSP there too).
+                    </p>
+                    <p v-if="fspAltUrls.length" class="text-caption text-grey mt-1">
+                        Other LAN addresses:
+                        <button
+                            v-for="u in fspAltUrls"
+                            :key="u"
+                            type="button"
+                            class="fsp-alt-link"
+                            @click="copyFspUrlValue(u)"
+                        >{{ u }}</button>
+                    </p>
+                </div>
             </template>
 
             <v-switch
@@ -110,7 +153,7 @@
                 @update:model-value="onTransferSounds"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Play EuroScope sounds for transfer request, accept, and refuse.
+                Play EuroScope sounds for transfer and XFL coordination (request, accept, refuse).
             </p>
 
             <v-switch
@@ -173,6 +216,95 @@
                 </p>
             </div>
 
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="RTC ASSR Simulation"
+                class="mt-2"
+                :model-value="efs.rtcAssrSimulation"
+                @update:model-value="onRtcAssrSimulation"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                For LOP verbal-ACC SSR airports (ESCF, ESGJ, ESGT, …), hide live ES ASSR until you
+                enter a manual code (click) or double-click to generate via TopSky and show ES ASSR.
+                Local flights always show ES ASSR. On by default.
+            </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Contact me (C ME)"
+                class="mt-2"
+                :model-value="efs.contactMeEnabled"
+                @update:model-value="onContactMeEnabled"
+            />
+            <p class="text-caption ml-13 contact-me-warning" style="margin-top: -15px">
+                Only works with ES in focus, so when EFS is running on (other) networked device!
+            </p>
+
+            <h2 class="settings-section-title">VatEFS sync</h2>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Enable scribble sync"
+                :model-value="efs.scribbleSyncEnabled"
+                @update:model-value="onScribbleSyncEnabled"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                Share freehand strip scribbles with other controllers via VatIRIS.
+            </p>
+
+            <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                class="mt-2"
+                label="Enable IRIS strip sync"
+                :model-value="efs.stripSyncEnabled"
+                @update:model-value="onStripSyncEnabled"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                Share bay placement, note/vehicle strips, and EFS-only flags (CLR read, QNH/ATIS).
+            </p>
+
+            <div class="scribble-mode-option mt-3 mb-2">
+                <div class="ui-scale-label">Sync realm</div>
+                <v-btn-toggle
+                    :model-value="efs.scribbleSyncRealm"
+                    mandatory
+                    density="comfortable"
+                    color="amber-darken-2"
+                    class="scribble-mode-toggle"
+                    @update:model-value="onScribbleSyncRealm"
+                >
+                    <v-btn value="auto" class="text-none" size="small">Auto</v-btn>
+                    <v-btn value="live" class="text-none" size="small">Live</v-btn>
+                    <v-btn value="sweatbox" class="text-none" size="small">Sweatbox</v-btn>
+                    <v-btn value="local" class="text-none" size="small">Local</v-btn>
+                </v-btn-toggle>
+                <p class="text-caption text-grey mt-1">
+                    Auto follows EuroScope connection (live / sweatbox / playback). Rooms are isolated per airport.
+                </p>
+            </div>
+
+            <div class="d-flex align-center ga-2 mb-4" style="max-width: 28rem">
+                <v-btn
+                    size="small"
+                    variant="tonal"
+                    class="text-none"
+                    @click="efs.openCidDialog(undefined, 'command')"
+                >
+                    Change CID
+                </v-btn>
+                <span class="text-caption text-grey">
+                    {{ efs.vatsimCid?.trim() ? `Current: ${efs.vatsimCid.trim()}` : 'Not set' }}
+                </span>
+            </div>
+
             <h2 class="settings-section-title">CDM</h2>
 
             <v-switch
@@ -218,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, onMounted, ref } from "vue"
 import { useEfsStore } from "@/store/efs"
 import { isAutoLopSsrMode } from "@vatefs/common"
 import {
@@ -242,6 +374,53 @@ function isStripPrintMode(value: unknown): value is "auto" | "manual" {
 const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
 const scribbleMode = useStripScribbleMode()
+
+/** Prefer backend-reported LAN URL; fall back to this page's origin. */
+const fspUrl = ref("")
+const fspUrls = ref<string[]>([])
+const fspCopied = ref(false)
+let fspCopiedTimer: ReturnType<typeof setTimeout> | undefined
+
+const fspUrlDisplay = computed(
+    () => fspUrl.value || (typeof window !== "undefined" ? window.location.origin : ""),
+)
+const fspAltUrls = computed(() =>
+    fspUrls.value.filter((u) => u !== fspUrlDisplay.value).slice(0, 4),
+)
+
+async function loadFspInfo() {
+    try {
+        const res = await fetch("/api/fsp")
+        if (!res.ok) return
+        const data = (await res.json()) as { fspUrl?: string; urls?: string[] }
+        if (typeof data.fspUrl === "string" && data.fspUrl) fspUrl.value = data.fspUrl
+        if (Array.isArray(data.urls)) fspUrls.value = data.urls.filter((u) => typeof u === "string")
+    } catch {
+        /* keep origin fallback */
+    }
+}
+
+async function copyFspUrlValue(url: string) {
+    if (!url) return
+    try {
+        await navigator.clipboard.writeText(url)
+        fspCopied.value = true
+        if (fspCopiedTimer) clearTimeout(fspCopiedTimer)
+        fspCopiedTimer = setTimeout(() => {
+            fspCopied.value = false
+        }, 1600)
+    } catch {
+        /* ignore */
+    }
+}
+
+function copyFspUrl() {
+    void copyFspUrlValue(fspUrlDisplay.value)
+}
+
+onMounted(() => {
+    void loadFspInfo()
+})
 
 function onUiScale(value: number | number[]) {
     const n = Array.isArray(value) ? value[0] : value
@@ -270,6 +449,11 @@ function onStripPrintMode(value: unknown) {
 function onStripPrintSound(value: unknown) {
     if (!isStripPrintSound(value)) return
     efs.updateUserSettings({ stripPrintSound: value })
+}
+
+function onFspServerEnabled(value: boolean | null) {
+    if (typeof value !== 'boolean') return
+    efs.updateUserSettings({ fspServerEnabled: value })
 }
 
 function onDclSound(value: boolean | null) {
@@ -307,9 +491,41 @@ function onAutoLopSsr(value: unknown) {
     efs.updateUserSettings({ autoLopSsr: value })
 }
 
+function onRtcAssrSimulation(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ rtcAssrSimulation: value })
+}
+
+function onContactMeEnabled(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ contactMeEnabled: value })
+}
+
 function onShowTobtSetByA(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ showTobtSetByA: value })
+}
+
+function onScribbleSyncEnabled(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ scribbleSyncEnabled: value })
+}
+
+function onStripSyncEnabled(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ stripSyncEnabled: value })
+}
+
+function onScribbleSyncRealm(value: unknown) {
+    if (
+        value === "auto" ||
+        value === "live" ||
+        value === "sweatbox" ||
+        value === "playback" ||
+        value === "local"
+    ) {
+        efs.updateUserSettings({ scribbleSyncRealm: value })
+    }
 }
 </script>
 
@@ -348,5 +564,56 @@ function onShowTobtSetByA(value: boolean | null) {
     font-size: 1.1rem;
     font-weight: 600;
     color: #c4c8ce;
+}
+
+.contact-me-warning {
+    max-width: 36rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 4px;
+    font-weight: 600;
+    color: #1a1a1a;
+    background: #fddf5f;
+}
+
+.fsp-url-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
+    flex-wrap: wrap;
+}
+
+.fsp-url-row--disabled {
+    opacity: 0.55;
+}
+
+.fsp-url-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.35rem 0.55rem;
+    border-radius: 4px;
+    background: #1e2024;
+    border: 1px solid #4a4d55;
+    color: #f0c040;
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+.fsp-inline {
+    color: #b0b4ba;
+    font-size: 0.9em;
+}
+
+.fsp-alt-link {
+    display: inline;
+    margin-left: 0.35rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: #93c5fd;
+    font: inherit;
+    font-size: inherit;
+    text-decoration: underline;
+    cursor: pointer;
 }
 </style>

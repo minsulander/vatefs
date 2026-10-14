@@ -47,21 +47,16 @@
         title="Settings"
       />
 
-      <!-- ESGG paper: RWY + Roles (same order as ESSA) -->
+      <!-- ESGG paper: RWY + covering roles (auto) -->
       <div v-if="efs.esggRolesMode" class="top-status-cluster">
         <span
           class="essa-status-btn esgg-rwy-label"
           :title="esggRwyTitle"
         >{{ esggRwyLabel }}</span>
-        <button
-          type="button"
-          class="essa-status-btn"
-          :class="{ 'is-manual': efs.esggRolesManual }"
+        <span
+          class="essa-status-btn esgg-roles-readonly"
           :title="esggRolesStatusTitle"
-          @click="esggRolesDialog = true"
-        >
-          Roles: {{ esggRolesLabel }}
-        </button>
+        >Roles: {{ esggRolesLabel }}</span>
       </div>
 
       <!-- ESSA status indicators (also editable via menu) -->
@@ -180,28 +175,7 @@
           </div>
         </div>
       </v-dialog>
-      <v-dialog v-model="esggRolesDialog" max-width="280" scrim content-class="essa-roles-dialog-wrap">
-        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
-          <div class="efs-popup-header">Roles</div>
-          <div class="efs-popup-list">
-            <label
-              v-for="role in esggRoleOptions"
-              :key="role"
-              class="efs-popup-item efs-popup-item--start"
-              :class="{ selected: draftEsggRoles.includes(role) }"
-            >
-              <input v-model="draftEsggRoles" type="checkbox" :value="role" class="essa-role-check" />
-              <span>{{ role }}</span>
-            </label>
-          </div>
-          <div class="essa-roles-actions">
-            <button type="button" class="efs-popup-footer essa-roles-action" @click="esggRolesDialog = false">Cancel</button>
-            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEsggRolesAuto">Auto</button>
-            <button type="button" class="efs-popup-footer essa-roles-action" @click="onEsggRolesOk">OK</button>
-          </div>
-        </div>
-      </v-dialog>
-      <!-- ATIS / airports: classic 1RWY/2RWY only (hidden ESSA roles + paper/ESGG) -->
+      <!-- Airports (+ ATIS/QNH when several): classic 1RWY/2RWY / RTC (hidden ESSA roles + paper) -->
       <template v-if="!efs.essaRolesMode && !efs.isPaperLook">
       <span
         v-for="info in atisDisplayItems"
@@ -217,17 +191,27 @@
         @click.stop="onAirportClick(info)"
       >
         <span class="airport-icao" :class="info.idle ? 'text-grey' : 'text-grey-darken-1'">{{ info.airport }}</span>
-        <template v-if="info.split">
-          <span class="text-amber ml-1" v-if="info.arrAtis">{{ info.arrAtis }}</span>
-          <span class="text-grey-darken-2 ml-1" v-if="info.arrRunways">{{ info.arrRunways }}</span>
-          <span class="text-cyan ml-1" v-if="info.depAtis">{{ info.depAtis }}</span>
-          <span class="text-grey-darken-2 ml-1" v-if="info.depRunways">{{ info.depRunways }}</span>
+        <!-- Several airports: ATIS + RWY + QNH beside each ICAO. Single: ICAO (+ RWY) only; ATIS/QNH on right. -->
+        <template v-if="showLeftAtisQnh">
+          <template v-if="info.split">
+            <span class="text-amber ml-1" v-if="info.arrAtis">{{ info.arrAtis }}</span>
+            <span class="text-grey-darken-2 ml-1" v-if="info.arrRunways">{{ info.arrRunways }}</span>
+            <span class="text-cyan ml-1" v-if="info.depAtis">{{ info.depAtis }}</span>
+            <span class="text-grey-darken-2 ml-1" v-if="info.depRunways">{{ info.depRunways }}</span>
+          </template>
+          <template v-else>
+            <span class="text-amber ml-1" v-if="info.atis">{{ info.atis }}</span>
+            <span class="text-grey-darken-2 ml-1" v-if="info.runways">{{ info.runways }}</span>
+          </template>
+          <span class="text-grey ml-1" v-if="info.qnh">{{ info.qnh }}</span>
         </template>
         <template v-else>
-          <span class="text-amber ml-1" v-if="info.atis">{{ info.atis }}</span>
-          <span class="text-grey-darken-2 ml-1" v-if="info.runways">{{ info.runways }}</span>
+          <template v-if="info.split">
+            <span class="text-grey-darken-2 ml-1" v-if="info.arrRunways">{{ info.arrRunways }}</span>
+            <span class="text-grey-darken-2 ml-1" v-if="info.depRunways">{{ info.depRunways }}</span>
+          </template>
+          <span v-else-if="info.runways" class="text-grey-darken-2 ml-1">{{ info.runways }}</span>
         </template>
-        <span class="text-grey ml-1" v-if="info.qnh">{{ info.qnh }}</span>
       </span>
       <!-- Fallback: show airports without ATIS data (non-MULTIAPT) -->
       <span v-if="atisDisplayItems.length === 0 && efs.displayAirports.length > 0" class="text-grey-darken-1 ml-2">
@@ -332,6 +316,31 @@
                   @click="efs.adjustColumnCount(1)"
                 >+</button>
               </span>
+              <span
+                v-else-if="isEsggPaperConfig(config) && config.file === efs.activeConfig"
+                class="column-count-ctrl"
+                title="Columns visible on screen (scroll for the rest)"
+                @click.stop
+              >
+                <button
+                  type="button"
+                  class="column-count-btn"
+                  :disabled="efs.esggVisibleColumns <= 2"
+                  title="Fewer columns on screen"
+                  @click="efs.adjustEsggVisibleColumns(-1)"
+                >−</button>
+                <span
+                  class="column-count-label"
+                  :title="`${efs.esggVisibleColumns} visible`"
+                >{{ efs.esggVisibleColumns }}</span>
+                <button
+                  type="button"
+                  class="column-count-btn"
+                  :disabled="efs.esggVisibleColumns >= 5"
+                  title="More columns on screen"
+                  @click="efs.adjustEsggVisibleColumns(1)"
+                >+</button>
+              </span>
             </button>
           </div>
         </div>
@@ -339,8 +348,8 @@
 
       <!-- Right chrome (L→R): SEP/DLV/GAP (ESSA) · ATIS · QNH · OK/OFF · Fullscreen -->
       <div class="top-right-chrome">
-        <!-- SEP/DLV/DEP GAP — ESSA only (hidden in ESGG paper + RTC) -->
-        <div v-if="!efs.isPaperLook && !efs.multiAirport" class="top-sep-group" title="Separation">
+        <!-- SEP/DLV/DEP GAP — ESSA roles only (not 1/2RWY4BAY, paper, or RTC) -->
+        <div v-if="efs.essaRolesMode" class="top-sep-group" title="Separation">
           <div class="top-sep-cell">
             <span class="top-sep-lbl">SEP</span>
             <span class="top-sep-val">{{ sepIndicators.sep }}</span>
@@ -355,8 +364,8 @@
           </div>
         </div>
 
-        <!-- ATIS / QNH — ESSA only (RTC uses per-column bay headers) -->
-        <template v-if="!efs.multiAirport">
+        <!-- ATIS / QNH right: single-airport classic, ESSA, paper (multi → left / bay headers) -->
+        <template v-if="showRightAtisQnh">
           <div
             v-if="topAtisEntries.length"
             class="top-atis"
@@ -381,7 +390,11 @@
             type="button"
             class="top-qnh"
             :class="{ 'is-changed': topQnhChanged }"
-            :title="topQnhChanged ? `QNH ${topQnh} - click to acknowledge` : `QNH ${topQnh}`"
+            :title="topQnhTitle"
+            @pointerdown="onTopQnhPointerDown"
+            @pointerup="onTopQnhPointerUp"
+            @pointerleave="onTopQnhPointerCancel"
+            @pointercancel="onTopQnhPointerCancel"
             @click="onTopQnhClick"
           >
             <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
@@ -583,6 +596,7 @@ const networkFeedRows = computed((): FeedRow[] => {
     { key: 'viff', title: 'vIFF / CDM' },
     { key: 'atis', title: 'VATSIM ATIS' },
     { key: 'afv', title: 'AFV transceivers' },
+    { key: 'irisSync', title: 'IRIS Sync' },
     { key: 'ctr', title: 'CTR / TIZ (LFV)' },
   ]
   return rows.map(({ key, title }) => {
@@ -622,9 +636,6 @@ const essaTwrRoles = ['TWR-E', 'TWR-W'] as const
 const essaRolesDialog = ref(false)
 const draftEssaRoles = ref<string[]>([])
 
-const esggRoleOptions = ['TWR', 'GND', 'CD'] as const
-const esggRolesDialog = ref(false)
-const draftEsggRoles = ref<string[]>([])
 const essaRwyDialog = ref(false)
 const draftEssaRwyId = ref<string | null>(null)
 /** Minute tick so night/day letter auto-switch updates without ES change */
@@ -762,11 +773,10 @@ const esggRolesLabel = computed(() => {
   return roles.length ? roles.join(', ') : '-'
 })
 
-const esggRolesStatusTitle = computed(() => {
-  return efs.esggRolesManual
-    ? `ESGG roles (manual override): ${esggRolesLabel.value}`
-    : `ESGG roles (auto): ${esggRolesLabel.value}`
-})
+const esggRolesStatusTitle = computed(
+  () =>
+    `Covering (from your position + who is online below): ${esggRolesLabel.value}`,
+)
 
 /** Active ESGG runway(s) from ATIS / rwyconfig — only 03 / 21. */
 const esggRwyLabel = computed(() => {
@@ -924,22 +934,6 @@ function onEssaRolesAuto() {
   essaRolesDialog.value = false
 }
 
-watch(esggRolesDialog, (open) => {
-  if (open) {
-    draftEsggRoles.value = [...efs.esggRoles]
-  }
-})
-
-function onEsggRolesOk() {
-  efs.setEsggRoles([...draftEsggRoles.value], true)
-  esggRolesDialog.value = false
-}
-
-function onEsggRolesAuto() {
-  efs.setEsggRoles([], false)
-  esggRolesDialog.value = false
-}
-
 function onEssaRwyOk() {
   if (draftEssaRwyId.value) {
     efs.setEssaRwyConfig(draftEssaRwyId.value, true)
@@ -1024,7 +1018,34 @@ const atisDisplayItems = computed((): AtisDisplayItem[] => {
     ]
   }
 
+  // Classic: prefer configured airports; fall back to ATIS feed list
+  if (efs.myAirports.length > 0) {
+    return efs.myAirports.map((a) => buildAtisItem(a, false))
+  }
   return efs.atisInfo.map((info) => buildAtisItem(info.airport, false))
+})
+
+/** Count of airports shown in the left airport strip (classic / RTC). */
+const classicAirportCount = computed(() => {
+  if (efs.multiAirport) {
+    return Math.max(1, atisDisplayItems.value.length)
+  }
+  return Math.max(efs.myAirports.length, atisDisplayItems.value.length, 1)
+})
+
+/** Several airports → ATIS/QNH beside each ICAO on the left. */
+const showLeftAtisQnh = computed(
+  () => efs.multiAirport || classicAirportCount.value > 1,
+)
+
+/**
+ * Single-airport classic, ESSA roles, paper → ATIS/QNH on the right.
+ * Multi / RTC → left (or bay headers), not right.
+ */
+const showRightAtisQnh = computed(() => {
+  if (efs.multiAirport) return false
+  if (efs.essaRolesMode || efs.isPaperLook) return true
+  return classicAirportCount.value <= 1
 })
 
 const activeConfigName = computed(() => {
@@ -1114,7 +1135,54 @@ const topQnhChanged = computed(() => {
   return apt ? efs.isQnhChanged(apt) : false
 })
 
+const topQnhTitle = computed(() => {
+  const q = topQnh.value
+  if (q == null) return 'QNH'
+  if (topQnhChanged.value) {
+    return `QNH ${q} — click to acknowledge · hold to stamp all strips`
+  }
+  return `QNH ${q} — hold to stamp all strips`
+})
+
+/** Long-hold (~600ms): stamp qnhGiven on every strip for this airport */
+const QNH_LONG_HOLD_MS = 600
+let topQnhHoldTimer: ReturnType<typeof setTimeout> | null = null
+let topQnhLongHeld = false
+
+function clearTopQnhHold() {
+  if (topQnhHoldTimer != null) {
+    clearTimeout(topQnhHoldTimer)
+    topQnhHoldTimer = null
+  }
+}
+
+function onTopQnhPointerDown(e: PointerEvent) {
+  if (e.button != null && e.button !== 0) return
+  const apt = topMetAirport.value
+  if (!apt || topQnh.value == null) return
+  topQnhLongHeld = false
+  clearTopQnhHold()
+  topQnhHoldTimer = setTimeout(() => {
+    topQnhHoldTimer = null
+    topQnhLongHeld = true
+    efs.stampQnhGivenForAirport(apt)
+  }, QNH_LONG_HOLD_MS)
+}
+
+function onTopQnhPointerUp() {
+  clearTopQnhHold()
+}
+
+function onTopQnhPointerCancel() {
+  clearTopQnhHold()
+  topQnhLongHeld = false
+}
+
 function onTopQnhClick() {
+  if (topQnhLongHeld) {
+    topQnhLongHeld = false
+    return
+  }
   const apt = topMetAirport.value
   if (!apt || !efs.isQnhChanged(apt)) return
   efs.acknowledgeQnh(apt)
@@ -1131,14 +1199,20 @@ function isRtcConfig(config: ConfigInfo): boolean {
   return config.name === 'RTC' || config.file.toLowerCase().includes('multiairport')
 }
 
+function isEsggPaperConfig(config: ConfigInfo): boolean {
+  const f = config.file.toLowerCase()
+  const n = config.name.toUpperCase()
+  return f.includes('esgg') || n === 'ESGG'
+}
+
 function onConfigClick(file: string) {
   const config = efs.availableConfigs.find(c => c.file === file)
   if (!config) return
   if (file !== efs.activeConfig) {
     efs.switchConfig(file)
   }
-  // Stay open on RTC so column buttons remain usable
-  if (!isRtcConfig(config)) {
+  // Stay open on RTC / ESGG so column ± buttons remain usable
+  if (!isRtcConfig(config) && !isEsggPaperConfig(config)) {
     configMenuOpen.value = false
   }
 }
@@ -1243,6 +1317,7 @@ onUnmounted(() => {
     clearTimeout(connStatusHideTimer)
     connStatusHideTimer = null
   }
+  clearTopQnhHold()
 })
 </script>
 
@@ -1363,7 +1438,8 @@ onUnmounted(() => {
   color: #fbbf24;
 }
 
-span.essa-status-btn.esgg-rwy-label {
+span.essa-status-btn.esgg-rwy-label,
+span.essa-status-btn.esgg-roles-readonly {
   cursor: default;
   pointer-events: none;
 }

@@ -273,6 +273,23 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (route && *route && strlen(route) < 1000)
             message["route"] = AnsiToUtf8(route);
 
+        // Airway-expanded route points (ES prediction) — FPR/DCT menu waypoints
+        {
+            EuroScopePlugIn::CFlightPlanExtractedRoute extracted = FlightPlan.GetExtractedRoute();
+            const int n = extracted.GetPointsNumber();
+            if (n > 0 && n < 256) {
+                std::string joined;
+                for (int i = 0; i < n; ++i) {
+                    const char *name = extracted.GetPointName(i);
+                    if (!name || !*name || strlen(name) >= 16) continue;
+                    if (!joined.empty()) joined.push_back(' ');
+                    joined += AnsiToUtf8(name);
+                }
+                if (!joined.empty() && joined.size() < 2000)
+                    message["extractedRoute"] = joined;
+            }
+        }
+
         // Filed cruise TAS (FPL) — shown on paper DEP strips (e.g. N0430)
         {
             int tas = fpData.GetTrueAirspeed();
@@ -304,7 +321,14 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (arrRwy && *arrRwy && strlen(arrRwy) < 5) SetJsonIfValidUtf8(message, "arrRwy", arrRwy);
         if (starName && *starName && strlen(starName) < 50)
             message["star"] = AnsiToUtf8(starName);
-        if (depRwy && *depRwy && strlen(depRwy) < 5) SetJsonIfValidUtf8(message, "depRwy", depRwy);
+        // Always send depRwy (empty when cleared) so FPR SID preview stays in sync with ES
+        if (depRwy && *depRwy && strlen(depRwy) < 5) {
+            message["depRwy"] = AnsiToUtf8(depRwy);
+            out << " depRwy " << depRwy;
+        } else {
+            message["depRwy"] = "";
+            out << " depRwy (none)";
+        }
         // Always send sid (empty when cleared) so the backend can drop a stale GetSid()
         if (sidName && *sidName && strlen(sidName) < 50) {
             message["sid"] = AnsiToUtf8(sidName);
@@ -437,7 +461,64 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
 
         // Always attach XFL — COPX exit level has no dedicated CTR_DATA_TYPE
         AppendXfl(message, FlightPlan, &out);
-        lastXflSnapshot[callsign] = message.value("xfl", 0);
+        // Advance outbound cycle before overwriting snapshot. Cycle posts accept/refuse
+        // edges itself (once per Initiate). Sticky ACCEPTED after same-level re-request
+        // is not a new accept.
+        {
+            const std::string newSnap = MakeXflSnapshot(FlightPlan);
+            auto xflIt = lastXflSnapshot.find(callsign);
+            const std::string prevSnap =
+                (xflIt != lastXflSnapshot.end()) ? xflIt->second : "";
+            auto cycleIt = outboundCoordCycles.find(callsign);
+            if (cycleIt != outboundCoordCycles.end() &&
+                (cycleIt->second.active ||
+                 (cycleIt->second.refuseLatched && !cycleIt->second.refuseNotified))) {
+                UpdateOutboundCoordCycle(callsign, FlightPlan);
+            }
+            // Sync sticky flags with cycle outcome. Critical: AppendXfl may still report
+            // REQUESTED_BY_ME after ACC accept (next-ctrl ACCEPTED only) — must not
+            // re-post exitCoordOutbound:true after the cycle already cleared pink.
+            // Also never force pink when live ES already cleared to NONE (2→1 accept).
+            if (cycleIt != outboundCoordCycles.end()) {
+                const bool liveOutbound =
+                    message.contains("exitCoordOutbound") &&
+                    message["exitCoordOutbound"].is_boolean() &&
+                    message["exitCoordOutbound"].get<bool>();
+                // Do NOT re-emit exitCoordRefused after refuseNotified — UpdateOutbound
+                // posts the refuse edge once; re-sticking on every CAD (move/action/
+                // groundstate) revives amber after DepC / Accept cleared it.
+                if (cycleIt->second.acceptNotified || cycleIt->second.refuseNotified ||
+                    cycleIt->second.cancelledNotified || !cycleIt->second.active) {
+                    message["exitCoordOutbound"] = false;
+                } else if (cycleIt->second.active && !cycleIt->second.refuseLatched &&
+                           liveOutbound) {
+                    // Cycle still open AND ES still shows REQUESTED_BY_ME — keep pink.
+                    message["exitCoordOutbound"] = true;
+                    message["exitCoordRefused"] = false;
+                } else {
+                    // Cycle open but live already NONE — do not re-stick pink; Update
+                    // (this tick or next) owns accept/refuse PostJson.
+                    message["exitCoordOutbound"] = false;
+                }
+                // Reinforce EST on CAD follow-up after outboundCoordAccept (coo only —
+                // do not re-send exitCoordAccepted or accept sound spam).
+                if (cycleIt->second.acceptNotified) {
+                    message["coo"] = true;
+                    message["exitCoordRefused"] = false;
+                }
+            } else if (!prevSnap.empty() && prevSnap != newSnap &&
+                       ShouldAutoEstOnXflTransition(prevSnap, newSnap)) {
+                // No VatEFS Initiate cycle (ES-native outbound) — legacy edge accept.
+                SetEstCoo(callsign, true);
+                lastEstCooSnapshot[callsign] = "1";
+                message["coo"] = true;
+                message["exitCoordAccepted"] = true;
+                message["exitCoordRefused"] = false;
+                message["exitCoordOutbound"] = false;
+                DebugMessage(std::string("CAD XFL transition auto DepC ") + callsign);
+            }
+            lastXflSnapshot[callsign] = newSnap;
+        }
 
         switch (DataType) {
         case EuroScopePlugIn::CTR_DATA_TYPE_SQUAWK: {
@@ -738,6 +819,18 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
             message["ete"] = ete;
         }
+        // Dense poll while an outbound Initiate cycle is open — REFUSED can last <1s.
+        const char *csRaw = RadarTarget.GetCallsign();
+        if (csRaw && csRaw[0] != '\0') {
+            std::string cs = csRaw;
+            for (auto &c : cs)
+                c = (char)std::toupper((unsigned char)c);
+            auto it = outboundCoordCycles.find(cs);
+            if (it != outboundCoordCycles.end() &&
+                (it->second.active ||
+                 (it->second.refuseLatched && !it->second.refuseNotified)))
+                UpdateOutboundCoordCycle(cs, fp);
+        }
     }
     PostJson(message, "OnRadarTargetPositionUpdate");
 }
@@ -1037,6 +1130,13 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
                 DisplayMessage("Backend process has exited");
         }
         return true;
+    } else if (subcommand == "cid") {
+        // Open VATSIM CID dialog in EFS UI (for scribble sync auth)
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "efsCidCommand";
+        PostJson(message, "OnCompileCommand");
+        DisplayMessage("Opening VATSIM CID dialog in VatEFS");
+        return true;
     }
     return false;
 }
@@ -1112,9 +1212,9 @@ void VatEFSPlugin::OnTimer(int counter)
         if (counter % 5 == 0) UpdateMyself();
         // Ownership (assume / transfer / accept / refuse) often has no ES callback — poll every tick.
         PollOwnershipChanges();
-        // VCH H/S (ann 4) + CTL (ann 3) — no CAD DataType callback.
+        // VCH H/S (ann 4) + CTL (ann 3) + EFSGA (5) + DepC (6) — no CAD DataType callback.
         PollVchAnnotationChanges();
-        // ES XFL (exit coordination altitude) — no CAD DataType callback.
+        // ES XFL / COPX / DirectTo — ACC coordination often has no CAD callback.
         PollXflChanges();
         // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.
         // Heartbeat every 5s refreshes backend local-prefer TTL without re-sending all times
@@ -1854,6 +1954,405 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
     return false;
 }
 
+/**
+ * Brittle EuroScope .contactme via keyboard (no SDK send-PM / ExecuteCommand):
+ *   ESC → type callsign → ASEL → HOME → ASEL
+ *
+ * Default ASEL key is numpad PLUS (VK_ADD). Must use real VKs/scancodes — UNICODE
+ * insertion puts glyphs in the cmdline so VK_ADD becomes a literal '+' (shows as
+ * +CALLSIGN+). Requires EuroScope foreground focus (EFS click steals it).
+ */
+static bool SendVkTap(WORD vk, bool extended = false)
+{
+    const WORD scan = (WORD)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    INPUT inputs[2] = {};
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wVk = vk;
+    inputs[0].ki.wScan = scan;
+    if (extended)
+        inputs[0].ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    inputs[1] = inputs[0];
+    inputs[1].ki.dwFlags |= KEYEVENTF_KEYUP;
+    return SendInput(2, inputs, sizeof(INPUT)) == 2;
+}
+
+/** Type one ASCII char via VkKeyScan (so ES sees real keydowns, not UNICODE inserts). */
+static bool SendCharTap(char ch)
+{
+    const SHORT mapped = VkKeyScanA(ch);
+    if (mapped == -1)
+        return false;
+    const WORD vk = LOBYTE(mapped);
+    const BYTE mods = HIBYTE(mapped);
+    INPUT seq[8] = {};
+    int n = 0;
+    auto push = [&](WORD key, bool up) {
+        seq[n].type = INPUT_KEYBOARD;
+        seq[n].ki.wVk = key;
+        seq[n].ki.wScan = (WORD)MapVirtualKeyW(key, MAPVK_VK_TO_VSC);
+        seq[n].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+        ++n;
+    };
+    if (mods & 1)
+        push(VK_SHIFT, false);
+    if (mods & 2)
+        push(VK_CONTROL, false);
+    if (mods & 4)
+        push(VK_MENU, false);
+    push(vk, false);
+    push(vk, true);
+    if (mods & 4)
+        push(VK_MENU, true);
+    if (mods & 2)
+        push(VK_CONTROL, true);
+    if (mods & 1)
+        push(VK_SHIFT, true);
+    return SendInput(n, seq, sizeof(INPUT)) == (UINT)n;
+}
+
+static bool SendAsciiText(const std::string &text)
+{
+    for (char ch : text) {
+        if (!SendCharTap(ch))
+            return false;
+        Sleep(15);
+    }
+    return true;
+}
+
+static BOOL CALLBACK FindEuroScopeHwnd(HWND hwnd, LPARAM lParam)
+{
+    if (!IsWindowVisible(hwnd))
+        return TRUE;
+    char title[512] = {};
+    GetWindowTextA(hwnd, title, sizeof(title) - 1);
+    if (title[0] && strstr(title, "EuroScope")) {
+        *reinterpret_cast<HWND *>(lParam) = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void FocusEuroScopeWindow()
+{
+    HWND hwnd = nullptr;
+    EnumWindows(FindEuroScopeHwnd, reinterpret_cast<LPARAM>(&hwnd));
+    if (!hwnd)
+        return;
+    DWORD foreTid = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+    DWORD esTid = GetWindowThreadProcessId(hwnd, nullptr);
+    if (foreTid && esTid && foreTid != esTid)
+        AttachThreadInput(foreTid, esTid, TRUE);
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    if (foreTid && esTid && foreTid != esTid)
+        AttachThreadInput(foreTid, esTid, FALSE);
+    Sleep(80);
+}
+
+bool VatEFSPlugin::SendContactMe(const std::string &targetCallsign)
+{
+    try {
+        std::string target = targetCallsign;
+        for (auto &c : target)
+            c = (char)std::toupper((unsigned char)c);
+        if (target.empty()) {
+            DisplayMessage("contactme: Invalid callsign");
+            return false;
+        }
+
+        auto fp = FlightPlanSelect(target.c_str());
+        auto rt = RadarTargetSelect(target.c_str());
+        if (!fp.IsValid() && !rt.IsValid()) {
+            DisplayMessage("contactme: No flight plan or radar target for " + target);
+            return false;
+        }
+
+        FocusEuroScopeWindow();
+
+        // ESC (clear cmdline) → callsign → ASEL (numpad +) → HOME → ASEL
+        if (!SendVkTap(VK_ESCAPE)) {
+            DisplayMessage("contactme: SendInput(ESC) failed for " + target);
+            return false;
+        }
+        Sleep(60);
+        if (!SendAsciiText(target)) {
+            DisplayMessage("contactme: SendInput(callsign) failed for " + target);
+            return false;
+        }
+        Sleep(60);
+        if (!SendVkTap(VK_ADD)) { // default ASEL = numpad +
+            DisplayMessage("contactme: SendInput(ASEL) failed for " + target);
+            return false;
+        }
+        Sleep(60);
+        if (!SendVkTap(VK_HOME, true)) {
+            DisplayMessage("contactme: SendInput(HOME) failed for " + target);
+            return false;
+        }
+        Sleep(60);
+        if (!SendVkTap(VK_ADD)) {
+            DisplayMessage("contactme: SendInput(ASEL#2) failed for " + target);
+            return false;
+        }
+
+        DebugMessage("contactme: ESC + " + target + " + ASEL + HOME + ASEL");
+        return true;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("contactme exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("contactme: Unknown exception");
+    }
+    return false;
+}
+
+bool VatEFSPlugin::SendInitiateCoordination(const std::string &callsign, int altitudeFeet,
+                                            const std::string &point,
+                                            const std::string &targetController)
+{
+    try {
+        std::string cs = callsign;
+        for (auto &c : cs)
+            c = (char)std::toupper((unsigned char)c);
+        auto fp = FlightPlanSelect(cs.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("initiateCoordination: No FP for " + cs);
+            return false;
+        }
+
+        // Require a real XFL (feet). Altitude 0 ⇒ ES sends point-only coordination.
+        int alt = altitudeFeet;
+        if (alt <= 0) {
+            try {
+                alt = fp.GetExitCoordinationAltitude();
+            } catch (...) {
+                alt = 0;
+            }
+        }
+        if (alt < 0 || alt > 100000)
+            alt = 0;
+        if (alt <= 0) {
+            DisplayMessage("initiateCoordination: No XFL altitude for " + cs);
+            return false;
+        }
+
+        // Same-level re-request: nudge ±1 ft so accept vs refuse is distinguishable.
+        // Lists/EFS show XFL in hundreds of feet (FL90), so 9000 vs 9001 is invisible.
+        // Accept path: 2→1 with live XFL == nudged → EST; refuse: XFL reverts → mismatch.
+        int currentXfl = 0;
+        try {
+            currentXfl = fp.GetExitCoordinationAltitude();
+        } catch (...) {
+            currentXfl = 0;
+        }
+        if (currentXfl > 0 && currentXfl == alt) {
+            const int original = alt;
+            int nudged = currentXfl + 1;
+            if (nudged == currentXfl || nudged <= 0 || nudged > 100000)
+                nudged = currentXfl - 1;
+            if (nudged > 0 && nudged <= 100000 && nudged != currentXfl) {
+                alt = nudged;
+                DisplayMessage("same-level nudge " + std::to_string(original) + "→" +
+                               std::to_string(alt));
+                DebugMessage("initiateCoordination: same-level nudge " + cs + " " +
+                             std::to_string(original) + "→" + std::to_string(alt));
+            }
+        }
+
+        // LOP DCT fallback point (e.g. MIKNA) — never prefer ESE COPX (BEDOS) here.
+        std::string lopPt = point;
+        for (auto &c : lopPt)
+            c = (char)std::toupper((unsigned char)c);
+
+        std::string target = targetController;
+        for (auto &c : target)
+            c = (char)std::toupper((unsigned char)c);
+        if (target.empty()) {
+            const char *next = fp.GetCoordinatedNextController();
+            if (next && next[0] != '\0')
+                target = next;
+        }
+        if (target.empty()) {
+            // Prefer an online CTR/FSS as ACC coordination target
+            for (EuroScopePlugIn::CController c = ControllerSelectFirst(); c.IsValid();
+                 c = ControllerSelectNext(c)) {
+                if (!c.IsController())
+                    continue;
+                const char *pos = c.GetPositionId();
+                const char *csn = c.GetCallsign();
+                if (!csn || csn[0] == '\0')
+                    continue;
+                std::string call = csn;
+                bool ctrish = false;
+                if (pos && (strstr(pos, "CTR") || strstr(pos, "FSS")))
+                    ctrish = true;
+                if (call.find("_CTR") != std::string::npos || call.find("_FSS") != std::string::npos)
+                    ctrish = true;
+                if (!ctrish)
+                    continue;
+                // Skip ourselves
+                if (ControllerMyself().IsValid() &&
+                    strcmp(csn, ControllerMyself().GetCallsign()) == 0)
+                    continue;
+                target = call;
+                break;
+            }
+        }
+        if (target.empty()) {
+            DisplayMessage("initiateCoordination: No target controller for " + cs);
+            return false;
+        }
+
+        // Capture sticky ACCEPTED *before* Initiate — same-level re-request often leaves
+        // ES ACCEPTED with no REQUESTED_BY_ME; must not auto-EST that as a new accept.
+        using EuroScopePlugIn::COORDINATION_STATE_ACCEPTED;
+        using EuroScopePlugIn::COORDINATION_STATE_MANUAL_ACCEPTED;
+        bool stickyAcceptedBefore = false;
+        try {
+            const int preAlt = fp.GetExitCoordinationAltitudeState();
+            const int preName = fp.GetExitCoordinationNameState();
+            const int preNext = fp.GetCoordinatedNextControllerState();
+            stickyAcceptedBefore =
+                preAlt == COORDINATION_STATE_ACCEPTED ||
+                preAlt == COORDINATION_STATE_MANUAL_ACCEPTED ||
+                preName == COORDINATION_STATE_ACCEPTED ||
+                preName == COORDINATION_STATE_MANUAL_ACCEPTED ||
+                preNext == COORDINATION_STATE_ACCEPTED ||
+                preNext == COORDINATION_STATE_MANUAL_ACCEPTED;
+        } catch (...) {
+        }
+
+        // (3) Try XFL-only: empty point + altitude (undocumented; may be refused).
+        bool ok = false;
+        if (fp.InitiateCoordination(target.c_str(), "", alt)) {
+            DebugMessage("initiateCoordination: " + cs + " → " + target +
+                         " XFL-only alt=" + std::to_string(alt));
+            DisplayMessage("XFL coord: " + cs + " → " + target + " (no COPX) " +
+                           std::to_string(alt));
+            ok = true;
+        } else {
+            DebugMessage("initiateCoordination: empty-point XFL refused for " + cs);
+
+            // (1) Fall back: LOP DCT point (MIKNA/…) + XFL — not ESE COPX/BEDOS.
+            if (lopPt.empty()) {
+                DisplayMessage("initiateCoordination: XFL-only refused; no LOP point for " + cs);
+                return false;
+            }
+            if (!fp.InitiateCoordination(target.c_str(), lopPt.c_str(), alt)) {
+                DisplayMessage("initiateCoordination: ES refused for " + cs + " → " + target +
+                               " @" + lopPt + " " + std::to_string(alt));
+                return false;
+            }
+
+            DebugMessage("initiateCoordination: " + cs + " → " + target + " @" + lopPt +
+                         " (LOP) alt=" + std::to_string(alt));
+            DisplayMessage("XFL coord: " + cs + " → " + target + " " + lopPt + " " +
+                           std::to_string(alt));
+            ok = true;
+        }
+
+        // Fresh outbound cycle: reset accept/refuse edges even if XFL already equals
+        // the previously accepted level (ES may leave state at ACCEPTED / no-op).
+        BeginOutboundCoordCycle(cs, alt, lopPt, fp, stickyAcceptedBefore);
+        // If ES already ACCEPTED (sticky same-level), resolve immediately so we do not
+        // leave forced exitCoordOutbound / "Outbound XFL coordination pending" UI.
+        UpdateOutboundCoordCycle(cs, fp);
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendXfl(message, fp);
+        auto cycleIt = outboundCoordCycles.find(cs);
+        const bool cycleStillOpen =
+            cycleIt != outboundCoordCycles.end() && cycleIt->second.active &&
+            !cycleIt->second.refuseLatched && !cycleIt->second.acceptNotified;
+        // Force pink outbound only while waiting — not when cycle already closed on ACCEPTED.
+        message["exitCoordOutbound"] = cycleStillOpen;
+        message["exitCoordRefused"] = false;
+        // Never echo accept on Initiate (sticky ACCEPTED ≠ new accept sound).
+        lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+        PostJson(message, "initiateCoordination");
+        return ok;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("initiateCoordination exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("initiateCoordination: Unknown exception");
+    }
+    return false;
+}
+
+bool VatEFSPlugin::SendAcceptCoordination(const std::string &callsign)
+{
+    try {
+        std::string cs = callsign;
+        for (auto &c : cs)
+            c = (char)std::toupper((unsigned char)c);
+        auto fp = FlightPlanSelect(cs.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("acceptCoordination: No FP for " + cs);
+            return false;
+        }
+
+        // Accept always clears REQUESTED_BY_OTHER (inbound). Never set EST here —
+        // EST is only for ACC accepting our outbound DEP (REQUESTED_BY_ME → accepted),
+        // handled in PollXflChanges / CAD via ShouldAutoEstOnXflTransition.
+        fp.AcceptCoordination();
+        DebugMessage(std::string("acceptCoordination: ") + cs + " [inbound — no DepC]");
+        // Inbound Accept (e.g. ESMS ACC 4000 counter) closes any stale outbound refuse
+        // latch so later CAD/Poll cannot revive amber.
+        {
+            auto cit = outboundCoordCycles.find(cs);
+            if (cit != outboundCoordCycles.end()) {
+                cit->second.active = false;
+                cit->second.refuseLatched = false;
+                cit->second.refuseNotified = false;
+                cit->second.cancelledNotified = true;
+            }
+        }
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendXfl(message, fp);
+        message["exitCoordRefused"] = false;
+        message["exitCoordOutbound"] = false;
+        lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+        PostJson(message, "acceptCoordination");
+        return true;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("acceptCoordination exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("acceptCoordination: Unknown exception");
+    }
+    return false;
+}
+
+bool VatEFSPlugin::SendRefuseCoordination(const std::string &callsign)
+{
+    try {
+        std::string cs = callsign;
+        for (auto &c : cs)
+            c = (char)std::toupper((unsigned char)c);
+        auto fp = FlightPlanSelect(cs.c_str());
+        if (!fp.IsValid()) {
+            DisplayMessage("refuseCoordination: No FP for " + cs);
+            return false;
+        }
+        fp.RefuseCoordination();
+        DebugMessage("refuseCoordination: " + cs);
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendXfl(message, fp);
+        lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+        PostJson(message, "refuseCoordination");
+        return true;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("refuseCoordination exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("refuseCoordination: Unknown exception");
+    }
+    return false;
+}
+
 void VatEFSPlugin::Refresh()
 {
     // Force a full CDM push — PollCdmDataFiles normally skips unchanged rows, so a
@@ -1886,26 +2385,30 @@ void VatEFSPlugin::Refresh()
         {
             const char *cs = FlightPlan.GetCallsign();
             if (cs && cs[0] != '\0')
-                lastXflSnapshot[cs] = message.value("xfl", 0);
+                lastXflSnapshot[cs] = MakeXflSnapshot(FlightPlan);
         }
         SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
-        // VCH hold short HS (ann 4) + CTL (ann 3) + EFS soft G/A (ann 5)
+        // VCH HS (ann 4) + CTL (ann 3) + EFS soft G/A (ann 5) + DepC (ann 6)
         {
             const char *cs = FlightPlan.GetCallsign();
             std::string hs;
             bool ctl = false;
             bool efsGa = false;
+            bool est = false;
             if (cs && cs[0] != '\0') {
                 hs = GetHoldShort(cs);
                 ctl = GetVchCtl(cs);
                 efsGa = GetEfsGoAround(cs);
+                est = GetEstCoo(cs);
                 lastHoldShortSnapshot[cs] = hs;
                 lastCtlSnapshot[cs] = ctl ? "1" : "0";
                 lastEfsGaSnapshot[cs] = efsGa ? "1" : "0";
+                lastEstCooSnapshot[cs] = est ? "1" : "0";
             }
             message["hs"] = hs;
             message["clearedToLand"] = ctl;
             message["efsGoAround"] = efsGa;
+            message["coo"] = est;
         }
         SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
@@ -2247,6 +2750,12 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     if (!SendRof(callsign)) {
                         // SendRof already displayed a specific error
                     }
+                } else if (message["type"] == "contactme") {
+                    // Brittle ES .contactme — see SendContactMe()
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!SendContactMe(callsign)) {
+                        // SendContactMe already displayed a specific error
+                    }
                 } else if (message["type"] == "clearScratchpad") {
                     auto callsign = message["callsign"].get<std::string>();
                     if (!callsign.empty()) {
@@ -2296,6 +2805,77 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         echo["callsign"] = callsign;
                         echo["hs"] = value;
                         PostJson(echo, "setHs");
+                    }
+                } else if (message["type"] == "setCoo") {
+                    // Departure Coordination — strip annotation 6 ("DepC")
+                    auto callsign = message["callsign"].get<std::string>();
+                    bool coo = message.contains("coo") && message["coo"].is_boolean()
+                                   ? message["coo"].get<bool>()
+                                   : false;
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("setCoo: Invalid callsign");
+                    } else if (!SetEstCoo(callsign, coo)) {
+                        DisplayMessage("setCoo: Failed for " + callsign);
+                    } else {
+                        lastEstCooSnapshot[callsign] = coo ? "1" : "0";
+                        DebugMessage(std::string("setCoo: ") + callsign + " -> " +
+                                     (coo ? "DepC" : "(clear)"));
+                        // DepC clears amber — drop refuse latch so CAD cannot revive it.
+                        if (coo) {
+                            auto cit = outboundCoordCycles.find(callsign);
+                            if (cit != outboundCoordCycles.end()) {
+                                cit->second.refuseLatched = false;
+                                cit->second.refuseNotified = false;
+                                cit->second.active = false;
+                                cit->second.cancelledNotified = true;
+                            }
+                        }
+                        nlohmann::json echo = nlohmann::json::object();
+                        echo["type"] = "controllerAssignedDataUpdate";
+                        echo["callsign"] = callsign;
+                        echo["coo"] = coo;
+                        if (coo)
+                            echo["exitCoordRefused"] = false;
+                        PostJson(echo, "setCoo");
+                    }
+                } else if (message["type"] == "initiateCoordination") {
+                    // COPX/XFL exit coordination only — never clearance / EST
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    int altitude = 0;
+                    if (message.contains("altitude") && message["altitude"].is_number())
+                        altitude = message["altitude"].get<int>();
+                    std::string point;
+                    if (message.contains("point") && message["point"].is_string())
+                        point = message["point"].get<std::string>();
+                    std::string target;
+                    if (message.contains("targetController") && message["targetController"].is_string())
+                        target = message["targetController"].get<std::string>();
+                    if (callsign.empty()) {
+                        DisplayMessage("initiateCoordination: Invalid callsign");
+                    } else if (!SendInitiateCoordination(callsign, altitude, point, target)) {
+                        // SendInitiateCoordination already DisplayMessage'd
+                    }
+                } else if (message["type"] == "acceptCoordination") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("acceptCoordination: Invalid callsign");
+                    } else if (!SendAcceptCoordination(callsign)) {
+                        // SendAcceptCoordination already DisplayMessage'd
+                    }
+                } else if (message["type"] == "refuseCoordination") {
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("refuseCoordination: Invalid callsign");
+                    } else if (!SendRefuseCoordination(callsign)) {
+                        // SendRefuseCoordination already DisplayMessage'd
                     }
                 } else if (message["type"] == "refresh") {
                     Refresh();
@@ -3678,6 +4258,32 @@ bool VatEFSPlugin::SetEfsGoAround(const std::string &callsign, bool goAround)
     }
 }
 
+/** Departure Coordination — strip annotation index 6 ("DepC"; legacy "EST"); syncs via ES */
+bool VatEFSPlugin::GetEstCoo(const std::string &callsign)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(6);
+        // DepC = current; EST = legacy strips still sync as coo=true
+        return ann && (strcmp(ann, "DepC") == 0 || strcmp(ann, "EST") == 0);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool VatEFSPlugin::SetEstCoo(const std::string &callsign, bool est)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return false;
+        return fp.GetControllerAssignedData().SetFlightStripAnnotation(
+            6, est ? "DepC" : "");
+    } catch (...) {
+        return false;
+    }
+}
+
 void VatEFSPlugin::PollVchAnnotationChanges()
 {
     for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
@@ -3691,6 +4297,8 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         std::string ctlSnap = ctl ? "1" : "0";
         bool efsGa = GetEfsGoAround(cs);
         std::string efsGaSnap = efsGa ? "1" : "0";
+        bool est = GetEstCoo(cs);
+        std::string estSnap = est ? "1" : "0";
 
         bool hsChanged = true;
         auto hsIt = lastHoldShortSnapshot.find(cs);
@@ -3704,7 +4312,11 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         auto efsGaIt = lastEfsGaSnapshot.find(cs);
         if (efsGaIt != lastEfsGaSnapshot.end() && efsGaIt->second == efsGaSnap) efsGaChanged = false;
 
-        if (!hsChanged && !ctlChanged && !efsGaChanged) continue;
+        bool estChanged = true;
+        auto estIt = lastEstCooSnapshot.find(cs);
+        if (estIt != lastEstCooSnapshot.end() && estIt->second == estSnap) estChanged = false;
+
+        if (!hsChanged && !ctlChanged && !efsGaChanged && !estChanged) continue;
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
@@ -3730,6 +4342,13 @@ void VatEFSPlugin::PollVchAnnotationChanges()
             lastEfsGaSnapshot[cs] = efsGaSnap;
             message["efsGoAround"] = efsGa;
         }
+        if (estChanged) {
+            DebugMessage(std::string("DepC change ") + cs + ": " +
+                         (estIt != lastEstCooSnapshot.end() ? estIt->second : "(none)") +
+                         " -> " + estSnap + " (ann 6)");
+            lastEstCooSnapshot[cs] = estSnap;
+            message["coo"] = est;
+        }
         PostJson(message, "PollVchAnnotationChanges");
     }
 }
@@ -3747,10 +4366,629 @@ void VatEFSPlugin::AppendXfl(nlohmann::json &message, EuroScopePlugIn::CFlightPl
     if (xfl < 0 || xfl > 100000) xfl = 0;
     message["xfl"] = xfl;
     if (out) *out << " xfl " << xfl;
+    AppendExitCoordProposal(message, FlightPlan);
+}
+
+void VatEFSPlugin::AppendExitCoordProposal(nlohmann::json &message,
+                                           EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_ME;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_OTHER;
+    using EuroScopePlugIn::COORDINATION_STATE_REFUSED;
+
+    // Exit = DEP COPX/XFL; entry = ARR COPN/PEL. Map both onto the same strip fields.
+    // Next-controller state is part of InitiateCoordination — ACC often accepts there.
+    int exitAltState = 0;
+    int exitNameState = 0;
+    int entryAltState = 0;
+    int entryPointState = 0;
+    int nextCtrlState = 0;
+    try {
+        if (FlightPlan.IsValid())
+            exitAltState = FlightPlan.GetExitCoordinationAltitudeState();
+    } catch (...) {
+        exitAltState = 0;
+    }
+    try {
+        if (FlightPlan.IsValid())
+            exitNameState = FlightPlan.GetExitCoordinationNameState();
+    } catch (...) {
+        exitNameState = 0;
+    }
+    try {
+        if (FlightPlan.IsValid())
+            entryAltState = FlightPlan.GetEntryCoordinationAltitudeState();
+    } catch (...) {
+        entryAltState = 0;
+    }
+    try {
+        if (FlightPlan.IsValid())
+            entryPointState = FlightPlan.GetEntryCoordinationPointState();
+    } catch (...) {
+        entryPointState = 0;
+    }
+    try {
+        if (FlightPlan.IsValid())
+            nextCtrlState = FlightPlan.GetCoordinatedNextControllerState();
+    } catch (...) {
+        nextCtrlState = 0;
+    }
+
+    const bool exitPendingOther =
+        exitAltState == COORDINATION_STATE_REQUESTED_BY_OTHER ||
+        exitNameState == COORDINATION_STATE_REQUESTED_BY_OTHER;
+    const bool entryPendingOther =
+        entryAltState == COORDINATION_STATE_REQUESTED_BY_OTHER ||
+        entryPointState == COORDINATION_STATE_REQUESTED_BY_OTHER;
+    const bool pendingOther = exitPendingOther || entryPendingOther;
+    const bool pendingMe =
+        exitAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        exitNameState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        entryAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        entryPointState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        nextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME;
+    const bool refused =
+        exitAltState == COORDINATION_STATE_REFUSED ||
+        exitNameState == COORDINATION_STATE_REFUSED ||
+        entryAltState == COORDINATION_STATE_REFUSED ||
+        entryPointState == COORDINATION_STATE_REFUSED ||
+        nextCtrlState == COORDINATION_STATE_REFUSED;
+    // Always set so backend can clear sticky state when ACC withdraws / accept
+    message["exitCoordPending"] = pendingOther;
+    message["exitCoordOutbound"] = pendingMe;
+    // Live REFUSED state (sticky edge also set in PollXflChanges)
+    if (refused)
+        message["exitCoordRefused"] = true;
+    if (!pendingOther) {
+        message["exitCoordPoint"] = "";
+        message["exitCoordAltitude"] = 0;
+        return;
+    }
+
+    // Prefer exit proposal details when both are pending (DEP counter-proposal);
+    // otherwise use entry (ARR inbound PEL/COPN).
+    const bool useEntry = entryPendingOther && !exitPendingOther;
+    std::string point;
+    try {
+        if (FlightPlan.IsValid()) {
+            const char *p = useEntry ? FlightPlan.GetEntryCoordinationPointName()
+                                     : FlightPlan.GetExitCoordinationPointName();
+            if (p && p[0] != '\0' && strlen(p) < 50)
+                point = p;
+        }
+    } catch (...) {
+    }
+    message["exitCoordPoint"] = point;
+
+    int xfl = 0;
+    try {
+        if (FlightPlan.IsValid())
+            xfl = useEntry ? FlightPlan.GetEntryCoordinationAltitude()
+                           : FlightPlan.GetExitCoordinationAltitude();
+    } catch (...) {
+        xfl = 0;
+    }
+    if (xfl < 0 || xfl > 100000) xfl = 0;
+    message["exitCoordAltitude"] = xfl;
+}
+
+std::string VatEFSPlugin::MakeXflSnapshot(EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    int xfl = 0;
+    try {
+        if (FlightPlan.IsValid())
+            xfl = FlightPlan.GetExitCoordinationAltitude();
+    } catch (...) {
+        xfl = 0;
+    }
+    if (xfl < 0 || xfl > 100000) xfl = 0;
+
+    std::string copx;
+    try {
+        if (FlightPlan.IsValid()) {
+            const char *p = FlightPlan.GetExitCoordinationPointName();
+            if (p && p[0] != '\0' && strlen(p) < 50)
+                copx = p;
+        }
+    } catch (...) {
+    }
+
+    std::string direct;
+    try {
+        if (FlightPlan.IsValid()) {
+            auto ctr = FlightPlan.GetControllerAssignedData();
+            const char *d = ctr.GetDirectToPointName();
+            if (d && strlen(d) < 50)
+                direct = d;
+        }
+    } catch (...) {
+    }
+
+    int exitAltState = 0;
+    int exitNameState = 0;
+    int entryAltState = 0;
+    int entryPointState = 0;
+    int nextCtrlState = 0;
+    int entryAlt = 0;
+    std::string entryPt;
+    try {
+        if (FlightPlan.IsValid())
+            exitAltState = FlightPlan.GetExitCoordinationAltitudeState();
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid())
+            exitNameState = FlightPlan.GetExitCoordinationNameState();
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid())
+            entryAltState = FlightPlan.GetEntryCoordinationAltitudeState();
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid())
+            entryPointState = FlightPlan.GetEntryCoordinationPointState();
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid())
+            nextCtrlState = FlightPlan.GetCoordinatedNextControllerState();
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid()) {
+            entryAlt = FlightPlan.GetEntryCoordinationAltitude();
+            if (entryAlt < 0 || entryAlt > 100000) entryAlt = 0;
+        }
+    } catch (...) {
+    }
+    try {
+        if (FlightPlan.IsValid()) {
+            const char *p = FlightPlan.GetEntryCoordinationPointName();
+            if (p && p[0] != '\0' && strlen(p) < 50)
+                entryPt = p;
+        }
+    } catch (...) {
+    }
+
+    return std::to_string(xfl) + "|" + copx + "|" + direct + "|" +
+           std::to_string(exitAltState) + "|" + std::to_string(exitNameState) + "|" +
+           std::to_string(entryAltState) + "|" + std::to_string(entryPointState) + "|" +
+           std::to_string(entryAlt) + "|" + entryPt + "|" + std::to_string(nextCtrlState);
+}
+
+bool VatEFSPlugin::ShouldAutoEstOnXflTransition(const std::string &prev, const std::string &snap)
+{
+    using EuroScopePlugIn::COORDINATION_STATE_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_MANUAL_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_ME;
+
+    if (prev.empty() || snap.empty() || prev == snap)
+        return false;
+
+    auto splitPipe = [](const std::string &s) {
+        std::vector<std::string> parts;
+        std::string cur;
+        for (char ch : s) {
+            if (ch == '|') {
+                parts.push_back(cur);
+                cur.clear();
+            } else {
+                cur.push_back(ch);
+            }
+        }
+        parts.push_back(cur);
+        return parts;
+    };
+
+    auto prevParts = splitPipe(prev);
+    auto snapParts = splitPipe(snap);
+    if (prevParts.size() < 5 || snapParts.size() < 5)
+        return false;
+
+    const int prevExitAlt = atoi(prevParts[3].c_str());
+    const int prevExitName = atoi(prevParts[4].c_str());
+    const int prevNextCtrl = prevParts.size() >= 10 ? atoi(prevParts[9].c_str()) : 0;
+    const int exitAltState = atoi(snapParts[3].c_str());
+    const int exitNameState = atoi(snapParts[4].c_str());
+    const int nextCtrlState = snapParts.size() >= 10 ? atoi(snapParts[9].c_str()) : 0;
+
+    // Only our outbound exit (DEP) request — never inbound OTHER (we AcceptCoordination).
+    // Next-controller REQUESTED_BY_ME is part of InitiateCoordination.
+    const bool wasExitOutbound =
+        prevExitAlt == COORDINATION_STATE_REQUESTED_BY_ME ||
+        prevExitName == COORDINATION_STATE_REQUESTED_BY_ME ||
+        prevNextCtrl == COORDINATION_STATE_REQUESTED_BY_ME;
+    if (!wasExitOutbound)
+        return false;
+
+    // Explicit accept only. REQUESTED_BY_ME → NONE cannot distinguish refuse vs cancel
+    // (ACC refuse may clear to NONE without lingering in REFUSED), so do not auto-EST.
+    // Sticky ACCEPTED → ACCEPTED (same-level re-Initiate no-op) never reaches here (prev==snap).
+    // Real ACC often accepts via GetCoordinatedNextControllerState only.
+    return exitAltState == COORDINATION_STATE_ACCEPTED ||
+           exitAltState == COORDINATION_STATE_MANUAL_ACCEPTED ||
+           exitNameState == COORDINATION_STATE_ACCEPTED ||
+           exitNameState == COORDINATION_STATE_MANUAL_ACCEPTED ||
+           nextCtrlState == COORDINATION_STATE_ACCEPTED ||
+           nextCtrlState == COORDINATION_STATE_MANUAL_ACCEPTED;
+}
+
+void VatEFSPlugin::BeginOutboundCoordCycle(const std::string &cs, int altFt,
+                                           const std::string &point,
+                                           EuroScopePlugIn::CFlightPlan fp,
+                                           bool stickyAcceptedBeforeInitiate)
+{
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_ME;
+
+    OutboundCoordCycle cycle;
+    cycle.active = true;
+    cycle.requestedAltFt = altFt;
+    cycle.requestedPoint = point;
+    cycle.sawRequestedByMe = false;
+    cycle.stickyAcceptedBeforeInitiate = stickyAcceptedBeforeInitiate;
+    cycle.acceptNotified = false;
+    cycle.refuseLatched = false;
+    cycle.refuseNotified = false;
+    cycle.cancelledNotified = false;
+    cycle.startedAt = std::time(nullptr);
+    cycle.lastExitAltState = 0;
+    cycle.lastExitNameState = 0;
+    cycle.lastNextCtrlState = 0;
+    try {
+        if (fp.IsValid())
+            cycle.lastExitAltState = fp.GetExitCoordinationAltitudeState();
+    } catch (...) {
+    }
+    try {
+        if (fp.IsValid())
+            cycle.lastExitNameState = fp.GetExitCoordinationNameState();
+    } catch (...) {
+    }
+    try {
+        if (fp.IsValid())
+            cycle.lastNextCtrlState = fp.GetCoordinatedNextControllerState();
+    } catch (...) {
+    }
+    // If ES already shows REQUESTED_BY_ME after Initiate, count it for this cycle.
+    // Sticky ACCEPTED from before Initiate is NOT progress (same-level no-op).
+    if (cycle.lastExitAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        cycle.lastExitNameState == COORDINATION_STATE_REQUESTED_BY_ME ||
+        cycle.lastNextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME) {
+        cycle.sawRequestedByMe = true;
+    }
+    outboundCoordCycles[cs] = cycle;
+    DebugMessage(std::string("outbound coord cycle begin ") + cs + " alt=" +
+                 std::to_string(altFt) + " states alt/name/next=" +
+                 std::to_string(cycle.lastExitAltState) + "/" +
+                 std::to_string(cycle.lastExitNameState) + "/" +
+                 std::to_string(cycle.lastNextCtrlState) +
+                 (cycle.sawRequestedByMe ? " [already REQUESTED_BY_ME]" : "") +
+                 (cycle.stickyAcceptedBeforeInitiate ? " [sticky ACCEPTED before Initiate]"
+                                                     : " [fresh / not sticky]"));
+    DisplayMessage("XFL cycle begin " + cs + " alt/name/next=" +
+                   std::to_string(cycle.lastExitAltState) + "/" +
+                   std::to_string(cycle.lastExitNameState) + "/" +
+                   std::to_string(cycle.lastNextCtrlState));
+}
+
+bool VatEFSPlugin::UpdateOutboundCoordCycle(const std::string &cs,
+                                            EuroScopePlugIn::CFlightPlan fp)
+{
+    using EuroScopePlugIn::COORDINATION_STATE_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_MANUAL_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_NONE;
+    using EuroScopePlugIn::COORDINATION_STATE_REFUSED;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_ME;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_OTHER;
+
+    auto it = outboundCoordCycles.find(cs);
+    if (it == outboundCoordCycles.end())
+        return false;
+    OutboundCoordCycle &cycle = it->second;
+    // Keep latching refuse while active; after resolve still allow one refuse notify.
+    if (!cycle.active && !(cycle.refuseLatched && !cycle.refuseNotified))
+        return false;
+
+    int exitAltState = 0;
+    int exitNameState = 0;
+    int nextCtrlState = 0;
+    int liveXfl = 0;
+    try {
+        if (fp.IsValid())
+            exitAltState = fp.GetExitCoordinationAltitudeState();
+    } catch (...) {
+    }
+    try {
+        if (fp.IsValid())
+            exitNameState = fp.GetExitCoordinationNameState();
+    } catch (...) {
+    }
+    try {
+        if (fp.IsValid())
+            nextCtrlState = fp.GetCoordinatedNextControllerState();
+    } catch (...) {
+    }
+    try {
+        if (fp.IsValid())
+            liveXfl = fp.GetExitCoordinationAltitude();
+    } catch (...) {
+        liveXfl = 0;
+    }
+    if (liveXfl < 0 || liveXfl > 100000)
+        liveXfl = 0;
+
+    const bool prevMe = cycle.lastExitAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+                        cycle.lastExitNameState == COORDINATION_STATE_REQUESTED_BY_ME ||
+                        cycle.lastNextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME;
+    const bool nowMe = exitAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+                       exitNameState == COORDINATION_STATE_REQUESTED_BY_ME ||
+                       nextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME;
+    // Real ACC (e.g. ESOS_3_CTR) often accepts via next-controller state only while
+    // exit alt/name stay REQUESTED_BY_ME or drop to NONE.
+    const bool nowAccepted =
+        exitAltState == COORDINATION_STATE_ACCEPTED ||
+        exitAltState == COORDINATION_STATE_MANUAL_ACCEPTED ||
+        exitNameState == COORDINATION_STATE_ACCEPTED ||
+        exitNameState == COORDINATION_STATE_MANUAL_ACCEPTED ||
+        nextCtrlState == COORDINATION_STATE_ACCEPTED ||
+        nextCtrlState == COORDINATION_STATE_MANUAL_ACCEPTED;
+    const bool nowRefused = exitAltState == COORDINATION_STATE_REFUSED ||
+                            exitNameState == COORDINATION_STATE_REFUSED ||
+                            nextCtrlState == COORDINATION_STATE_REFUSED;
+    const bool nowPendingOther =
+        exitAltState == COORDINATION_STATE_REQUESTED_BY_OTHER ||
+        exitNameState == COORDINATION_STATE_REQUESTED_BY_OTHER;
+
+    // Temporary debug: log every state change while cycle open (ACC accept diagnosis).
+    if (cycle.active &&
+        (exitAltState != cycle.lastExitAltState || exitNameState != cycle.lastExitNameState ||
+         nextCtrlState != cycle.lastNextCtrlState)) {
+        const std::string line =
+            "XFL cycle " + cs + " alt/name/next " + std::to_string(cycle.lastExitAltState) +
+            "/" + std::to_string(cycle.lastExitNameState) + "/" +
+            std::to_string(cycle.lastNextCtrlState) + " -> " + std::to_string(exitAltState) +
+            "/" + std::to_string(exitNameState) + "/" + std::to_string(nextCtrlState) +
+            (nowAccepted ? " [ACCEPTED]" : "") + (nowRefused ? " [REFUSED]" : "") +
+            (nowMe ? " [ME]" : "") + (nowPendingOther ? " [OTHER]" : "");
+        DebugMessage(line);
+        DisplayMessage(line);
+    }
+
+    // Catch REQUESTED_BY_ME → ACCEPTED between polls (prev tick or this tick).
+    if (nowMe || prevMe)
+        cycle.sawRequestedByMe = true;
+
+    // Latch REFUSED on any tick during this cycle (XFL value may be unchanged).
+    // Same-level refuse often flashes REFUSED(5) briefly then NONE(1) with XFL still
+    // matching — without this latch, 2→1+match would falsely ACCEPT. Dense callers:
+    // PollXflChanges (OnTimer ~1s), OnRadarTargetPositionUpdate, CAD.
+    // Skip latch when ACC already countered (REQUESTED_BY_OTHER) — ESMS 1000→4000
+    // must not become amber refuse before pink inbound Accept.
+    const bool wasRefused = cycle.lastExitAltState == COORDINATION_STATE_REFUSED ||
+                            cycle.lastExitNameState == COORDINATION_STATE_REFUSED ||
+                            cycle.lastNextCtrlState == COORDINATION_STATE_REFUSED;
+    if ((nowRefused || wasRefused) && !cycle.refuseLatched && !nowPendingOther) {
+        cycle.refuseLatched = true;
+        DebugMessage(std::string("outbound coord REFUSED latch ") + cs +
+                     (nowRefused ? " [live]" : " [prev tick]") +
+                     (cycle.sawRequestedByMe ? "" : " [no prior REQUESTED_BY_ME]"));
+        if (nowRefused)
+            DisplayMessage(std::string("VatEFS: REFUSED latched for ") + cs);
+    }
+
+    bool posted = false;
+
+    // ACC counter-proposal while our Initiate is open (ESMS: TWR 1000 → ACC 4000).
+    // Close outbound without refuse; AppendXfl / pending OTHER drives pink inbound.
+    if (cycle.active && nowPendingOther && !cycle.acceptNotified && !cycle.refuseNotified) {
+        cycle.active = false;
+        cycle.refuseLatched = false;
+        cycle.cancelledNotified = true;
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendXfl(message, fp);
+        message["exitCoordOutbound"] = false;
+        message["exitCoordRefused"] = false;
+        lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+        PostJson(message, "outboundCoordCounter");
+        DebugMessage(std::string("outbound coord ACC counter (OTHER) ") + cs +
+                     " XFL=" + std::to_string(liveXfl) + " — no refuse");
+        DisplayMessage(std::string("VatEFS: ACC counter-proposal ") + cs +
+                       " XFL=" + std::to_string(liveXfl));
+        posted = true;
+    }
+
+    // Close cycle on ACCEPTED always — never leave forced outbound-pending UI when ES
+    // already reports accept (exit alt/name OR next controller — ACC often next only).
+    // Full EST + accept sound on real accept: REQUESTED_BY_ME this cycle, non-sticky
+    // Initiate, or a *per-channel* rising edge to ACCEPTED. Do not use "any channel was
+    // ACCEPTED" — sticky exit-alt ACCEPTED would hide next-ctrl NONE→ACCEPTED (real ACC
+    // path, often without REQUESTED_BY_ME).
+    auto isAcceptedState = [](int s) {
+        return s == COORDINATION_STATE_ACCEPTED || s == COORDINATION_STATE_MANUAL_ACCEPTED;
+    };
+    const bool risingExitAlt =
+        isAcceptedState(exitAltState) && !isAcceptedState(cycle.lastExitAltState);
+    const bool risingExitName =
+        isAcceptedState(exitNameState) && !isAcceptedState(cycle.lastExitNameState);
+    const bool risingNextCtrl =
+        isAcceptedState(nextCtrlState) && !isAcceptedState(cycle.lastNextCtrlState);
+    const bool risingAccepted = risingExitAlt || risingExitName || risingNextCtrl;
+    // Next-ctrl ACCEPTED after Initiate is always a real ACC accept → EST (no sawRequestedByMe).
+    const bool doAcceptEst = cycle.sawRequestedByMe ||
+                             !cycle.stickyAcceptedBeforeInitiate || risingAccepted ||
+                             risingNextCtrl;
+    if (!posted && cycle.active && nowAccepted && !cycle.acceptNotified &&
+        !cycle.refuseLatched) {
+        cycle.active = false;
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendXfl(message, fp);
+        // Always clear sticky pink — AppendXfl may still see REQUESTED_BY_ME on alt.
+        message["exitCoordOutbound"] = false;
+        message["exitCoordRefused"] = false;
+        lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+
+        if (doAcceptEst) {
+            cycle.acceptNotified = true;
+            // Always latch EST snapshot before UDP so PollVch cannot wipe coo:true
+            // if SetFlightStripAnnotation fails or lags.
+            const bool estOk = SetEstCoo(cs, true);
+            lastEstCooSnapshot[cs] = "1";
+            message["coo"] = true;
+            message["exitCoordAccepted"] = true;
+            PostJson(message, "outboundCoordAccept");
+            DebugMessage(std::string("outbound coord ACCEPT auto-DepC ") + cs + " exitAlt=" +
+                         std::to_string(exitAltState) + " exitName=" +
+                         std::to_string(exitNameState) + " next=" +
+                         std::to_string(nextCtrlState) +
+                         (cycle.sawRequestedByMe ? " [saw REQUESTED_BY_ME]" : "") +
+                         (risingNextCtrl ? " [rising next-ctrl]" : "") +
+                         (risingAccepted && !risingNextCtrl ? " [rising ACCEPTED]" : "") +
+                         (!cycle.stickyAcceptedBeforeInitiate ? " [open cycle]" : "") +
+                         (estOk ? " [ann6 ok]" : " [ann6 FAIL]"));
+            DisplayMessage(std::string("VatEFS: Departure Coordination set for ") + cs +
+                           " (coord accepted)" +
+                           (estOk ? "" : " — ann6 write failed"));
+        } else {
+            // Sticky same-level: ES stayed ACCEPTED without REQUESTED_BY_ME / rising edge.
+            // Clear pending UI immediately; do not spam accept sound.
+            // If EST missing and live XFL matches what we asked, set EST quietly.
+            cycle.cancelledNotified = true; // treat as resolved clear (no accept sound)
+            const bool xflMatches =
+                cycle.requestedAltFt > 0 && liveXfl == cycle.requestedAltFt;
+            if (xflMatches && !GetEstCoo(cs)) {
+                SetEstCoo(cs, true);
+                lastEstCooSnapshot[cs] = "1";
+                message["coo"] = true;
+            }
+            PostJson(message, "outboundCoordNoop");
+            DebugMessage(std::string("outbound coord sticky ACCEPTED clear ") + cs +
+                         " (never REQUESTED_BY_ME; XFL " + std::to_string(liveXfl) +
+                         (xflMatches ? " matches" : " differs") + ")");
+            DisplayMessage("XFL coord: " + cs +
+                           " — already accepted (same level); cleared pending");
+        }
+        posted = true;
+    } else if (!posted && cycle.refuseLatched && !cycle.refuseNotified) {
+        // Refuse feedback even if EST already set from a prior accepted cycle.
+        // Keep EST checkmark; amber XFL via exitCoordRefused.
+        // Backend refuse sound: rising exitCoordRefused while flight.exitCoordOutbound
+        // still true from Initiate — must set outbound false AFTER refuse in same
+        // packet (outbound:true would clear refused in applyExitCoordProposal).
+        // If ACC already countered (OTHER), drop the latch — not a hard refuse.
+        if (nowPendingOther) {
+            cycle.refuseLatched = false;
+            cycle.active = false;
+            cycle.cancelledNotified = true;
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "controllerAssignedDataUpdate";
+            SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+            AppendXfl(message, fp);
+            message["exitCoordOutbound"] = false;
+            message["exitCoordRefused"] = false;
+            lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+            PostJson(message, "outboundCoordCounterAfterRefuse");
+            DebugMessage(std::string("outbound coord REFUSE latch dropped (OTHER) ") + cs);
+            posted = true;
+        } else {
+            cycle.refuseNotified = true;
+            cycle.active = false;
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "controllerAssignedDataUpdate";
+            SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+            AppendXfl(message, fp);
+            message["exitCoordRefused"] = true;
+            message["exitCoordOutbound"] = false;
+            // Do not clear coo / EST
+            lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+            PostJson(message, "outboundCoordRefuse");
+            DebugMessage(std::string("outbound coord REFUSE cycle ") + cs + " next=" +
+                         std::to_string(nextCtrlState));
+            DisplayMessage(std::string("VatEFS: coord refused ") + cs + " (REFUSED state)");
+            posted = true;
+        }
+    } else if (!posted && cycle.active && cycle.sawRequestedByMe && !nowMe &&
+               !nowAccepted && !nowRefused && !nowPendingOther && !cycle.acceptNotified &&
+               !cycle.refuseLatched && !cycle.cancelledNotified) {
+        // Real ACC (e.g. ESMM_K_CTR) often never shows ACCEPTED(4)/REFUSED(5):
+        // REQUESTED_BY_ME(2) → NONE(1) with XFL == requestedAltFt = accept; else refuse.
+        // Same-level re-requests use ±1 ft nudge so refuse (revert) ≠ accept (keep nudged).
+        // refuseLatched still blocks this branch if REFUSED(5) was seen.
+        // Do not use bare anyNone when OTHER is pending (handled above) — a lone NONE
+        // on next-ctrl while exit is OTHER used to false-refuse ESMS 1000→4000.
+        const bool meToNoneAlt =
+            cycle.lastExitAltState == COORDINATION_STATE_REQUESTED_BY_ME &&
+            exitAltState == COORDINATION_STATE_NONE;
+        const bool meToNoneNext =
+            cycle.lastNextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME &&
+            nextCtrlState == COORDINATION_STATE_NONE;
+        const bool meToNoneName =
+            cycle.lastExitNameState == COORDINATION_STATE_REQUESTED_BY_ME &&
+            exitNameState == COORDINATION_STATE_NONE;
+        // Only resolve when a ME channel actually cleared to NONE (not "any channel NONE").
+        if (meToNoneAlt || meToNoneNext || meToNoneName) {
+            const bool xflMatches =
+                cycle.requestedAltFt > 0 && liveXfl == cycle.requestedAltFt;
+            cycle.active = false;
+            nlohmann::json message = nlohmann::json::object();
+            message["type"] = "controllerAssignedDataUpdate";
+            SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+            AppendXfl(message, fp);
+            // Always clear sticky pink — AppendXfl may still see stale REQUESTED_BY_ME.
+            message["exitCoordOutbound"] = false;
+            lastXflSnapshot[cs] = MakeXflSnapshot(fp);
+
+            if (xflMatches) {
+                // No REFUSED latched this cycle → treat as ACCEPT (real ACC silent accept).
+                cycle.acceptNotified = true;
+                const bool estOk = SetEstCoo(cs, true);
+                lastEstCooSnapshot[cs] = "1";
+                message["coo"] = true;
+                message["exitCoordAccepted"] = true;
+                message["exitCoordRefused"] = false;
+                PostJson(message, "outboundCoordAcceptNone");
+                DebugMessage(std::string("outbound coord ACCEPT via NONE clear ") + cs +
+                             " XFL=" + std::to_string(liveXfl) + " (matched requested " +
+                             std::to_string(cycle.requestedAltFt) + "; no REFUSED latched)" +
+                             (estOk ? " [ann6 ok]" : " [ann6 FAIL]"));
+                DisplayMessage(std::string("VatEFS: Departure Coordination set for ") + cs +
+                               " (accept 2→1 XFL match)" +
+                               (estOk ? "" : " — ann6 write failed"));
+            } else {
+                cycle.refuseLatched = true;
+                cycle.refuseNotified = true;
+                message["exitCoordRefused"] = true;
+                PostJson(message, "outboundCoordRefuseNone");
+                DebugMessage(std::string("outbound coord REFUSE via NONE clear ") + cs +
+                             " XFL " + std::to_string(cycle.requestedAltFt) + "→" +
+                             std::to_string(liveXfl));
+                DisplayMessage(std::string("VatEFS: coord refused ") + cs + " (2→1 XFL " +
+                               std::to_string(cycle.requestedAltFt) + "→" +
+                               std::to_string(liveXfl) + ")");
+            }
+            posted = true;
+        }
+    }
+
+    cycle.lastExitAltState = exitAltState;
+    cycle.lastExitNameState = exitNameState;
+    cycle.lastNextCtrlState = nextCtrlState;
+    return posted;
 }
 
 void VatEFSPlugin::PollXflChanges()
 {
+    using EuroScopePlugIn::COORDINATION_STATE_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_MANUAL_ACCEPTED;
+    using EuroScopePlugIn::COORDINATION_STATE_REFUSED;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_ME;
+    using EuroScopePlugIn::COORDINATION_STATE_REQUESTED_BY_OTHER;
+
     for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
          fp = FlightPlanSelectNext(fp)) {
         if (!FilterFlightPlan(fp)) continue;
@@ -3758,22 +4996,191 @@ void VatEFSPlugin::PollXflChanges()
         if (!csRaw || csRaw[0] == '\0') continue;
         std::string cs = csRaw;
 
+        // Always advance active outbound cycles (even if snapshot unchanged) so a
+        // one-tick REFUSED / next-ctrl ACCEPTED / NONE cancel can fire.
+        auto cycleIt = outboundCoordCycles.find(cs);
+        if (cycleIt != outboundCoordCycles.end() &&
+            (cycleIt->second.active ||
+             (cycleIt->second.refuseLatched && !cycleIt->second.refuseNotified))) {
+            UpdateOutboundCoordCycle(cs, fp);
+        }
+
+        const std::string snap = MakeXflSnapshot(fp);
+        auto it = lastXflSnapshot.find(cs);
+        const std::string prev = (it != lastXflSnapshot.end()) ? it->second : "";
+        if (prev == snap)
+            continue;
+
         nlohmann::json probe = nlohmann::json::object();
         AppendXfl(probe, fp);
         const int xfl = probe.value("xfl", 0);
 
-        auto it = lastXflSnapshot.find(cs);
-        if (it != lastXflSnapshot.end() && it->second == xfl) continue;
+        auto splitPipe = [](const std::string &s) {
+            std::vector<std::string> parts;
+            std::string cur;
+            for (char ch : s) {
+                if (ch == '|') {
+                    parts.push_back(cur);
+                    cur.clear();
+                } else {
+                    cur.push_back(ch);
+                }
+            }
+            parts.push_back(cur);
+            return parts;
+        };
 
-        DebugMessage(std::string("XFL change ") + cs + ": " +
-                     (it != lastXflSnapshot.end() ? std::to_string(it->second) : "(none)") +
-                     " -> " + std::to_string(xfl));
-        lastXflSnapshot[cs] = xfl;
+        // prev: xfl|copx|direct|exitAlt|exitName|entryAlt|entryPt|entryAltFt|entryPt|nextCtrl
+        std::string prevDirect;
+        int prevExitAlt = 0, prevExitName = 0, prevEntryAlt = 0, prevEntryPt = 0;
+        int prevNextCtrl = 0;
+        if (!prev.empty()) {
+            auto parts = splitPipe(prev);
+            if (parts.size() >= 3)
+                prevDirect = parts[2];
+            if (parts.size() >= 4)
+                prevExitAlt = atoi(parts[3].c_str());
+            if (parts.size() >= 5)
+                prevExitName = atoi(parts[4].c_str());
+            if (parts.size() >= 6)
+                prevEntryAlt = atoi(parts[5].c_str());
+            if (parts.size() >= 7)
+                prevEntryPt = atoi(parts[6].c_str());
+            if (parts.size() >= 10)
+                prevNextCtrl = atoi(parts[9].c_str());
+        }
+
+        auto parts = splitPipe(snap);
+        std::string direct = parts.size() >= 3 ? parts[2] : "";
+        const bool directChanged = (prevDirect != direct);
+
+        int exitAltState = 0, exitNameState = 0, entryAltState = 0, entryPointState = 0;
+        int nextCtrlState = 0;
+        try {
+            exitAltState = fp.GetExitCoordinationAltitudeState();
+        } catch (...) {
+        }
+        try {
+            exitNameState = fp.GetExitCoordinationNameState();
+        } catch (...) {
+        }
+        try {
+            entryAltState = fp.GetEntryCoordinationAltitudeState();
+        } catch (...) {
+        }
+        try {
+            entryPointState = fp.GetEntryCoordinationPointState();
+        } catch (...) {
+        }
+        try {
+            nextCtrlState = fp.GetCoordinatedNextControllerState();
+        } catch (...) {
+        }
+
+        const bool wasEntryPending =
+            prevEntryAlt == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevEntryAlt == COORDINATION_STATE_REQUESTED_BY_OTHER ||
+            prevEntryPt == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevEntryPt == COORDINATION_STATE_REQUESTED_BY_OTHER;
+        const bool nowEntryAccepted =
+            entryAltState == COORDINATION_STATE_ACCEPTED ||
+            entryAltState == COORDINATION_STATE_MANUAL_ACCEPTED ||
+            entryPointState == COORDINATION_STATE_ACCEPTED ||
+            entryPointState == COORDINATION_STATE_MANUAL_ACCEPTED;
+        // VatEFS Initiate cycles own accept/refuse edges. Legacy path only when no cycle.
+        const bool hasCycle = outboundCoordCycles.count(cs) != 0 &&
+                              (outboundCoordCycles[cs].active ||
+                               outboundCoordCycles[cs].acceptNotified ||
+                               outboundCoordCycles[cs].refuseLatched ||
+                               outboundCoordCycles[cs].cancelledNotified);
+        const bool autoEst =
+            !hasCycle && ShouldAutoEstOnXflTransition(prev, snap);
+        const bool entryAccepted =
+            !prev.empty() && wasEntryPending && nowEntryAccepted && !autoEst;
+        // Legacy refuse only without an active/recent Initiate cycle
+        const bool wasOutbound =
+            prevExitAlt == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevExitName == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevEntryAlt == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevEntryPt == COORDINATION_STATE_REQUESTED_BY_ME ||
+            prevNextCtrl == COORDINATION_STATE_REQUESTED_BY_ME;
+        const bool nowRefused =
+            exitAltState == COORDINATION_STATE_REFUSED ||
+            exitNameState == COORDINATION_STATE_REFUSED ||
+            entryAltState == COORDINATION_STATE_REFUSED ||
+            entryPointState == COORDINATION_STATE_REFUSED ||
+            nextCtrlState == COORDINATION_STATE_REFUSED;
+        const bool outboundRefused =
+            !hasCycle && !prev.empty() && wasOutbound && nowRefused && !autoEst;
+        const bool nowOutbound =
+            exitAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+            exitNameState == COORDINATION_STATE_REQUESTED_BY_ME ||
+            entryAltState == COORDINATION_STATE_REQUESTED_BY_ME ||
+            entryPointState == COORDINATION_STATE_REQUESTED_BY_ME ||
+            nextCtrlState == COORDINATION_STATE_REQUESTED_BY_ME;
+        const bool outboundRetrigger = !prev.empty() && !wasOutbound && nowOutbound;
+
+        DebugMessage(std::string("XFL/COPX/COPN/DCT change ") + cs + ": " +
+                     (prev.empty() ? "(none)" : prev) + " -> " + snap +
+                     (autoEst ? " [auto DepC]" : "") +
+                     (entryAccepted ? " [entry accept]" : "") +
+                     (outboundRefused ? " [refused]" : "") +
+                     (outboundRetrigger ? " [re-request]" : ""));
+        lastXflSnapshot[cs] = snap;
+
+        if (autoEst) {
+            const bool estOk = SetEstCoo(cs, true);
+            lastEstCooSnapshot[cs] = "1";
+            DisplayMessage(std::string("VatEFS: Departure Coordination set for ") + cs +
+                           " (coord accepted)" +
+                           (estOk ? "" : " — ann6 write failed"));
+        }
 
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
         SetJsonIfValidUtf8(message, "callsign", cs.c_str());
         message["xfl"] = xfl;
+        AppendExitCoordProposal(message, fp);
+        // Sync with Initiate cycle: force pink only while ES still shows REQUESTED_BY_ME.
+        // Never re-stick pink after 2→1 NONE clear (would leave sticky outbound until reload).
+        if (cycleIt != outboundCoordCycles.end()) {
+            if (cycleIt->second.acceptNotified || cycleIt->second.refuseNotified ||
+                cycleIt->second.cancelledNotified || !cycleIt->second.active) {
+                message["exitCoordOutbound"] = false;
+            } else if (cycleIt->second.active && !cycleIt->second.refuseLatched &&
+                       nowOutbound) {
+                message["exitCoordOutbound"] = true;
+                message["exitCoordRefused"] = false;
+            } else {
+                message["exitCoordOutbound"] = false;
+            }
+            // Never re-stick exitCoordRefused after refuseNotified — same as CAD path.
+            // UpdateOutboundCoordCycle owns the single refuse edge PostJson.
+            // coo only — exitCoordAccepted already posted by UpdateOutboundCoordCycle
+            if (cycleIt->second.acceptNotified) {
+                message["coo"] = true;
+                message["exitCoordRefused"] = false;
+            }
+        }
+        // Only touch strip.direct when ES DirectTo actually changed (else we'd wipe LOP DCT
+        // with empty or with ESE COPX on every XFL-only tick).
+        if (directChanged) {
+            message["direct"] = direct;
+            if (!direct.empty())
+                message["ahdg"] = 0;
+        }
+        if (autoEst) {
+            message["coo"] = true;
+            message["exitCoordAccepted"] = true;
+            message["exitCoordRefused"] = false;
+            message["exitCoordOutbound"] = false;
+        } else if (entryAccepted) {
+            message["exitCoordRefused"] = false;
+        } else if (outboundRefused) {
+            message["exitCoordRefused"] = true;
+        } else if (outboundRetrigger) {
+            message["exitCoordRefused"] = false;
+        }
         PostJson(message, "PollXflChanges");
     }
 }

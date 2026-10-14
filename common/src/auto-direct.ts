@@ -42,8 +42,33 @@ export function isLopFprDepAirport(adep: string | undefined | null): boolean {
 }
 
 /**
- * DEP runway explicitly set in ES (depRwy) or forced in FPL (ADEP/rwy or SID/rwy).
- * Does not use active-runway fallback — no RWY ⇒ no FPR preview on strip.
+ * Major TMA airports that keep the "SID" field label (not "DEP RTE").
+ * ESDF is treated as major for labeling despite also being LOP FPR.
+ */
+const MAJOR_SID_LABEL_AIRPORTS = new Set(["ESSA", "ESGG", "ESMS", "ESDF"])
+
+/**
+ * Strip / clearance field label for departure route.
+ * - RTC (`multiAirport`): always "SID"
+ * - Major TMA (ESSA/ESGG/ESMS/ESDF): "SID"
+ * - Regional LOP FPR airports (non-RTC): "DEP RTE"
+ * - Otherwise: "SID"
+ */
+export function sidFieldLabel(
+    adep: string | undefined | null,
+    multiAirport: boolean,
+): "SID" | "DEP RTE" {
+    if (multiAirport) return "SID"
+    const icao = (adep || "").trim().toUpperCase()
+    if (!icao || MAJOR_SID_LABEL_AIRPORTS.has(icao)) return "SID"
+    if (isLopFprDepAirport(icao)) return "DEP RTE"
+    return "SID"
+}
+
+/**
+ * DEP runway for FPR gate: ES GetDepartureRwy, caller-resolved display RWY
+ * (incl. ES-active DEP), or ADEP/rwy / SID/rwy on the first FPL route term.
+ * No usable RWY ⇒ no FPR preview on strip.
  */
 export function hasExplicitDepRunway(
     depRwy: string | undefined | null,
@@ -60,14 +85,19 @@ export function hasExplicitDepRunway(
 
 /**
  * Strip SID-cell preview for FPR airports: first significant FPL fix.
- * Requires explicit DEP RWY; empty when no RWY. Forced SID/rwy in FPL wins (caller).
+ * Requires a DEP RWY (ES / FPL / caller-resolved active); empty when none.
+ * Forced SID/rwy in FPL wins (caller).
+ * VFR / VFR→IFR (V/Z): never auto-preview — SID cell stays empty unless a SID was entered.
  */
 export function fprDepDisplayFix(
     adep: string | undefined | null,
     route: string | undefined | null,
     depRwy?: string | null,
+    flightRules?: string | null,
 ): string | undefined {
     if (!isLopFprDepAirport(adep)) return undefined
+    // V = VFR, Z = VFR→IFR — no auto FPR first-fix display
+    if (flightRules === "V" || flightRules === "Z") return undefined
     if (!hasExplicitDepRunway(depRwy, route)) return undefined
     if (hasForcedSidInRoute(route)) return undefined
     return extractSignificantRouteFixes(route)[0]

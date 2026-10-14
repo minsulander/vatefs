@@ -17,7 +17,8 @@ export type {
     StripPrintMode,
     StripLook,
     PaperInfoKind,
-    AirportAtisInfo
+    AirportAtisInfo,
+    ScribbleStrokePayload,
 } from "./types.js"
 
 export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind, isAutoLopSsrMode } from "./types.js"
@@ -99,11 +100,33 @@ export {
     isLopFprDepAirport,
     hasExplicitDepRunway,
     fprDepDisplayFix,
+    sidFieldLabel,
     resolveLopAutoDirect,
     resolveLopSuggestDirects,
     resolveLopDirectHighlights,
 } from "./auto-direct.js"
 export type { LopDirectMode, LopDirectSuggestion, LopDirectInput } from "./auto-direct.js"
+
+export { parsePobFromRemarks, withPobInRemarks } from "./fpl-remarks.js"
+
+export {
+    requiresAccCoordination,
+    requiresSsrCoordination,
+    resolveEssaHeavyPreferredDepRwy,
+    ESMS_AUTO_COORD_INIT_XFL_FT,
+    ESMS_AUTO_COORD_REPLY_XFL_FT,
+    ESMS_AUTO_COORD_EXITS,
+    normalizeEsmsAutoCoordRwy,
+    isEsmsAutoCoordSid,
+    isEsmsAutoCoordReplyAltitude,
+} from "./airport-rules.js"
+export type { SsrCoordinationOpts, EssaHeavyPreferredDepRwyInput } from "./airport-rules.js"
+
+export {
+    normalizeAircraftTypeDesignator,
+    isHeavyAsLeaderAircraftType,
+    isThickAtypBorderAircraftType,
+} from "./wake-highlight.js"
 
 // WebSocket API messages
 export type {
@@ -165,6 +188,17 @@ export type {
     SetRwyFlagMessage,
     ConfigInfo,
     ConfigListMessage,
+    ScribbleUpdateMessage,
+    OpenCidDialogMessage,
+    CidSuggestMessage,
+    OpenVatIrisSignInMessage,
+    ScribbleSetMessage,
+    ScribbleSyncPushMessage,
+    SetVatsimCidMessage,
+    RequestCidSuggestMessage,
+    InitiateXflCoordinationMessage,
+    AcceptCoordinationMessage,
+    RefuseCoordinationMessage,
     ClientMessage
 } from "./messages.js"
 

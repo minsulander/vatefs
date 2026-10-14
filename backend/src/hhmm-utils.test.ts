@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict"
 import {
+    eobtInsertIndexAmong,
     flightEtaHhmm,
     minutesUntilFlightEta,
     minutesUntilHhmm,
@@ -63,6 +64,63 @@ check("overdue ETA still within wrap (negative minutes)", () => {
     const nowMs = Date.UTC(2026, 0, 1, 12, 25, 0)
     // ETA 12:20 → −5
     assert.equal(minutesUntilFlightEta({ ete: 20, lastUpdate }, nowMs), -5)
+})
+
+check("eobtInsertIndexAmong: earliest toward bottom", () => {
+    // now midday so 1000/1100/1200 are unambiguous
+    const nowMin = 12 * 60
+    const existing = [
+        { callsign: "A", eobt: "1200" },
+        { callsign: "B", eobt: "1100" },
+        { callsign: "C", eobt: "1000" },
+    ]
+    // 1130 sorts between 1200 and 1100
+    assert.equal(
+        eobtInsertIndexAmong(existing, { callsign: "N", eobt: "1130" }, nowMin),
+        1,
+    )
+    // later than all → top
+    assert.equal(
+        eobtInsertIndexAmong(existing, { callsign: "N", eobt: "1300" }, nowMin),
+        0,
+    )
+    // earlier than all → bottom
+    assert.equal(
+        eobtInsertIndexAmong(existing, { callsign: "N", eobt: "0900" }, nowMin),
+        3,
+    )
+})
+
+check("eobtInsertIndexAmong: does not re-sort manual order", () => {
+    const nowMin = 12 * 60
+    // Manually shuffled: earliest on top (wrong vs auto EOBT)
+    const existing = [
+        { callsign: "C", eobt: "1000" },
+        { callsign: "A", eobt: "1200" },
+        { callsign: "B", eobt: "1100" },
+    ]
+    const idx = eobtInsertIndexAmong(existing, { callsign: "N", eobt: "1130" }, nowMin)
+    // Insert only — existing relative order unchanged by the helper
+    assert.ok(idx >= 0 && idx <= existing.length)
+    const after = [...existing]
+    after.splice(idx, 0, { callsign: "N", eobt: "1130" })
+    assert.deepEqual(
+        after.filter((x) => x.callsign !== "N").map((x) => x.callsign),
+        ["C", "A", "B"],
+    )
+})
+
+check("eobtInsertIndexAmong: CLR-read stays below new print", () => {
+    const nowMin = 12 * 60
+    const existing = [
+        { callsign: "A", eobt: "1200" },
+        { callsign: "R", eobt: "1100", clearanceRead: true },
+    ]
+    // New print (no CLR read) inserts among non-CLR by EOBT, above CLR-read tier
+    assert.equal(
+        eobtInsertIndexAmong(existing, { callsign: "N", eobt: "1000" }, nowMin),
+        1,
+    )
 })
 
 console.log(`\n${passed} passed`)

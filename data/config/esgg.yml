@@ -103,6 +103,7 @@ sectionRules:
     notMyRole: [TWR]
     priority: 96
 
+  # Paper: APP-owned CA/VA stay in INBOUND until handoff (matches common-rules).
   ctr_arr_approach_clearance_other:
     sectionId: inbound
     direction: arrival

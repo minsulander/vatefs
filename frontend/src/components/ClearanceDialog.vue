@@ -1,7 +1,7 @@
 <template>
   <v-dialog v-model="dialogOpen" max-width="320" content-class="clnc-dialog-wrapper">
     <div class="efs-popup-menu efs-popup-menu--wide clnc-dialog" @click.stop>
-      <div class="efs-popup-header">Clearance</div>
+      <div class="efs-popup-header">{{ clearanceDialogTitle }}</div>
       <div class="efs-popup-subheader clnc-subheader">
         <span class="clnc-callsign">{{ strip.callsign }}</span>
         <span class="clnc-header-meta">
@@ -65,12 +65,12 @@
         <button
           type="button"
           class="efs-popup-item clnc-field-row"
-          :class="{ 'is-disabled': !strip.canResetSquawk }"
+          :class="{ 'is-disabled': !ssrCoordActive && !strip.canResetSquawk }"
           :title="assrTitle"
           @click="onAssrClick"
         >
           <span class="clnc-field-label">ASSR</span>
-          <span class="clnc-field-value">{{ strip.squawk || '----' }}</span>
+          <span class="clnc-field-value">{{ displayedAssr || '----' }}</span>
         </button>
         <div v-if="showCdmTimes && strip.tsat" class="efs-popup-item clnc-field-row is-disabled">
           <span class="clnc-field-label">TSAT</span>
@@ -163,7 +163,9 @@ import {
   isIfrSidEligible,
   isTrackSidName,
   parseRflToFeet,
+  resolveEssaHeavyPreferredDepRwy,
   resolveLopAutoDirect,
+  sidFieldLabel,
   sidsMatch,
   withSlowRemark,
 } from '@vatefs/common'
@@ -206,12 +208,29 @@ const canSendDcl = computed(() => {
   return sidValid && cflValid && squawkValid
 })
 
-/** Show proactive DCL only when Hoppie connected, pilot online, and no active request/send. */
+/**
+ * Show proactive DCL when Hoppie connected, pilot online, and no active request/send.
+ * ESSA: also treat DONE/UNABLE/etc. as DCL path so Hoppie-online aircraft stay on DCL UI.
+ */
 const showProactiveDcl = computed(() => {
   if (store.dclStatus !== 'connected') return false
   if (!hoppieOnline.value) return false
   const s = props.strip.dclStatus
   return !s || s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED' || s === 'DONE'
+})
+
+/** ESSA Hoppie session: dialog title follows DCL path when request/proactive/online. */
+const clearanceDialogTitle = computed(() => {
+  if (!store.essaRolesMode) return 'Clearance'
+  if (
+    props.strip.dclStatus === 'REQUEST' ||
+    props.strip.dclStatus === 'SENT' ||
+    showProactiveDcl.value
+  ) {
+    return 'DCL'
+  }
+  if (props.strip.dclStatus) return 'DCL'
+  return 'Clearance'
 })
 
 const dclStatusClass = computed(() => {
@@ -303,10 +322,11 @@ function normSidKey(s: string): string {
   return s.toUpperCase().replace(/\s+/g, '').replace(/[•*]/g, '·')
 }
 
-/** SID row label — DCT when a direct-to is set (FPR/DCT). */
-const clearanceSidLabel = computed(() =>
-  (props.strip.direct || '').trim() ? 'DCT' : 'SID',
-)
+/** SID row label — DCT when a direct-to is set; DEP RTE for regional non-RTC. */
+const clearanceSidLabel = computed(() => {
+  if ((props.strip.direct || '').trim()) return 'DCT'
+  return sidFieldLabel(props.strip.adep, store.multiAirport)
+})
 
 /**
  * SID/DCT row: DCT waypoint when set; else preferred/SID preview like the strip.
@@ -578,6 +598,30 @@ function onCflClick(event: MouseEvent) {
   openFieldMenu(event, 'cfl')
 }
 
+/**
+ * ESSA heavy take-off RWY (A388/A124/… → 01L/19R) — same auto-LOP prep path as DCT/SID.
+ * Apply before SID so preferred SID/CFL follow the corrected DEP RWY.
+ */
+function applyEssaHeavyPreferredDepRwy(): boolean {
+  if (props.strip.clearance || !props.strip.canEditClearance) return false
+  if (!isIfrSidEligible(props.strip.flightRules)) return false
+  if (props.strip.stripType !== 'departure' && props.strip.stripType !== 'local') return false
+
+  const essa =
+    store.atisInfo.find((a) => a.airport === 'ESSA') ??
+    (props.strip.adep === 'ESSA' ? store.atisInfo[0] : undefined)
+  const prefer = resolveEssaHeavyPreferredDepRwy({
+    adep: props.strip.adep,
+    aircraftType: props.strip.aircraftType,
+    activeArr: essa?.arrRunways,
+    activeDep: essa?.depRunways,
+    currentDepRwy: props.strip.runway,
+  })
+  if (!prefer) return false
+  store.sendAssignment(props.strip.id, 'assignDepartureRunway', prefer)
+  return true
+}
+
 /** LOP airport auto DCT (ESMT/ESTA/ESMK/…) — before preferred SID. */
 function applyLopAutoDirect(): boolean {
   if (props.strip.clearance || !props.strip.canEditClearance) return false
@@ -604,6 +648,7 @@ async function runClearancePrep() {
   preferredSidMatched.value = null
   fetchDestinationName()
   fetchDepartureName()
+  applyEssaHeavyPreferredDepRwy()
   await fetchSids()
   const lopDct = applyLopAutoDirect()
   if (!lopDct) {
@@ -672,7 +717,16 @@ function onProactiveDcl() {
   dialogOpen.value = false
 }
 
+const ssrCoordActive = computed(() => store.isSsrCoordinationActive(props.strip))
+const displayedAssr = computed(() => store.displayAssrForStrip(props.strip))
+
 const assrTitle = computed(() => {
+  if (ssrCoordActive.value) {
+    const shown = displayedAssr.value
+    return shown
+      ? `ASSR ${shown} (manual) — click for TopSky / ES`
+      : 'ASSR hidden until coordination — click for TopSky / ES'
+  }
   if (!props.strip.canResetSquawk) {
     return props.strip.squawk ? `ASSR ${props.strip.squawk}` : 'ASSR'
   }
@@ -693,6 +747,10 @@ function requestTopskySquawk() {
 }
 
 function onAssrClick() {
+  // RTC ASSR simulation: leave hide-mode then request TopSky (same as strip double-click)
+  if (ssrCoordActive.value) {
+    store.overrideSsrCoordination(props.strip.id)
+  }
   requestTopskySquawk()
 }
 </script>

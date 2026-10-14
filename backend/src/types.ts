@@ -42,6 +42,11 @@ export interface Flight {
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
     route?: string
+    /**
+     * EuroScope GetExtractedRoute point names (space-joined), airway-expanded.
+     * Used for FPR/DCT waypoint lists; falls back to filed `route` when absent.
+     */
+    extractedRoute?: string
     /** Filed cruise TAS (N0448 / M078) — from FPL route group or VATSIM cruise_tas */
     tas?: string
     eobt?: string              // Estimated Off Block Time (HHmm)
@@ -97,6 +102,11 @@ export interface Flight {
     clearanceRead?: boolean
     /** Paper FPS col 5: CLR correct — toggles EuroScope CLR flag */
     clearanceReadback?: boolean
+    /**
+     * Next createStrip is a fresh paper reprint — do not derive CLR read/correct
+     * from EuroScope clearance (strip starts clean; CAD may set them again later).
+     */
+    paperFreshPrint?: boolean
     stand?: string            // Parking stand/gate
 
     // Speed/altitude assignments
@@ -134,6 +144,16 @@ export interface Flight {
     qnhGiven?: number
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
+    /**
+     * TopSky WEATHER manual alert (MET / WX_) — EFS UI state.
+     * Kept when scratch WX_ is cleared (TopSky consume or DEP airborne).
+     */
+    weatherGiven?: boolean
+    /**
+     * Until this timestamp, ignore CAD WX_ setting weatherGiven
+     * (we just pulsed WX_ to toggle TopSky alert off).
+     */
+    weatherGivenHoldOffUntil?: number
     taxiMinutes?: number          // Taxi time from CDM (for TOBT updates)
     ctot?: string                 // Calculated Take Off Time (HHmm)
     /** Had CTOT, now cancelled (cdmSts SLC) — strip shows SCL in CTOT slot */
@@ -154,8 +174,16 @@ export interface Flight {
     hp?: string
     /** Hold short — VCH strip annotation 4 (TAG_STRIP_ANNO_HOS), max 5 chars */
     hs?: string
-    /** ACC coordination done — scratchpad `.COO` (RTC NeedsCoordination airports) */
+    /** Departure Coordination done — strip annotation 6 ("DepC"; legacy "EST") */
     coo?: boolean
+    /** ACC coordination proposal pending (REQUESTED_BY_OTHER on exit or entry) */
+    exitCoordPending?: boolean
+    /** Outbound exit coordination pending (REQUESTED_BY_ME) */
+    exitCoordOutbound?: boolean
+    /** ACC refused our outbound XFL / DEP COORD */
+    exitCoordRefused?: boolean
+    exitCoordPoint?: string
+    exitCoordAltitude?: number
     /** True after controller manually clears an auto-SLOW remark — do not re-add */
     autoSlowDismissed?: boolean
     /** True when SLOW remarks were added by tryAutoSlowRemark (safe to auto-clear on ATYP change) */
@@ -192,6 +220,11 @@ export interface Flight {
     // Rule tracking
     lastSectionRule?: string  // ID of the last section rule that matched, or 'manual' for manual drag, 'default' for default section
     lastDeleteRule?: string   // ID of the delete rule that caused soft-deletion
+    /**
+     * Fingerprint of ES-ish state when section was manually / sync-placed.
+     * While lastSectionRule==='manual' and this still matches, rules must not yank the strip.
+     */
+    placementStickyKey?: string
 
     // Special strip tracking
     synthetic?: boolean       // Flight was created from UI (VFR DEP/ARR/CROSS), not from EuroScope
@@ -202,6 +235,11 @@ export interface Flight {
     ownershipOptimisticUntil?: number
     /** Until this timestamp, ignore stale non-empty groundstate from ES after NOSTATE clear */
     groundstateClearedUntil?: number
+    /**
+     * After trash restore of a PARK/TERM soft-delete: skip delete_parked / Auto PARK
+     * until the controller explicitly TERMs again (or the flight disconnects).
+     */
+    suppressParkDelete?: boolean
     /**
      * Until this timestamp, ignore ES groundstate that differs from EFS-set value
      * (e.g. TopSky still reports ARR while aircraft is on runway after TXI).
@@ -263,6 +301,8 @@ export interface FlightPlanDataUpdateMessage {
     /** EuroScope communication type: V voice, R receive-only, T text, 0 unassigned */
     communicationType?: string
     route?: string
+    /** Space-joined GetExtractedRoute point names (airway-expanded) */
+    extractedRoute?: string
     /**
      * Filed TAS from EuroScope GetTrueAirspeed (knots), or preformatted "N0430".
      */
@@ -280,6 +320,16 @@ export interface FlightPlanDataUpdateMessage {
     rfl?: number              // Requested flight level (feet)
     /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
     xfl?: number
+    /** ACC counter-proposal pending (REQUESTED_BY_OTHER) */
+    exitCoordPending?: boolean
+    /** Outbound exit coordination pending (REQUESTED_BY_ME) */
+    exitCoordOutbound?: boolean
+    /** ACC refused our outbound XFL / DEP COORD */
+    exitCoordRefused?: boolean
+    exitCoordPoint?: string
+    exitCoordAltitude?: number
+    /** Plugin: XFL/exit coordination was accepted → auto DepC */
+    exitCoordAccepted?: boolean
     /** Flight plan item 18 remarks */
     fplRemarks?: string
     // Route data from UpdateRoute()
@@ -307,6 +357,16 @@ export interface ControllerAssignedDataUpdateMessage {
     cfl?: number
     /** EuroScope exit coordination altitude / XFL (feet); 0 = none */
     xfl?: number
+    /** ACC counter-proposal pending (REQUESTED_BY_OTHER) */
+    exitCoordPending?: boolean
+    /** Outbound exit coordination pending (REQUESTED_BY_ME) */
+    exitCoordOutbound?: boolean
+    /** ACC refused our outbound XFL / DEP COORD */
+    exitCoordRefused?: boolean
+    exitCoordPoint?: string
+    exitCoordAltitude?: number
+    /** Plugin: XFL/exit coordination was accepted → auto DepC */
+    exitCoordAccepted?: boolean
     groundstate?: GroundState
     clearance?: boolean
     /** VCH CTL — strip annotation 3 */
@@ -318,6 +378,8 @@ export interface ControllerAssignedDataUpdateMessage {
     scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")
     /** VCH hold short — strip annotation 4 (empty string clears) */
     hs?: string
+    /** Departure Coordination — strip annotation 6 ("DepC") */
+    coo?: boolean
     stand?: string
     asp?: number
     mach?: number

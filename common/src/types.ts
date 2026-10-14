@@ -28,6 +28,11 @@ export interface FlightStrip {
     /** Full airport name for ades (tooltip) */
     adesName?: string
     route?: string             // Flight planned route
+    /**
+     * EuroScope extracted (airway-expanded) route points, space-joined.
+     * Prefer for FPR/DCT menus when present.
+     */
+    extractedRoute?: string
     sid?: string               // Standard Instrument Departure
     /**
      * TMA exit fix — first significant FPL route point (excludes ADEP/rwy, SID/rwy).
@@ -73,6 +78,11 @@ export interface FlightStrip {
     qnhGiven?: number
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
+    /**
+     * TopSky WEATHER manual alert (WX_) acknowledged / on for this strip.
+     * Survives scratch clear (TopSky often consumes WX_; DEP airborne clears scratch but keeps this).
+     */
+    weatherGiven?: boolean
     ctot?: string              // Calculated Take Off Time (HHmm) when regulated
     /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
     ctotCancelled?: boolean
@@ -87,8 +97,33 @@ export interface FlightStrip {
     hp?: string
     /** Hold short — VCH strip annotation 4 (H/S), max 5 chars */
     hs?: string
-    /** ACC coordination — scratchpad `.COO` (RTC NeedsCoordination) */
+    /** Departure Coordination — strip annotation 6 ("DepC" / empty; legacy "EST") */
     coo?: boolean
+    /**
+     * ACC sent a coordination proposal (REQUESTED_BY_OTHER on exit COPX/XFL
+     * or entry COPN/PEL). Plugin maps both onto this field.
+     * RTC DEP: pink XFL / pink C on coo cell; RTC ARR: pink C on PEL.
+     */
+    exitCoordPending?: boolean
+    /**
+     * We initiated exit coordination and are waiting (REQUESTED_BY_ME).
+     * RTC: pink XFL on outbound Departure Coordination / XFL request.
+     */
+    exitCoordOutbound?: boolean
+    /**
+     * ACC refused our outbound XFL / Departure Coordination.
+     * RTC: amber XFL until DepC set or a later coord is accepted.
+     */
+    exitCoordRefused?: boolean
+    /** Proposed COPX / DCT point from pending exit coordination */
+    exitCoordPoint?: string
+    /** Proposed XFL (feet) from pending exit coordination */
+    exitCoordAltitude?: number
+    /**
+     * Persons on board from FPL remarks `P/XXX` (always 3 digits when set).
+     * Synced via amendFlightPlan → EuroScope item 18.
+     */
+    pob?: string
 
     // Strip metadata
     stripType: StripType
@@ -146,6 +181,11 @@ export interface FlightStrip {
 
     // Special strip fields
     noteText?: string            // Text content for note strips
+    /**
+     * Stable key for cross-controller scribble sync (usually same as id for flights;
+     * note:/veh: UUID ids for specials).
+     */
+    syncKey?: string
     /**
      * Paper-look printed info / blank strip template (note strips only).
      * When set, the strip uses a fixed FPS-style layout instead of free note text.
@@ -305,6 +345,17 @@ export interface UiSettings {
      */
     autoLopSsr: AutoLopSsrMode
     /**
+     * RTC ASSR Simulation: for LOP verbal-ACC SSR airports, hide live ES ASSR until
+     * manual entry or double-click TopSky generate/override. Default on.
+     * (Legacy settings key: rtcSsrSimulation — migrated on load.)
+     */
+    rtcAssrSimulation: boolean
+    /**
+     * Show Contact me (C ME) on non-assumed arrivals. Uses brittle EuroScope
+     * keyboard inject (ESC → callsign → ASEL → HOME → ASEL); needs ES focus.
+     */
+    contactMeEnabled: boolean
+    /**
      * Show the "A" (ATC) marker next to TOBT when TOBT was set by ATC.
      * Pilot "P" always shows when applicable. Default on.
      */
@@ -320,6 +371,34 @@ export interface UiSettings {
      * manual = wait for an explicit print action per flight.
      */
     stripPrintMode: StripPrintMode
+    /**
+     * Paper-look only: accept VatIRIS / VatFSP POST /api/print/external.
+     * Default off — enable in Options and copy the FSP URL into IRIS.
+     */
+    fspServerEnabled: boolean
+    /** When true, sync freehand scribble strokes via VatEFS / VatIRIS sync */
+    scribbleSyncEnabled: boolean
+    /**
+     * When true, sync bay placement / reorder / note·vehicle + EFS-only flags
+     * (clearanceRead, QNH/ATIS) via the same sync endpoint.
+     */
+    stripSyncEnabled: boolean
+    /**
+     * Legacy persisted sync base URL — ignored in UI.
+     * Effective URL is VATEFS_SYNC_URL env or https://backend.vatiris.se.
+     */
+    scribbleSyncUrl: string
+    /** VATSIM CID used as X-Vatsim-Cid for scribble sync (empty = not set) */
+    vatsimCid: string
+    /** Network realm for scribble rooms: auto from ES connection, or override */
+    scribbleSyncRealm: 'auto' | 'live' | 'sweatbox' | 'playback' | 'local'
+}
+
+/** Stroke payload for local + remote scribble sync */
+export interface ScribbleStrokePayload {
+    points: string
+    color: 'blue' | 'red' | 'black'
+    tag?: string
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -332,9 +411,17 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     showAppDepXcFrequency: false,
     autoParkEnabled: true,
     autoLopSsr: 'instant',
+    rtcAssrSimulation: true,
+    contactMeEnabled: true,
     showTobtSetByA: true,
     stripPrintSound: 'short',
     stripPrintMode: 'auto',
+    fspServerEnabled: false,
+    scribbleSyncEnabled: true,
+    stripSyncEnabled: true,
+    scribbleSyncUrl: '',
+    vatsimCid: '',
+    scribbleSyncRealm: 'auto',
 }
 
 export interface AirportAtisInfo {

@@ -82,5 +82,21 @@ assert(
     fprDepDisplayFix("ESGJ", "N0445F340 DEVNI DCT", "01") === "DEVNI",
     "FPR first fix with ES RWY",
 )
+assert(
+    fprDepDisplayFix("ESOE", "TABUT ARS", "19") === "TABUT",
+    "FPR first fix with ES-active/display RWY (SCQ71N-style)",
+)
+assert(
+    fprDepDisplayFix("ESGJ", "ESGJ/01 N0445F340 DEVNI DCT", "01", "V") === undefined,
+    "FPR blank for VFR",
+)
+assert(
+    fprDepDisplayFix("ESGJ", "ESGJ/01 N0445F340 DEVNI DCT", "01", "Z") === undefined,
+    "FPR blank for VFR→IFR",
+)
+assert(
+    fprDepDisplayFix("ESGJ", "ESGJ/01 N0445F340 DEVNI DCT", "01", "I") === "DEVNI",
+    "FPR still for IFR",
+)
 
 console.log("auto-direct.test.ts: OK")

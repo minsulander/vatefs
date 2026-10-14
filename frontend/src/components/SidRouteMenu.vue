@@ -273,8 +273,13 @@ const hasAnySids = computed(
     0,
 )
 
-/** All significant FPL fixes; first = FPR, rest = preceding DCT targets */
-const routeFixes = computed(() => extractSignificantRouteFixes(props.strip.route))
+/**
+ * Significant FPL fixes for FPR/DCT: prefer EuroScope extracted (airway-expanded)
+ * route when present, else filed route tokens.
+ */
+const routeFixes = computed(() =>
+  extractSignificantRouteFixes(props.strip.extractedRoute || props.strip.route),
+)
 const fprPoint = computed(() => routeFixes.value[0] || undefined)
 const precedingWaypoints = computed(() => routeFixes.value.slice(1))
 
@@ -283,7 +288,7 @@ const lopDirectHighlights = computed(() =>
   resolveLopDirectHighlights({
     adep: props.strip.adep,
     ades: props.strip.ades,
-    route: props.strip.route,
+    route: props.strip.extractedRoute || props.strip.route,
     rflFeet: parseRflToFeet(props.strip.rfl),
     runway: props.strip.runway,
     // Strip has no engine type — isSlow covers typical prop/turboprop deps
@@ -388,9 +393,6 @@ async function fetchExitMatches(airport: string, runway: string) {
         params.set('config', store.essaRwyConfigIdResolved)
       }
       params.set('slow', hasSlowRemark(props.strip.remarks) || props.strip.isSlow ? '1' : '0')
-    }
-    if (airport === 'ESGG' && props.strip.callsign) {
-      params.set('callsign', props.strip.callsign)
     }
     if (props.strip.route) params.set('route', props.strip.route)
     const res = await fetch(`/api/preferred-sid?${params}`)

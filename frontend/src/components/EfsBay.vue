@@ -53,7 +53,11 @@
             type="button"
             class="bay-header-qnh"
             :class="{ 'bay-header-qnh--changed': headerQnhChanged }"
-            :title="headerQnhChanged ? `QNH ${headerQnh} - click to acknowledge` : `QNH ${headerQnh}`"
+            :title="headerQnhTitle"
+            @pointerdown.stop="onHeaderQnhPointerDown"
+            @pointerup.stop="onHeaderQnhPointerUp"
+            @pointerleave="onHeaderQnhPointerCancel"
+            @pointercancel="onHeaderQnhPointerCancel"
             @click.stop="onHeaderQnhClick"
           >{{ headerQnh }}</button>
         </div>
@@ -232,7 +236,54 @@ const headerQnhChanged = computed(() => {
   return !!icao && store.isQnhChanged(icao)
 })
 
+const headerQnhTitle = computed(() => {
+  const q = headerQnh.value
+  if (!q) return 'QNH'
+  if (headerQnhChanged.value) {
+    return `QNH ${q} — click to acknowledge · hold to stamp all strips`
+  }
+  return `QNH ${q} — hold to stamp all strips`
+})
+
+/** Long-hold (~600ms): stamp qnhGiven on every strip for this airport */
+const QNH_LONG_HOLD_MS = 600
+let headerQnhHoldTimer: ReturnType<typeof setTimeout> | null = null
+let headerQnhLongHeld = false
+
+function clearHeaderQnhHold() {
+  if (headerQnhHoldTimer != null) {
+    clearTimeout(headerQnhHoldTimer)
+    headerQnhHoldTimer = null
+  }
+}
+
+function onHeaderQnhPointerDown(e: PointerEvent) {
+  if (e.button != null && e.button !== 0) return
+  const icao = selectedAirport.value
+  if (!icao || !headerQnh.value) return
+  headerQnhLongHeld = false
+  clearHeaderQnhHold()
+  headerQnhHoldTimer = setTimeout(() => {
+    headerQnhHoldTimer = null
+    headerQnhLongHeld = true
+    store.stampQnhGivenForAirport(icao)
+  }, QNH_LONG_HOLD_MS)
+}
+
+function onHeaderQnhPointerUp() {
+  clearHeaderQnhHold()
+}
+
+function onHeaderQnhPointerCancel() {
+  clearHeaderQnhHold()
+  headerQnhLongHeld = false
+}
+
 function onHeaderQnhClick() {
+  if (headerQnhLongHeld) {
+    headerQnhLongHeld = false
+    return
+  }
   const icao = selectedAirport.value
   if (!icao || !headerQnhChanged.value) return
   store.acknowledgeQnh(icao)
@@ -349,6 +400,7 @@ onBeforeUnmount(() => {
   bayResizeObs?.disconnect()
   bayResizeObs = null
   if (bayScaleRaf) cancelAnimationFrame(bayScaleRaf)
+  clearHeaderQnhHold()
 })
 
 // After first render, lock all non-last sections to their actual pixel heights
@@ -537,6 +589,11 @@ onMounted(() => {
 /* SAAB 400×50 body ratio; bay-scale so notes/vehicles match flight strips + headers */
 .efs-bay--paper :deep(.flight-strip) {
   --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+}
+
+/* Compact half-height SAAB — respect 25px body (do not force full height via bay) */
+.efs-bay:not(.efs-bay--paper) :deep(.flight-strip.strip-compact) {
+  --strip-body-h: calc(25px * var(--bay-scale, var(--strip-scale)));
 }
 
 /* Vertical spacing only — strip↔strip = strip↔header; sideways unchanged */

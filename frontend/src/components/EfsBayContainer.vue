@@ -5,14 +5,20 @@
     @click="onContainerClick"
   >
     <EfsTopBar />
-    <div class="efs-bay-content">
+    <div
+      ref="scrollEl"
+      class="efs-bay-content"
+      :class="{ 'efs-bay-content--table-scroll': tableScroll }"
+    >
       <div
         class="bay-row"
         :class="{
           'bay-row--multi': store.multiAirport,
           'bay-row--choosing': store.pendingIdleSwap != null,
           'bay-row--paper': store.isPaperLook,
+          'bay-row--table-scroll': tableScroll,
         }"
+        :style="tableScroll ? { '--efs-bay-col-width': colWidthPx } : undefined"
       >
         <div
           v-for="(bay, index) in bays"
@@ -24,6 +30,7 @@
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
             'bay-column--paper': store.isPaperLook,
+            'bay-column--table-fixed': tableScroll,
           }"
           :style="store.multiAirport ? { '--bay-accent': columnAccent(index) } : undefined"
           @click="onColumnClick(index, $event)"
@@ -50,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEfsStore } from '@/store/efs'
 import EfsBay from './EfsBay.vue'
 import EfsTopBar from './EfsTopBar.vue'
@@ -58,6 +65,93 @@ import EfsBottomBar from './EfsBottomBar.vue'
 
 const store = useEfsStore()
 const bays = computed(() => store.getBays)
+const scrollEl = ref<HTMLElement | null>(null)
+const colWidthPx = ref('25%')
+
+const visibleCols = computed(() => {
+  const n = store.esggVisibleColumns
+  return n >= 2 && n <= 5 ? n : 4
+})
+
+/**
+ * Physical strip table: column width = window / visibleCols (2–5);
+ * scrollbar pans when more bays exist (layout/roles unchanged).
+ */
+const tableScroll = computed(() => store.isPaperLook && store.esggRolesMode)
+
+/**
+ * Covering GND on a 5-col board (GND/CD staffed with TWR): pan so INBOUND
+ * is one column off-screen. Solo TWR covering GND stays 4-col — no pan.
+ */
+const panHideInbound = computed(() => {
+  if (!tableScroll.value) return false
+  const covering = store.esggRoles ?? []
+  if (!covering.includes('GND')) return false
+  if (bays.value.length < 5) return false
+  return bays.value.some((b) => b.sections.some((s) => s.id === 'inbound'))
+})
+
+function measureColWidth() {
+  const el = scrollEl.value
+  if (!el || !tableScroll.value) {
+    colWidthPx.value = `${100 / visibleCols.value}%`
+    return
+  }
+  const w = el.clientWidth
+  if (w <= 0) return
+  colWidthPx.value = `${Math.floor(w / visibleCols.value)}px`
+}
+
+let applyingDefaultScroll = false
+
+function applyDefaultScroll() {
+  measureColWidth()
+  const el = scrollEl.value
+  if (!el || !tableScroll.value) return
+  const colW = el.clientWidth / visibleCols.value
+  // GND working the right side of the table: hide INBOUND, keep scroll available
+  applyingDefaultScroll = true
+  el.scrollLeft = panHideInbound.value ? Math.round(colW) : 0
+  requestAnimationFrame(() => {
+    applyingDefaultScroll = false
+  })
+}
+
+let ro: ResizeObserver | null = null
+let userScrolled = false
+
+function onScroll() {
+  if (applyingDefaultScroll) return
+  userScrolled = true
+}
+
+onMounted(() => {
+  applyDefaultScroll()
+  if (typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(() => {
+      measureColWidth()
+      // Keep GND pan after resize unless the user already scrolled
+      if (!userScrolled && panHideInbound.value) applyDefaultScroll()
+    })
+    if (scrollEl.value) ro.observe(scrollEl.value)
+  }
+  window.addEventListener('resize', measureColWidth)
+  scrollEl.value?.addEventListener('scroll', onScroll, { passive: true })
+})
+
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  window.removeEventListener('resize', measureColWidth)
+  scrollEl.value?.removeEventListener('scroll', onScroll)
+})
+
+watch(
+  [tableScroll, bays, panHideInbound, visibleCols, () => store.esggRoles.join(',')],
+  () => {
+    userScrolled = false
+    requestAnimationFrame(applyDefaultScroll)
+  },
+)
 
 function columnAccent(index: number): string {
   return store.columnAirports[index] ? store.columnColor(index) : '#616161'
@@ -100,6 +194,33 @@ function onContainerClick() {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+/* Physical table: 4 bay-widths visible; scrollbar along the bottom for bay5 */
+.efs-bay-content--table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(201, 166, 107, 0.55) rgba(0, 0, 0, 0.25);
+}
+
+.efs-bay-content--table-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.efs-bay-content--table-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.efs-bay-content--table-scroll::-webkit-scrollbar-thumb {
+  background: rgba(201, 166, 107, 0.55);
+  border-radius: 5px;
+}
+
+.efs-bay-content--table-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(201, 166, 107, 0.75);
 }
 
 .bay-row {
@@ -107,6 +228,13 @@ function onContainerClick() {
   flex: 1;
   min-height: 0;
   height: 100%;
+}
+
+.bay-row--table-scroll {
+  flex: 0 0 100%;
+  height: 100%;
+  width: max-content;
+  min-width: 100%;
 }
 
 .bay-row--multi {
@@ -122,6 +250,13 @@ function onContainerClick() {
   overflow: hidden;
   box-sizing: border-box;
   position: relative;
+}
+
+.bay-column--table-fixed {
+  flex: 0 0 var(--efs-bay-col-width, 25%);
+  width: var(--efs-bay-col-width, 25%);
+  min-width: var(--efs-bay-col-width, 25%);
+  max-width: var(--efs-bay-col-width, 25%);
 }
 
 /* Paper: keep flush columns (no visible inter-bay gap); pipes live inside each bay */
@@ -199,57 +334,51 @@ function onContainerClick() {
   color: #90caf9;
   font-size: calc(12px * var(--efs-scale, 1));
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 @keyframes swap-pulse {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: inset 0 0 0 2px rgba(144, 202, 249, 0.35);
   }
   50% {
-    box-shadow: inset 0 0 0 2px rgba(144, 202, 249, 0.85);
+    box-shadow: inset 0 0 0 2px rgba(144, 202, 249, 0.7);
   }
 }
 
 @keyframes column-flash {
-  0%, 100% {
-    box-shadow: inset 0 0 0 2px transparent;
+  0%,
+  100% {
     filter: brightness(1);
   }
   50% {
-    box-shadow:
-      inset 0 0 0 3px #fff,
-      0 0 22px color-mix(in srgb, var(--bay-accent) 70%, white);
-    filter: brightness(1.35);
+    filter: brightness(1.25);
   }
 }
 
 .efs-notify {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--efs-bottom-bar-h, 40px) + 6px);
+  bottom: calc(56px * var(--efs-scale, 1));
   transform: translateX(-50%);
-  z-index: 50;
-  max-width: min(90vw, calc(560px * var(--efs-scale, 1)));
-  padding: calc(8px * var(--efs-scale, 1)) calc(14px * var(--efs-scale, 1));
-  border-radius: calc(4px * var(--efs-scale, 1));
-  font-size: calc(13px * var(--efs-scale, 1));
+  z-index: 40;
+  max-width: min(90vw, 520px);
+  padding: calc(10px * var(--efs-scale, 1)) calc(16px * var(--efs-scale, 1));
+  border-radius: 4px;
+  font-size: calc(14px * var(--efs-scale, 1));
   font-weight: 600;
-  line-height: 1.35;
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
-.efs-notify--error {
-  background: #5c1a1a;
-  color: #ffcdd2;
-  border: 1px solid #e57373;
+.efs-notify--info {
+  background: #1565c0;
+  color: #fff;
 }
 
-.efs-notify--info {
-  background: #1a2a3a;
-  color: #bbdefb;
-  border: 1px solid #64b5f6;
+.efs-notify--error {
+  background: #c62828;
+  color: #fff;
 }
 </style>

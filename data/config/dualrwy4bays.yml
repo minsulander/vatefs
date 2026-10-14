@@ -47,6 +47,16 @@ layout:
           title: CLEARED
 
 sectionRules:
+  # CA/VA alone → stay INBOUND (assume / inbound transfer → CTR ARR). See common-rules.
+  ctr_arr_approach_clearance_other:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    approachClearance: true
+    priority: 85
+
   # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
 
   # Aircraft physically on the departure runway
