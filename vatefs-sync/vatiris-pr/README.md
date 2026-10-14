@@ -32,20 +32,27 @@ Base: `/efs/sync`
 | GET | `/:realm/:airport` | `?since=<iso>` |
 | PUT | `/:realm/:airport/:stripKey` | `{ strokes, strip? }` |
 | DELETE | `/:realm/:airport/:stripKey` | |
+| GET | `/:realm/:airport/meta` | airport meta |
+| PUT | `/:realm/:airport/meta` | `{ essaSep: { sep, dlv, depGap } }` |
 
 Realms: `live` \| `sweatbox` \| `playback` \| `local`  
 Airport: ICAO. Strip keys: `CALLSIGN@ICAO`, `note:<uuid>`, `veh:<uuid>`.
+
+**Airport meta (`…/meta`)** — ESSA SEP / DLV / DEP GAP (effective strings from VatEFS TWR).  
+Stripview (ESOS APP/DEP) should `GET` or subscribe to WS/SSE event `type: "meta"`.  
+Table: `efs_airport_meta` (see `migration.sql`).
 
 Caps: JSON body ≤256kb, rate limits, ~1h TTL (see `migration.sql` + `routes.ts`).
 
 ## Integration steps
 
-1. Apply `migration.sql` (Postgres)
-2. Mount `createScribbleRouter({ userExists })` under `/efs`
+1. Apply `migration.sql` (Postgres) — includes `efs_airport_meta`
+2. Mount `createScribbleRouter({ userExists, store, publishRoom? })` under `/efs`
 3. Optional: set VatEFS default sync URL to `https://backend.vatiris.se` when ready
 
 ## Client behaviour (VatEFS)
 
 - Push on zoom close (strokes + placement meta); push on drag (placement)
+- TWR role: push ESSA SEP/DLV/DEP GAP to `PUT …/ESSA/meta` when values change
 - SSE fanout + ~15s poll safety net
 - Manual/synced placement is sticky until groundstate / ownership / airborne / CLR changes

@@ -37,6 +37,9 @@ Send header `X-Vatsim-Cid: <number>` on every request.
 - `PUT /efs/sync/:realm/:airport/:stripKey` body `{ "strokes"?: [...], "strip"?: {...} }`  
   Omit `strokes` or `strip` to leave the previous value unchanged (partial update).
 - `DELETE /efs/sync/:realm/:airport/:stripKey`
+- `GET /efs/sync/:realm/:airport/meta` — airport-scoped meta (e.g. ESSA SEP/DLV/DEP GAP)
+- `PUT /efs/sync/:realm/:airport/meta` body `{ "essaSep": { "sep", "dlv", "depGap" } }`  
+  Fanout: WS/SSE event `meta`. Used by VatIRIS Stripview (ESOS APP/DEP).
 - `WS /efs/sync/:realm/:airport/ws?cid=…` (live fanout)
 - `GET /health`
 

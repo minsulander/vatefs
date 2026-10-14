@@ -23,7 +23,11 @@ import {
     parseAltitudeToFeet,
     parseGapKey,
     resolveEssaRwyConfigId,
+    computeEssaSepIndicators,
+    mergeEssaSepIndicators,
+    ESSA_SEP_CYCLE,
 } from "@vatefs/common"
+import type { EssaSepOverrides, EssaSepField } from "@vatefs/common"
 import type {
     LayoutMessage,
     StripMessage,
@@ -38,6 +42,7 @@ import type {
     DclStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
+    EssaSepIndicatorsMessage,
     ConfigListMessage,
     ControllersMessage,
     ControllerInfo,
@@ -65,6 +70,7 @@ import {
     getIrisSyncHealth,
     isOfflineVatsimRealm,
     onConnectionTypeChanged,
+    pushEssaSepMetaToRemote,
     resolveRealm,
 } from "./vatefs-sync.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
@@ -1294,6 +1300,63 @@ function sendAtisUpdate(socket: WebSocket) {
 function broadcastAtisUpdate() {
     const message: AtisUpdateMessage = { type: "atisUpdate", airports: buildAtisInfo() }
     broadcast(message)
+    broadcastEssaSepIndicators()
+}
+
+/** TWR-managed SEP/DLV/DEP GAP overrides (synced; absent key = auto). */
+let essaSepOverrides: EssaSepOverrides = {}
+
+function canEditEssaSepIndicators(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const roles = staticConfig.essaRoles ?? []
+    return roles.some((r) => r === "TWR-E" || r === "TWR-W" || String(r).startsWith("TWR"))
+}
+
+function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
+    return (ESSA_SEP_CYCLE[field] as readonly (string | null)[]).some((v) => v === value)
+}
+
+/** Build ESSA SEP/DLV/DEP GAP message (roles mode + ESSA ops only). */
+function buildEssaSepIndicatorsMessage(): EssaSepIndicatorsMessage | null {
+    if (!isEssaRolesConfig(staticConfig)) return null
+    const ops = getEssaOps()
+    const arr = ops?.arr ?? []
+    const dep = ops?.dep ?? []
+    const sccMap = atisService?.getEssaScc() ?? new Map()
+    const metar = atisService?.getMetarText("ESSA") ?? null
+    const prefer = getAupR16Status().suggestConfigId
+    const configId = resolveEssaRwyConfigId(arr, dep, new Date(), {
+        preferConfigId: prefer,
+    })
+    const auto = computeEssaSepIndicators({
+        configId,
+        arrRunways: arr,
+        depRunways: dep,
+        sccByDesignator: sccMap,
+        metar,
+    })
+    const ind = mergeEssaSepIndicators(auto, essaSepOverrides)
+    const scc: Record<string, [number, number, number]> = {}
+    for (const [k, v] of sccMap) scc[k] = v
+    return { type: "essaSepIndicators", ...ind, scc, metar, overrides: { ...essaSepOverrides } }
+}
+
+function sendEssaSepIndicators(socket: WebSocket) {
+    const message = buildEssaSepIndicatorsMessage()
+    if (message) sendMessage(socket, message)
+}
+
+function broadcastEssaSepIndicators() {
+    const message = buildEssaSepIndicatorsMessage()
+    if (message) broadcast(message)
+    // TWR publishes effective values to IRIS for Stripview (ESOS APP/DEP)
+    if (message && canEditEssaSepIndicators()) {
+        void pushEssaSepMetaToRemote({
+            sep: message.sep,
+            dlv: message.dlv,
+            depGap: message.depGap,
+        })
+    }
 }
 
 // Send config list to a single client
@@ -1405,6 +1468,7 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
 
         broadcastConfigList()
         broadcastStatus()
+        broadcastEssaSepIndicators()
         broadcastRefresh(`Config switched to ${configInfo.name}`)
     } catch (err) {
         console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
@@ -4269,6 +4333,36 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "setEssaSepIndicators": {
+            if (!canEditEssaSepIndicators()) {
+                console.log("[ESSA SEP] reject setEssaSepIndicators — TWR role required")
+                break
+            }
+            let changed = false
+            const fields: EssaSepField[] = ["sep", "dlv", "depGap"]
+            for (const field of fields) {
+                if (!(field in message)) continue
+                const raw = message[field]
+                if (raw === null) {
+                    if (essaSepOverrides[field] !== undefined) {
+                        delete essaSepOverrides[field]
+                        changed = true
+                    }
+                    continue
+                }
+                if (typeof raw !== "string" || !isValidEssaSepOverride(field, raw)) continue
+                if (essaSepOverrides[field] !== raw) {
+                    essaSepOverrides[field] = raw
+                    changed = true
+                }
+            }
+            if (changed) {
+                broadcastEssaSepIndicators()
+                console.log(`[ESSA SEP] overrides → ${JSON.stringify(essaSepOverrides)}`)
+            }
+            break
+        }
+
         case "setSectionHeight": {
             const result = store.setSectionHeight(message.bayId, message.sectionId, message.height)
             if (result && result.changed) {
@@ -5754,6 +5848,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 store.reprocessAllFlights()
                 broadcastStatus()
                 broadcastLayout()
+                broadcastEssaSepIndicators()
                 broadcastRefresh("ESSA roles changed")
             }
             break
@@ -6626,6 +6721,7 @@ wsServer.on("connection", (socket) => {
     sendDclStatus(socket)
     sendUserSettings(socket)
     sendAtisUpdate(socket)
+    sendEssaSepIndicators(socket)
     sendConfigList(socket)
     sendControllers(socket)
     // Trash survives store.clear(); push so reconnect restores the list without opening the dialog

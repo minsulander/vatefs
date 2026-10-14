@@ -311,6 +311,58 @@ async function putRemote(
     return true
 }
 
+/**
+ * Push ESSA SEP/DLV/DEP GAP airport meta for Stripview (ESOS APP/DEP).
+ * Caller must gate on TWR role + essaRoles mode.
+ */
+let lastPushedEssaSepJson = ""
+
+export async function pushEssaSepMetaToRemote(indicators: {
+    sep: string
+    dlv: string
+    depGap: string
+}): Promise<boolean> {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return false
+    const airports = getAirports().map((a) => a.toUpperCase())
+    if (!airports.includes("ESSA")) return false
+    const payload = {
+        essaSep: {
+            sep: indicators.sep ?? "",
+            dlv: indicators.dlv ?? "",
+            depGap: indicators.depGap ?? "",
+        },
+    }
+    const json = JSON.stringify(payload)
+    if (json === lastPushedEssaSepJson) return true
+    const base = baseUrl()
+    if (!base) return false
+    const realm = resolveRealm(settings)
+    const url = `${base}/efs/sync/${realm}/ESSA/meta`
+    const cid = settings.vatsimCid.trim()
+    let result = await fetchJson(url, {
+        method: "PUT",
+        cid,
+        body: json,
+    })
+    if (result.status === 429) {
+        await new Promise((r) => setTimeout(r, 250))
+        result = await fetchJson(url, {
+            method: "PUT",
+            cid,
+            body: json,
+        })
+    }
+    if (!result.ok) {
+        console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
+        noteAuthFailure(result.status, result.json?.error)
+        return false
+    }
+    lastPushedEssaSepJson = json
+    noteSuccess()
+    return true
+}
+
 /** Push strip including explicit QNH/ATIS clear (null). Requires strip sync. */
 export async function pushStripFlagsToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()

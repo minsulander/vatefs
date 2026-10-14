@@ -348,19 +348,36 @@
 
       <!-- Right chrome (L→R): SEP/DLV/GAP (ESSA) · ATIS · QNH · OK/OFF · Fullscreen -->
       <div class="top-right-chrome">
-        <!-- SEP/DLV/DEP GAP — ESSA roles only (not 1/2RWY4BAY, paper, or RTC) -->
-        <div v-if="efs.essaRolesMode" class="top-sep-group" title="Separation">
-          <div class="top-sep-cell">
+        <!-- SEP/DLV/DEP GAP — ESSA roles; TWR can edit, GND/CD view-only -->
+        <div
+          v-if="efs.essaRolesMode"
+          class="top-sep-group"
+          :title="canEditSepIndicators ? 'Separation (TWR: click to cycle; ends with auto)' : 'Separation (information only — managed by TWR)'"
+        >
+          <div
+            class="top-sep-cell"
+            :class="{ 'is-editable': canEditSepIndicators, 'is-overridden': efs.isEssaSepOverrideActive('sep') }"
+            @click="onSepFieldClick('sep')"
+          >
             <span class="top-sep-lbl">SEP</span>
-            <span class="top-sep-val">{{ sepIndicators.sep }}</span>
+            <span class="top-sep-val">{{ sepIndicators.sep || '—' }}</span>
           </div>
-          <div class="top-sep-cell" title="Delivery separation TWR→APP">
+          <div
+            class="top-sep-cell"
+            :class="{ 'is-editable': canEditSepIndicators, 'is-overridden': efs.isEssaSepOverrideActive('dlv') }"
+            title="Delivery separation APP→TWR"
+            @click="onSepFieldClick('dlv')"
+          >
             <span class="top-sep-lbl">DLV</span>
-            <span class="top-sep-val">{{ sepIndicators.dlv }}</span>
+            <span class="top-sep-val">{{ sepIndicators.dlv || '—' }}</span>
           </div>
-          <div class="top-sep-cell">
+          <div
+            class="top-sep-cell"
+            :class="{ 'is-editable': canEditSepIndicators, 'is-overridden': efs.isEssaSepOverrideActive('depGap') }"
+            @click="onSepFieldClick('depGap')"
+          >
             <span class="top-sep-lbl">DEP GAP</span>
-            <span class="top-sep-val">{{ sepIndicators.depGap }}</span>
+            <span class="top-sep-val">{{ sepIndicators.depGap || '—' }}</span>
           </div>
         </div>
 
@@ -1188,12 +1205,16 @@ function onTopQnhClick() {
   efs.acknowledgeQnh(apt)
 }
 
-/** Placeholder separation cells (SAAB-style) until live values are wired */
-const sepIndicators = computed(() => ({
-  sep: '2.5 nm',
-  dlv: '2.5 nm',
-  depGap: '',
-}))
+/** SEP (ARR SCC/radar) · DLV (APP→TWR) · DEP GAP (single-RWY only) */
+const sepIndicators = computed(() => efs.essaSepIndicators)
+
+/** Any TWR role may edit; GND/CD are information-only */
+const canEditSepIndicators = computed(() => hasTwrRole.value)
+
+function onSepFieldClick(field: 'sep' | 'dlv' | 'depGap') {
+  if (!canEditSepIndicators.value) return
+  efs.cycleEssaSepField(field)
+}
 
 function isRtcConfig(config: ConfigInfo): boolean {
   return config.name === 'RTC' || config.file.toLowerCase().includes('multiairport')
@@ -1484,7 +1505,9 @@ span.essa-status-btn.esgg-roles-readonly {
   align-items: stretch;
   gap: 0;
   border: 1px solid #4a4e54;
-  background: #1a1c20;
+  background: var(--efs-bay-bg, #3b3c41);
+  border-radius: calc(4px * var(--tb));
+  overflow: hidden;
 }
 
 .top-sep-cell {
@@ -1496,10 +1519,25 @@ span.essa-status-btn.esgg-roles-readonly {
   padding: calc(2px * var(--tb)) calc(4px * var(--tb));
   border-right: 1px solid #4a4e54;
   box-sizing: border-box;
+  user-select: none;
 }
 
 .top-sep-cell:last-child {
   border-right: none;
+}
+
+.top-sep-cell.is-editable {
+  cursor: pointer;
+}
+
+.top-sep-cell.is-editable:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.top-sep-cell.is-overridden .top-sep-val {
+  color: #fbbf24;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .top-sep-lbl {

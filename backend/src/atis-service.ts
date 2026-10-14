@@ -1,12 +1,17 @@
 /**
- * VATSIM ATIS + VatIRIS METAR polling service.
+ * VATSIM ATIS + VatIRIS METAR / WX polling service.
  * ATIS letter/QNH from VATSIM Data API; QNH falls back to VatIRIS METAR
  * (same source VatIRIS uses when no ATIS/WX is online).
+ * ESSA RWY SCC from VatIRIS WX.AWOS (`/wx?viewId=arlanda-overview.html`).
  */
+
+import { parseEssaSccFromWxText } from "@vatefs/common"
 
 const VATSIM_DATA_URL = "https://data.vatsim.net/v3/vatsim-data.json"
 /** VatIRIS METAR proxy — same endpoint as VatIRIS metar store */
 const VATIRIS_METAR_URL = "https://api.vatiris.se/metar"
+/** VatIRIS WX.AWOS HTML (SCC lines) — same as VatIRIS wx store */
+const VATIRIS_WX_URL = "https://api.vatiris.se/wx?viewId=arlanda-overview.html"
 
 interface VatsimAtisEntry {
     cid: number
@@ -88,10 +93,15 @@ export class AtisService {
     private essaAtisCache: { arrLetter?: string; depLetter?: string; qnh?: number } = {}
     /** Latest METAR QNH from VatIRIS (fallback when ATIS has no QNH) */
     private metarQnh = new Map<string, number>()
+    /** Latest raw METAR line per airport (for ESSA IMC / SEP indicators) */
+    private metarText = new Map<string, string>()
+    /** ESSA RWY SCC thirds keyed by AWOS designator (01L / 01R / 08) */
+    private essaScc = new Map<string, [number, number, number]>()
     private onUpdate: () => void
     private pollIntervalMs: number
     private lastFetchOk = false
     private lastMetarOk = false
+    private lastWxOk = false
     private started = false
 
     constructor(options: { onUpdate: () => void; pollIntervalMs?: number }) {
@@ -155,6 +165,16 @@ export class AtisService {
         }
     }
 
+    /** Latest METAR observation text for airport (newest line), if any. */
+    getMetarText(airport: string): string | undefined {
+        return this.metarText.get(airport.toUpperCase())
+    }
+
+    /** ESSA SCC map from WX.AWOS (designators 01L / 01R / 08). */
+    getEssaScc(): Map<string, [number, number, number]> {
+        return new Map(this.essaScc)
+    }
+
     private schedulePoll(): void {
         if (this.pollTimer) {
             clearTimeout(this.pollTimer)
@@ -176,6 +196,17 @@ export class AtisService {
         } catch (err) {
             this.lastMetarOk = false
             console.warn(`[ATIS] Error fetching VatIRIS METAR: ${err instanceof Error ? err.message : err}`)
+        }
+
+        if (this.airports.includes("ESSA")) {
+            try {
+                changed = (await this.pollEssaWxScc()) || changed
+            } catch (err) {
+                this.lastWxOk = false
+                console.warn(
+                    `[ATIS] Error fetching VatIRIS WX: ${err instanceof Error ? err.message : err}`,
+                )
+            }
         }
 
         if (changed) {
@@ -231,7 +262,8 @@ export class AtisService {
 
         // Newest observation is first per ICAO in the response
         const seen = new Set<string>()
-        const next = new Map<string, number>()
+        const nextQnh = new Map<string, number>()
+        const nextText = new Map<string, string>()
         for (const section of text.split(/\n+/)) {
             const line = section.trim()
             const m = line.match(/^METAR\s+(\w{4})\b/i)
@@ -239,13 +271,14 @@ export class AtisService {
             const icao = m[1].toUpperCase()
             if (seen.has(icao)) continue
             seen.add(icao)
+            nextText.set(icao, line)
             const qnh = extractQnhFromText(line)
-            if (qnh != null) next.set(icao, qnh)
+            if (qnh != null) nextQnh.set(icao, qnh)
         }
 
         let changed = false
         for (const airport of this.airports) {
-            const q = next.get(airport)
+            const q = nextQnh.get(airport)
             const prev = this.metarQnh.get(airport)
             if (q != null) {
                 if (prev !== q) {
@@ -256,11 +289,57 @@ export class AtisService {
                 this.metarQnh.delete(airport)
                 changed = true
             }
+
+            const mt = nextText.get(airport)
+            const prevText = this.metarText.get(airport)
+            if (mt != null) {
+                if (prevText !== mt) {
+                    this.metarText.set(airport, mt)
+                    changed = true
+                }
+            } else if (prevText != null) {
+                this.metarText.delete(airport)
+                changed = true
+            }
         }
         if (changed) {
             console.log(
                 `[ATIS] METAR QNH: ${[...this.metarQnh.entries()].map(([a, q]) => `${a}=${q}`).join(" ")}`,
             )
+        }
+        return changed
+    }
+
+    /** ESSA WX.AWOS — parse SCC for 01L / 01R / 08 (opposite ends map in common). */
+    private async pollEssaWxScc(): Promise<boolean> {
+        const response = await fetch(VATIRIS_WX_URL)
+        if (!response.ok) {
+            console.warn(`[ATIS] VatIRIS WX failed: ${response.status}`)
+            this.lastWxOk = false
+            return false
+        }
+        const html = await response.text()
+        this.lastWxOk = true
+        const next = parseEssaSccFromWxText(html)
+
+        let changed = false
+        if (next.size !== this.essaScc.size) {
+            changed = true
+        } else {
+            for (const [k, v] of next) {
+                const prev = this.essaScc.get(k)
+                if (!prev || prev[0] !== v[0] || prev[1] !== v[1] || prev[2] !== v[2]) {
+                    changed = true
+                    break
+                }
+            }
+        }
+        if (changed) {
+            this.essaScc = next
+            const summary = [...next.entries()]
+                .map(([d, t]) => `${d}=${t.join("")}`)
+                .join(" ")
+            console.log(`[ATIS] ESSA SCC: ${summary || "(none)"}`)
         }
         return changed
     }

@@ -6,7 +6,7 @@
  */
 
 import type { Pool } from "pg"
-import type { ScribbleStore, StripMeta } from "./routes.js"
+import type { AirportMetaPayload, ScribbleStore, StripMeta } from "./routes.js"
 
 function mergeStripMeta(prev: StripMeta | null, incoming: StripMeta | null): StripMeta | null {
   if (!incoming) return prev
@@ -119,6 +119,63 @@ export function createPgScribbleStore(pool: Pool): ScribbleStore {
       // Soft-clear: empty strokes + null meta (matches closed-beta DELETE semantics)
       await this.upsert(realm, airport, stripKey, [], null, cid)
     },
+
+    async getAirportMeta(realm, airport) {
+      const { rows } = await pool.query(
+        `SELECT meta, updated_at, updated_by_cid
+         FROM efs_airport_meta
+         WHERE realm = $1 AND airport = $2`,
+        [realm, airport],
+      )
+      const r = rows[0] as
+        | { meta: AirportMetaPayload; updated_at: Date | string; updated_by_cid: string | number | null }
+        | undefined
+      if (!r) return null
+      const updatedAt =
+        r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at)
+      const cid =
+        r.updated_by_cid == null
+          ? null
+          : typeof r.updated_by_cid === "number"
+            ? r.updated_by_cid
+            : Number(r.updated_by_cid)
+      return {
+        meta: r.meta && typeof r.meta === "object" ? r.meta : {},
+        updatedAt,
+        updatedByCid: Number.isFinite(cid) ? (cid as number) : null,
+      }
+    },
+
+    async upsertAirportMeta(realm, airport, meta, cid) {
+      const { rows } = await pool.query(
+        `INSERT INTO efs_airport_meta (realm, airport, meta, updated_at, updated_by_cid)
+         VALUES ($1, $2, $3::jsonb, NOW(), $4)
+         ON CONFLICT (realm, airport) DO UPDATE SET
+           meta = EXCLUDED.meta,
+           updated_at = EXCLUDED.updated_at,
+           updated_by_cid = EXCLUDED.updated_by_cid
+         RETURNING meta, updated_at, updated_by_cid`,
+        [realm, airport, JSON.stringify(meta), cid],
+      )
+      const r = rows[0] as {
+        meta: AirportMetaPayload
+        updated_at: Date | string
+        updated_by_cid: string | number | null
+      }
+      const updatedAt =
+        r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at)
+      const outCid =
+        r.updated_by_cid == null
+          ? null
+          : typeof r.updated_by_cid === "number"
+            ? r.updated_by_cid
+            : Number(r.updated_by_cid)
+      return {
+        meta: r.meta && typeof r.meta === "object" ? r.meta : meta,
+        updatedAt,
+        updatedByCid: Number.isFinite(outCid) ? (outCid as number) : null,
+      }
+    },
   }
 }
 
@@ -126,6 +183,14 @@ export function createPgScribbleStore(pool: Pool): ScribbleStore {
 export async function purgeExpiredScribbles(pool: Pool, olderThanHours = 1): Promise<number> {
   const { rowCount } = await pool.query(
     `DELETE FROM efs_scribble WHERE updated_at < NOW() - ($1::text || ' hours')::interval`,
+    [String(olderThanHours)],
+  )
+  return rowCount ?? 0
+}
+
+export async function purgeExpiredAirportMeta(pool: Pool, olderThanHours = 1): Promise<number> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM efs_airport_meta WHERE updated_at < NOW() - ($1::text || ' hours')::interval`,
     [String(olderThanHours)],
   )
   return rowCount ?? 0

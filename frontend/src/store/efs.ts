@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind, EssaSepIndicators, EssaSepOverrides, EssaSepField } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
@@ -8,6 +8,9 @@ import {
     DEFAULT_UI_SETTINGS,
     isAutoLopSsrMode,
     resolveEssaRwyConfigId,
+    computeEssaSepIndicators,
+    mergeEssaSepIndicators,
+    nextEssaSepCycleValue,
     extractTmaExitPoint,
     formatAhdVectorSidDisplay,
     formatSidForDisplay,
@@ -359,6 +362,14 @@ export const useEfsStore = defineStore("efs", () => {
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
 
+    /** ESSA WX SCC + METAR for SEP/DLV/DEP GAP (from server) */
+    const essaSepScc = ref<Record<string, [number, number, number]>>({})
+    const essaSepMetar = ref<string | null>(null)
+    /** Last server-computed values (fallback before local recompute) */
+    const essaSepFromServer = ref<EssaSepIndicators | null>(null)
+    /** TWR-managed overrides (synced); absent key = auto */
+    const essaSepOverrides = ref<EssaSepOverrides>({})
+
     /** Last seen ATIS letters + last acknowledged QNH per airport */
     type AtisAckSnapshot = {
         arrAtis?: string
@@ -511,6 +522,54 @@ export const useEfsStore = defineStore("efs", () => {
             preferConfigId: essaRwyAutoPreferId.value,
         })
     })
+
+    /**
+     * ESSA top-bar SEP / DLV / DEP GAP — recomputed with local RWY config lock +
+     * SCC/METAR from server, then TWR overrides applied.
+     */
+    const essaSepIndicators = computed<EssaSepIndicators>(() => {
+        const { arr, dep } = essaEsRunways.value
+        const sccMap = new Map<string, [number, number, number]>()
+        for (const [k, v] of Object.entries(essaSepScc.value)) {
+            if (Array.isArray(v) && v.length === 3) sccMap.set(k, v)
+        }
+        const auto =
+            sccMap.size === 0 && !essaSepMetar.value && essaSepFromServer.value
+                ? essaSepFromServer.value
+                : computeEssaSepIndicators({
+                      configId: essaRwyConfigIdResolved.value,
+                      arrRunways: arr,
+                      depRunways: dep,
+                      sccByDesignator: sccMap,
+                      metar: essaSepMetar.value,
+                  })
+        return mergeEssaSepIndicators(auto, essaSepOverrides.value)
+    })
+
+    function isEssaSepOverrideActive(field: EssaSepField): boolean {
+        return essaSepOverrides.value[field] !== undefined
+    }
+
+    /** TWR: cycle SEP/DLV/DEP GAP preset (ends with clear → auto). */
+    function cycleEssaSepField(field: EssaSepField) {
+        if (!essaRolesMode.value) return
+        const canEdit = essaRoles.value.some(
+            (r) => r === 'TWR-E' || r === 'TWR-W' || r.startsWith('TWR')
+        )
+        if (!canEdit) return
+        const effective = essaSepIndicators.value[field]
+        const hasOverride = isEssaSepOverrideActive(field)
+        const next = nextEssaSepCycleValue(field, effective, hasOverride)
+        // Optimistic local apply
+        const nextOverrides = { ...essaSepOverrides.value }
+        if (next === null) delete nextOverrides[field]
+        else nextOverrides[field] = next
+        essaSepOverrides.value = nextOverrides
+        sendMessage({
+            type: 'setEssaSepIndicators',
+            [field]: next,
+        })
+    }
 
     // Configuration
     const availableConfigs = ref<ConfigInfo[]>([])
@@ -806,6 +865,18 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'atisUpdate':
                         applyAtisUpdate(message.airports)
                         break
+                    case 'essaSepIndicators': {
+                        essaSepScc.value = message.scc ?? {}
+                        essaSepMetar.value = message.metar ?? null
+                        essaSepOverrides.value = { ...(message.overrides ?? {}) }
+                        // Merged display values — used only when local SCC/METAR unavailable
+                        essaSepFromServer.value = {
+                            sep: message.sep,
+                            dlv: message.dlv,
+                            depGap: message.depGap,
+                        }
+                        break
+                    }
                     case 'aupR16': {
                         const { type: _type, ...status } = message
                         aupR16.value = status
@@ -2984,6 +3055,10 @@ export const useEfsStore = defineStore("efs", () => {
         essaRwyConfigId,
         essaRwyConfigManual,
         essaRwyConfigIdResolved,
+        essaSepIndicators,
+        essaSepOverrides,
+        isEssaSepOverrideActive,
+        cycleEssaSepField,
         aupR16,
         activeRwyFlags,
         activeRwyFlagsVersion,

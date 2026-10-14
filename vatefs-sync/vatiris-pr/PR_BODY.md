@@ -5,14 +5,16 @@
 - Does **not** invent flight strips — those still come from EuroScope on each PC
 - Auth: `X-Vatsim-Cid` + CID must exist in `useraccount` (no OAuth), as agreed
 - Postgres table + ~1h TTL; rate limits / payload caps
+- Airport meta: `GET/PUT /efs/sync/:realm/:airport/meta` with `{ essaSep: { sep, dlv, depGap } }` for Stripview (ESOS APP/DEP)
 - Closed-beta tested via Cloudflare Tunnel + allowlist host
 
 ## Test plan
 
-- [ ] Migration applies cleanly
+- [ ] Migration applies cleanly (`efs_scribble` + `efs_airport_meta`)
 - [ ] GET/PUT/DELETE with valid CID in useraccount
 - [ ] 403 when CID has no useraccount
 - [ ] Room isolation: live vs sweatbox, ESGG vs ESSA
 - [ ] Strokes sync for an existing flight strip; missing flights are not created
 - [ ] Drag placement converges for two controllers who both have the strip
+- [ ] PUT/GET `…/ESSA/meta` stores and returns `essaSep`; WS/SSE fans out `type: "meta"`
 - [ ] VatEFS Settings custom URL → `https://backend.vatiris.se` (or leave custom for self-host)

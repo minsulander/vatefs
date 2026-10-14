@@ -5,11 +5,14 @@ import path from "path"
 import { fileURLToPath } from "url"
 import { WebSocketServer } from "ws"
 import {
+  getAirportMeta,
   initDb,
   listSince,
   purgeExpired,
   remove,
   upsert,
+  upsertAirportMeta,
+  validateAirportMeta,
   validateStrokes,
   type StripMeta,
 } from "./db.js"
@@ -109,6 +112,73 @@ efs.get("/sync/:realm/:airport/stream", (req, res) => {
   subscribeRoom(realm, airport, cid, res)
   console.log(`[vatefs-sync] SSE subscribe ${realm}/${airport} cid=${cid}`)
 })
+
+/** Airport meta (SEP/DLV/DEP GAP) — must be registered before :stripKey. */
+efs.get(
+  "/sync/:realm/:airport/meta",
+  rateLimit({ windowMs: 60_000, max: 360 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const row = getAirportMeta(realm, airport)
+    if (!row) {
+      res.json({
+        meta: {},
+        updatedAt: new Date(0).toISOString(),
+        updatedByCid: null,
+      })
+      return
+    }
+    res.json({
+      meta: row.meta,
+      updatedAt: row.updatedAt,
+      updatedByCid: row.updatedByCid,
+    })
+  },
+)
+
+efs.put(
+  "/sync/:realm/:airport/meta",
+  rateLimit({ windowMs: 60_000, max: 120 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const checked = validateAirportMeta(req.body)
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    const cid = getCid(req)
+    const row = upsertAirportMeta(realm, airport, checked.meta, cid)
+    publishRoom(
+      realm,
+      airport,
+      {
+        type: "meta",
+        meta: row.meta,
+        updatedAt: row.updatedAt,
+        updatedByCid: row.updatedByCid,
+      },
+      cid,
+    )
+    res.json({
+      ok: true,
+      meta: row.meta,
+      updatedAt: row.updatedAt,
+      updatedByCid: row.updatedByCid,
+    })
+  },
+)
 
 efs.put(
   "/sync/:realm/:airport/:stripKey",

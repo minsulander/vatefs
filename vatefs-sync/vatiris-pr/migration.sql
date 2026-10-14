@@ -15,5 +15,16 @@ CREATE TABLE IF NOT EXISTS efs_scribble (
 CREATE INDEX IF NOT EXISTS efs_scribble_room_updated_idx
   ON efs_scribble (realm, airport, updated_at);
 
+-- Airport-scoped meta (ESSA SEP/DLV/DEP GAP for Stripview, etc.)
+CREATE TABLE IF NOT EXISTS efs_airport_meta (
+  realm TEXT NOT NULL,
+  airport TEXT NOT NULL,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by_cid BIGINT,
+  PRIMARY KEY (realm, airport)
+);
+
 -- Optional: purge rows older than 1h via cron / scheduled job:
 -- DELETE FROM efs_scribble WHERE updated_at < NOW() - INTERVAL '1 hour';
+-- DELETE FROM efs_airport_meta WHERE updated_at < NOW() - INTERVAL '1 hour';

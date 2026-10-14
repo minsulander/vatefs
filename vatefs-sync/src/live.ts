@@ -4,18 +4,25 @@
 
 import type { Response } from "express"
 import type { WebSocket } from "ws"
-import type { StripMeta } from "./db.js"
+import type { AirportMetaPayload, StripMeta } from "./db.js"
 
-export type LiveUpdate = {
-  type: "scribble"
-  stripKey: string
-  strokes: unknown[]
-  strip?: StripMeta
-  updatedAt: string
-  updatedByCid: number | null
-  /** True when peer DELETEd the strip record (note/vehicle remove). */
-  deleted?: boolean
-}
+export type LiveUpdate =
+  | {
+      type: "scribble"
+      stripKey: string
+      strokes: unknown[]
+      strip?: StripMeta
+      updatedAt: string
+      updatedByCid: number | null
+      /** True when peer DELETEd the strip record (note/vehicle remove). */
+      deleted?: boolean
+    }
+  | {
+      type: "meta"
+      meta: AirportMetaPayload
+      updatedAt: string
+      updatedByCid: number | null
+    }
 
 type SseClient = { kind: "sse"; res: Response; cid: number }
 type WsClient = { kind: "ws"; ws: WebSocket; cid: number }
@@ -104,7 +111,8 @@ export function subscribeRoomWs(
 export function publishRoom(realm: string, airport: string, update: LiveUpdate, exceptCid?: number) {
   const set = rooms.get(roomKey(realm, airport))
   if (!set?.size) return
-  const ssePayload = `event: scribble\ndata: ${JSON.stringify(update)}\n\n`
+  const eventName = update.type === "meta" ? "meta" : "scribble"
+  const ssePayload = `event: ${eventName}\ndata: ${JSON.stringify(update)}\n\n`
   const wsPayload = JSON.stringify(update)
   for (const client of [...set]) {
     if (exceptCid != null && client.cid === exceptCid) continue

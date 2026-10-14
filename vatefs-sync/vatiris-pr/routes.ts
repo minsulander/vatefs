@@ -32,11 +32,34 @@ export type StripMeta = {
   std?: string
 }
 
+/** ESSA SEP/DLV/DEP GAP (and future airport-scoped fields) for Stripview. */
+export type EssaSepMeta = {
+  sep: string
+  dlv: string
+  depGap: string
+}
+
+export type AirportMetaPayload = {
+  essaSep?: EssaSepMeta
+}
+
 export type ScribbleDeps = {
   /** Return true if CID may use VatEFS Sync (VatIRIS: useraccount exists). */
   userExists: (cid: number) => boolean | Promise<boolean>
   /** Optional: inject Postgres helpers; if omitted, use in-memory (tests only). */
   store?: ScribbleStore
+  /** Optional live fanout (VatIRIS WS/SSE). */
+  publishRoom?: (
+    realm: string,
+    airport: string,
+    update: {
+      type: "meta"
+      meta: AirportMetaPayload
+      updatedAt: string
+      updatedByCid: number | null
+    },
+    exceptCid?: number | null,
+  ) => void
 }
 
 export type ScribbleStore = {
@@ -64,6 +87,51 @@ export type ScribbleStore = {
     cid: number,
   ) => Promise<{ stripKey: string; updatedAt: string; updatedByCid: number | null }>
   remove: (realm: string, airport: string, stripKey: string, cid: number) => Promise<void>
+  getAirportMeta: (
+    realm: string,
+    airport: string,
+  ) => Promise<{
+    meta: AirportMetaPayload
+    updatedAt: string
+    updatedByCid: number | null
+  } | null>
+  upsertAirportMeta: (
+    realm: string,
+    airport: string,
+    meta: AirportMetaPayload,
+    cid: number,
+  ) => Promise<{
+    meta: AirportMetaPayload
+    updatedAt: string
+    updatedByCid: number | null
+  }>
+}
+
+export function validateAirportMeta(
+  raw: unknown,
+): { ok: true; meta: AirportMetaPayload } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "meta must be an object" }
+  }
+  const body = raw as { essaSep?: unknown }
+  const out: AirportMetaPayload = {}
+  if (body.essaSep !== undefined) {
+    if (!body.essaSep || typeof body.essaSep !== "object" || Array.isArray(body.essaSep)) {
+      return { ok: false, error: "essaSep must be an object" }
+    }
+    const s = body.essaSep as Record<string, unknown>
+    if (typeof s.sep !== "string" || typeof s.dlv !== "string" || typeof s.depGap !== "string") {
+      return { ok: false, error: "essaSep requires sep, dlv, depGap strings" }
+    }
+    if (s.sep.length > 32 || s.dlv.length > 32 || s.depGap.length > 32) {
+      return { ok: false, error: "essaSep field too long" }
+    }
+    out.essaSep = { sep: s.sep, dlv: s.dlv, depGap: s.depGap }
+  }
+  if (!out.essaSep) {
+    return { ok: false, error: "essaSep required" }
+  }
+  return { ok: true, meta: out }
 }
 
 const REALMS = new Set(["live", "sweatbox", "playback", "local"])
@@ -103,7 +171,12 @@ function memoryStore(): ScribbleStore {
       updatedByCid: number | null
     }
   >()
+  const airportMeta = new Map<
+    string,
+    { meta: AirportMetaPayload; updatedAt: string; updatedByCid: number | null }
+  >()
   const k = (realm: string, airport: string, stripKey: string) => `${realm}|${airport}|${stripKey}`
+  const mk = (realm: string, airport: string) => `${realm}|${airport}`
   return {
     async listSince(realm, airport, since) {
       const out = []
@@ -130,6 +203,18 @@ function memoryStore(): ScribbleStore {
     },
     async remove(realm, airport, stripKey, cid) {
       await this.upsert(realm, airport, stripKey, [], null, cid)
+    },
+    async getAirportMeta(realm, airport) {
+      return airportMeta.get(mk(realm, airport)) ?? null
+    },
+    async upsertAirportMeta(realm, airport, meta, cid) {
+      const row = {
+        meta,
+        updatedAt: new Date().toISOString(),
+        updatedByCid: cid,
+      }
+      airportMeta.set(mk(realm, airport), row)
+      return row
     },
   }
 }
@@ -181,6 +266,63 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
       if (row.updatedAt > updatedAt) updatedAt = row.updatedAt
     }
     res.json({ updatedAt: updatedAt || new Date(0).toISOString(), strips })
+  })
+
+  /** Airport meta — register before :stripKey so "meta" is not treated as a strip key. */
+  router.get("/sync/:realm/:airport/meta", async (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    if (!REALMS.has(realm) || !/^[A-Z0-9]{3,4}$/.test(airport)) {
+      res.status(400).json({ error: "invalid realm or airport" })
+      return
+    }
+    const row = await store.getAirportMeta(realm, airport)
+    if (!row) {
+      res.json({
+        meta: {},
+        updatedAt: new Date(0).toISOString(),
+        updatedByCid: null,
+      })
+      return
+    }
+    res.json({
+      meta: row.meta,
+      updatedAt: row.updatedAt,
+      updatedByCid: row.updatedByCid,
+    })
+  })
+
+  router.put("/sync/:realm/:airport/meta", async (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    if (!REALMS.has(realm) || !/^[A-Z0-9]{3,4}$/.test(airport)) {
+      res.status(400).json({ error: "invalid realm or airport" })
+      return
+    }
+    const checked = validateAirportMeta(req.body)
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    const cid = (req as Request & { cid: number }).cid
+    const row = await store.upsertAirportMeta(realm, airport, checked.meta, cid)
+    deps.publishRoom?.(
+      realm,
+      airport,
+      {
+        type: "meta",
+        meta: row.meta,
+        updatedAt: row.updatedAt,
+        updatedByCid: row.updatedByCid,
+      },
+      cid,
+    )
+    res.json({
+      ok: true,
+      meta: row.meta,
+      updatedAt: row.updatedAt,
+      updatedByCid: row.updatedByCid,
+    })
   })
 
   router.put("/sync/:realm/:airport/:stripKey", async (req, res) => {

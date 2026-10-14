@@ -4,17 +4,24 @@
 
 import type { Response } from "express"
 import type { WebSocket } from "ws"
-import type { StripMeta } from "./routes.js"
+import type { AirportMetaPayload, StripMeta } from "./routes.js"
 
-export type LiveUpdate = {
-  type: "scribble"
-  stripKey: string
-  strokes: unknown[]
-  strip?: StripMeta
-  updatedAt: string
-  updatedByCid: number | null
-  deleted?: boolean
-}
+export type LiveUpdate =
+  | {
+      type: "scribble"
+      stripKey: string
+      strokes: unknown[]
+      strip?: StripMeta
+      updatedAt: string
+      updatedByCid: number | null
+      deleted?: boolean
+    }
+  | {
+      type: "meta"
+      meta: AirportMetaPayload
+      updatedAt: string
+      updatedByCid: number | null
+    }
 
 type SseClient = { kind: "sse"; res: Response; cid: number }
 type WsClient = { kind: "ws"; ws: WebSocket; cid: number }
@@ -108,13 +115,14 @@ export function publishRoom(
   const set = rooms.get(roomKey(realm, airport))
   if (!set || set.size === 0) return
   const payload = JSON.stringify(update)
+  const eventName = update.type === "meta" ? "meta" : "scribble"
   for (const c of set) {
     if (exceptCid != null && c.cid === exceptCid) continue
     try {
       if (c.kind === "ws") {
         if (c.ws.readyState === c.ws.OPEN) c.ws.send(payload)
       } else {
-        c.res.write(`data: ${payload}\n\n`)
+        c.res.write(`event: ${eventName}\ndata: ${payload}\n\n`)
         ;(c.res as typeof c.res & { flush?: () => void }).flush?.()
       }
     } catch {

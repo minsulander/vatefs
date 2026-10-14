@@ -35,23 +35,43 @@ export interface ScribbleRow {
   updatedByCid: number | null
 }
 
+/** Airport-scoped meta (e.g. ESSA SEP/DLV/DEP GAP for Stripview). */
+export interface EssaSepMeta {
+  sep: string
+  dlv: string
+  depGap: string
+}
+
+export interface AirportMetaPayload {
+  essaSep?: EssaSepMeta
+}
+
+export interface AirportMetaRow {
+  realm: string
+  airport: string
+  meta: AirportMetaPayload
+  updatedAt: string
+  updatedByCid: number | null
+}
+
 /** Unused room entries expire after 1h (return flights within 1h keep ink). */
 const TTL_MS = 60 * 60 * 1000
 const MAX_STROKES = 40
 const MAX_POINTS_CHARS = 8000
 const MAX_BODY_HINT = 256 * 1024
 
-type StoreFile = { rows: ScribbleRow[] }
+type StoreFile = { rows: ScribbleRow[]; airportMeta?: AirportMetaRow[] }
 
 let dataPath = ""
 let rows: ScribbleRow[] = []
+let airportMetaRows: AirportMetaRow[] = []
 
 function keyOf(r: Pick<ScribbleRow, "realm" | "airport" | "stripKey">) {
   return `${r.realm}\0${r.airport}\0${r.stripKey}`
 }
 
 function persist() {
-  const payload: StoreFile = { rows }
+  const payload: StoreFile = { rows, airportMeta: airportMetaRows }
   fs.writeFileSync(dataPath, JSON.stringify(payload), "utf-8")
 }
 
@@ -66,11 +86,14 @@ export function initDb(dataDir: string) {
     try {
       const parsed = JSON.parse(fs.readFileSync(dataPath, "utf-8")) as StoreFile
       rows = Array.isArray(parsed.rows) ? parsed.rows : []
+      airportMetaRows = Array.isArray(parsed.airportMeta) ? parsed.airportMeta : []
     } catch {
       rows = []
+      airportMetaRows = []
     }
   } else {
     rows = []
+    airportMetaRows = []
     persist()
   }
 }
@@ -78,11 +101,60 @@ export function initDb(dataDir: string) {
 export function purgeExpired() {
   const cutoff = new Date(Date.now() - TTL_MS).toISOString()
   const before = rows.length
+  const beforeMeta = airportMetaRows.length
   rows = rows.filter((r) => r.updatedAt >= cutoff)
-  if (rows.length !== before) {
+  airportMetaRows = airportMetaRows.filter((r) => r.updatedAt >= cutoff)
+  if (rows.length !== before || airportMetaRows.length !== beforeMeta) {
     persist()
-    console.log(`[vatefs-sync] purged ${before - rows.length} expired row(s)`)
+    const n = before - rows.length + (beforeMeta - airportMetaRows.length)
+    console.log(`[vatefs-sync] purged ${n} expired row(s)`)
   }
+}
+
+export function validateAirportMeta(
+  raw: unknown,
+): { ok: true; meta: AirportMetaPayload } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "meta must be an object" }
+  }
+  const body = raw as { essaSep?: unknown }
+  const out: AirportMetaPayload = {}
+  if (body.essaSep !== undefined) {
+    if (!body.essaSep || typeof body.essaSep !== "object" || Array.isArray(body.essaSep)) {
+      return { ok: false, error: "essaSep must be an object" }
+    }
+    const s = body.essaSep as Record<string, unknown>
+    if (typeof s.sep !== "string" || typeof s.dlv !== "string" || typeof s.depGap !== "string") {
+      return { ok: false, error: "essaSep requires sep, dlv, depGap strings" }
+    }
+    if (s.sep.length > 32 || s.dlv.length > 32 || s.depGap.length > 32) {
+      return { ok: false, error: "essaSep field too long" }
+    }
+    out.essaSep = { sep: s.sep, dlv: s.dlv, depGap: s.depGap }
+  }
+  if (!out.essaSep) {
+    return { ok: false, error: "essaSep required" }
+  }
+  return { ok: true, meta: out }
+}
+
+export function getAirportMeta(realm: string, airport: string): AirportMetaRow | null {
+  return airportMetaRows.find((r) => r.realm === realm && r.airport === airport) ?? null
+}
+
+export function upsertAirportMeta(
+  realm: string,
+  airport: string,
+  meta: AirportMetaPayload,
+  cid: number,
+): AirportMetaRow {
+  const updatedAt = new Date().toISOString()
+  const idx = airportMetaRows.findIndex((r) => r.realm === realm && r.airport === airport)
+  const next: AirportMetaRow = { realm, airport, meta, updatedAt, updatedByCid: cid }
+  if (idx >= 0) airportMetaRows[idx] = next
+  else airportMetaRows.push(next)
+  persist()
+  return next
 }
 
 export function validateStrokes(raw: unknown): { ok: true; strokes: unknown[] } | { ok: false; error: string } {
