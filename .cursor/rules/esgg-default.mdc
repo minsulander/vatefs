@@ -1,0 +1,12 @@
+---
+description: Default new EFS behavior to ESGG paper unless user says otherwise
+alwaysApply: true
+---
+
+# ESGG-first defaults
+
+Unless the user explicitly says otherwise (e.g. ESSA, RTC, all configs, SAAB look):
+
+- Treat requested rules, UX, and placement behavior as **ESGG-only** (`data/config/esgg.yml`, `look: paper`).
+- Gate backend/frontend changes with paper look / ESGG config — do **not** change ESSA, multi-airport, or other bay configs by default.
+- Prefer overrides in `esgg.yml` or `look === 'paper'` checks over editing shared `common-rules.yml` behavior for everyone.
