@@ -71,11 +71,9 @@ import {
     isOfflineVatsimRealm,
     onConnectionTypeChanged,
     pushEssaSepMetaToRemote,
-    setStripviewLayoutProvider,
     scheduleStripviewLayoutPush,
     resolveRealm,
 } from "./vatefs-sync.js"
-import { buildEssaStripviewLayout } from "./essa-stripview-layout.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -1018,7 +1016,7 @@ function broadcastStrip(
     if (options?.cleanReprint) message.cleanReprint = true
     if (options?.playPrintAnim) message.playPrintAnim = true
     broadcast(message, options?.exclude)
-    // Bay order changed → refresh Strip TV columns (transferred→APP drop out)
+    // Full IRIS /order snapshot (transferred→APP omit stripKey)
     if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
 }
 
@@ -1370,7 +1368,7 @@ function sendEssaSepIndicators(socket: WebSocket) {
 function broadcastEssaSepIndicators() {
     const message = buildEssaSepIndicatorsMessage()
     if (message) broadcast(message)
-    // TWR publishes SEP to scribble-sync meta; TWR/GND publish Strip TV layout
+    // TWR → PUT …/meta { essaSep }; TWR/GND → PUT …/order
     if (message && canEditEssaSepIndicators()) {
         void pushEssaSepMetaToRemote({
             sep: message.sep,
@@ -1378,7 +1376,7 @@ function broadcastEssaSepIndicators() {
             depGap: message.depGap,
         })
     }
-    if (message && canPublishEssaStripview()) {
+    if (canPublishEssaStripview()) {
         scheduleStripviewLayoutPush()
     }
 }
@@ -3259,6 +3257,7 @@ initScribbleSync({
     getSettings: () => currentUiSettings,
     getConnectionType: () => lastConnectionType,
     getStripById: (id) => store.getStrip(id),
+    getAllStrips: () => store.getAllStrips(),
     getAirports: () => staticConfig.myAirports || [],
     onApplyRemote: applyRemoteScribble,
     onNeedVatIrisSignIn: (detail) => {
@@ -3267,21 +3266,11 @@ initScribbleSync({
     onRealmChanged: (realm) => {
         syncOnlineNetworkServices(realm)
     },
-})
-// Strip TV / APP: EFS order + SEP only (no ES status). Transferred→APP leave columns.
-setStripviewLayoutProvider(() => {
-    if (!canPublishEssaStripview()) return null
-    const ind = buildEssaSepIndicatorsMessage()
-    if (!ind) return null
-    return {
-        airport: "ESSA",
-        view: "DEP",
-        body: buildEssaStripviewLayout(
-            store.getAllStrips(),
-            { sep: ind.sep, dlv: ind.dlv, depGap: ind.depGap },
-            "ESSA",
-        ),
-    }
+    canPublishIrisOrder: () => canPublishEssaStripview(),
+    getEssaSepIndicators: () => {
+        const m = buildEssaSepIndicatorsMessage()
+        return m ? { sep: m.sep, dlv: m.dlv, depGap: m.depGap } : null
+    },
 })
 restartScribbleSyncPolling()
 syncOnlineNetworkServices()

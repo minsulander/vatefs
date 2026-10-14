@@ -1,40 +1,33 @@
 /**
- * Remote scribble / strip sync client (VatIRIS / closed-beta compatible REST API).
+ * Remote EFS sync client for VatIRIS — single allowed write set:
+ *   …/:stripKey · …/order · …/meta · optional …/heartbeat · …/ws?cid=
  *
- * Primary: push on event → WebSocket fanout (SSE is legacy; CF tunnels buffer it).
- * Safety: 15s poll + top-bar reload.
+ * No /sep, /strips/, or PUT /efs/:airport/:view.
+ * Does NOT publish EuroScope/ops status (IRIS esdata joins by callsign).
+ *
+ * Primary: push on event → WebSocket fanout. Safety: 15s poll + top-bar reload.
  */
 
 import type { FeedStatusItem, FlightStrip, ScribbleStrokePayload, UiSettings } from "@vatefs/common"
 import WebSocket from "ws"
 import * as scribbleStore from "./scribble-store.js"
-import { anonymousSpecialStripKind } from "./multi-airport.js"
+import {
+    buildEssaIrisOrder,
+    buildStripEfsFields,
+    formatIrisSep,
+    irisStripKey,
+    type IrisOrderPayload,
+    type StripEfsFields,
+} from "./iris-efs-order.js"
 
 export type ScribbleRealm = "live" | "sweatbox" | "playback" | "local"
 
 const DEFAULT_SYNC_BASE_URL = "https://backend.vatiris.se"
 
-export interface StripSyncMeta {
-    kind: string
-    paperInfoKind?: string
+/** Remote apply meta — EFS-only fields (alias of StripEfsFields + legacy optional keys). */
+export type StripSyncMeta = StripEfsFields & {
     airport?: string
-    callsign?: string
-    /** Anonymous VFR/CROSS recreate */
-    aircraftType?: string
-    adep?: string
-    ades?: string
-    flightRules?: string
-    /** Bay placement — synced for note/vehicle create and all strip drags */
-    bayId?: string
-    sectionId?: string
-    position?: number
     bottom?: boolean
-    /** EFS-only flags (not EuroScope-native) */
-    clearanceRead?: boolean
-    qnhGiven?: number | null
-    atisGiven?: string | null
-    noteText?: string
-    std?: string
 }
 
 type ApplyRemoteFn = (
@@ -48,10 +41,14 @@ type ApplyRemoteFn = (
 let getSettings: () => UiSettings = () => ({}) as UiSettings
 let getConnectionType: () => number | undefined = () => undefined
 let getStripById: (id: string) => FlightStrip | undefined = () => undefined
+let getAllStrips: () => FlightStrip[] = () => []
 let getAirports: () => string[] = () => []
 let onApplyRemote: ApplyRemoteFn = () => {}
 let onNeedVatIrisSignIn: (detail?: string) => void = () => {}
 let onRealmChanged: (realm: ScribbleRealm) => void = () => {}
+/** True when this session may publish ESSA order/SEP/heartbeat (TWR/GND). */
+let canPublishIrisOrder: () => boolean = () => false
+let getEssaSepIndicators: () => { sep: string; dlv: string; depGap: string } | null = () => null
 
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let sinceByRoom = new Map<string, string>()
@@ -72,18 +69,24 @@ export function initScribbleSync(opts: {
     getSettings: () => UiSettings
     getConnectionType: () => number | undefined
     getStripById: (id: string) => FlightStrip | undefined
+    getAllStrips?: () => FlightStrip[]
     getAirports: () => string[]
     onApplyRemote: ApplyRemoteFn
     onNeedVatIrisSignIn?: (detail?: string) => void
     onRealmChanged?: (realm: ScribbleRealm) => void
+    canPublishIrisOrder?: () => boolean
+    getEssaSepIndicators?: () => { sep: string; dlv: string; depGap: string } | null
 }) {
     getSettings = opts.getSettings
     getConnectionType = opts.getConnectionType
     getStripById = opts.getStripById
+    if (opts.getAllStrips) getAllStrips = opts.getAllStrips
     getAirports = opts.getAirports
     onApplyRemote = opts.onApplyRemote
     if (opts.onNeedVatIrisSignIn) onNeedVatIrisSignIn = opts.onNeedVatIrisSignIn
     if (opts.onRealmChanged) onRealmChanged = opts.onRealmChanged
+    if (opts.canPublishIrisOrder) canPublishIrisOrder = opts.canPublishIrisOrder
+    if (opts.getEssaSepIndicators) getEssaSepIndicators = opts.getEssaSepIndicators
 }
 
 export function resolveRealm(settings: UiSettings): ScribbleRealm {
@@ -175,61 +178,12 @@ function noteSuccess() {
 }
 
 function syncKeyForStrip(strip: FlightStrip): string {
-    return strip.syncKey || strip.id
+    return irisStripKey(strip)
 }
 
-/**
- * Strip meta on PUT:
- * - note/vehicle: create-on-receive + placement + text fields
- * - anonymous VFR/CROSS (empty callsign): create-on-receive via strip id key
- * - flight: placement + EFS-only flags (ES-native CLR/CTL/CTO/G/A stay on EuroScope)
- */
-function stripMeta(strip: FlightStrip): StripSyncMeta {
-    const placement = {
-        airport: strip.airport,
-        callsign: strip.callsign || undefined,
-        bayId: strip.bayId,
-        sectionId: strip.sectionId,
-        position: strip.position,
-        bottom: !!strip.bottom,
-    }
-    if (strip.stripType === "note") {
-        return {
-            kind: "note",
-            paperInfoKind: strip.paperInfoKind,
-            noteText: strip.noteText ?? "",
-            ...placement,
-        }
-    }
-    if (strip.stripType === "vehicle") {
-        return {
-            kind: "vehicle",
-            std: strip.std ?? "",
-            ...placement,
-        }
-    }
-    const anonKind = anonymousSpecialStripKind(strip.syncKey || strip.id)
-    if (anonKind) {
-        return {
-            kind: anonKind,
-            aircraftType: strip.aircraftType || undefined,
-            adep: strip.adep || undefined,
-            ades: strip.ades || undefined,
-            flightRules: strip.flightRules || undefined,
-            ...placement,
-        }
-    }
-    const meta: StripSyncMeta = {
-        kind: "flight",
-        ...placement,
-        // Paper CLR-read bit (col 4). CLR correct / CTL / CTO / G/A stay on EuroScope.
-        clearanceRead: !!(strip.clearanceRead || strip.clearance || strip.clearanceReadback),
-    }
-    // Only send QNH/ATIS when set — omit on bare moves so peers don't wipe each other.
-    // Clears go through setQnhGiven → push with explicit null (see pushStripFlagsToRemote).
-    if (strip.qnhGiven != null) meta.qnhGiven = strip.qnhGiven
-    if (strip.atisGiven) meta.atisGiven = strip.atisGiven
-    return meta
+/** EFS-only strip body for PUT …/strips/:stripKey (no ES status). */
+function stripMeta(strip: FlightStrip, opts?: { includeQnhAtisClear?: boolean }): StripSyncMeta {
+    return buildStripEfsFields(strip, opts)
 }
 
 function baseUrl(): string | undefined {
@@ -265,36 +219,34 @@ type PutBody = {
     strip?: StripSyncMeta
 }
 
-async function putRemote(
-    stripId: string,
-    body: PutBody,
-): Promise<boolean> {
+async function putWithRetry(
+    url: string,
+    cid: string,
+    body: string,
+): Promise<{ ok: boolean; status: number; json?: any }> {
+    let result = await fetchJson(url, { method: "PUT", cid, body })
+    if (result.status === 429) {
+        await new Promise((r) => setTimeout(r, 250))
+        result = await fetchJson(url, { method: "PUT", cid, body })
+    }
+    return result
+}
+
+async function putRemote(stripId: string, body: PutBody): Promise<boolean> {
     const base = baseUrl()
     const settings = getSettings()
     if (!base) return false
     const strip = getStripById(stripId)
     if (!strip) return false
-    // Key by syncKey/id — never require callsign (anonymous VFR/CROSS use vfrdep:uuid etc.)
     const apt = (strip.airport || getAirports()[0] || "").toUpperCase()
     if (!apt) return false
     if (body.strokes === undefined && body.strip === undefined) return false
     const realm = resolveRealm(settings)
     const key = encodeURIComponent(syncKeyForStrip(strip))
+    // IRIS single write set: bare /:stripKey only
     const url = `${base}/efs/sync/${realm}/${apt}/${key}`
     const cid = settings.vatsimCid.trim()
-    let result = await fetchJson(url, {
-        method: "PUT",
-        cid,
-        body: JSON.stringify(body),
-    })
-    if (result.status === 429) {
-        await new Promise((r) => setTimeout(r, 250))
-        result = await fetchJson(url, {
-            method: "PUT",
-            cid,
-            body: JSON.stringify(body),
-        })
-    }
+    const result = await putWithRetry(url, cid, JSON.stringify(body))
     if (!result.ok) {
         console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
         noteAuthFailure(result.status, result.json?.error)
@@ -311,12 +263,8 @@ async function putRemote(
     return true
 }
 
-/**
- * Push ESSA SEP/DLV/DEP GAP airport meta (scribble-sync path).
- * Caller must gate on TWR/GND + essaRoles mode.
- * Dual-write with pushEssaStripviewLayoutToRemote until IRIS merges routes.
- */
-let lastPushedEssaSepJson = ""
+/** SEP — IRIS single write set: PUT …/meta { essaSep } only (bare values, no /sep). */
+let lastPushedSepJson = ""
 
 export async function pushEssaSepMetaToRemote(indicators: {
     sep: string
@@ -327,141 +275,127 @@ export async function pushEssaSepMetaToRemote(indicators: {
     if (!syncTogglesOn(settings) || !validCid(settings)) return false
     const airports = getAirports().map((a) => a.toUpperCase())
     if (!airports.includes("ESSA")) return false
-    const payload = {
-        essaSep: {
-            sep: indicators.sep ?? "",
-            dlv: indicators.dlv ?? "",
-            depGap: indicators.depGap ?? "",
-        },
-    }
-    const json = JSON.stringify(payload)
-    if (json === lastPushedEssaSepJson) return true
+    const bare = formatIrisSep(indicators)
+    const metaBody = { essaSep: bare }
+    const metaJson = JSON.stringify(metaBody)
+    if (metaJson === lastPushedSepJson) return true
     const base = baseUrl()
     if (!base) return false
     const realm = resolveRealm(settings)
     const url = `${base}/efs/sync/${realm}/ESSA/meta`
-    const cid = settings.vatsimCid.trim()
-    let result = await fetchJson(url, {
-        method: "PUT",
-        cid,
-        body: json,
-    })
-    if (result.status === 429) {
-        await new Promise((r) => setTimeout(r, 250))
-        result = await fetchJson(url, {
-            method: "PUT",
-            cid,
-            body: json,
-        })
-    }
+    const result = await putWithRetry(url, settings.vatsimCid.trim(), metaJson)
     if (!result.ok) {
         console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
         noteAuthFailure(result.status, result.json?.error)
         return false
     }
-    lastPushedEssaSepJson = json
+    lastPushedSepJson = metaJson
     noteSuccess()
     return true
 }
 
-/**
- * Strip TV / APP bay mirror: PUT /efs/:airport/:view with ordered callsigns + SEP.
- * EFS-owned order only — no ES-native status. 5 min TTL on IRIS → keepalive required.
- */
-let lastPushedStripviewJson = ""
-let stripviewKeepaliveTimer: ReturnType<typeof setInterval> | undefined
-let stripviewLayoutProvider: (() => { airport: string; view: string; body: unknown } | null) | null =
-    null
+/** Order revision + debounce / heartbeat for locked IRIS contract. */
+let orderRevision = 0
+let lastPushedOrderEntriesJson = ""
+let orderDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 
-const STRIPVIEW_KEEPALIVE_MS = 2 * 60 * 1000
+/** Optional heartbeat — any write also refreshes IRIS 5 min TTL; keep ≤2 min when quiet. */
+const HEARTBEAT_MS = 90_000
 
-export function setStripviewLayoutProvider(
-    provider: (() => { airport: string; view: string; body: unknown } | null) | null,
-) {
-    stripviewLayoutProvider = provider
+export function peekEssaOrderPayload(revision = orderRevision + 1): IrisOrderPayload {
+    return buildEssaIrisOrder(getAllStrips(), revision, "ESSA")
 }
 
-export async function pushEssaStripviewLayoutToRemote(
-    body: unknown,
-    opts?: { airport?: string; view?: string; force?: boolean },
+export async function pushIrisOrderToRemote(
+    payload?: IrisOrderPayload,
+    opts?: { force?: boolean; airport?: string },
 ): Promise<boolean> {
     const settings = getSettings()
     if (!syncTogglesOn(settings) || !validCid(settings)) return false
-    const airports = getAirports().map((a) => a.toUpperCase())
+    if (!canPublishIrisOrder()) return false
     const airport = (opts?.airport || "ESSA").toUpperCase()
-    if (!airports.includes(airport)) return false
-    const view = (opts?.view || "DEP").toUpperCase()
+    if (!getAirports().map((a) => a.toUpperCase()).includes(airport)) return false
+    const entriesJson = JSON.stringify(
+        (payload ?? peekEssaOrderPayload(orderRevision + 1)).entries,
+    )
+    // Skip if bay order unchanged (unless force — e.g. sync start)
+    if (!opts?.force && !payload && entriesJson === lastPushedOrderEntriesJson) return true
+    orderRevision += 1
+    const body = payload ?? buildEssaIrisOrder(getAllStrips(), orderRevision, "ESSA")
     const json = JSON.stringify(body)
-    if (!opts?.force && json === lastPushedStripviewJson) return true
     const base = baseUrl()
     if (!base) return false
-    // VatIRIS efs-sync/stripview: PUT /efs/:airport/:view (no realm in path)
-    const url = `${base}/efs/${airport}/${view}`
-    const cid = settings.vatsimCid.trim()
-    let result = await fetchJson(url, {
-        method: "PUT",
-        cid,
-        body: json,
-    })
-    if (result.status === 429) {
-        await new Promise((r) => setTimeout(r, 250))
-        result = await fetchJson(url, {
-            method: "PUT",
-            cid,
-            body: json,
-        })
-    }
+    const realm = resolveRealm(settings)
+    const url = `${base}/efs/sync/${realm}/${airport}/order`
+    const result = await putWithRetry(url, settings.vatsimCid.trim(), json)
     if (!result.ok) {
         console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
-        // 404 = route not mounted yet on older IRIS — not an auth failure
+        noteAuthFailure(result.status, result.json?.error)
+        return false
+    }
+    lastPushedOrderEntriesJson = JSON.stringify(body.entries)
+    noteSuccess()
+    return true
+}
+
+export function scheduleIrisOrderPush(delayMs = 150) {
+    if (orderDebounceTimer) clearTimeout(orderDebounceTimer)
+    orderDebounceTimer = setTimeout(() => {
+        orderDebounceTimer = undefined
+        void pushIrisOrderToRemote(undefined, { force: false })
+    }, delayMs)
+}
+
+/** Alias used by server wiring. */
+export const scheduleStripviewLayoutPush = scheduleIrisOrderPush
+
+export async function pushIrisHeartbeat(airport = "ESSA"): Promise<boolean> {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return false
+    if (!canPublishIrisOrder()) return false
+    const apt = airport.toUpperCase()
+    if (!getAirports().map((a) => a.toUpperCase()).includes(apt)) return false
+    const base = baseUrl()
+    if (!base) return false
+    const realm = resolveRealm(settings)
+    const url = `${base}/efs/sync/${realm}/${apt}/heartbeat`
+    const result = await putWithRetry(url, settings.vatsimCid.trim(), "{}")
+    if (!result.ok) {
+        // 404 while IRIS rolls out — don't treat as auth
         if (result.status !== 404) {
+            console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
             noteAuthFailure(result.status, result.json?.error)
         }
         return false
     }
-    lastPushedStripviewJson = json
     noteSuccess()
     return true
 }
 
-/** Debounced Strip TV layout publish (order + SEP). */
-let stripviewDebounceTimer: ReturnType<typeof setTimeout> | undefined
-
-export function scheduleStripviewLayoutPush(delayMs = 150) {
-    if (stripviewDebounceTimer) clearTimeout(stripviewDebounceTimer)
-    stripviewDebounceTimer = setTimeout(() => {
-        stripviewDebounceTimer = undefined
-        void flushStripviewLayoutPush(false)
-    }, delayMs)
+function startIrisHeartbeat() {
+    if (heartbeatTimer) return
+    heartbeatTimer = setInterval(() => {
+        void pushIrisHeartbeat("ESSA")
+    }, HEARTBEAT_MS)
 }
 
-export async function flushStripviewLayoutPush(force: boolean): Promise<boolean> {
-    if (!stripviewLayoutProvider) return false
-    const snap = stripviewLayoutProvider()
-    if (!snap) return false
-    return pushEssaStripviewLayoutToRemote(snap.body, {
-        airport: snap.airport,
-        view: snap.view,
-        force,
-    })
-}
-
-function startStripviewKeepalive() {
-    if (stripviewKeepaliveTimer) return
-    stripviewKeepaliveTimer = setInterval(() => {
-        void flushStripviewLayoutPush(true)
-    }, STRIPVIEW_KEEPALIVE_MS)
-}
-
-function stopStripviewKeepalive() {
-    if (stripviewKeepaliveTimer) {
-        clearInterval(stripviewKeepaliveTimer)
-        stripviewKeepaliveTimer = undefined
+function stopIrisHeartbeat() {
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = undefined
     }
-    if (stripviewDebounceTimer) {
-        clearTimeout(stripviewDebounceTimer)
-        stripviewDebounceTimer = undefined
+    if (orderDebounceTimer) {
+        clearTimeout(orderDebounceTimer)
+        orderDebounceTimer = undefined
     }
+}
+
+/** @deprecated no-op — layout PUT /efs/:airport/:view retired */
+export function setStripviewLayoutProvider(
+    _provider: (() => { airport: string; view: string; body: unknown } | null) | null,
+) {
+    // Order publish uses getAllStrips + canPublishIrisOrder from initScribbleSync
 }
 
 /** Push strip including explicit QNH/ATIS clear (null). Requires strip sync. */
@@ -471,16 +405,14 @@ export async function pushStripFlagsToRemote(stripId: string): Promise<boolean> 
     const strip = getStripById(stripId)
     if (!strip) return false
     const body: PutBody = {
-        strip: {
-            ...stripMeta(strip),
-            qnhGiven: strip.qnhGiven ?? null,
-            atisGiven: strip.atisGiven ?? null,
-        },
+        strip: stripMeta(strip, { includeQnhAtisClear: true }),
     }
     if (settings.scribbleSyncEnabled) {
         body.strokes = scribbleStore.getScribbles(stripId)
     }
-    return putRemote(stripId, body)
+    const ok = await putRemote(stripId, body)
+    if (ok) scheduleIrisOrderPush()
+    return ok
 }
 
 function applyRemotePayload(
@@ -521,7 +453,9 @@ export async function pushStripToRemote(stripId: string): Promise<boolean> {
     if (settings.scribbleSyncEnabled) {
         body.strokes = scribbleStore.getScribbles(stripId)
     }
-    return putRemote(stripId, body)
+    const ok = await putRemote(stripId, body)
+    if (ok) scheduleIrisOrderPush()
+    return ok
 }
 
 /** Zoom-close / stroke push — requires scribble sync. */
@@ -560,13 +494,22 @@ export async function deleteStripFromRemote(stripId: string): Promise<boolean> {
         return false
     }
     noteSuccess()
+    scheduleIrisOrderPush()
     return true
 }
 
 function findLocalStripId(syncKey: string, airport: string): string | undefined {
     const direct = getStripById(syncKey)
     if (direct) return direct.id
-    void airport
+    const key = syncKey.toUpperCase()
+    const apt = airport.toUpperCase()
+    for (const s of getAllStrips()) {
+        if (irisStripKey(s) === key) {
+            if (!apt || !(s.airport || "") || (s.airport || "").toUpperCase() === apt) {
+                return s.id
+            }
+        }
+    }
     return undefined
 }
 
@@ -636,14 +579,36 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
             strip?: StripSyncMeta
             updatedAt?: string
             deleted?: boolean
+            /** snapshot on connect */
+            strips?: Record<
+                string,
+                { strokes?: unknown[]; strip?: StripSyncMeta; updatedAt?: string }
+            >
         }
-        if (msg.type === "hello") return
+        if (msg.type === "hello" || msg.type === "heartbeat" || msg.type === "order") return
+        if (msg.type === "meta") return // SEP is TWR-owned; peers don't apply airport meta locally yet
+        if (msg.type === "snapshot" && msg.strips && typeof msg.strips === "object") {
+            for (const [syncKey, row] of Object.entries(msg.strips)) {
+                if (!row?.updatedAt) continue
+                applyRemotePayload(apt, syncKey, {
+                    strokes: row.strokes ?? [],
+                    strip: row.strip,
+                    updatedAt: row.updatedAt,
+                })
+            }
+            return
+        }
+        // IRIS: strip / stripDeleted; legacy scribble still accepted from older sync hosts
+        const isUpsert =
+            msg.type === "strip" || msg.type === "scribble" || msg.type === undefined
+        const isDelete = msg.type === "stripDeleted" || !!msg.deleted
         if (!msg.stripKey || typeof msg.updatedAt !== "string") return
+        if (!isUpsert && !isDelete) return
         applyRemotePayload(apt, msg.stripKey, {
             strokes: msg.strokes ?? [],
             strip: msg.strip,
             updatedAt: msg.updatedAt,
-            deleted: !!msg.deleted,
+            deleted: isDelete,
         })
     } catch {
         // ignore malformed
@@ -775,22 +740,26 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
     stopScribbleSyncPolling()
     refreshHealth()
     startLiveStreams()
-    startStripviewKeepalive()
+    startIrisHeartbeat()
     pollTimer = setInterval(() => {
         void pollRemote()
         startLiveStreams()
     }, intervalMs)
     void pollRemote()
-    void flushStripviewLayoutPush(true)
+    void pushIrisOrderToRemote(undefined, { force: true })
+    void pushIrisHeartbeat("ESSA")
+    const sep = getEssaSepIndicators()
+    if (sep) void pushEssaSepMetaToRemote(sep)
 }
 
 export function stopScribbleSyncPolling() {
     if (pollTimer) clearInterval(pollTimer)
     pollTimer = undefined
     stopLiveStreams()
-    stopStripviewKeepalive()
+    stopIrisHeartbeat()
     lastPollOk = false
-    lastPushedStripviewJson = ""
+    lastPushedOrderEntriesJson = ""
+    lastPushedSepJson = ""
     refreshHealth()
 }
 
