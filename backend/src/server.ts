@@ -71,8 +71,11 @@ import {
     isOfflineVatsimRealm,
     onConnectionTypeChanged,
     pushEssaSepMetaToRemote,
+    setStripviewLayoutProvider,
+    scheduleStripviewLayoutPush,
     resolveRealm,
 } from "./vatefs-sync.js"
+import { buildEssaStripviewLayout } from "./essa-stripview-layout.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -1015,12 +1018,15 @@ function broadcastStrip(
     if (options?.cleanReprint) message.cleanReprint = true
     if (options?.playPrintAnim) message.playPrintAnim = true
     broadcast(message, options?.exclude)
+    // Bay order changed → refresh Strip TV columns (transferred→APP drop out)
+    if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
 }
 
 // Broadcast a strip delete
 function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
     const message: StripDeleteMessage = { type: "stripDelete", stripId }
     broadcast(message, exclude)
+    if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
 }
 
 /** Push current trash list so clients stay in sync across reconnect without opening the dialog. */
@@ -1312,6 +1318,21 @@ function canEditEssaSepIndicators(): boolean {
     return roles.some((r) => r === "TWR-E" || r === "TWR-W" || String(r).startsWith("TWR"))
 }
 
+/** TWR or GND may publish bay order + SEP snapshot for Strip TV / APP. */
+function canPublishEssaStripview(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const airports = (staticConfig.myAirports ?? []).map((a) => a.toUpperCase())
+    if (!airports.includes("ESSA")) return false
+    const roles = staticConfig.essaRoles ?? []
+    return roles.some(
+        (r) =>
+            r === "TWR-E" ||
+            r === "TWR-W" ||
+            String(r).startsWith("TWR") ||
+            String(r).startsWith("GND"),
+    )
+}
+
 function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
     return (ESSA_SEP_CYCLE[field] as readonly (string | null)[]).some((v) => v === value)
 }
@@ -1349,13 +1370,16 @@ function sendEssaSepIndicators(socket: WebSocket) {
 function broadcastEssaSepIndicators() {
     const message = buildEssaSepIndicatorsMessage()
     if (message) broadcast(message)
-    // TWR publishes effective values to IRIS for Stripview (ESOS APP/DEP)
+    // TWR publishes SEP to scribble-sync meta; TWR/GND publish Strip TV layout
     if (message && canEditEssaSepIndicators()) {
         void pushEssaSepMetaToRemote({
             sep: message.sep,
             dlv: message.dlv,
             depGap: message.depGap,
         })
+    }
+    if (message && canPublishEssaStripview()) {
+        scheduleStripviewLayoutPush()
     }
 }
 
@@ -3243,6 +3267,21 @@ initScribbleSync({
     onRealmChanged: (realm) => {
         syncOnlineNetworkServices(realm)
     },
+})
+// Strip TV / APP: EFS order + SEP only (no ES status). Transferred→APP leave columns.
+setStripviewLayoutProvider(() => {
+    if (!canPublishEssaStripview()) return null
+    const ind = buildEssaSepIndicatorsMessage()
+    if (!ind) return null
+    return {
+        airport: "ESSA",
+        view: "DEP",
+        body: buildEssaStripviewLayout(
+            store.getAllStrips(),
+            { sep: ind.sep, dlv: ind.dlv, depGap: ind.depGap },
+            "ESSA",
+        ),
+    }
 })
 restartScribbleSyncPolling()
 syncOnlineNetworkServices()

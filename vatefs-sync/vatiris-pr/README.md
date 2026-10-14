@@ -27,6 +27,9 @@ Optional `strip` metadata on PUT:
 
 Base: `/efs/sync`
 
+**Contract:** order + scribbles + EFS-only strip fields + SEP. No ES-native status (IRIS plugin).  
+Strip TV also consumes `PUT /efs/:airport/:view` from VatEFS (see main [README](../README.md)).
+
 | Method | Path | Body / query |
 |--------|------|----------------|
 | GET | `/:realm/:airport` | `?since=<iso>` |

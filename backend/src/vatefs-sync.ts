@@ -312,8 +312,9 @@ async function putRemote(
 }
 
 /**
- * Push ESSA SEP/DLV/DEP GAP airport meta for Stripview (ESOS APP/DEP).
- * Caller must gate on TWR role + essaRoles mode.
+ * Push ESSA SEP/DLV/DEP GAP airport meta (scribble-sync path).
+ * Caller must gate on TWR/GND + essaRoles mode.
+ * Dual-write with pushEssaStripviewLayoutToRemote until IRIS merges routes.
  */
 let lastPushedEssaSepJson = ""
 
@@ -361,6 +362,106 @@ export async function pushEssaSepMetaToRemote(indicators: {
     lastPushedEssaSepJson = json
     noteSuccess()
     return true
+}
+
+/**
+ * Strip TV / APP bay mirror: PUT /efs/:airport/:view with ordered callsigns + SEP.
+ * EFS-owned order only — no ES-native status. 5 min TTL on IRIS → keepalive required.
+ */
+let lastPushedStripviewJson = ""
+let stripviewKeepaliveTimer: ReturnType<typeof setInterval> | undefined
+let stripviewLayoutProvider: (() => { airport: string; view: string; body: unknown } | null) | null =
+    null
+
+const STRIPVIEW_KEEPALIVE_MS = 2 * 60 * 1000
+
+export function setStripviewLayoutProvider(
+    provider: (() => { airport: string; view: string; body: unknown } | null) | null,
+) {
+    stripviewLayoutProvider = provider
+}
+
+export async function pushEssaStripviewLayoutToRemote(
+    body: unknown,
+    opts?: { airport?: string; view?: string; force?: boolean },
+): Promise<boolean> {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return false
+    const airports = getAirports().map((a) => a.toUpperCase())
+    const airport = (opts?.airport || "ESSA").toUpperCase()
+    if (!airports.includes(airport)) return false
+    const view = (opts?.view || "DEP").toUpperCase()
+    const json = JSON.stringify(body)
+    if (!opts?.force && json === lastPushedStripviewJson) return true
+    const base = baseUrl()
+    if (!base) return false
+    // VatIRIS efs-sync/stripview: PUT /efs/:airport/:view (no realm in path)
+    const url = `${base}/efs/${airport}/${view}`
+    const cid = settings.vatsimCid.trim()
+    let result = await fetchJson(url, {
+        method: "PUT",
+        cid,
+        body: json,
+    })
+    if (result.status === 429) {
+        await new Promise((r) => setTimeout(r, 250))
+        result = await fetchJson(url, {
+            method: "PUT",
+            cid,
+            body: json,
+        })
+    }
+    if (!result.ok) {
+        console.warn(`[vatefs-sync] PUT ${url} → ${result.status}`, result.json?.error || "")
+        // 404 = route not mounted yet on older IRIS — not an auth failure
+        if (result.status !== 404) {
+            noteAuthFailure(result.status, result.json?.error)
+        }
+        return false
+    }
+    lastPushedStripviewJson = json
+    noteSuccess()
+    return true
+}
+
+/** Debounced Strip TV layout publish (order + SEP). */
+let stripviewDebounceTimer: ReturnType<typeof setTimeout> | undefined
+
+export function scheduleStripviewLayoutPush(delayMs = 150) {
+    if (stripviewDebounceTimer) clearTimeout(stripviewDebounceTimer)
+    stripviewDebounceTimer = setTimeout(() => {
+        stripviewDebounceTimer = undefined
+        void flushStripviewLayoutPush(false)
+    }, delayMs)
+}
+
+export async function flushStripviewLayoutPush(force: boolean): Promise<boolean> {
+    if (!stripviewLayoutProvider) return false
+    const snap = stripviewLayoutProvider()
+    if (!snap) return false
+    return pushEssaStripviewLayoutToRemote(snap.body, {
+        airport: snap.airport,
+        view: snap.view,
+        force,
+    })
+}
+
+function startStripviewKeepalive() {
+    if (stripviewKeepaliveTimer) return
+    stripviewKeepaliveTimer = setInterval(() => {
+        void flushStripviewLayoutPush(true)
+    }, STRIPVIEW_KEEPALIVE_MS)
+}
+
+function stopStripviewKeepalive() {
+    if (stripviewKeepaliveTimer) {
+        clearInterval(stripviewKeepaliveTimer)
+        stripviewKeepaliveTimer = undefined
+    }
+    if (stripviewDebounceTimer) {
+        clearTimeout(stripviewDebounceTimer)
+        stripviewDebounceTimer = undefined
+    }
 }
 
 /** Push strip including explicit QNH/ATIS clear (null). Requires strip sync. */
@@ -674,18 +775,22 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
     stopScribbleSyncPolling()
     refreshHealth()
     startLiveStreams()
+    startStripviewKeepalive()
     pollTimer = setInterval(() => {
         void pollRemote()
         startLiveStreams()
     }, intervalMs)
     void pollRemote()
+    void flushStripviewLayoutPush(true)
 }
 
 export function stopScribbleSyncPolling() {
     if (pollTimer) clearInterval(pollTimer)
     pollTimer = undefined
     stopLiveStreams()
+    stopStripviewKeepalive()
     lastPollOk = false
+    lastPushedStripviewJson = ""
     refreshHealth()
 }
 

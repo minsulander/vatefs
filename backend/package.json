@@ -10,7 +10,7 @@
         "start": "tsx --watch src/server.ts",
         "spoof": "tsx src/spoof-cli.ts",
         "playback": "tsx src/playback.ts",
-        "test": "tsx src/ese-airspace.test.ts && tsx src/essa-roles.test.ts && tsx src/essa-next-si.test.ts && tsx src/afv-transceivers.test.ts && tsx src/esgg-app.test.ts && tsx src/esgg-covering.test.ts && tsx src/geo-utils.test.ts && tsx src/hhmm-utils.test.ts && tsx src/fsp-api.test.ts && tsx src/esms-sid.test.ts && tsx src/display-si.test.ts && tsx src/scratchpad.test.ts && tsx src/squawk.test.ts && tsx src/aup/r16.test.ts && tsx src/runway-strip-order.test.ts && tsx src/trash-meta.test.ts"
+        "test": "tsx src/ese-airspace.test.ts && tsx src/essa-roles.test.ts && tsx src/essa-next-si.test.ts && tsx src/afv-transceivers.test.ts && tsx src/esgg-app.test.ts && tsx src/esgg-covering.test.ts && tsx src/geo-utils.test.ts && tsx src/hhmm-utils.test.ts && tsx src/fsp-api.test.ts && tsx src/esms-sid.test.ts && tsx src/display-si.test.ts && tsx src/scratchpad.test.ts && tsx src/squawk.test.ts && tsx src/aup/r16.test.ts && tsx src/runway-strip-order.test.ts && tsx src/trash-meta.test.ts && tsx src/essa-stripview-layout.test.ts"
     },
     "keywords": [],
     "author": "",
