@@ -251,43 +251,38 @@ export function isEsmsAutoCoordReplyAltitude(
     )
 }
 
-/**
- * ESSA DEP RWY 19R → TOVRI / BABAP: MDI 2 MIN reminder (black SID box).
- * Eastbound SIDs / tracks from 19R need minimum departure interval awareness.
- */
-const ESSA_MDI_2MIN_EXITS = ["TOVRI", "BABAP"] as const
+/** Preferred ESSA APP/DEP sector (Appendix A) — SID black box when east. */
+export type EssaAppDepNextSector = "DEP-W" | "DEP-E" | "ARR-W" | "ARR-E"
 
+/**
+ * ESSA: black SID box when preferred next sector is DEP-E or ARR-E
+ * (all eastbound / east-delivery departures — not only TOVRI/BABAP 19R MDI).
+ */
+export function needsEssaEastSidBox(
+    appDepNextSector: EssaAppDepNextSector | string | null | undefined,
+): boolean {
+    const s = (appDepNextSector || "").trim().toUpperCase()
+    return s === "DEP-E" || s === "ARR-E"
+}
+
+/** @deprecated Use needsEssaEastSidBox(appDepNextSector) — kept for older call sites. */
 export type EssaMdi2MinSidBoxInput = {
     adep?: string | null
-    /** Strip / ES departure runway (e.g. 19R) */
     depRwy?: string | null
-    /**
-     * SID as shown on the strip (displaySidForStrip / sidDisplayOverride),
-     * so FPR-forced and track display forms still match.
-     */
     displaySid?: string | null
     stripType?: string | null
     flightRules?: string | null
+    /** Preferred Appendix A sector when known (preferred over SID heuristics). */
+    appDepNextSector?: EssaAppDepNextSector | string | null
 }
 
-/** Normalize DEP RWY designator: "19R", "essa19r" → "19R". */
-function normalizeEssaDepRwy(rwy: string | undefined | null): string {
-    return (rwy || "").trim().toUpperCase().replace(/[^0-9LRC]/g, "")
-}
-
-/**
- * True when display SID is a TOVRI/BABAP procedure, track, or bare exit.
- * Matches RNAV (TOVRI1A), FPR/DCT (TOVRI), SLOW (120veBABAP), and veEXIT.
- */
+/** @deprecated Prefer strip.appDepNextSector + needsEssaEastSidBox. */
 export function sidMatchesEssaMdi2MinExit(sid: string | undefined | null): boolean {
     const raw = (sid || "").trim().toUpperCase().replace(/\s+/g, "")
     if (!raw) return false
-
-    for (const exit of ESSA_MDI_2MIN_EXITS) {
+    for (const exit of ["TOVRI", "BABAP"] as const) {
         if (raw === exit) return true
-        // RNAV: TOVRI1A / BABAP2G (exit + digit…)
         if (raw.startsWith(exit) && /^[0-9]/.test(raw.slice(exit.length))) return true
-        // AHD / vector / SLOW display: veEXIT, …veEXIT, ·EXIT / *EXIT / •EXIT
         if (raw === `VE${exit}`) return true
         if (raw.endsWith(`VE${exit}`)) return true
         if (
@@ -301,16 +296,18 @@ export function sidMatchesEssaMdi2MinExit(sid: string | undefined | null): boole
     return false
 }
 
-/**
- * ESSA-only: IFR DEP/local on 19R via TOVRI or BABAP → show MDI 2 MIN SID box.
- */
+/** @deprecated Prefer strip.appDepNextSector + needsEssaEastSidBox. */
 export function needsEssaMdi2MinSidBox(input: EssaMdi2MinSidBoxInput): boolean {
+    if (input.appDepNextSector != null && input.appDepNextSector !== "") {
+        return needsEssaEastSidBox(input.appDepNextSector)
+    }
+    // Legacy heuristic (19R TOVRI/BABAP) when sector not provided
     const adep = (input.adep || "").trim().toUpperCase()
     if (adep !== "ESSA") return false
-
     const t = (input.stripType || "").toLowerCase()
     if (t !== "departure" && t !== "local") return false
     if (!isIfrSidEligible(input.flightRules)) return false
-    if (normalizeEssaDepRwy(input.depRwy) !== "19R") return false
+    const rwy = (input.depRwy || "").trim().toUpperCase().replace(/[^0-9LRC]/g, "")
+    if (rwy !== "19R") return false
     return sidMatchesEssaMdi2MinExit(input.displaySid)
 }

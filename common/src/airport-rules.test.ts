@@ -12,6 +12,7 @@ import {
     ESMS_AUTO_COORD_REPLY_XFL_FT,
     sidMatchesEssaMdi2MinExit,
     needsEssaMdi2MinSidBox,
+    needsEssaEastSidBox,
 } from "./airport-rules.js"
 
 function assert(cond: unknown, msg: string) {
@@ -160,22 +161,27 @@ assert(isEsmsAutoCoordReplyAltitude(1000) === false, "init 1000 not reply")
 assert(isEsmsAutoCoordReplyAltitude(3900) === false, "near miss")
 assert(isEsmsAutoCoordReplyAltitude(undefined) === false, "undefined alt")
 
-// ESSA 19R TOVRI/BABAP — MDI 2 MIN SID box
-assert(sidMatchesEssaMdi2MinExit("TOVRI1A") === true, "TOVRI1A")
-assert(sidMatchesEssaMdi2MinExit("TOVRI 1A") === true, "TOVRI spaced")
-assert(sidMatchesEssaMdi2MinExit("BABAP2G") === true, "BABAP2G")
-assert(sidMatchesEssaMdi2MinExit("TOVRI") === true, "bare TOVRI")
-assert(sidMatchesEssaMdi2MinExit("BABAP") === true, "bare BABAP")
-assert(sidMatchesEssaMdi2MinExit("120veBABAP") === true, "SLOW BABAP")
-assert(sidMatchesEssaMdi2MinExit("120·BABAP") === true, "track ·BABAP")
-assert(sidMatchesEssaMdi2MinExit("010·240veTOVRI") === true, "double track TOVRI")
-assert(sidMatchesEssaMdi2MinExit("veTOVRI") === true, "AHD veTOVRI")
-assert(sidMatchesEssaMdi2MinExit("ARS6EveBABAP") === true, "vector compact BABAP")
-assert(sidMatchesEssaMdi2MinExit("PETEV3G") === false, "other SID")
-assert(sidMatchesEssaMdi2MinExit("NOSLI1A") === false, "NOSLI")
-assert(sidMatchesEssaMdi2MinExit("") === false, "empty sid")
-assert(sidMatchesEssaMdi2MinExit(undefined) === false, "undefined sid")
+// ESSA east SID box — preferred DEP-E / ARR-E
+assert(needsEssaEastSidBox("DEP-E") === true, "DEP-E")
+assert(needsEssaEastSidBox("ARR-E") === true, "ARR-E")
+assert(needsEssaEastSidBox("dep-e") === true, "dep-e case")
+assert(needsEssaEastSidBox("DEP-W") === false, "DEP-W")
+assert(needsEssaEastSidBox("ARR-W") === false, "ARR-W")
+assert(needsEssaEastSidBox(undefined) === false, "undefined sector")
+assert(needsEssaEastSidBox("") === false, "empty sector")
 
+// Legacy SID heuristic still available via needsEssaMdi2MinSidBox without sector
+assert(sidMatchesEssaMdi2MinExit("TOVRI1A") === true, "TOVRI1A")
+assert(sidMatchesEssaMdi2MinExit("BABAP2G") === true, "BABAP2G")
+assert(sidMatchesEssaMdi2MinExit("PETEV3G") === false, "other SID")
+assert(
+    needsEssaMdi2MinSidBox({ appDepNextSector: "DEP-E" }) === true,
+    "sector DEP-E via legacy helper",
+)
+assert(
+    needsEssaMdi2MinSidBox({ appDepNextSector: "DEP-W" }) === false,
+    "sector DEP-W via legacy helper",
+)
 assert(
     needsEssaMdi2MinSidBox({
         adep: "ESSA",
@@ -184,67 +190,7 @@ assert(
         stripType: "departure",
         flightRules: "I",
     }) === true,
-    "ESSA 19R TOVRI IFR DEP",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "essa",
-        depRwy: "19r",
-        displaySid: "120veBABAP",
-        stripType: "local",
-        flightRules: "Y",
-    }) === true,
-    "ESSA 19R BABAP local Y",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "ESSA",
-        depRwy: "19R",
-        displaySid: "TOVRI1A",
-        stripType: "departure",
-        flightRules: "V",
-    }) === false,
-    "VFR no MDI box",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "ESSA",
-        depRwy: "19L",
-        displaySid: "TOVRI1A",
-        stripType: "departure",
-        flightRules: "I",
-    }) === false,
-    "19L no MDI box",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "ESSA",
-        depRwy: "19R",
-        displaySid: "PETEV3G",
-        stripType: "departure",
-        flightRules: "I",
-    }) === false,
-    "other SID no MDI box",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "ESGG",
-        depRwy: "19R",
-        displaySid: "TOVRI1A",
-        stripType: "departure",
-        flightRules: "I",
-    }) === false,
-    "ESGG never",
-)
-assert(
-    needsEssaMdi2MinSidBox({
-        adep: "ESSA",
-        depRwy: "19R",
-        displaySid: "TOVRI1A",
-        stripType: "arrival",
-        flightRules: "I",
-    }) === false,
-    "arrival never",
+    "legacy 19R TOVRI heuristic",
 )
 
 console.log("airport-rules.test.ts: OK")

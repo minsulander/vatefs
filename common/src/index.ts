@@ -46,6 +46,7 @@ export {
 } from "./essa-rwy-config.js"
 export type { EssaRwyCombination, EssaPhysicalRwyPair } from "./essa-rwy-config.js"
 
+
 export {
     isRunwayOrderSectionId,
     runwayLuRank,
@@ -121,11 +122,13 @@ export {
     isEsmsAutoCoordReplyAltitude,
     sidMatchesEssaMdi2MinExit,
     needsEssaMdi2MinSidBox,
+    needsEssaEastSidBox,
 } from "./airport-rules.js"
 export type {
     SsrCoordinationOpts,
     EssaHeavyPreferredDepRwyInput,
     EssaMdi2MinSidBoxInput,
+    EssaAppDepNextSector,
 } from "./airport-rules.js"
 
 export {

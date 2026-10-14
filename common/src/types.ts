@@ -169,6 +169,12 @@ export interface FlightStrip {
     // Slow aircraft indicator (light WTC or specific medium turboprops)
     isSlow?: boolean
 
+    /**
+     * ESSA Appendix A preferred APP/DEP sector for this departure (from SID prefs / route).
+     * SID black box when DEP-E or ARR-E.
+     */
+    appDepNextSector?: 'DEP-W' | 'DEP-E' | 'ARR-W' | 'ARR-E'
+
     // Actions that should be highlighted (yellow) to prompt controller action
     highlightActions?: string[]
 

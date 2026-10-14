@@ -1050,6 +1050,16 @@ function resolveIdealAppDepSector(flight: Flight, missedApproach: boolean): AppD
     })
 }
 
+/**
+ * Preferred ESSA APP/DEP sector for an ESSA-origin departure/local (Appendix A).
+ * Used for SID black-box (DEP-E / ARR-E) and TWR→APP handoff cues.
+ */
+export function resolveFlightAppDepNextSector(flight: Flight): AppDepSector | undefined {
+    const origin = (flight.origin || "").toUpperCase()
+    if (origin !== "ESSA") return undefined
+    return resolveIdealAppDepSector(flight, false)
+}
+
 /** Manual settings override: always show ideal APP/DEP freq (even without AFV XC). */
 let forceIdealAppDepFrequency = false
 

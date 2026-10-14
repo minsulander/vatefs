@@ -646,13 +646,9 @@
             :class="{
               ghost: !store.displaySidForStrip(strip),
               editable: canEditAssignedData,
-              'sid-mdi-box': essaMdi2MinSidBox,
+              'sid-mdi-box': essaEastSidBox,
             }"
-            :title="
-              essaMdi2MinSidBox
-                ? 'MDI 2 MIN'
-                : paperTip(sidCellLabel, `Departure route / ${sidCellLabel}`)
-            "
+            :title="paperTip(sidCellLabel, `Departure route / ${sidCellLabel}`)"
             @click.stop="onSidClick"
           >
             <span class="pg-sid-val">{{ store.displaySidForStrip(strip) || '' }}</span>
@@ -1420,10 +1416,10 @@
             :class="{
               ghost: !store.displaySidForStrip(strip),
               'sid-highlight': sidHighlight,
-              'sid-mdi-box': essaMdi2MinSidBox,
+              'sid-mdi-box': essaEastSidBox,
               editable: canEditAssignedData,
             }"
-            :title="essaMdi2MinSidBox ? 'MDI 2 MIN' : `Departure route / ${sidCellLabel}`"
+            :title="`Departure route / ${sidCellLabel}`"
             @click.stop="onSidClick"
           >{{ store.displaySidForStrip(strip) || sidCellLabel }}</div>
           <!-- RTC ARR: empty framed SID slot (no data / no edit) -->
@@ -1572,7 +1568,7 @@ import {
   isIfrSidEligible,
   isTrackSidName,
   isVectorSidName,
-  needsEssaMdi2MinSidBox,
+  needsEssaEastSidBox,
   normalizeEssaRwy,
   requiresAccCoordination,
   sidFieldLabel,
@@ -2836,18 +2832,9 @@ const sidHighlight = computed(() => {
 })
 
 /**
- * ESSA DEP 19R + TOVRI/BABAP — black SID box (MDI 2 MIN reminder).
- * Uses display SID so FPR-forced / override SIDs still match.
+ * ESSA: black SID box when preferred APP/DEP sector is DEP-E or ARR-E.
  */
-const essaMdi2MinSidBox = computed(() =>
-  needsEssaMdi2MinSidBox({
-    adep: props.strip.adep,
-    depRwy: props.strip.runway,
-    displaySid: store.displaySidForStrip(props.strip),
-    stripType: props.strip.stripType,
-    flightRules: props.strip.flightRules,
-  }),
-)
+const essaEastSidBox = computed(() => needsEssaEastSidBox(props.strip.appDepNextSector))
 
 const hasRofRequest = computed(() => !!props.strip.rofRequestCallsign || !!props.strip.rofRequestSi)
 /** Inbound: ROF sent to us (we track). Outbound: we sent ROF (pink window). */
@@ -6332,7 +6319,7 @@ function onGroundStateClick(action: string) {
   padding: 0 calc(2px * var(--strip-scale));
   cursor: pointer;
 }
-/* ESSA 19R TOVRI/BABAP — black SID box (MDI 2 MIN) on paper look */
+/* ESSA preferred DEP-E / ARR-E — black SID box on paper look */
 .pg-sid.sid-mdi-box:not(.ghost) {
   box-shadow: inset 0 0 0 3px #111;
 }
@@ -8214,7 +8201,7 @@ function onGroundStateClick(action: string) {
 .cell-sid:not(.ghost) {
   font-size: var(--fs-data-lg);
 }
-/* ESSA 19R TOVRI/BABAP — black SID box (MDI 2 MIN); cell-sid has border:none */
+/* ESSA preferred DEP-E / ARR-E — black SID box; cell-sid has border:none */
 .cell-sid.sid-mdi-box:not(.ghost) {
   box-shadow: inset 0 0 0 3px #111;
 }

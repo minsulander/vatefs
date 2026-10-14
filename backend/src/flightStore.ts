@@ -27,6 +27,7 @@ import type { EfsStaticConfig } from "./config.js"
 import { isEssaRolesConfig, ALL_GND_POSITIONS } from "./essa-roles.js"
 import {
     resolveEssaNextSi,
+    resolveFlightAppDepNextSector,
     recordFlightMovement,
     isInSelectedGndAor,
     shouldOfferGndSequenceXfer,
@@ -4920,6 +4921,13 @@ class FlightStore {
                     : undefined,
             pob: parsePobFromRemarks(flight.fplRemarks),
             isSlow,
+            // ESSA east SID box: preferred Appendix A sector DEP-E / ARR-E
+            appDepNextSector:
+                (stripType === "departure" || stripType === "local") &&
+                isIfrSidEligible(flightRules) &&
+                (flight.origin || "").toUpperCase() === "ESSA"
+                    ? resolveFlightAppDepNextSector(flight)
+                    : undefined,
             highlightActions: highlightActions.length > 0 ? highlightActions : undefined,
             isAssumed: isTrackedByMe || undefined,
             ownerSi,
