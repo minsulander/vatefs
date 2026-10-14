@@ -186,4 +186,92 @@ check("manual forceIdeal → display DW freq without AFV XC", () => {
     assert.equal(hit!.xc, true)
 })
 
+check("APP offline + CTR online without XC → display CTR freq (not ideal DEP)", () => {
+    __setAppDepOwnerChainsForTest({
+        DW: ["DW", "W", "E", "S9", "AA"],
+        W: ["W", "E", "S9", "AA"],
+        E: ["E", "S9", "AA"],
+    })
+    __setEsePositionForTest({
+        callsign: "ESSA_W_DEP",
+        frequency: 124.105,
+        si: "DW",
+        airport: "ESSA",
+        role: "DEP",
+    })
+    __setEsePositionForTest({
+        callsign: "ESAA_CTR",
+        frequency: 118.405,
+        si: "AA",
+        airport: "ESAA",
+        role: "CTR",
+    })
+    staticConfig.onlineControllers = new Map([
+        [
+            "ESAA_CTR",
+            { role: "CTR", frequency: 118.405, callsign: "ESAA_CTR", positionId: "AA" },
+        ],
+    ])
+    __setAfvFrequenciesForTest({
+        ESAA_CTR: ["118.405"],
+    })
+
+    const hit = resolveAppDepTransfer("DEP-W")
+    assert.ok(hit)
+    assert.equal(hit!.transferCallsign, "ESAA_CTR")
+    assert.equal(hit!.transferSi, "AA")
+    assert.equal(hit!.displaySi, "AA")
+    assert.equal(hit!.displayFrequency, 118.405)
+    assert.equal(hit!.xc, false)
+
+    // MAP/ARR-E uses the same helper — must not fall back to published APP freq
+    const mapHit = resolveAppDepTransfer("ARR-E")
+    assert.ok(mapHit)
+    assert.equal(mapHit!.transferCallsign, "ESAA_CTR")
+    assert.equal(mapHit!.displayFrequency, 118.405)
+    assert.equal(mapHit!.xc, false)
+})
+
+check("APP offline + CTR online with AFV XC → display ideal DEP freq", () => {
+    __setAfvFrequenciesForTest({
+        ESAA_CTR: ["118.405", "124.105"],
+    })
+    const hit = resolveAppDepTransfer("DEP-W")
+    assert.ok(hit)
+    assert.equal(hit!.transferCallsign, "ESAA_CTR")
+    assert.equal(hit!.displaySi, "DW")
+    assert.equal(hit!.displayFrequency, 124.105)
+    assert.equal(hit!.xc, true)
+})
+
+check("APP online prefers APP over CTR further in OWNER chain", () => {
+    staticConfig.onlineControllers = new Map([
+        [
+            "ESSA_E_APP",
+            { role: "APP", frequency: 126.655, callsign: "ESSA_E_APP", positionId: "E" },
+        ],
+        [
+            "ESAA_CTR",
+            { role: "CTR", frequency: 118.405, callsign: "ESAA_CTR", positionId: "AA" },
+        ],
+    ])
+    __setEsePositionForTest({
+        callsign: "ESSA_E_APP",
+        frequency: 126.655,
+        si: "E",
+        airport: "ESSA",
+        role: "APP",
+    })
+    __setAfvFrequenciesForTest({
+        ESSA_E_APP: ["126.655"],
+        ESAA_CTR: ["118.405"],
+    })
+    const hit = resolveAppDepTransfer("DEP-W")
+    assert.ok(hit)
+    assert.equal(hit!.transferCallsign, "ESSA_E_APP")
+    assert.equal(hit!.displaySi, "E")
+    assert.equal(hit!.displayFrequency, 126.655)
+    assert.equal(hit!.xc, false)
+})
+
 console.log(`\n${passed} passed`)

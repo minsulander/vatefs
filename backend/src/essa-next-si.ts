@@ -1062,7 +1062,8 @@ export function getForceIdealAppDepFrequency(): boolean {
 }
 
 /**
- * Walk ESE OWNER chain for ideal sector; pick first online ESSA APP/DEP.
+ * Walk ESE OWNER chain for ideal sector; prefer first online ESSA APP/DEP,
+ * then fall through to later owners (e.g. CTR S9/AA) when APP/DEP are offline.
  * Display ideal SI/freq when covering controller monitors ideal freq on AFV (XC),
  * or when settings force ideal frequency.
  */
@@ -1081,12 +1082,24 @@ export function resolveAppDepTransfer(
     const chain = getAppDepOwnerChain(idealSi)
 
     let transfer: { callsign: string; frequency: number; si: string } | undefined
+    // Prefer APP/DEP SIs so a covering APP still wins over CTR further down the chain
     for (const ownerSi of chain) {
         if (!APP_DEP_OWNER_SIS.has(ownerSi.toUpperCase())) continue
         const hit = isOnlineSi(ownerSi)
         if (hit) {
             transfer = hit
             break
+        }
+    }
+    // No APP/DEP online — CTR (or other) owner later in the ESE chain covers
+    if (!transfer) {
+        for (const ownerSi of chain) {
+            if (APP_DEP_OWNER_SIS.has(ownerSi.toUpperCase())) continue
+            const hit = isOnlineSi(ownerSi)
+            if (hit) {
+                transfer = hit
+                break
+            }
         }
     }
     if (!transfer) return undefined
