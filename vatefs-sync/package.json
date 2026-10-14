@@ -1,0 +1,25 @@
+{
+  "name": "@vatefs/vatefs-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Closed-beta / self-host VatEFS sync API (scribbles, placement, EFS-only flags; VatIRIS-compatible)",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "tsx --watch src/server.ts",
+    "tunnel": "echo Run: cloudflared tunnel --url http://127.0.0.1:$PORT (default PORT=17880)"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.10.0",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
