@@ -2754,6 +2754,27 @@ const canShowContactMe = computed(
 )
 
 /**
+ * SAAB RTO: press sends LINEUP (undo CFTO) and replaces the key with TAXI OUT / TAXI IN.
+ * Keep choice open after CFTO clears; close when TXO/TXI chosen or strip changes.
+ */
+const rtoChoiceOpen = ref(false)
+watch(
+  () => props.strip.id,
+  () => {
+    rtoChoiceOpen.value = false
+  },
+)
+watch(
+  () => props.strip.groundstate,
+  (gs) => {
+    // Choice is only while still lined up after RTO; taxi/other GS closes it
+    if (rtoChoiceOpen.value && gs !== 'LINEUP' && gs !== 'DEPA') {
+      rtoChoiceOpen.value = false
+    }
+  },
+)
+
+/**
  * Visible action keys: strip.actions plus CONTACTME paired with ASSUME on non-assumed arrivals.
  * Also ensures ASSUME when the context menu would offer it (empty/missing actions).
  */
@@ -2766,6 +2787,10 @@ const displayActions = computed(() => {
     const i = actions.indexOf('ASSUME')
     actions = [...actions]
     actions.splice(i + 1, 0, 'CONTACTME')
+  }
+  // RTO press replaces RTO with TAXI OUT / TAXI IN (same strip action row)
+  if (rtoChoiceOpen.value) {
+    return ['TXO', 'TXI']
   }
   return actions
 })
@@ -4892,12 +4917,17 @@ function actionLabel(action: string): string {
       if (showEssaDclLabel.value) return 'DCL'
       return showAckClrLabel.value ? 'ACK CLR' : 'CLR'
     case 'TXO':
+      if (rtoChoiceOpen.value) return compactPair ? 'OUT' : 'TAXI OUT'
+      return 'TAXI'
     case 'TXI':
+      if (rtoChoiceOpen.value) return compactPair ? 'IN' : 'TAXI IN'
+      return 'TAXI'
     case 'TAXI': return 'TAXI'
     case 'LU': return compactPair ? 'L/U' : 'LINE UP'
     case 'ASSUME': return compactPair ? 'ASSU' : 'ASSUME'
     case 'CONTACTME': return compactPair ? 'C ME' : 'C ME'
     case 'CTO': return 'CFTO'
+    case 'RTO': return 'RTO'
     case 'XFER': return 'TRANS'
     case 'PARK': return 'TERM'
     case 'GOA': return 'G/A'
@@ -5351,6 +5381,15 @@ function onActionClick(action: string) {
     clncDialogOpen.value = true
     return
   }
+  // SAAB RTO: undo CFTO → LINEUP, then replace key with TAXI OUT / TAXI IN
+  if (action === 'RTO') {
+    rtoChoiceOpen.value = true
+    store.sendStripAction(props.strip.id, 'RTO')
+    return
+  }
+  if (action === 'TXO' || action === 'TXI') {
+    rtoChoiceOpen.value = false
+  }
   store.sendStripAction(props.strip.id, action)
 }
 
@@ -5364,6 +5403,14 @@ function onActionTouch(event: TouchEvent, action: string) {
     }
     clncDialogOpen.value = true
     return
+  }
+  if (action === 'RTO') {
+    rtoChoiceOpen.value = true
+    store.sendStripAction(props.strip.id, 'RTO')
+    return
+  }
+  if (action === 'TXO' || action === 'TXI') {
+    rtoChoiceOpen.value = false
   }
   store.sendStripAction(props.strip.id, action)
 }

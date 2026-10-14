@@ -848,6 +848,9 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             return { type: "setGroundState", callsign, state: "TAXI" }
         case "TXI":
             return { type: "setGroundState", callsign, state: "TXIN" }
+        case "RTO":
+            // Rejected takeoff: undo CFTO → LINEUP; UI then offers TAXI OUT / TAXI IN
+            return { type: "setGroundState", callsign, state: "LINEUP" }
         case "FRQ":
             return { type: "setGroundState", callsign, state: "ONFREQ" }
         case "STUP":
@@ -4588,9 +4591,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 }
 
-                // HP clears on CFTO; HS clears on LINE UP or CFTO (match EFS 0.0.17)
-                if (flight && (message.action === "LU" || message.action === "CTO")) {
-                    const clearHp = message.action === "CTO"
+                // HP clears on CFTO; HS clears on LINE UP or CFTO (match EFS 0.0.17).
+                // RTO undoes CFTO → LINEUP: clear HS and HP (same as leaving takeoff).
+                if (flight && (message.action === "LU" || message.action === "CTO" || message.action === "RTO")) {
+                    const clearHp = message.action === "CTO" || message.action === "RTO"
                     const clearHs = true
                     if (clearHp && flight.hp) {
                         flight.hp = undefined
@@ -4615,10 +4619,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 }
 
+                // RTO: clear ATD so green ATD/CFTO cues drop with LINEUP (CFTO flag is DEPA-only)
+                if (flight && message.action === "RTO" && flight.atd) {
+                    flight.atd = undefined
+                    console.log(`[ATD] ${strip.callsign} cleared on RTO`)
+                }
+
                 // Optimistic GS for live mode (hold against runway ARR echo after TXI/TXO/…)
                 const optimisticGs: Record<string, string> = {
                     PUSH: "PUSH",
                     LU: "LINEUP",
+                    RTO: "LINEUP",
                     CTO: "DEPA",
                     TXO: "TAXI",
                     TXI: "TXIN",
@@ -4701,6 +4712,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         case "LU":
                             flight.groundstate = "LINEUP"
                             flight.hs = undefined
+                            break
+                        case "RTO":
+                            // Undo CFTO → LINEUP (UI then offers TAXI OUT / TAXI IN); clear ATD
+                            flight.groundstate = "LINEUP"
+                            flight.hs = undefined
+                            flight.hp = undefined
+                            flight.atd = undefined
                             break
                         case "CTO":
                             flight.groundstate = "DEPA"

@@ -4506,6 +4506,12 @@ class FlightStore {
                     actions = ['ROF']
                 }
             }
+        } else if (this.config.look !== 'paper' && isTrackedByMe) {
+            // SAAB CFTO (DEPA): show RTO — frontend expands to TAXI OUT / TAXI IN
+            const action = determineActionForFlight(flight, sectionId, actionConfig)
+            if (action === 'RTO') {
+                actions = ['RTO']
+            }
         }
 
         let xferFrequency: string | undefined
@@ -4546,27 +4552,30 @@ class FlightStore {
                 }
             }
             // TWR-only (GND separate): vacated arrival/local → XFER to next GND via ESSA sequence
-            // (EuroScope nextController is often APP/empty, so action rules alone miss this)
+            // (EuroScope nextController is often APP/empty, so action rules alone miss this).
+            // Same for RTO → TAXI IN (departure TXIN back to gate) — ESSA may pick split GND SI.
             if (
                 coveringTwr &&
                 !coveringGndOnly &&
                 isTrackedByMe &&
                 transferPending !== "out" &&
-                (stripType === "arrival" || stripType === "local") &&
                 flight.airborne === false &&
                 parseControllerRole(essaNext.callsign, actionConfig.myAirports) === "GND"
             ) {
-                const vacated =
-                    flight.latitude === undefined ||
-                    flight.longitude === undefined ||
-                    flight.currentAltitude === undefined ||
-                    !isOnAnyRunway(
-                        flight.latitude,
-                        flight.longitude,
-                        flight.currentAltitude,
-                        actionConfig.myAirports
-                    )?.onRunway
-                if (vacated) {
+                const gs = flight.groundstate ?? ""
+                const rtoTaxiIn = stripType === "departure" && gs === "TXIN"
+                const vacatedArrLocal =
+                    (stripType === "arrival" || stripType === "local") &&
+                    (flight.latitude === undefined ||
+                        flight.longitude === undefined ||
+                        flight.currentAltitude === undefined ||
+                        !isOnAnyRunway(
+                            flight.latitude,
+                            flight.longitude,
+                            flight.currentAltitude,
+                            actionConfig.myAirports
+                        )?.onRunway)
+                if (rtoTaxiIn || vacatedArrLocal) {
                     actions = ["XFER"]
                 }
             }

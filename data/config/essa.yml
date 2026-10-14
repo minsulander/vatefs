@@ -88,7 +88,7 @@ sectionRules:
     sectionId: taxi_dep
     direction: departure
     airborne: false
-    groundstates: [TAXI, TXIN]
+    groundstates: [TAXI]
     priority: 30
 
   taxi_dep_local:
@@ -97,6 +97,14 @@ sectionRules:
     airborne: false
     groundstates: [TAXI]
     priority: 30
+
+  # RTO / rejected takeoff → TAXI IN: departure with TXIN goes to TAXIWAY ARR (gate)
+  taxi_arr_dep_txin:
+    sectionId: taxi_arr
+    direction: departure
+    airborne: false
+    groundstates: [TXIN]
+    priority: 92
 
   # ESSA: CA/VA/CAT/OS alone stay in INBOUND APP (same as common-rules / ESGG).
   # CTR ARR only via assume (90) or inbound transfer (95) — not APP-set approach clearance.
@@ -138,7 +146,7 @@ sectionRules:
     sectionId: taxi_dep
     direction: departure
     airborne: false
-    groundstates: [TAXI, TXIN]
+    groundstates: [TAXI]
     controller: myself
     myRole: [TWR]
     priority: 90

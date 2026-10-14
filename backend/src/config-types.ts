@@ -14,7 +14,7 @@ export type ControllerRole = 'DEL' | 'GND' | 'TWR' | 'APP' | 'CTR'
 /**
  * Default action codes for flight strips
  */
-export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'STUP' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA' | 'ROF'
+export type StripAction = 'ASSUME' | 'CTL' | 'CTO' | 'LU' | 'XFER' | 'PUSH' | 'STUP' | 'TAXI' | 'TXO' | 'TXI' | 'PARK' | 'CLNC' | 'READY' | 'GOA' | 'ROF' | 'RTO'
 
 /**
  * Flight direction relative to our airport.

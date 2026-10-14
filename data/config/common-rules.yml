@@ -329,9 +329,21 @@ actionRules:
     myRole: [GND]
     priority: 111
 
+  # GND: ASSUME RTO → TAXI IN (departure TXIN back to gate) when TWR transferred
+  assume_dep_txin_gnd:
+    action: ASSUME
+    direction: departure
+    controller: not_myself
+    airborne: false
+    groundstates: [TXIN]
+    handoffInitiated: true
+    myRole: [GND]
+    priority: 111
+
   # TWR/APP/CTR: XFER to GND for on-ground arrivals/local when GND is separately online
   # nextControllerRole: if ES sets nextController it must be GND; if unset (ESSA), allow
   # and let ESSA sequence / flightStore fill the XFER target.
+  # Also covers RTO → TAXI IN (departure TXIN) — solo TWR covering GND skips via notMyRole.
   xfer_twr_to_gnd:
     action: XFER
     direction: either
@@ -378,6 +390,17 @@ actionRules:
     airborne: false
     myRole: [TWR]
     priority: 90
+
+  # SAAB: rejected takeoff after CFTO (DEPA) — UI expands to TAXI OUT / TAXI IN
+  # Paper keeps empty actions on CFTO (scribble CTO↔LU); flightStore gates RTO to non-paper
+  rto_depa:
+    action: RTO
+    direction: departure
+    controller: myself
+    groundstates: [DEPA]
+    airborne: false
+    myRole: [TWR]
+    priority: 95
 
   # TAXI departures: LU (line up) — frontend shows LU+CTO pair (TWR/APP/CTR top-down)
   # airborne: false — after takeoff without CFTO, groundstate may still be TAXI in CTR DEP

@@ -143,6 +143,14 @@ sectionRules:
     groundstates: [TAXI]
     priority: 30
 
+  # RTO → TAXI IN: departure with TXIN still lands on TAXIWAY (single bay)
+  twy_taxi_dep_txin:
+    sectionId: twy
+    direction: departure
+    airborne: false
+    groundstates: [TXIN]
+    priority: 32
+
   twy_taxi_dep_local:
     sectionId: twy
     direction: local
@@ -307,11 +315,22 @@ actionRules:
     myRole: [GND]
     priority: 111
 
+  # GND: ASSUME RTO → TAXI IN when TWR transferred
+  assume_dep_txin_gnd:
+    action: ASSUME
+    direction: departure
+    controller: not_myself
+    airborne: false
+    groundstates: [TXIN]
+    handoffInitiated: true
+    myRole: [GND]
+    priority: 111
+
   xfer_twr_to_gnd:
     action: XFER
     direction: either
     controller: myself
-    groundstates: ['', NSTS, ARR]
+    groundstates: ['', NSTS, ARR, TXIN]
     airborne: false
     handoffInitiated: false
     myRole: [TWR, APP, CTR]
@@ -401,6 +420,16 @@ actionRules:
     airborne: false
     myRole: [TWR]
     priority: 90
+
+  # Rejected takeoff after CFTO — UI expands to TAXI OUT / TAXI IN
+  rto_depa:
+    action: RTO
+    direction: departure
+    controller: myself
+    groundstates: [DEPA]
+    airborne: false
+    myRole: [TWR]
+    priority: 95
 
   lu_taxi_dep:
     action: LU
