@@ -8410,17 +8410,27 @@ function onGroundStateClick(action: string) {
 .action-button.action-key-amber .action-freq {
   color: var(--strip-amber) !important;
 }
+/* DCL status — coloured label on strip-bg key (not filled button) */
 .action-button.action-dcl-sent {
-  background: #66bb6a !important;
-  color: #000 !important;
+  background: #ebebeb !important;
+  color: #2e7d32 !important;
+}
+.action-button.action-dcl-sent .action-text {
+  color: #2e7d32 !important;
 }
 .action-button.action-dcl-request {
-  background: #fdd835 !important;
-  color: #000 !important;
+  background: #ebebeb !important;
+  color: #f9a825 !important;
+}
+.action-button.action-dcl-request .action-text {
+  color: #f9a825 !important;
 }
 .action-button.action-dcl-error {
-  background: #e53935 !important;
-  color: #000 !important;
+  background: #ebebeb !important;
+  color: #e53935 !important;
+}
+.action-button.action-dcl-error .action-text {
+  color: #e53935 !important;
 }
 /* Pink ROF label on strip-bg key — not filled pink background */
 .action-button.action-rof-pink {
