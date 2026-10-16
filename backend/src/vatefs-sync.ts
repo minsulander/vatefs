@@ -122,7 +122,7 @@ export function getIrisSyncHealth(): FeedStatusItem {
 }
 
 function syncTogglesOn(s: UiSettings): boolean {
-    return !!(s.scribbleSyncEnabled || s.stripSyncEnabled)
+    return !!s.syncEnabled
 }
 
 function validCid(s: UiSettings): boolean {
@@ -429,17 +429,15 @@ export function setStripviewLayoutProvider(
     // Order publish uses getAllStrips + canPublishIrisOrder from initScribbleSync
 }
 
-/** Push strip including explicit QNH/ATIS clear (null). Requires strip sync. */
+/** Push strip including explicit QNH/ATIS clear (null). */
 export async function pushStripFlagsToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
-    if (!settings.stripSyncEnabled) return false
+    if (!settings.syncEnabled) return false
     const strip = getStripById(stripId)
     if (!strip) return false
     const body: PutBody = {
         strip: stripMeta(strip, { includeQnhAtisClear: true }),
-    }
-    if (settings.scribbleSyncEnabled) {
-        body.strokes = scribbleStore.getScribbles(stripId)
+        strokes: scribbleStore.getScribbles(stripId),
     }
     const ok = await putRemote(stripId, body)
     if (ok) scheduleIrisOrderPush()
@@ -457,16 +455,16 @@ function applyRemotePayload(
     },
 ) {
     const settings = getSettings()
+    if (!settings.syncEnabled) return
     const localId = findLocalStripId(syncKey, apt) || syncKey
     const prevRemote = scribbleStore.getRemoteUpdatedAt(localId)
     if (!payload.deleted && prevRemote && payload.updatedAt && payload.updatedAt <= prevRemote) {
         return
     }
     const strokes = scribbleStore.normalizeStrokes(payload.strokes)
-    const applyStripMeta = !!settings.stripSyncEnabled
     onApplyRemote(localId, strokes, payload.strip, payload.updatedAt, {
         deleted: !!payload.deleted,
-        applyStripMeta,
+        applyStripMeta: true,
     })
     const roomRealm = resolveRealm(getSettings())
     const room = `${roomRealm}/${apt}`
@@ -474,30 +472,30 @@ function applyRemotePayload(
     if (!prev || payload.updatedAt > prev) sinceByRoom.set(room, payload.updatedAt)
 }
 
-/** Placement / create / reorder push — requires strip sync. */
+/** Placement / create / reorder push. */
 export async function pushStripToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
-    if (!settings.stripSyncEnabled) return false
+    if (!settings.syncEnabled) return false
     const strip = getStripById(stripId)
     if (!strip) return false
-    const body: PutBody = { strip: stripMeta(strip) }
-    if (settings.scribbleSyncEnabled) {
-        body.strokes = scribbleStore.getScribbles(stripId)
+    const body: PutBody = {
+        strip: stripMeta(strip),
+        strokes: scribbleStore.getScribbles(stripId),
     }
     const ok = await putRemote(stripId, body)
     if (ok) scheduleIrisOrderPush()
     return ok
 }
 
-/** Zoom-close / stroke push — requires scribble sync. */
+/** Zoom-close / stroke push. */
 export async function pushScribbleToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
-    if (!settings.scribbleSyncEnabled) return false
+    if (!settings.syncEnabled) return false
     const strip = getStripById(stripId)
     if (!strip) return false
-    const body: PutBody = { strokes: scribbleStore.getScribbles(stripId) }
-    if (settings.stripSyncEnabled) {
-        body.strip = stripMeta(strip)
+    const body: PutBody = {
+        strokes: scribbleStore.getScribbles(stripId),
+        strip: stripMeta(strip),
     }
     return putRemote(stripId, body)
 }
@@ -505,8 +503,7 @@ export async function pushScribbleToRemote(stripId: string): Promise<boolean> {
 /** Push a remote delete (note/vehicle remove, or clear shared ink record). */
 export async function deleteStripFromRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
-    // Deletes of note/vehicle need strip sync; ink-clear alone needs scribble sync
-    if (!settings.stripSyncEnabled && !settings.scribbleSyncEnabled) return false
+    if (!settings.syncEnabled) return false
     const base = baseUrl()
     if (!base) return false
     const strip = getStripById(stripId)
