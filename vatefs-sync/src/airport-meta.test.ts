@@ -22,13 +22,29 @@ const ok = validateAirportMeta({
 assert(ok.ok, "valid essaSep")
 if (!ok.ok) throw new Error("unreachable")
 
+const okCfg = validateAirportMeta({
+  essaSep: { sep: "2.5", dlv: "3.5", depGap: "6" },
+  essaConfig: "9A",
+})
+assert(okCfg.ok, "valid essaConfig")
+if (!okCfg.ok) throw new Error("unreachable")
+assert(okCfg.meta.essaConfig === "9A", "essaConfig kept")
+
+const badCfg = validateAirportMeta({
+  essaSep: { sep: "2.5", dlv: "3.5", depGap: "6" },
+  essaConfig: "99",
+})
+assert(!badCfg.ok, "unknown essaConfig rejected")
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vatefs-meta-"))
 initDb(dir)
-const row = upsertAirportMeta("live", "ESSA", ok.meta, 1157125)
-assert(row.meta.essaSep?.sep === "2.5 nm", "upsert sep")
+const row = upsertAirportMeta("live", "ESSA", okCfg.meta, 1157125)
+assert(row.meta.essaSep?.sep === "2.5", "upsert sep")
+assert(row.meta.essaConfig === "9A", "upsert essaConfig")
 assert(row.updatedByCid === 1157125, "cid")
 const got = getAirportMeta("live", "ESSA")
-assert(got?.meta.essaSep?.dlv === "3.5 nm", "get dlv")
+assert(got?.meta.essaSep?.dlv === "3.5", "get dlv")
+assert(got?.meta.essaConfig === "9A", "get essaConfig")
 assert(getAirportMeta("live", "ESGG") == null, "other airport empty")
 
 fs.rmSync(dir, { recursive: true, force: true })

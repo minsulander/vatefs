@@ -48,7 +48,12 @@ let onNeedVatIrisSignIn: (detail?: string) => void = () => {}
 let onRealmChanged: (realm: ScribbleRealm) => void = () => {}
 /** True when this session may publish ESSA order/SEP/heartbeat (TWR/GND). */
 let canPublishIrisOrder: () => boolean = () => false
-let getEssaSepIndicators: () => { sep: string; dlv: string; depGap: string } | null = () => null
+let getEssaSepIndicators: () => {
+    sep: string
+    dlv: string
+    depGap: string
+    essaConfig?: string | null
+} | null = () => null
 
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let sinceByRoom = new Map<string, string>()
@@ -75,7 +80,12 @@ export function initScribbleSync(opts: {
     onNeedVatIrisSignIn?: (detail?: string) => void
     onRealmChanged?: (realm: ScribbleRealm) => void
     canPublishIrisOrder?: () => boolean
-    getEssaSepIndicators?: () => { sep: string; dlv: string; depGap: string } | null
+    getEssaSepIndicators?: () => {
+        sep: string
+        dlv: string
+        depGap: string
+        essaConfig?: string | null
+    } | null
 }) {
     getSettings = opts.getSettings
     getConnectionType = opts.getConnectionType
@@ -263,22 +273,34 @@ async function putRemote(stripId: string, body: PutBody): Promise<boolean> {
     return true
 }
 
-/** SEP — IRIS single write set: PUT …/meta { essaSep } only (bare values, no /sep). */
+/**
+ * Airport meta — IRIS single write set: PUT …/meta
+ * `{ essaSep, essaConfig? }` (bare SEP values; bankonfig id e.g. "9A").
+ */
 let lastPushedSepJson = ""
 
-export async function pushEssaSepMetaToRemote(indicators: {
-    sep: string
-    dlv: string
-    depGap: string
-}): Promise<boolean> {
+export async function pushEssaSepMetaToRemote(
+    indicators: {
+        sep: string
+        dlv: string
+        depGap: string
+        essaConfig?: string | null
+    },
+    opts?: { force?: boolean },
+): Promise<boolean> {
     const settings = getSettings()
     if (!syncTogglesOn(settings) || !validCid(settings)) return false
     const airports = getAirports().map((a) => a.toUpperCase())
     if (!airports.includes("ESSA")) return false
     const bare = formatIrisSep(indicators)
-    const metaBody = { essaSep: bare }
+    const metaBody: {
+        essaSep: { sep: string; dlv: string; depGap: string }
+        essaConfig?: string
+    } = { essaSep: bare }
+    const cfg = (indicators.essaConfig || "").trim()
+    if (cfg) metaBody.essaConfig = cfg
     const metaJson = JSON.stringify(metaBody)
-    if (metaJson === lastPushedSepJson) return true
+    if (!opts?.force && metaJson === lastPushedSepJson) return true
     const base = baseUrl()
     if (!base) return false
     const realm = resolveRealm(settings)
@@ -292,6 +314,13 @@ export async function pushEssaSepMetaToRemote(indicators: {
     lastPushedSepJson = metaJson
     noteSuccess()
     return true
+}
+
+/** Refresh meta (SEP + bankonfig) so IRIS TTL stays warm. */
+export async function refreshEssaMetaToRemote(force = false): Promise<boolean> {
+    const ind = getEssaSepIndicators()
+    if (!ind) return false
+    return pushEssaSepMetaToRemote(ind, { force })
 }
 
 /** Order revision + debounce / heartbeat for locked IRIS contract. */
@@ -376,6 +405,8 @@ export async function pushIrisHeartbeat(airport = "ESSA"): Promise<boolean> {
 function startIrisHeartbeat() {
     if (heartbeatTimer) return
     heartbeatTimer = setInterval(() => {
+        // Meta write refreshes TTL and keeps essaConfig current; heartbeat is optional backup
+        void refreshEssaMetaToRemote(true)
         void pushIrisHeartbeat("ESSA")
     }, HEARTBEAT_MS)
 }
@@ -747,9 +778,8 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
     }, intervalMs)
     void pollRemote()
     void pushIrisOrderToRemote(undefined, { force: true })
+    void refreshEssaMetaToRemote(true)
     void pushIrisHeartbeat("ESSA")
-    const sep = getEssaSepIndicators()
-    if (sep) void pushEssaSepMetaToRemote(sep)
 }
 
 export function stopScribbleSyncPolling() {

@@ -1335,6 +1335,16 @@ function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
     return (ESSA_SEP_CYCLE[field] as readonly (string | null)[]).some((v) => v === value)
 }
 
+/** ESSA bankonfig id from ES ARR/DEP (+ AUP prefer), e.g. "9A". */
+function resolveCurrentEssaConfigId(): string | null {
+    if (!isEssaRolesConfig(staticConfig)) return null
+    const ops = getEssaOps()
+    const prefer = getAupR16Status().suggestConfigId
+    return resolveEssaRwyConfigId(ops?.arr ?? [], ops?.dep ?? [], new Date(), {
+        preferConfigId: prefer,
+    })
+}
+
 /** Build ESSA SEP/DLV/DEP GAP message (roles mode + ESSA ops only). */
 function buildEssaSepIndicatorsMessage(): EssaSepIndicatorsMessage | null {
     if (!isEssaRolesConfig(staticConfig)) return null
@@ -1343,10 +1353,7 @@ function buildEssaSepIndicatorsMessage(): EssaSepIndicatorsMessage | null {
     const dep = ops?.dep ?? []
     const sccMap = atisService?.getEssaScc() ?? new Map()
     const metar = atisService?.getMetarText("ESSA") ?? null
-    const prefer = getAupR16Status().suggestConfigId
-    const configId = resolveEssaRwyConfigId(arr, dep, new Date(), {
-        preferConfigId: prefer,
-    })
+    const configId = resolveCurrentEssaConfigId()
     const auto = computeEssaSepIndicators({
         configId,
         arrRunways: arr,
@@ -1368,12 +1375,13 @@ function sendEssaSepIndicators(socket: WebSocket) {
 function broadcastEssaSepIndicators() {
     const message = buildEssaSepIndicatorsMessage()
     if (message) broadcast(message)
-    // TWR → PUT …/meta { essaSep }; TWR/GND → PUT …/order
+    // TWR → PUT …/meta { essaSep, essaConfig }; TWR/GND → PUT …/order
     if (message && canEditEssaSepIndicators()) {
         void pushEssaSepMetaToRemote({
             sep: message.sep,
             dlv: message.dlv,
             depGap: message.depGap,
+            essaConfig: resolveCurrentEssaConfigId(),
         })
     }
     if (canPublishEssaStripview()) {
@@ -3269,7 +3277,13 @@ initScribbleSync({
     canPublishIrisOrder: () => canPublishEssaStripview(),
     getEssaSepIndicators: () => {
         const m = buildEssaSepIndicatorsMessage()
-        return m ? { sep: m.sep, dlv: m.dlv, depGap: m.depGap } : null
+        if (!m) return null
+        return {
+            sep: m.sep,
+            dlv: m.dlv,
+            depGap: m.depGap,
+            essaConfig: resolveCurrentEssaConfigId(),
+        }
     },
 })
 restartScribbleSyncPolling()

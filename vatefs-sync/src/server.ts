@@ -15,6 +15,7 @@ import {
   upsert,
   upsertAirportMeta,
   upsertOrder,
+  findForbiddenSyncStripKeys,
   validateAirportMeta,
   validateOrderBody,
   validateSepBody,
@@ -308,6 +309,13 @@ function putStripHandler(req: Request, res: Response) {
     if (raw == null) {
       stripMeta = null
     } else if (typeof raw === "object") {
+      const forbidden = findForbiddenSyncStripKeys(raw)
+      if (forbidden.length) {
+        res.status(400).json({
+          error: `strip must not include ES fields: ${forbidden.join(", ")}`,
+        })
+        return
+      }
       const s = raw as StripMeta
       stripMeta = {
         kind: typeof s.kind === "string" ? s.kind : undefined,

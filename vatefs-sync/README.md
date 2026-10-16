@@ -8,7 +8,7 @@ Standalone REST API matching the **single allowed VatIRIS write set**.
 |--------|------|------|
 | PUT/DELETE | `/efs/sync/:realm/:airport/:stripKey` | `{ strip?, strokes? }` |
 | PUT | `/efs/sync/:realm/:airport/order` | `{ revision?, entries: [{ stripKey, bayId, sectionId, position }] }` |
-| PUT/GET | `/efs/sync/:realm/:airport/meta` | `{ essaSep: { sep, dlv, depGap } }` (bare values e.g. `"2.5"`) |
+| PUT/GET | `/efs/sync/:realm/:airport/meta` | `{ essaSep: { sep, dlv, depGap }, essaConfig? }` (bare SEP; bankonfig id e.g. `"9A"`) |
 | PUT | `/efs/sync/:realm/:airport/heartbeat` | `{}` (optional; any write refreshes 5 min TTL) |
 | WS | `/efs/sync/:realm/:airport/ws?cid=` | fanout |
 
@@ -19,9 +19,11 @@ Auth: `X-Vatsim-Cid` on writes.
 
 ## Contract notes
 
-- EFS-owned only (order, scribbles, EFS-only strip fields, SEP). No ES status — IRIS joins esdata by callsign.
+- EFS-owned only (order, scribbles, EFS-only strip fields, SEP + bankonfig). No ES status — IRIS joins esdata by callsign.
+- `essaConfig` = ESSA bankonfig id (`1`–`8`, `9A`/`9B`/`9C`, `10`–`14`, `15A`/`15B`/`15C`, `16`), not UTC hour.
 - ESSA Strip TV: `/order` is canonical. `bayId` `TWR-W`\|`TWR-E` from dep RWY; `sectionId` `TAXI`\|`LINEUP`\|`DEPA`. Transfer → stripKey **absent** from order.
 - Per-strip PUT still carries `bayId`/`sectionId`/`position` for APP/consistency.
+- Strip bodies must **not** include ES fields (`groundstate`, `clearedForTakeoff`/`cfto`, `atd`, `depRwy`, `sid`, `stand`, `cfl`, …) — rejected with 400.
 - WS events (IRIS): `order` · `meta` · `strip` · `stripDeleted` · `heartbeat` · `snapshot` (on connect).
 - Writers: any allowlisted CID; VatEFS gates TWR→SEP, TWR+GND→order/strips.
 

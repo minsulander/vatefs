@@ -3254,8 +3254,11 @@ class FlightStore {
         const airborneThreshold = fieldElevation + 200
         const defNotAirborneThreshold = fieldElevation + 30
         const groundSpeedThreshold = 55
+        /** Strip TV / GRP Departure Timer: latch ATD at GS > 40 with CFTO (or no GS at all). */
+        const atdGroundSpeedKt = 40
 
-        // Set airborne flag for both departures and arrivals; stamp ATD/ATA once
+        // Set airborne flag for both departures and arrivals; stamp ATA once.
+        // ATD is latched on roll (below), not at airborne — matches IRIS Strip TV.
         const myAirports = this.config.myAirports.map((a) => a.toUpperCase())
         const originMine = !!flight.origin && myAirports.includes(flight.origin.toUpperCase())
         const destMine = !!flight.destination && myAirports.includes(flight.destination.toUpperCase())
@@ -3275,6 +3278,17 @@ class FlightStore {
             (gsKnown &&
                 gs! <= groundSpeedThreshold &&
                 preDepGs.includes(flight.groundstate ?? ''))
+
+        // ATD: CFTO (DEPA) + GS > 40; or no groundstate + GS > 40. Never CFTO alone / never airborne-only.
+        if (!flight.atd && originMine && gsKnown && gs! > atdGroundSpeedKt) {
+            const gsState = flight.groundstate ?? ''
+            const cfto = gsState === 'DEPA'
+            const noGroundState = gsState === ''
+            if (cfto || noGroundState) {
+                flight.atd = utcHhmm()
+            }
+        }
+
         if (gateLike) {
             flight.airborne = false
         } else if (
@@ -3286,9 +3300,6 @@ class FlightStore {
             flight.airborne = true
             // Airborne again after a landing stamp = go-around (or new dep) — clear ATA
             if (flight.ata) flight.ata = undefined
-            if (!flight.atd && originMine) {
-                flight.atd = utcHhmm()
-            }
             // HP/HS are ground annotations — clear once airborne (EFS + EuroScope)
             const hadHp = !!flight.hp
             const hadHs = !!flight.hs

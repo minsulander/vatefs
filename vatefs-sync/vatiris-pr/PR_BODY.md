@@ -2,15 +2,17 @@
 
 - `/efs/sync` single write set for VatEFS: `/:stripKey`, `/order`, `/meta`, optional `/heartbeat`, `/ws`
 - **No** `/sep`, `/strips/:stripKey`, or `PUT /efs/:airport/:view`
-- Order + scribbles + EFS-only fields + SEP — not EuroScope status
+- Order + scribbles + EFS-only fields + SEP/`essaConfig` — not EuroScope status
+- Meta: `{ essaSep, essaConfig? }` — bankonfig id (`9A`, …), not UTC hour
 - ESSA Strip TV: `/order` canonical (`TWR-W`/`TWR-E` + `TAXI`|`LINEUP`|`DEPA`); transfer = absent from order
 - WS: `order` · `meta` · `strip` · `stripDeleted` · `heartbeat` · `snapshot`
 - Auth: `X-Vatsim-Cid` + allowlist / useraccount
 
 ## Test plan
 
-- [ ] PUT/GET `/meta` with `{ essaSep }` only
+- [ ] PUT/GET `/meta` with `{ essaSep, essaConfig: "9A" }`
 - [ ] PUT/DELETE bare `/:stripKey` (not `/strips/`)
+- [ ] Strip PUT rejected when body includes CFTO/ATD/groundstate
 - [ ] PUT `/order`; transferred callsign absent after TWR→APP
 - [ ] Optional `/heartbeat`; TTL refreshed by any write
 - [ ] WS fanout types match IRIS consumer

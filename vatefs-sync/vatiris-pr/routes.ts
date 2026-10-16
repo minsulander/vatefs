@@ -41,6 +41,8 @@ export type EssaSepMeta = {
 
 export type AirportMetaPayload = {
   essaSep?: EssaSepMeta
+  /** ESSA bankonfig id (QuickRef / Strip TV), e.g. "9A". */
+  essaConfig?: string
 }
 
 export type ScribbleDeps = {
@@ -107,13 +109,35 @@ export type ScribbleStore = {
   }>
 }
 
+/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies. */
+export const FORBIDDEN_SYNC_STRIP_KEYS = [
+  "groundstate",
+  "clearedForTakeoff",
+  "cfto",
+  "atd",
+  "depRwy",
+  "arrRwy",
+  "sid",
+  "stand",
+  "cfl",
+  "temporaryAltitude",
+  "squawk",
+] as const
+
+export function findForbiddenSyncStripKeys(strip: unknown): string[] {
+  if (!strip || typeof strip !== "object" || Array.isArray(strip)) return []
+  return Object.keys(strip as object).filter((k) =>
+    (FORBIDDEN_SYNC_STRIP_KEYS as readonly string[]).includes(k),
+  )
+}
+
 export function validateAirportMeta(
   raw: unknown,
 ): { ok: true; meta: AirportMetaPayload } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "meta must be an object" }
   }
-  const body = raw as { essaSep?: unknown }
+  const body = raw as { essaSep?: unknown; essaConfig?: unknown }
   const out: AirportMetaPayload = {}
   if (body.essaSep !== undefined) {
     if (!body.essaSep || typeof body.essaSep !== "object" || Array.isArray(body.essaSep)) {
@@ -127,6 +151,15 @@ export function validateAirportMeta(
       return { ok: false, error: "essaSep field too long" }
     }
     out.essaSep = { sep: s.sep, dlv: s.dlv, depGap: s.depGap }
+  }
+  if (body.essaConfig !== undefined) {
+    if (
+      typeof body.essaConfig !== "string" ||
+      !/^(?:[1-8]|9[ABC]|1[0-4]|15[ABC]|16)$/.test(body.essaConfig.trim())
+    ) {
+      return { ok: false, error: "essaConfig must be a known bankonfig id" }
+    }
+    out.essaConfig = body.essaConfig.trim()
   }
   if (!out.essaSep) {
     return { ok: false, error: "essaSep required" }
@@ -355,6 +388,13 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
       if (raw == null) {
         stripMeta = null
       } else if (typeof raw === "object") {
+        const forbidden = findForbiddenSyncStripKeys(raw)
+        if (forbidden.length) {
+          res.status(400).json({
+            error: `strip must not include ES fields: ${forbidden.join(", ")}`,
+          })
+          return
+        }
         const s = raw as StripMeta
         stripMeta = {
           kind: typeof s.kind === "string" ? s.kind : undefined,
