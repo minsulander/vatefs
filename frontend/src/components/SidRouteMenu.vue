@@ -402,18 +402,22 @@ async function refineLayout() {
     if (nextSplit !== splitColumns.value) {
       splitColumns.value = nextSplit
       await nextTick()
-      if (token !== refineToken || !menuEl.value) return
-      const chromeAfter = measureChrome(menuEl.value)
+      const menuAfter = menuEl.value
+      if (token !== refineToken || !menuAfter) return
+      const chromeAfter = measureChrome(menuAfter)
       if (chromeAfter > 0) measuredChrome.value = chromeAfter
     }
-    updateScrollPin(menuEl.value)
+    const menuForScroll = menuEl.value
+    if (!menuForScroll) return
+    updateScrollPin(menuForScroll)
     await nextTick()
   } else if (!fprView.value) {
     splitColumns.value = false
     pinScrollHeight.value = false
   }
-  if (token !== refineToken || !menuEl.value) return
-  placeMenu(menuEl.value.offsetHeight || oneColNatural.value)
+  const menuForPlace = menuEl.value
+  if (token !== refineToken || !menuForPlace) return
+  placeMenu(menuForPlace.offsetHeight || oneColNatural.value)
 }
 
 function onWindowChange() {
