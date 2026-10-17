@@ -228,6 +228,7 @@
       'is-bottom': strip.bottom,
       'strip-note-layout': isNote && !isPaperEmptyFlightHolder,
       'strip-vehicle-layout': isVehicle,
+      'look-essa': isVehicle && store.essaRolesMode,
       'look-paper': store.isPaperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
       'paper-info-holder': store.isPaperLook && isPaperInfoHolder,
       'paper-empty-frame': store.isPaperLook && paperInfoKind === 'empty_frame',
@@ -6780,9 +6781,12 @@ function onGroundStateClick(action: string) {
   background: #fff;
 }
 
-/* Vehicle strips: red type frame (1/2RWY4BAY, RTC, paper) */
+/* Vehicle strips: red type frame (paper, RTC, other SAAB). ESSA roles config is dark grey. */
 .strip-vehicle {
   --strip-type: #c62828;
+}
+.strip-vehicle.look-essa {
+  --strip-type: #2a2a2a;
 }
 
 .flight-strip.dragging {

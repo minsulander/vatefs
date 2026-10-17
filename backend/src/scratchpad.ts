@@ -57,6 +57,18 @@ export function isProtocolScratch(scratch: string): boolean {
     return false
 }
 
+/**
+ * Ground Radar arrival-stand broadcast embedded in the scratch pad.
+ * Lists show this assignment immediately; the scratch token is the same value.
+ * Returns undefined when the scratch is not a stand broadcast (leave flight.stand).
+ */
+export function standFromGrpScratch(scratch: string | undefined | null): string | undefined {
+    if (!scratch) return undefined
+    const match = scratch.match(/GRP\/S\/([A-Z0-9]{1,6})/i)
+    if (!match?.[1]) return undefined
+    return match[1].toUpperCase()
+}
+
 function parseRemarksAndHp(body: string): {
     remarks: string | undefined
     hp: string | undefined
@@ -89,6 +101,10 @@ export function parseCombinedScratch(scratch: string): {
     remarks: string | undefined | null
     hp: string | undefined | null
 } {
+    // GRP/S/<stand> is a stand broadcast, not remarks. Do not start a scratch hold.
+    if (standFromGrpScratch(scratch)) {
+        return { remarks: null, hp: null }
+    }
     if (isProtocolScratch(scratch)) {
         return { remarks: null, hp: null }
     }

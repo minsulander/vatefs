@@ -376,6 +376,12 @@ export interface ControllerAssignedDataUpdateMessage {
     /** EuroScope communication type: V/R/T/0 */
     communicationType?: string
     scratch?: string          // Raw scratchpad value (unrecognized by plugin, e.g. "MISAP_" or "")
+    /**
+     * Ground Radar "Arrival stand" list item (tag code 2).
+     * Published before the GRP/S scratch broadcast that arrives with the handoff.
+     * Applied only when destination is one of our airports.
+     */
+    arrivalStand?: string
     /** VCH hold short — strip annotation 4 (empty string clears) */
     hs?: string
     /** Departure Coordination — strip annotation 6 ("DepC") */

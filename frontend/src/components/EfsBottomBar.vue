@@ -171,6 +171,7 @@
       <template v-if="!store.isPaperLook">
         <div
           class="tiny-strip tiny-strip-vehicle"
+          :class="{ 'look-essa': store.essaRolesMode }"
           draggable="true"
           @dragstart="(e) => onTinyDragStart(e, 'vehicle')"
           @dragend="onTinyDragEnd"
@@ -960,7 +961,9 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 .tiny-strip-arr { --tiny-type: #daa520; }
 .tiny-strip-cross { --tiny-type: #881fe0; }
 .tiny-strip-note { --tiny-type: #888; }
+/* Vehicle create button: red on RTC / other SAAB. ESSA roles is dark grey, matching the strip frame. */
 .tiny-strip-vehicle { --tiny-type: #c62828; }
+.tiny-strip-vehicle.look-essa { --tiny-type: #2a2a2a; }
 
 .tiny-body {
   flex: 1 1 auto;

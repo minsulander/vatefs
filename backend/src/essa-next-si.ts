@@ -1220,8 +1220,18 @@ export function isEssaStripVisibleForRoles(
     next: EssaNextSiResult | undefined
 ): boolean {
     if (!isEssaRolesConfig(staticConfig)) return true
-    // Local-only strips (no flight / next-SI) — always visible when created
-    if (strip.stripType === "note" || strip.stripType === "vehicle") return true
+    // Local-only strips — always visible when created.
+    // VFR CRS (cross) is manual-only: crossings are not auto-eligible, and a
+    // flight outside the selected GND/TWR sectors (e.g. ESOW→ESSN) has no
+    // overlapping next-SI role, so the filter would hide the strip the
+    // controller just added.
+    if (
+        strip.stripType === "note" ||
+        strip.stripType === "vehicle" ||
+        strip.stripType === "cross"
+    ) {
+        return true
+    }
     if (selectedRoles.length === 0) return true
 
     // Overrides

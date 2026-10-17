@@ -3,6 +3,7 @@
 
 #include "json.hpp"
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <format>
 #include <fstream>
@@ -713,6 +714,7 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
         lastHoldShortSnapshot.erase(cs);
         lastCtlSnapshot.erase(cs);
         lastEfsGaSnapshot.erase(cs);
+        lastGrpStandSnapshot.erase(cs);
     }
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
@@ -1141,6 +1143,150 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
     return false;
 }
 
+/**
+ * Ground Radar plugin (this ESAA build) keeps the arrival stand in tag item 2
+ * ("Arrival stand") — the STD column on the arrival list. VatEFS previously
+ * learned it only from the GRP/S scratch broadcast, which is delivered on handoff.
+ *
+ * Offsets below were taken from GRplugin.dll loaded with ESAA (image base
+ * 0x10000000): EuroScopePlugInInit stores the CPlugIn* at RVA 0x2701C4, and
+ * OnGetTagItem is vtable slot 13. A fault disables the poll; scratch GRP/S
+ * still updates the stand on transfer.
+ */
+static const DWORD GRP_PLUGIN_INSTANCE_RVA = 0x2701C4;
+static const int GRP_ONGETTAGITEM_SLOT = 13;
+static const int GRP_ARRIVAL_STAND_ITEM = 2;
+
+static bool PtrInImage(unsigned char *base, DWORD imageSize, const void *p)
+{
+    auto a = reinterpret_cast<const unsigned char *>(p);
+    return a >= base && a < base + imageSize;
+}
+
+/** SEH wrapper. CFlightPlan/CRadarTarget are a single pointer passed by value. */
+static void QueryGrpArrivalStandRaw(void *self, void *fn, void *fpWord, void *rtWord, int tagData,
+                                     char out[16], bool *ok)
+{
+    *ok = false;
+    out[0] = '\0';
+    if (!self || !fn) return;
+    using Fn = void (__thiscall *)(void *, void *, void *, int, int, char *, int *, COLORREF *, double *);
+    int color = 0;
+    COLORREF rgb = 0;
+    double font = 0;
+    __try {
+        auto call = reinterpret_cast<Fn>(fn);
+        call(self, fpWord, rtWord, GRP_ARRIVAL_STAND_ITEM, tagData, out, &color, &rgb, &font);
+        out[15] = '\0';
+        *ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out[0] = '\0';
+        *ok = false;
+    }
+}
+
+static bool ResolveGrpArrivalStandFn(void **outSelf, void **outFn)
+{
+    HMODULE mod = GetModuleHandleA("GRplugin.dll");
+    if (!mod) return false;
+    auto base = reinterpret_cast<unsigned char *>(mod);
+    auto dos = reinterpret_cast<IMAGE_DOS_HEADER *>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    auto nt = reinterpret_cast<IMAGE_NT_HEADERS *>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    const DWORD imageSize = nt->OptionalHeader.SizeOfImage;
+    if (GRP_PLUGIN_INSTANCE_RVA + sizeof(void *) > imageSize) return false;
+
+    void *self = nullptr;
+    void **vt = nullptr;
+    void *fn = nullptr;
+    __try {
+        self = *reinterpret_cast<void **>(base + GRP_PLUGIN_INSTANCE_RVA);
+        if (!self) return false;
+        vt = *reinterpret_cast<void ***>(self);
+        if (!vt) return false;
+        fn = vt[GRP_ONGETTAGITEM_SLOT];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    if (!PtrInImage(base, imageSize, vt) || !PtrInImage(base, imageSize, fn)) return false;
+    *outSelf = self;
+    *outFn = fn;
+    return true;
+}
+
+/** Alphanumeric gate id (F36L, 16, R9C). Reject empty and prose. */
+static std::string NormalizeGrpStandToken(const char *raw)
+{
+    if (!raw || !raw[0]) return "";
+    std::string s;
+    for (const char *p = raw; *p && s.size() < 6; ++p) {
+        unsigned char c = static_cast<unsigned char>(*p);
+        if (c == ' ' || c == '\t') {
+            if (!s.empty()) break;
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') c = static_cast<unsigned char>(c - 'a' + 'A');
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return "";
+        s.push_back(static_cast<char>(c));
+    }
+    bool digit = false;
+    for (char c : s)
+        if (c >= '0' && c <= '9') digit = true;
+    if (!digit || s.empty() || s.size() > 6) return "";
+    return s;
+}
+
+void VatEFSPlugin::PollGrpArrivalStands()
+{
+    if (grpStandPollFailed) return;
+    static_assert(sizeof(EuroScopePlugIn::CFlightPlan) == sizeof(void *), "CFlightPlan layout");
+    static_assert(sizeof(EuroScopePlugIn::CRadarTarget) == sizeof(void *), "CRadarTarget layout");
+
+    void *self = nullptr;
+    void *fn = nullptr;
+    if (!ResolveGrpArrivalStandFn(&self, &fn)) return;
+
+    for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
+         fp = FlightPlanSelectNext(fp)) {
+        if (!FilterFlightPlan(fp)) continue;
+        const char *cs = fp.GetCallsign();
+        if (!cs || cs[0] == '\0') continue;
+        EuroScopePlugIn::CFlightPlanData fpData = fp.GetFlightPlanData();
+        const char *dest = fpData.GetDestination();
+        if (!dest || strncmp(dest, "ES", 2) != 0) continue;
+
+        EuroScopePlugIn::CRadarTarget rt = fp.GetCorrelatedRadarTarget();
+        void *fpWord = nullptr;
+        void *rtWord = nullptr;
+        static_assert(sizeof(fp) == sizeof(fpWord), "pass CFlightPlan as one pointer");
+        static_assert(sizeof(rt) == sizeof(rtWord), "pass CRadarTarget as one pointer");
+        memcpy(&fpWord, &fp, sizeof(fpWord));
+        memcpy(&rtWord, &rt, sizeof(rtWord));
+        const int tagData = rt.IsValid() ? EuroScopePlugIn::TAG_DATA_CORRELATED
+                                          : EuroScopePlugIn::TAG_DATA_FLIGHT_PLAN_TRACK;
+        char item[16] = {};
+        bool ok = false;
+        QueryGrpArrivalStandRaw(self, fn, fpWord, rtWord, tagData, item, &ok);
+        if (!ok) {
+            grpStandPollFailed = true;
+            DebugMessage("GRP arrival stand poll disabled after a fault");
+            return;
+        }
+        const std::string stand = NormalizeGrpStandToken(item);
+        if (stand.empty()) continue;
+        auto it = lastGrpStandSnapshot.find(cs);
+        if (it != lastGrpStandSnapshot.end() && it->second == stand) continue;
+        lastGrpStandSnapshot[cs] = stand;
+
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "controllerAssignedDataUpdate";
+        SetJsonIfValidUtf8(message, "callsign", cs);
+        SetJsonIfValidUtf8(message, "arrivalStand", stand.c_str());
+        PostJson(message, "PollGrpArrivalStands");
+    }
+}
+
 void VatEFSPlugin::OnTimer(int counter)
 {
     try {
@@ -1214,6 +1360,8 @@ void VatEFSPlugin::OnTimer(int counter)
         PollOwnershipChanges();
         // VCH H/S (ann 4) + CTL (ann 3) + EFSGA (5) + DepC (6) — no CAD DataType callback.
         PollVchAnnotationChanges();
+        // GRP arrival-list stand is assigned before the handoff scratch broadcast.
+        PollGrpArrivalStands();
         // ES XFL / COPX / DirectTo — ACC coordination often has no CAD callback.
         PollXflChanges();
         // CDM plugin rewrites CDM_data_*.txt atomically-ish; poll every second.

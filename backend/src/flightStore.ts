@@ -63,6 +63,7 @@ import {
     parseCombinedScratch,
     buildCombinedScratch,
     isProtocolScratch,
+    standFromGrpScratch,
 } from "./scratchpad.js"
 import { resolveIncomingGroundstate } from "./groundstate.js"
 import {
@@ -3092,6 +3093,22 @@ class FlightStore {
                     console.log(`[HP] ${callsign}: ${flight.hp ?? '-'} -> ${nextHp ?? '-'} (scratch /)`)
                     flight.hp = nextHp
                 }
+            }
+        }
+        if (message.scratch !== undefined) {
+            const grpStand = standFromGrpScratch(message.scratch)
+            if (grpStand && grpStand !== flight.stand) {
+                console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${grpStand} (GRP/S)`)
+                flight.stand = grpStand
+            }
+        }
+        // GRP arrival-list stand (already assigned). Do not apply to pure departures.
+        if (message.arrivalStand) {
+            const dest = flight.destination?.toUpperCase()
+            const destMine = !!dest && this.config.myAirports.some((a) => a.toUpperCase() === dest)
+            if (destMine && message.arrivalStand !== flight.stand) {
+                console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${message.arrivalStand} (GRP list)`)
+                flight.stand = message.arrivalStand
             }
         }
         if (message.hs !== undefined) {

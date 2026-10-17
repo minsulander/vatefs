@@ -34,6 +34,7 @@ import {
     essaAorLayoutKey,
     filterEssaRunwayPlacementsForMyAor,
 } from "./essa-next-si.js"
+import { stripMatchesRemoteKey } from "./iris-efs-order.js"
 import {
     applyEsggRoleLayout,
     isEsggRolesConfig,
@@ -1034,7 +1035,8 @@ class EfsStore {
         airport?: string,
         paperInfoKind?: PaperInfoKind,
     ): FlightStrip | undefined {
-        const stripId = `note:${crypto.randomUUID()}`
+        // Uppercase so the id matches VatIRIS stripKey (server uppercases every key).
+        const stripId = `note:${crypto.randomUUID()}`.toUpperCase()
         const icao = airport?.toUpperCase()
 
         // Determine bay/section
@@ -1106,6 +1108,18 @@ class EfsStore {
     }
 
     /**
+     * Local note/vehicle id may be `note:uuid` while VatIRIS echoes `NOTE:UUID`.
+     */
+    private findStripBySyncKey(syncKey: string): FlightStrip | undefined {
+        const direct = this.strips.get(syncKey)
+        if (direct) return direct
+        for (const s of this.strips.values()) {
+            if (stripMatchesRemoteKey(s, syncKey)) return s
+        }
+        return undefined
+    }
+
+    /**
      * Materialize a note/vehicle/anonymous-VFR strip from remote scribble sync (same syncKey/id).
      */
     ensureSyncedSpecialStrip(opts: {
@@ -1120,7 +1134,7 @@ class EfsStore {
         position?: number
         bottom?: boolean
     }): FlightStrip | undefined {
-        const existing = this.strips.get(opts.syncKey)
+        const existing = this.findStripBySyncKey(opts.syncKey)
         if (existing) return existing
         if (opts.kind === 'note') {
             const strip = this.createNoteStrip(
@@ -1203,7 +1217,8 @@ class EfsStore {
         airport?: string,
         callsign?: string,
     ): FlightStrip | undefined {
-        const stripId = `veh:${crypto.randomUUID()}`
+        // Uppercase so the id matches VatIRIS stripKey (server uppercases every key).
+        const stripId = `veh:${crypto.randomUUID()}`.toUpperCase()
         const icao = airport?.toUpperCase()
         const cs = (callsign ?? '').trim().toUpperCase()
 

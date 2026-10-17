@@ -17,6 +17,7 @@ import {
     formatIrisSep,
     irisStripKey,
     normalizeAtd,
+    stripMatchesRemoteKey,
     type IrisOrderPayload,
     type StripEfsFields,
 } from "./iris-efs-order.js"
@@ -559,13 +560,11 @@ export async function deleteStripFromRemote(stripId: string): Promise<boolean> {
 function findLocalStripId(syncKey: string, airport: string): string | undefined {
     const direct = getStripById(syncKey)
     if (direct) return direct.id
-    const key = syncKey.toUpperCase()
     const apt = airport.toUpperCase()
     for (const s of getAllStrips()) {
-        if (irisStripKey(s) === key) {
-            if (!apt || !(s.airport || "") || (s.airport || "").toUpperCase() === apt) {
-                return s.id
-            }
+        if (!stripMatchesRemoteKey(s, syncKey)) continue
+        if (!apt || !(s.airport || "") || (s.airport || "").toUpperCase() === apt) {
+            return s.id
         }
     }
     return undefined

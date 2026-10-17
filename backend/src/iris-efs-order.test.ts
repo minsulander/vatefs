@@ -6,6 +6,7 @@ import {
     buildStripEfsFields,
     formatIrisSep,
     irisStripKey,
+    stripMatchesRemoteKey,
     isEssaStripviewOrderStrip,
     isIrisStripviewPlacement,
 } from "./iris-efs-order.js"
@@ -53,6 +54,36 @@ function strip(
 
 check("stripKey uppercase callsign", () => {
     assert.equal(irisStripKey(strip({ callsign: "sas123", sectionId: "taxi_dep" })), "SAS123")
+})
+
+check("synthetic stripKey matches VatIRIS uppercase echo", () => {
+    const note = strip({
+        callsign: "",
+        id: "note:abc-def",
+        syncKey: "note:abc-def",
+        sectionId: "inbound",
+        stripType: "note",
+    })
+    assert.equal(stripMatchesRemoteKey(note, "NOTE:ABC-DEF"), true)
+    assert.equal(stripMatchesRemoteKey(note, "note:abc-def"), true)
+    const vehicle = strip({
+        callsign: "",
+        id: "veh:123",
+        syncKey: "veh:123",
+        sectionId: "taxi_dep",
+        stripType: "vehicle",
+    })
+    assert.equal(stripMatchesRemoteKey(vehicle, "VEH:123"), true)
+    const named = strip({
+        callsign: "FOL",
+        id: "veh:123",
+        syncKey: "veh:123",
+        sectionId: "taxi_dep",
+        stripType: "vehicle",
+    })
+    assert.equal(stripMatchesRemoteKey(named, "FOL"), true)
+    assert.equal(stripMatchesRemoteKey(named, "VEH:123"), true)
+    assert.equal(stripMatchesRemoteKey(named, "OTHER"), false)
 })
 
 check("sep bare values", () => {

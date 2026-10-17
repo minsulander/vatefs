@@ -8,6 +8,7 @@ import {
     groundstateFromScratch,
     isProtocolScratch,
     parseCombinedScratch,
+    standFromGrpScratch,
 } from "./scratchpad.js"
 
 let passed = 0
@@ -112,6 +113,14 @@ check("GS scratch both modes (LINEUP / xLU) is not remarks", () => {
     assert.equal(groundstateFromScratch("xLU"), "LINEUP")
     assert.equal(groundstateFromScratch("TXO"), "TAXI")
     assert.equal(groundstateFromScratch(".URNAV"), undefined)
+})
+
+check("GRP/S stand broadcast is not remarks", () => {
+    assert.equal(standFromGrpScratch("GRP/S/F36L"), "F36L")
+    assert.equal(standFromGrpScratch("GRP/S/16"), "16")
+    assert.equal(standFromGrpScratch(".URNAV /Y2"), undefined)
+    assert.deepEqual(parseCombinedScratch("GRP/S/F38"), { remarks: null, hp: null })
+    assert.equal(isProtocolScratch("GRP/S/F38"), false)
 })
 
 check("build roundtrip (no EST)", () => {

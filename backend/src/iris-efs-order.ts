@@ -102,6 +102,21 @@ export function irisStripKey(strip: Pick<FlightStrip, "callsign" | "syncKey" | "
     return strip.syncKey || strip.id
 }
 
+/**
+ * VatIRIS stores every stripKey uppercased (`note:uuid` → `NOTE:UUID`).
+ * Match the local strip anyway so a create echo does not materialize a second strip.
+ */
+export function stripMatchesRemoteKey(
+    strip: Pick<FlightStrip, "callsign" | "syncKey" | "id">,
+    remoteKey: string,
+): boolean {
+    const key = remoteKey.trim().toUpperCase()
+    if (!key) return false
+    if (irisStripKey(strip).toUpperCase() === key) return true
+    if (strip.id.toUpperCase() === key) return true
+    return (strip.syncKey || "").toUpperCase() === key
+}
+
 export function stripNmSuffix(value: string): string {
     return String(value ?? "")
         .replace(/\s*nm\s*$/i, "")

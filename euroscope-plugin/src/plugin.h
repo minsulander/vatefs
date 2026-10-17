@@ -72,6 +72,11 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     /** Poll VCH + EFS annotations (H/S=4, CTL=3, EFSGA=5, DepC=6) — ES has no CAD DataType for annotations */
     void PollVchAnnotationChanges();
     /**
+     * Ground Radar "Arrival stand" list item. The scratch GRP/S broadcast that sets
+     * flight.stand is sent on handoff; the list already has the stand before that.
+     */
+    void PollGrpArrivalStands();
+    /**
      * Poll exit (COPX/XFL) + entry (COPN/PEL) coordination + DirectTo.
      * ACC coordination replies often change these without a CAD callback.
      */
@@ -253,6 +258,10 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::map<std::string, std::string> lastEstCooSnapshot;
     // Last sent "xfl|copx|direct|altState|nameState" (ACC coord often skips CAD)
     std::map<std::string, std::string> lastXflSnapshot;
+    // Last Ground Radar arrival-stand list value sent per callsign
+    std::map<std::string, std::string> lastGrpStandSnapshot;
+    // GRP tag query faulted once — stop calling into that DLL
+    bool grpStandPollFailed = false;
     // Per-callsign outbound InitiateCoordination cycle (accept/refuse edges once each)
     std::map<std::string, OutboundCoordCycle> outboundCoordCycles;
 
