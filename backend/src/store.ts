@@ -845,6 +845,14 @@ class EfsStore {
             }
         }
 
+        // Sync must not park a strip in a bay/section this layout does not have.
+        if (opts?.fromSync && !this.findSection(targetBayId, targetSectionId)) {
+            console.log(
+                `[MOVE] sync skipped ${strip.callsign || stripId}: unknown ${targetBayId}/${targetSectionId}`,
+            )
+            return null
+        }
+
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
         const oldBottom = strip.bottom

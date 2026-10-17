@@ -30,6 +30,10 @@ export type StripMeta = {
   atisGiven?: string | null
   noteText?: string
   std?: string
+  /** EFS cleared-for-takeoff. False clears the Stripview mark. */
+  cfto?: boolean
+  /** EFS ATD as UTC HHmm. Null clears a previous time. */
+  atd?: string | null
 }
 
 /** ESSA SEP/DLV/DEP GAP (and future airport-scoped fields) for Stripview. */
@@ -109,12 +113,11 @@ export type ScribbleStore = {
   }>
 }
 
-/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies. */
+/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies.
+ *  `cfto` and `atd` are allowed: EFS owns those for Stripview (not IRIS ground speed). */
 export const FORBIDDEN_SYNC_STRIP_KEYS = [
   "groundstate",
   "clearedForTakeoff",
-  "cfto",
-  "atd",
   "depRwy",
   "arrRwy",
   "sid",
@@ -424,6 +427,13 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
                 : undefined,
           noteText: typeof s.noteText === "string" ? s.noteText : undefined,
           std: typeof s.std === "string" ? s.std : undefined,
+          cfto: typeof s.cfto === "boolean" ? s.cfto : undefined,
+          atd:
+            s.atd === null
+              ? null
+              : typeof s.atd === "string" && /^\d{4}$/.test(s.atd.trim())
+                ? s.atd.trim()
+                : undefined,
         }
       } else {
         res.status(400).json({ error: "strip must be an object or null" })

@@ -72,8 +72,11 @@ import {
     onConnectionTypeChanged,
     pushEssaSepMetaToRemote,
     scheduleStripviewLayoutPush,
+    pushStripCftoAtdIfChanged,
+    forgetStripCftoAtd,
     resolveRealm,
 } from "./vatefs-sync.js"
+import { isIrisStripviewPlacement } from "./iris-efs-order.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -1048,14 +1051,18 @@ function broadcastStrip(
     if (options?.cleanReprint) message.cleanReprint = true
     if (options?.playPrintAnim) message.playPrintAnim = true
     broadcast(message, options?.exclude)
-    // Full IRIS /order snapshot (transferred→APP omit stripKey)
+    // Full IRIS /order snapshot (transferred→APP omit stripKey).
+    // Order entries carry cfto/atd so the debounce skip still publishes them.
+    // Also PUT the strip body when that signature changes (not on every scribble).
     if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
+    pushStripCftoAtdIfChanged(strip)
 }
 
 // Broadcast a strip delete
 function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
     const message: StripDeleteMessage = { type: "stripDelete", stripId }
     broadcast(message, exclude)
+    forgetStripCftoAtd(stripId)
     if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
 }
 
@@ -3186,8 +3193,12 @@ function applyRemoteScribble(
 
     if (applyMeta) {
         // Shared bay placement (all strip types). Flight strips are never invented — only moved if present.
+        // IRIS Stripview coords (TWR-W/TAXI, …) are not EFS bays. Applying them
+        // pulls a TAXIWAY DEP strip off the layout and out of the IRIS order.
+        const irisPlacement = isIrisStripviewPlacement(meta?.bayId, meta?.sectionId)
         if (
             strip &&
+            !irisPlacement &&
             meta?.bayId &&
             meta?.sectionId &&
             (strip.bayId !== meta.bayId ||
@@ -3246,7 +3257,9 @@ function applyRemoteScribble(
             }
         }
 
-        // EFS-only flight flags (CLR correct / CTL / CTO / softGA stay on EuroScope)
+        // EFS-only flight flags (CLR correct / CTL / CTO / softGA stay on EuroScope).
+        // cfto and atd are EFS-owned for Stripview. Do not copy inbound values
+        // onto the flight — IRIS must not echo a different ATD or CFTO back.
         if (strip && strip.stripType !== "note" && strip.stripType !== "vehicle") {
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {

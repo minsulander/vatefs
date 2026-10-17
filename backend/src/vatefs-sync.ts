@@ -16,6 +16,7 @@ import {
     buildStripEfsFields,
     formatIrisSep,
     irisStripKey,
+    normalizeAtd,
     type IrisOrderPayload,
     type StripEfsFields,
 } from "./iris-efs-order.js"
@@ -472,6 +473,35 @@ function applyRemotePayload(
     if (!prev || payload.updatedAt > prev) sinceByRoom.set(room, payload.updatedAt)
 }
 
+/** Last pushed `cfto|atd` per strip. Empty atd is the cleared value. */
+const lastCftoAtdSig = new Map<string, string>()
+
+function cftoAtdSignature(strip: Pick<FlightStrip, "clearedForTakeoff" | "atd">): string {
+    return `${!!strip.clearedForTakeoff}|${normalizeAtd(strip.atd) ?? ""}`
+}
+
+/**
+ * PUT the strip body when EFS cfto/atd changes, without waiting for a scribble.
+ * The first observation of `false|` is skipped so startup does not PUT every strip.
+ * Inbound sync must not apply these fields back onto the flight.
+ */
+export function pushStripCftoAtdIfChanged(strip: FlightStrip): void {
+    if (strip.stripType === "note" || strip.stripType === "vehicle") return
+    if (!canPublishIrisOrder()) return
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return
+    const sig = cftoAtdSignature(strip)
+    const prev = lastCftoAtdSig.get(strip.id)
+    if (prev === sig) return
+    lastCftoAtdSig.set(strip.id, sig)
+    if (prev === undefined && sig === "false|") return
+    void pushStripToRemote(strip.id)
+}
+
+export function forgetStripCftoAtd(stripId: string): void {
+    lastCftoAtdSig.delete(stripId)
+}
+
 /** Placement / create / reorder push. */
 export async function pushStripToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
@@ -777,6 +807,7 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
     void pushIrisOrderToRemote(undefined, { force: true })
     void refreshEssaMetaToRemote(true)
     void pushIrisHeartbeat("ESSA")
+    for (const strip of getAllStrips()) pushStripCftoAtdIfChanged(strip)
 }
 
 export function stopScribbleSyncPolling() {
@@ -787,6 +818,7 @@ export function stopScribbleSyncPolling() {
     lastPollOk = false
     lastPushedOrderEntriesJson = ""
     lastPushedSepJson = ""
+    lastCftoAtdSig.clear()
     refreshHealth()
 }
 

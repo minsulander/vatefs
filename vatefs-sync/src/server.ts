@@ -341,6 +341,13 @@ function putStripHandler(req: Request, res: Response) {
           s.atisGiven === null ? null : typeof s.atisGiven === "string" ? s.atisGiven : undefined,
         noteText: typeof s.noteText === "string" ? s.noteText : undefined,
         std: typeof s.std === "string" ? s.std : undefined,
+        cfto: typeof s.cfto === "boolean" ? s.cfto : undefined,
+        atd:
+          s.atd === null
+            ? null
+            : typeof s.atd === "string" && /^\d{4}$/.test(s.atd.trim())
+              ? s.atd.trim()
+              : undefined,
       }
     } else {
       res.status(400).json({ error: "strip must be an object or null" })

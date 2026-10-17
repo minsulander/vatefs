@@ -288,6 +288,12 @@ import {
 } from '@/composables/useRunwayFlagStrips'
 import { useTouchDropPlacement } from '@/composables/useTouchDrag'
 import {
+  draggingStripId,
+  flightStripsIn,
+  insertIndexAtClientY,
+  visualIndexForInsert,
+} from '@/composables/dropPlacement'
+import {
   claimDropHighlight,
   dropHighlightOwnerKey,
   releaseDropHighlight,
@@ -910,7 +916,11 @@ const rtcHeaderRwyTitle = computed(() => {
   return `RWY ${rtcHeaderRwy.value}`
 })
 
-/** Index among topStrips where a dragged strip would insert (line before that index; length = end). */
+/**
+ * v-for index the placement line is drawn before (topStrips.length = after the last).
+ * Commit index is the non-dragging count; this is that index mapped onto the full list,
+ * or the post-sort slot when the section will reorder the drop.
+ */
 const dropInsertIndex = ref<number | null>(null)
 
 function updateDropPlacementLine(event: DragEvent) {
@@ -919,24 +929,9 @@ function updateDropPlacementLine(event: DragEvent) {
     dropInsertIndex.value = null
     return
   }
-  // Skip collapsed paper drag source (height:0) so insert index stays correct
-  const strips = Array.from(container.querySelectorAll('.flight-strip:not(.dragging)'))
-  if (strips.length === 0) {
-    // Only info strips (or empty): still show end-of-list insert line
-    dropInsertIndex.value = 0
-    return
-  }
-  for (let i = 0; i < strips.length; i++) {
-    const el = strips[i]
-    if (!el) continue
-    const rect = el.getBoundingClientRect()
-    const mid = rect.top + rect.height / 2
-    if (event.clientY < mid) {
-      dropInsertIndex.value = i
-      return
-    }
-  }
-  dropInsertIndex.value = strips.length
+  // Count without the drag source — same list moveStrip splices into.
+  const insert = insertIndexAtClientY(flightStripsIn(container, false), event.clientY)
+  showInsertLine(insert)
 }
 
 function clearDropPlacementLine() {
@@ -999,7 +994,7 @@ watch(touchDropPlacement, (p) => {
   }
   isBottomDragOver.value = false
   headerDropActive.value = p!.insertIndex === 0
-  dropInsertIndex.value = p!.insertIndex
+  showInsertLine(p!.insertIndex ?? 0)
 })
 
 const isTimeSortedSection = computed(() => isTimeSortSectionId(props.section.id))
@@ -1342,12 +1337,8 @@ const showGaps = computed(
     (!timeSortEnabled.value || preferManualOrder.value),
 )
 
-const topStrips = computed(() => {
-  void store.stripsVersion
-  // Re-read mode when user toggles TOBT/MAN
-  void sectionSortMode.value
-  const list = collectTopStrips()
-
+/** Same order topStrips shows. Used to predict where a drop will actually sit. */
+function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
   // Paper KLARERING (above header): EOBT (+ CLR read at bottom) until user
   // drags — then sticky positions; new prints insert by EOBT without re-sort.
   if (paperPendingKlarering.value) {
@@ -1388,7 +1379,99 @@ const topStrips = computed(() => {
   }
 
   return list.sort((a, b) => a.position - b.position)
+}
+
+const topStrips = computed(() => {
+  void store.stripsVersion
+  // Re-read mode when user toggles TOBT/MAN
+  void sectionSortMode.value
+  return orderTopStrips(collectTopStrips())
 })
+
+/**
+ * Sections whose display sort ignores a raw drop index (ETA / ATD / runway tier / taxi tier).
+ * Time-sort bays (TSAT, CD ALL) freeze to manual on drop, so the pointer index sticks.
+ */
+function displayReordersDrop(): boolean {
+  return (
+    etaSortEnabled.value ||
+    atdSortEnabled.value ||
+    rtcArrSortEnabled.value ||
+    runwayLuSortEnabled.value ||
+    isTaxiSectionId(props.section.id)
+  )
+}
+
+/**
+ * Paper pending → cleared always inserts at the top (moveStripToSection).
+ * Returns that commit index, or null when the pointer index is used.
+ */
+function forcedInsertIndex(strip: FlightStripData | undefined): number | null {
+  if (!strip) return null
+  const sameTop =
+    strip.bayId === props.bayId && strip.sectionId === props.section.id && !strip.bottom
+  if (sameTop) return null
+  if (
+    store.isPaperLook &&
+    isPendingDepSectionId(strip.sectionId) &&
+    isClearedSectionId(props.section.id)
+  ) {
+    return 0
+  }
+  return null
+}
+
+/**
+ * Where `dragged` will sit after moveStrip splices `insertAmongVisible` into
+ * position order and this section's existing sort runs.
+ * Return value is a v-for index in the current topStrips (length = end).
+ */
+function predictVisualLine(insertAmongVisible: number, dragged: FlightStripData): number {
+  const others = store.getTopStrips(props.bayId, props.section.id).filter((s) => s.id !== dragged.id)
+  const at = Math.max(0, Math.min(insertAmongVisible, others.length))
+  const placed: FlightStripData[] = []
+  let pos = 0
+  for (let i = 0; i < others.length; i++) {
+    if (i === at) placed.push({ ...dragged, position: pos++ })
+    const other = others[i]
+    if (other) placed.push({ ...other, position: pos++ })
+  }
+  if (at >= others.length) placed.push({ ...dragged, position: pos })
+
+  const sorted = orderTopStrips(placed)
+  const current = topStrips.value
+  // No visual change — mark the drag source's own row (not a slot below it).
+  if (sorted.length === current.length && sorted.every((s, i) => s.id === current[i]?.id)) {
+    const self = current.findIndex((s) => s.id === dragged.id)
+    return self < 0 ? current.length : self
+  }
+  const idx = sorted.findIndex((s) => s.id === dragged.id)
+  if (idx < 0 || idx >= sorted.length - 1) return current.length
+  const below = sorted[idx + 1]
+  if (!below) return current.length
+  const vis = current.findIndex((s) => s.id === below.id)
+  return vis < 0 ? current.length : vis
+}
+
+/** Draw the placement line at the row the drop will actually occupy. */
+function showInsertLine(insertAmongVisible: number) {
+  const id = draggingStripId()
+  const dragged = id ? store.strips.get(id) : undefined
+  const forced = forcedInsertIndex(dragged)
+  if (forced != null) {
+    dropInsertIndex.value = forced
+    return
+  }
+  if (dragged && displayReordersDrop()) {
+    dropInsertIndex.value = predictVisualLine(insertAmongVisible, dragged)
+    return
+  }
+  const container = topContainer.value
+  const all = container ? flightStripsIn(container, true) : []
+  dropInsertIndex.value = all.length
+    ? visualIndexForInsert(all, insertAmongVisible)
+    : insertAmongVisible
+}
 
 function toggleSortMode() {
   if (sectionSortMode.value === 'man') {
@@ -1820,7 +1903,7 @@ function onHeaderDragOver(event: DragEvent) {
   claimHtml5DropHighlight()
   headerDropActive.value = true
   isBottomDragOver.value = false
-  dropInsertIndex.value = 0
+  showInsertLine(headerDropInsertIndex(draggingStripId() ?? undefined))
 }
 
 function onHeaderDragEnter(event: DragEvent) {
@@ -1828,7 +1911,7 @@ function onHeaderDragEnter(event: DragEvent) {
   claimHtml5DropHighlight()
   headerDropActive.value = true
   isBottomDragOver.value = false
-  dropInsertIndex.value = 0
+  showInsertLine(headerDropInsertIndex(draggingStripId() ?? undefined))
 }
 
 function onHeaderDragLeave(event: DragEvent) {
@@ -2063,19 +2146,11 @@ function onTopDrop(event: DragEvent) {
       }
     }
 
-    // Find position based on midpoints
-    for (let i = 0; i < stripElements.length; i++) {
-      const element = stripElements[i]
-      if (!element) continue
-
-      const rect = element.getBoundingClientRect()
-      const midpoint = rect.top + rect.height / 2
-
-      if (event.clientY < midpoint) {
-        position = i
-        droppedBelowLastStrip = false
-        break
-      }
+    // Same midpoint test as the placement line (index among strips excluding the drag source).
+    const insertAt = insertIndexAtClientY(stripElements, event.clientY)
+    if (insertAt < stripElements.length) {
+      position = insertAt
+      droppedBelowLastStrip = false
     }
 
     // Handle same-section gap adjustments

@@ -7,7 +7,7 @@ Standalone REST API matching the **single allowed VatIRIS write set**.
 | Method | Path | Body |
 |--------|------|------|
 | PUT/DELETE | `/efs/sync/:realm/:airport/:stripKey` | `{ strip?, strokes? }` |
-| PUT | `/efs/sync/:realm/:airport/order` | `{ revision?, entries: [{ stripKey, bayId, sectionId, position }] }` |
+| PUT | `/efs/sync/:realm/:airport/order` | `{ revision?, entries: [{ stripKey, bayId, sectionId, position, cfto, atd }] }` |
 | PUT/GET | `/efs/sync/:realm/:airport/meta` | `{ essaSep: { sep, dlv, depGap }, essaConfig? }` (bare SEP; bankonfig id e.g. `"9A"`) |
 | PUT | `/efs/sync/:realm/:airport/heartbeat` | `{}` (optional; any write refreshes 5 min TTL) |
 | WS | `/efs/sync/:realm/:airport/ws?cid=` | fanout |
@@ -23,7 +23,8 @@ Auth: `X-Vatsim-Cid` on writes.
 - `essaConfig` = ESSA bankonfig id (`1`–`8`, `9A`/`9B`/`9C`, `10`–`14`, `15A`/`15B`/`15C`, `16`), not UTC hour.
 - ESSA Strip TV: `/order` is canonical. `bayId` `TWR-W`\|`TWR-E` from dep RWY; `sectionId` `TAXI`\|`LINEUP`\|`DEPA`. Transfer → stripKey **absent** from order.
 - Per-strip PUT still carries `bayId`/`sectionId`/`position` for APP/consistency.
-- Strip bodies must **not** include ES fields (`groundstate`, `clearedForTakeoff`/`cfto`, `atd`, `depRwy`, `sid`, `stand`, `cfl`, …) — rejected with 400.
+- `cfto` (boolean) and `atd` (`"HHmm"` or `null` to clear) are allowed EFS-owned fields on **order entries and strip bodies**. Stripview must use these instead of its own ground-speed track. `false` / `null` clears (RTO). Notes and vehicles omit them.
+- Strip bodies must **not** include other ES fields (`groundstate`, `clearedForTakeoff`, `depRwy`, `sid`, `stand`, `cfl`, …) — rejected with 400. `cfto` and `atd` are not in that forbidden list.
 - WS events (IRIS): `order` · `meta` · `strip` · `stripDeleted` · `heartbeat` · `snapshot` (on connect).
 - Writers: any allowlisted CID; VatEFS gates TWR→SEP, TWR+GND→order/strips.
 

@@ -23,6 +23,10 @@ export interface StripMeta {
   noteText?: string
   /** Vehicle STD field */
   std?: string
+  /** EFS cleared-for-takeoff. False clears the Stripview mark. */
+  cfto?: boolean
+  /** EFS ATD as UTC HHmm. Null clears a previous time. */
+  atd?: string | null
 }
 
 export interface ScribbleRow {
@@ -65,6 +69,10 @@ export type OrderEntry = {
   bayId: string
   sectionId: string
   position: number
+  /** EFS cleared-for-takeoff. */
+  cfto?: boolean
+  /** EFS ATD as UTC HHmm, or null to clear. */
+  atd?: string | null
 }
 
 export type OrderPayload = {
@@ -191,11 +199,19 @@ export function validateOrderBody(
     if (typeof row.position !== "number" || !Number.isFinite(row.position)) {
       return { ok: false, error: "entry.position required" }
     }
+    const atd =
+      row.atd === null
+        ? null
+        : typeof row.atd === "string" && /^\d{4}$/.test(row.atd.trim())
+          ? row.atd.trim()
+          : undefined
     entries.push({
       stripKey: String(row.stripKey).toUpperCase(),
       bayId: String(row.bayId),
       sectionId: String(row.sectionId),
       position: row.position,
+      ...(typeof row.cfto === "boolean" ? { cfto: row.cfto } : {}),
+      ...(atd !== undefined ? { atd } : {}),
     })
   }
   const revision =
@@ -252,12 +268,11 @@ export function touchHeartbeat(realm: string, airport: string, cid: number): Ord
 
 const ESSA_CONFIG_ID_RE = /^(?:[1-8]|9[ABC]|1[0-4]|15[ABC]|16)$/
 
-/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies. */
+/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies.
+ *  `cfto` and `atd` are allowed: EFS owns those for Stripview (not IRIS ground speed). */
 export const FORBIDDEN_SYNC_STRIP_KEYS = [
   "groundstate",
   "clearedForTakeoff",
-  "cfto",
-  "atd",
   "depRwy",
   "arrRwy",
   "sid",

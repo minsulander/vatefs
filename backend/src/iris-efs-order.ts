@@ -1,9 +1,10 @@
 /**
  * VatIRIS EFS sync order mapping (locked contract).
  *
- * Publishes EFS-owned bay order only. ES-native status is never included.
+ * Publishes EFS-owned bay order, plus the EFS CFTO flag and ATD (HHmm).
+ * IRIS must use these instead of its own ground-speed track.
  * ESSA Strip TV bayIds: TWR-W / TWR-E; sections: TAXI | LINEUP | DEPA.
- * Transferred to APP/DEP (ctr_dep etc.) → omitted from order.
+ * Moving to CTR DEP (airborne) keeps the strip. Transfer or release removes it.
  */
 
 import {
@@ -17,21 +18,40 @@ const TAXI_PLUS = new Set(["TAXI", "LINEUP", "DEPA"])
 const ESSA_TWR_E = new Set(["01R", "19L"])
 const ESSA_TWR_W = new Set(["01L", "19R", "08", "26"])
 
-/** Sections that mean the strip left TWR/GND bay for APP/DEP (absent from order). */
+/** Sections that are not the TWR departure sequence (absent from order). */
 const TRANSFERRED_SECTION = new Set([
-    "ctr_dep",
     "ctr_arr",
     "inbound", // INBOUND APP — not on TWR DEP stripview
 ])
 
+function isCtrDepSection(sectionId: string): boolean {
+    const id = sectionId || ""
+    return id === "ctr_dep" || id.endsWith("_ctr_dep")
+}
+
 export type IrisOrderBayId = "TWR-W" | "TWR-E"
 export type IrisOrderSectionId = "TAXI" | "LINEUP" | "DEPA"
+
+const IRIS_ORDER_BAYS = new Set<string>(["TWR-W", "TWR-E"])
+const IRIS_ORDER_SECTIONS = new Set<string>(["TAXI", "LINEUP", "DEPA"])
+
+/**
+ * True for VatIRIS Stripview coordinates (TWR-W/E + TAXI|LINEUP|DEPA).
+ * Those are published on the strip record for IRIS; they are not EFS layout ids.
+ */
+export function isIrisStripviewPlacement(bayId?: string, sectionId?: string): boolean {
+    return !!bayId && !!sectionId && IRIS_ORDER_BAYS.has(bayId) && IRIS_ORDER_SECTIONS.has(sectionId)
+}
 
 export type IrisOrderEntry = {
     stripKey: string
     bayId: string
     sectionId: string
     position: number
+    /** EFS cleared-for-takeoff. False clears the Stripview mark (RTO / no longer CFTO). */
+    cfto: boolean
+    /** EFS ATD as UTC HHmm. Null clears a previous time. */
+    atd: string | null
 }
 
 export type IrisOrderPayload = {
@@ -57,6 +77,10 @@ export type StripEfsFields = {
     flightRules?: string
     paperInfoKind?: string
     std?: string
+    /** EFS cleared-for-takeoff. False clears the Stripview mark. */
+    cfto?: boolean
+    /** EFS ATD as UTC HHmm. Null clears a previous time. */
+    atd?: string | null
 }
 
 export type IrisSepPayload = {
@@ -66,6 +90,12 @@ export type IrisSepPayload = {
 }
 
 /** stripKey: UPPERCASE callsign for aircraft; stable id for synthetic/empty CS. */
+/** UTC HHmm, or null when EFS has no ATD (clears a previous value). */
+export function normalizeAtd(value: string | null | undefined): string | null {
+    const hhmm = (value || "").trim()
+    return /^\d{4}$/.test(hhmm) ? hhmm : null
+}
+
 export function irisStripKey(strip: Pick<FlightStrip, "callsign" | "syncKey" | "id">): string {
     const cs = (strip.callsign || "").trim().toUpperCase()
     if (cs) return cs
@@ -92,6 +122,8 @@ export function formatIrisSep(indicators: {
 
 export function isTransferredOffTwrgndBay(sectionId: string): boolean {
     const id = sectionId || ""
+    // CTR DEP is the airborne bay. Stripview stays until transfer or release.
+    if (isCtrDepSection(id)) return false
     if (TRANSFERRED_SECTION.has(id)) return true
     if (id.startsWith("ctr_")) return true
     return false
@@ -118,6 +150,8 @@ export function irisDepSectionForStrip(strip: {
     clearedForTakeoff?: boolean
 }): IrisOrderSectionId | null {
     const gs = (strip.groundstate || "").toUpperCase()
+    // Airborne bay — still the departure roll on Stripview until transfer/release.
+    if (isCtrDepSection(strip.sectionId)) return "DEPA"
     if (strip.clearedForTakeoff || gs === "DEPA") return "DEPA"
     if (gs === "LINEUP") return "LINEUP"
     if (gs === "TAXI") return "TAXI"
@@ -129,11 +163,22 @@ export function irisDepSectionForStrip(strip: {
 
 export function isEssaStripviewOrderStrip(strip: Pick<
     FlightStrip,
-    "callsign" | "sectionId" | "stripType" | "groundstate" | "airport" | "clearedForTakeoff"
+    | "callsign"
+    | "sectionId"
+    | "stripType"
+    | "groundstate"
+    | "airport"
+    | "clearedForTakeoff"
+    | "isAssumed"
+    | "transferPending"
 >): boolean {
-    if (isTransferredOffTwrgndBay(strip.sectionId)) return false
     if (strip.stripType === "note" || strip.stripType === "vehicle") return false
     if (strip.stripType === "arrival") return false
+    // XFER to APP/DEP — drop even if the strip has not changed section yet.
+    if (strip.transferPending === "out") return false
+    // CTR DEP: keep while still assumed. Release clears assume and drops the strip.
+    if (isCtrDepSection(strip.sectionId)) return !!strip.isAssumed
+    if (isTransferredOffTwrgndBay(strip.sectionId)) return false
     if (!isStripviewOrderSectionId(strip.sectionId)) return false
     const gs = (strip.groundstate || "").toUpperCase()
     if (gs === "ARR") return false
@@ -150,12 +195,13 @@ type Ranked = {
     position: number
     groundstate?: string
     clearedForTakeoff?: boolean
+    atd?: string
     callsign: string
 }
 
 /**
  * Build IRIS /order payload for ESSA Strip TV + APP bay mirror.
- * Only TWR-W/E + TAXI|LINEUP|DEPA entries; transferred strips omitted.
+ * Only TWR-W/E + TAXI|LINEUP|DEPA entries. CTR DEP stays until transfer or release.
  */
 export function buildEssaIrisOrder(
     strips: ReadonlyArray<
@@ -171,6 +217,9 @@ export function buildEssaIrisOrder(
             | "clearedForTakeoff"
             | "runway"
             | "airport"
+            | "isAssumed"
+            | "transferPending"
+            | "atd"
         >
     >,
     revision: number,
@@ -193,11 +242,17 @@ export function buildEssaIrisOrder(
             position: s.position,
             groundstate: s.groundstate,
             clearedForTakeoff: s.clearedForTakeoff,
+            atd: s.atd,
             callsign: (s.callsign || stripKey).toUpperCase(),
         })
     }
 
-    // Sort within bay+section: DEPA/LINEUP use runway LU rank; TAXI by position
+    // Sort within bay+section.
+    // TAXIWAY DEP (addFromTop) inserts at position 0 and EfsSection renders
+    // ascending position top→bottom, so position 0 is the visual top and the
+    // highest position is the visual bottom. Publish that same order: the EFS
+    // bottom strip is the last TAXI entry. LINEUP/DEPA keep runway LU rank
+    // (lower position = above); those are not inverted.
     const groups = new Map<string, Ranked[]>()
     for (const r of ranked) {
         const g = `${r.bayId}|${r.sectionId}`
@@ -223,6 +278,8 @@ export function buildEssaIrisOrder(
                 bayId: r.bayId,
                 sectionId: r.sectionId,
                 position: i,
+                cfto: !!r.clearedForTakeoff,
+                atd: normalizeAtd(r.atd),
             })
         })
     }
@@ -295,6 +352,8 @@ export function buildStripEfsFields(
         fields.kind = "flight"
     }
 
+    fields.cfto = !!strip.clearedForTakeoff
+    fields.atd = normalizeAtd(strip.atd)
     fields.clearanceRead = !!(strip.clearanceRead || strip.clearance || strip.clearanceReadback)
     if (opts?.includeQnhAtisClear) {
         fields.qnhGiven = strip.qnhGiven ?? null
@@ -312,7 +371,6 @@ export const FORBIDDEN_SYNC_KEYS = [
     "clearance",
     "clearence",
     "clearedForTakeoff",
-    "cfto",
     "depRwy",
     "arrRwy",
     "sid",
@@ -321,7 +379,6 @@ export const FORBIDDEN_SYNC_KEYS = [
     "temporaryAltitude",
     "ownership",
     "sector",
-    "atd",
     "squawk",
     "type",
     "wtc",
