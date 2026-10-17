@@ -23,6 +23,13 @@ which heat >/dev/null
 
 FILENAME=vatefs-$VERSION.msi
 
+# WiX ProductVersion needs major.minor.build. 0.9 becomes 0.9.0; the file name stays vatefs-0.9.msi.
+PRODUCT_VERSION="$VERSION"
+case "$PRODUCT_VERSION" in
+    *.*.*) ;;
+    *.*) PRODUCT_VERSION="${PRODUCT_VERSION}.0" ;;
+esac
+
 if [ "$VERSION" == "0.0.1" -a ! -z "$CI_PIPELINE_ID" ]; then
     FILENAME=vatefs-$CI_PIPELINE_ID.msi
 fi
@@ -45,7 +52,7 @@ cp -rf data "$root"
 rm -f *.wixobj *.generated.wxs
 
 heat dir $root -gg -sfrag -template fragment -srd -cg AllFiles -var var.path -dr INSTALLDIR -out allfiles.generated.wxs
-candle -arch x64 -dpath=$root -dProductVersion=$VERSION scripts/*.wxs *.generated.wxs -ext WiXUtilExtension -ext WixFirewallExtension
+candle -arch x64 -dpath=$root -dProductVersion=$PRODUCT_VERSION scripts/*.wxs *.generated.wxs -ext WiXUtilExtension -ext WixFirewallExtension
 light *.wixobj -o $FILENAME -cultures:en-US -ext WixUIExtension.dll -ext WiXUtilExtension -ext WixFirewallExtension
 
 rm -f *.wixobj *.generated.wxs *.wixpdb

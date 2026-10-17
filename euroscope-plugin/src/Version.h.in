@@ -5,7 +5,7 @@
 
 namespace {
 const char *PLUGIN_NAME{ "VatEFS" };
-const char *PLUGIN_VERSION{ "@CMAKE_PROJECT_VERSION@" };
+const char *PLUGIN_VERSION{ "@VATEFS_PLUGIN_VERSION_STRING@" };
 const char *PLUGIN_AUTHOR{ "Martin Insulander" };
 const char *PLUGIN_LICENSE{ "GPLv3" };
 

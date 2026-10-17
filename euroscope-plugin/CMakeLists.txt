@@ -1,7 +1,9 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.14)
 
 # Plugin version is independent of the MSI / @vatefs/common app version — bump only when the DLL changes.
-PROJECT(VatEFS-Euroscope-Plugin VERSION "0.0.9")
+PROJECT(VatEFS-Euroscope-Plugin VERSION 0.9.0)
+# Shown in EuroScope. Numeric fields stay 0.9.0 so the version header compiles.
+SET(VATEFS_PLUGIN_VERSION_STRING "0.9")
 SET_PROPERTY(GLOBAL PROPERTY USE_FOLDERS ON)
 SET(CMAKE_CXX_STANDARD 20)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
