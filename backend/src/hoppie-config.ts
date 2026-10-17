@@ -1,8 +1,14 @@
 import fs from "fs"
 import path from "path"
+import { isValidHoppieLogonCode } from "@vatefs/common"
 
-let logonCode: string | null = null
+/** Code read from ESAA/Plugins/TopSkyCPDLChoppieCode.txt */
+let fileLogonCode: string | null = null
+/** Settings override. Wins over the plugin file when set. */
+let manualLogonCode: string | null = null
 const dclTemplates = new Map<string, string>()
+
+export type HoppieLogonSource = "manual" | "file" | "none"
 
 /**
  * Load Hoppie configuration from EuroScope directory.
@@ -15,15 +21,15 @@ export function loadHoppieConfig(euroscopeDir: string): { logonCode: string | nu
     const codeFile = path.join(pluginsDir, "TopSkyCPDLChoppieCode.txt")
     if (fs.existsSync(codeFile)) {
         const raw = fs.readFileSync(codeFile, "utf-8").trim()
-        if (raw.length < 40 && /^[a-zA-Z0-9]+$/.test(raw)) {
-            logonCode = raw
-            console.log(`Hoppie logon code loaded (${raw.length} chars)`)
+        if (isValidHoppieLogonCode(raw)) {
+            fileLogonCode = raw
+            console.log(`Hoppie logon code loaded from file (${raw.length} chars)`)
         } else {
-            logonCode = null
+            fileLogonCode = null
             console.log("Hoppie logon code file does not contain a valid code")
         }
     } else {
-        logonCode = null
+        fileLogonCode = null
         console.log(`Hoppie logon code file not found: ${codeFile}`)
     }
 
@@ -63,7 +69,27 @@ export function loadHoppieConfig(euroscopeDir: string): { logonCode: string | nu
         console.log(`TopSkyCPDLC.txt not found: ${cpdlcFile}`)
     }
 
-    return { logonCode, dclTemplates }
+    return { logonCode: getLogonCode(), dclTemplates }
+}
+
+/**
+ * Manual logon code from Options. Empty / invalid clears the override
+ * so the plugin file is used again.
+ */
+export function setManualLogonCode(code: string | null | undefined): void {
+    const trimmed = (code ?? "").trim()
+    manualLogonCode = isValidHoppieLogonCode(trimmed) ? trimmed : null
+}
+
+/** Valid code from TopSkyCPDLChoppieCode.txt, ignoring any manual override. */
+export function getFileLogonCode(): string | null {
+    return fileLogonCode
+}
+
+export function getHoppieLogonSource(): HoppieLogonSource {
+    if (manualLogonCode) return "manual"
+    if (fileLogonCode) return "file"
+    return "none"
 }
 
 /**
@@ -77,7 +103,7 @@ export function getDclAirports(): string[] {
  * Get the Hoppie logon code, or null if not available/valid.
  */
 export function getLogonCode(): string | null {
-    return logonCode
+    return manualLogonCode ?? fileLogonCode
 }
 
 /**

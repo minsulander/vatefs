@@ -249,6 +249,8 @@ export interface UserSettingsMessage {
     settings: UiSettings
     /** True when any myAirport has GNG stand data (show Auto PARK option). */
     autoParkAvailable?: boolean
+    /** True when ESAA/Plugins/TopSkyCPDLChoppieCode.txt contains a valid code. */
+    hoppieFileCodePresent?: boolean
 }
 
 /** Transient UI toast (e.g. ROF send failure) */

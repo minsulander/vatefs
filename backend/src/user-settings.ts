@@ -5,7 +5,7 @@
 import fs from "fs"
 import path from "path"
 import type { AutoLopSsrMode, DclMode, StripPrintMode, StripPrintSound, UiSettings } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode } from "@vatefs/common"
+import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
 
 function isStripPrintSound(value: unknown): value is StripPrintSound {
     return value === "off" || value === "short" || value === "long"
@@ -16,6 +16,12 @@ function isStripPrintMode(value: unknown): value is StripPrintMode {
 }
 
 /** Prefer autoLopSsr; migrate legacy autoDepSquawkCfl boolean (true→instant, false→manual). */
+function resolveHoppieLogonCode(value: unknown): string {
+    if (typeof value !== "string") return ""
+    const trimmed = value.trim()
+    return isValidHoppieLogonCode(trimmed) ? trimmed : ""
+}
+
 function resolveAutoLopSsr(saved: UserSettings): AutoLopSsrMode {
     if (isAutoLopSsrMode(saved.autoLopSsr)) return saved.autoLopSsr
     if (typeof saved.autoDepSquawkCfl === "boolean") {
@@ -63,11 +69,17 @@ export interface UserSettings {
     /** Manual ESGG paper role selection (CD / GND / TWR) */
     esggRoles?: string[]
     esggRolesManual?: boolean
+    /** @deprecated Merged into syncEnabled. Ignored on load; dropped on save. */
     scribbleSyncEnabled?: boolean
+    /** @deprecated Merged into syncEnabled. Ignored on load; dropped on save. */
     stripSyncEnabled?: boolean
+    /** Scribble + strip sync. Missing in older files → on. */
+    syncEnabled?: boolean
     scribbleSyncUrl?: string
     vatsimCid?: string
     scribbleSyncRealm?: UiSettings["scribbleSyncRealm"]
+    /** Manual Hoppie logon code. Empty uses the ESAA plugin file. */
+    hoppieLogonCode?: string
 }
 
 let settingsPath: string | undefined
@@ -110,6 +122,8 @@ export function saveUserSettings(update: Partial<UserSettings>) {
     const merged = { ...current, ...update } as UserSettings & { equalBayColumns?: boolean }
     // Drop removed / migrated preferences if still present in older settings files
     delete merged.equalBayColumns
+    delete merged.scribbleSyncEnabled
+    delete merged.stripSyncEnabled
     if (merged.autoLopSsr !== undefined) delete merged.autoDepSquawkCfl
     if (merged.rtcAssrSimulation !== undefined) delete merged.rtcSsrSimulation
     try {
@@ -172,14 +186,8 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.fspServerEnabled === "boolean"
                 ? saved.fspServerEnabled
                 : DEFAULT_UI_SETTINGS.fspServerEnabled,
-        scribbleSyncEnabled:
-            typeof saved.scribbleSyncEnabled === "boolean"
-                ? saved.scribbleSyncEnabled
-                : DEFAULT_UI_SETTINGS.scribbleSyncEnabled,
-        stripSyncEnabled:
-            typeof saved.stripSyncEnabled === "boolean"
-                ? saved.stripSyncEnabled
-                : DEFAULT_UI_SETTINGS.stripSyncEnabled,
+        syncEnabled:
+            typeof saved.syncEnabled === "boolean" ? saved.syncEnabled : DEFAULT_UI_SETTINGS.syncEnabled,
         scribbleSyncUrl:
             typeof saved.scribbleSyncUrl === "string"
                 ? saved.scribbleSyncUrl
@@ -194,5 +202,6 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             saved.scribbleSyncRealm === "auto"
                 ? saved.scribbleSyncRealm
                 : DEFAULT_UI_SETTINGS.scribbleSyncRealm,
+        hoppieLogonCode: resolveHoppieLogonCode(saved.hoppieLogonCode),
     }
 }

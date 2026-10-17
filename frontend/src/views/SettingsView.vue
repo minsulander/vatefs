@@ -143,6 +143,45 @@
                 Play the TopSky CPDLC sound on the EuroScope PC when a DCL request arrives.
             </p>
 
+            <div class="scribble-mode-option mb-4 mt-4">
+                <div class="ui-scale-label">Hoppie logon code</div>
+                <div class="hoppie-code-row">
+                    <input
+                        v-model="hoppieDraft"
+                        class="hoppie-code-input"
+                        :class="{ 'hoppie-code-input--invalid': hoppieError }"
+                        :type="hoppieVisible ? 'text' : 'password'"
+                        autocomplete="off"
+                        spellcheck="false"
+                        autocapitalize="off"
+                        placeholder="Leave empty to use the plugin file"
+                        @focus="hoppieFocused = true"
+                        @blur="onHoppieBlur"
+                        @keydown.enter.prevent="saveHoppieCode"
+                    />
+                    <v-btn
+                        size="small"
+                        variant="text"
+                        class="text-none"
+                        @mousedown.prevent
+                        @click="hoppieVisible = !hoppieVisible"
+                    >
+                        {{ hoppieVisible ? 'Hide' : 'Show' }}
+                    </v-btn>
+                    <v-btn
+                        size="small"
+                        variant="tonal"
+                        class="text-none"
+                        @mousedown.prevent
+                        @click="saveHoppieCode"
+                    >
+                        Save
+                    </v-btn>
+                </div>
+                <p v-if="hoppieError" class="text-caption hoppie-code-error mt-1">{{ hoppieError }}</p>
+                <p class="text-caption text-grey mt-1">{{ hoppieHint }}</p>
+            </div>
+
             <v-switch
                 color="white"
                 base-color="grey-darken-1"
@@ -250,25 +289,14 @@
                 color="white"
                 base-color="grey-darken-1"
                 hide-details
-                label="Enable scribble sync"
-                :model-value="efs.scribbleSyncEnabled"
-                @update:model-value="onScribbleSyncEnabled"
+                label="Sync scribbles and strips"
+                :model-value="efs.syncEnabled"
+                @update:model-value="onSyncEnabled"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Share freehand strip scribbles with other controllers via VatIRIS.
-            </p>
-
-            <v-switch
-                color="white"
-                base-color="grey-darken-1"
-                hide-details
-                class="mt-2"
-                label="Enable IRIS strip sync"
-                :model-value="efs.stripSyncEnabled"
-                @update:model-value="onStripSyncEnabled"
-            />
-            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Share bay placement, note/vehicle strips, and EFS-only flags (CLR read, QNH/ATIS).
+                On by default. Shares freehand scribbles, bay placement, note and vehicle strips,
+                and EFS-only flags (CLR read, QNH/ATIS) with other controllers. Turn off only if
+                sync is causing problems.
             </p>
 
             <div class="scribble-mode-option mt-3 mb-2">
@@ -350,9 +378,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { useEfsStore } from "@/store/efs"
-import { isAutoLopSsrMode } from "@vatefs/common"
+import { isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
 import {
     useUiScalePercent,
     setUiScalePercent,
@@ -374,6 +402,46 @@ function isStripPrintMode(value: unknown): value is "auto" | "manual" {
 const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
 const scribbleMode = useStripScribbleMode()
+
+const hoppieDraft = ref("")
+const hoppieVisible = ref(false)
+const hoppieFocused = ref(false)
+const hoppieError = ref("")
+
+watch(
+    () => efs.hoppieLogonCode,
+    (code) => {
+        if (!hoppieFocused.value) hoppieDraft.value = code
+    },
+    { immediate: true },
+)
+
+const hoppieHint = computed(() => {
+    if (efs.hoppieLogonCode) {
+        return "This code overrides ESAA/Plugins/TopSkyCPDLChoppieCode.txt. Clear the field and save to use the file again. An open Hoppie session reconnects when the code changes."
+    }
+    if (efs.hoppieFileCodePresent) {
+        return "Using the code from ESAA/Plugins/TopSkyCPDLChoppieCode.txt. Type a code here to override it."
+    }
+    return "ESAA/Plugins/TopSkyCPDLChoppieCode.txt is empty or missing. Enter your Hoppie logon code. Letters and digits, under 40 characters."
+})
+
+function saveHoppieCode() {
+    const trimmed = hoppieDraft.value.trim()
+    hoppieDraft.value = trimmed
+    if (trimmed !== "" && !isValidHoppieLogonCode(trimmed)) {
+        hoppieError.value = "Use letters and digits only, shorter than 40 characters."
+        return
+    }
+    hoppieError.value = ""
+    if (trimmed === efs.hoppieLogonCode) return
+    efs.updateUserSettings({ hoppieLogonCode: trimmed })
+}
+
+function onHoppieBlur() {
+    hoppieFocused.value = false
+    saveHoppieCode()
+}
 
 /** Prefer backend-reported LAN URL; fall back to this page's origin. */
 const fspUrl = ref("")
@@ -506,14 +574,9 @@ function onShowTobtSetByA(value: boolean | null) {
     efs.updateUserSettings({ showTobtSetByA: value })
 }
 
-function onScribbleSyncEnabled(value: boolean | null) {
+function onSyncEnabled(value: boolean | null) {
     if (typeof value !== "boolean") return
-    efs.updateUserSettings({ scribbleSyncEnabled: value })
-}
-
-function onStripSyncEnabled(value: boolean | null) {
-    if (typeof value !== "boolean") return
-    efs.updateUserSettings({ stripSyncEnabled: value })
+    efs.updateUserSettings({ syncEnabled: value })
 }
 
 function onScribbleSyncRealm(value: unknown) {
@@ -602,6 +665,40 @@ function onScribbleSyncRealm(value: unknown) {
 .fsp-inline {
     color: #b0b4ba;
     font-size: 0.9em;
+}
+
+.hoppie-code-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.hoppie-code-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0.4rem 0.55rem;
+    border-radius: 4px;
+    background: #1e2024;
+    border: 1px solid #4a4d55;
+    color: #f0f2f5;
+    font: inherit;
+    font-size: 0.9rem;
+    letter-spacing: 0.04em;
+    outline: none;
+}
+
+.hoppie-code-input:focus {
+    border-color: #f0c040;
+}
+
+.hoppie-code-input--invalid {
+    border-color: #ef5350;
+}
+
+.hoppie-code-error {
+    color: #ef9a9a;
 }
 
 .fsp-alt-link {

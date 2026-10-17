@@ -1,13 +1,21 @@
 <template>
   <v-menu
     :model-value="modelValue"
-    :target="target"
+    :target="menuAnchor"
     location="bottom"
+    :max-height="menuMaxPx"
+    content-class="sid-route-overlay"
     :z-index="zIndex"
     :close-on-content-click="false"
     @update:model-value="onModelUpdate"
   >
-    <div class="sid-route-menu" @click.stop>
+    <div
+      ref="menuEl"
+      class="sid-route-menu"
+      :class="{ 'sid-route-split': splitColumns && !fprView }"
+      :style="menuBoxStyle"
+      @click.stop
+    >
       <!-- FPR / DCT submenu -->
       <template v-if="fprView">
         <button type="button" class="sid-route-top" title="Back" @click="fprView = false">
@@ -16,11 +24,11 @@
         </button>
         <div
           v-if="!fprPoint && !precedingWaypoints.length && !lopExtraSuggestPoints.length"
-          class="sid-route-empty"
+          class="sid-route-empty sid-route-scroll"
         >
           No FPL waypoints
         </div>
-        <div v-else class="sid-route-list">
+        <div v-else class="sid-route-list sid-route-scroll" :style="scrollBoxStyle">
           <button
             v-if="fprPoint"
             type="button"
@@ -74,91 +82,147 @@
         <div v-if="!strip.runway" class="sid-route-empty">No runway assigned</div>
         <div v-else-if="loading" class="sid-route-empty">Loading…</div>
         <div v-else-if="!hasAnySids" class="sid-route-empty">No SIDs for runway {{ strip.runway }}</div>
-        <template v-else>
-          <div
-            v-if="normalSids.length"
-            class="sid-route-list"
-            :class="{ 'sid-route-list-cols': normalSids.length > 10 }"
-          >
-            <button
-              v-for="sid in normalSids"
-              :key="sid"
-              type="button"
-              class="sid-route-item"
-              :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
-              @click="onSelect(sid)"
-            >{{ sidLabel(sid) }}</button>
+        <div
+          v-else
+          ref="bodyEl"
+          class="sid-route-scroll"
+          :style="scrollBoxStyle"
+        >
+          <div class="sid-route-col sid-route-col-main">
+            <div v-if="normalSids.length" class="sid-route-list">
+              <button
+                v-for="sid in normalSids"
+                :key="sid"
+                type="button"
+                class="sid-route-item"
+                :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                @click="onSelect(sid)"
+              >{{ sidLabel(sid) }}</button>
+            </div>
+            <template v-if="!splitColumns">
+              <template v-if="slowSids.length">
+                <div class="sid-route-section">SLOW</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in slowSids"
+                    :key="'slow-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
+              <template v-if="milSids.length">
+                <div class="sid-route-section">MIL</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in milSids"
+                    :key="'mil-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
+              <template v-if="vfrSids.length">
+                <div class="sid-route-section">VFR</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in vfrSids"
+                    :key="'vfr-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
+            </template>
           </div>
-          <template v-if="slowSids.length">
-            <div class="sid-route-section">SLOW</div>
-            <div
-              class="sid-route-list"
-              :class="{ 'sid-route-list-cols': slowSids.length > 8 }"
-            >
-              <button
-                v-for="sid in slowSids"
-                :key="sid"
-                type="button"
-                class="sid-route-item"
-                :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
-                @click="onSelect(sid)"
-              >{{ sidLabel(sid) }}</button>
+          <div v-if="splitColumns" class="sid-route-col sid-route-col-side">
+            <div class="sid-route-col-side-scroll">
+              <template v-if="slowSids.length">
+                <div class="sid-route-section">SLOW</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in slowSids"
+                    :key="'slow2-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
+              <template v-if="milSids.length">
+                <div class="sid-route-section">MIL</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in milSids"
+                    :key="'mil2-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
+              <template v-if="vfrSids.length">
+                <div class="sid-route-section">VFR</div>
+                <div class="sid-route-list">
+                  <button
+                    v-for="sid in vfrSids"
+                    :key="'vfr2-' + sid"
+                    type="button"
+                    class="sid-route-item"
+                    :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
+                    @click="onSelect(sid)"
+                  >{{ sidLabel(sid) }}</button>
+                </div>
+              </template>
             </div>
+            <button
+              type="button"
+              class="sid-route-fpr"
+              :class="{ 'lop-dct': !!lopPrimaryHighlight }"
+              @click="openFprView"
+            >FPR / DCT</button>
+            <button
+              v-if="fprPoint || lopPrimaryHighlight"
+              type="button"
+              class="sid-route-item sid-route-fpr-point"
+              :class="dctItemClass(lopPrimaryHighlight || fprPoint || '')"
+              @click="onSelectDirect(lopPrimaryHighlight || fprPoint || '')"
+            >{{ lopPrimaryHighlight || fprPoint }}</button>
+          </div>
+        </div>
+        <div class="sid-route-foot">
+          <template v-if="!splitColumns && hasAnySids && strip.runway && !loading">
+            <button
+              type="button"
+              class="sid-route-fpr"
+              :class="{ 'lop-dct': !!lopPrimaryHighlight }"
+              @click="openFprView"
+            >FPR / DCT</button>
+            <button
+              v-if="fprPoint || lopPrimaryHighlight"
+              type="button"
+              class="sid-route-item sid-route-fpr-point"
+              :class="dctItemClass(lopPrimaryHighlight || fprPoint || '')"
+              @click="onSelectDirect(lopPrimaryHighlight || fprPoint || '')"
+            >{{ lopPrimaryHighlight || fprPoint }}</button>
           </template>
-          <template v-if="milSids.length">
-            <div class="sid-route-section">MIL</div>
-            <div
-              class="sid-route-list"
-              :class="{ 'sid-route-list-cols': milSids.length > 8 }"
-            >
-              <button
-                v-for="sid in milSids"
-                :key="sid"
-                type="button"
-                class="sid-route-item"
-                :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
-                @click="onSelect(sid)"
-              >{{ sidLabel(sid) }}</button>
-            </div>
-          </template>
-          <template v-if="vfrSids.length">
-            <div class="sid-route-section">VFR</div>
-            <div
-              class="sid-route-list"
-              :class="{ 'sid-route-list-cols': vfrSids.length > 8 }"
-            >
-              <button
-                v-for="sid in vfrSids"
-                :key="sid"
-                type="button"
-                class="sid-route-item"
-                :class="{ selected: isSelected(sid), 'exit-match': isExitMatch(sid) }"
-                @click="onSelect(sid)"
-              >{{ sidLabel(sid) }}</button>
-            </div>
-          </template>
-        </template>
-        <button
-          type="button"
-          class="sid-route-fpr"
-          :class="{ 'lop-dct': !!lopPrimaryHighlight }"
-          @click="openFprView"
-        >FPR / DCT</button>
-        <button
-          v-if="fprPoint || lopPrimaryHighlight"
-          type="button"
-          class="sid-route-item sid-route-fpr-point"
-          :class="dctItemClass(lopPrimaryHighlight || fprPoint || '')"
-          @click="onSelectDirect(lopPrimaryHighlight || fprPoint || '')"
-        >{{ lopPrimaryHighlight || fprPoint }}</button>
-        <button type="button" class="sid-route-clear" @click="onClear">CLEAR</button>
+          <button type="button" class="sid-route-clear" @click="onClear">CLEAR</button>
+        </div>
       </template>
     </div>
   </v-menu>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import {
@@ -194,6 +258,181 @@ let ignoreCloseUntil = 0
 const fprView = ref(false)
 const manualInput = ref<HTMLInputElement | null>(null)
 const manualText = ref('')
+const menuEl = ref<HTMLElement | null>(null)
+const bodyEl = ref<HTMLElement | null>(null)
+
+/** Gap between the menu and the visible window edges. Matches Vuetify's overlay inset. */
+const VIEW_MARGIN = 16
+/** Header + footer reserved until the real chrome is measured. */
+const CHROME_FALLBACK = 160
+
+const menuMaxPx = ref(320)
+const splitColumns = ref(false)
+const pinScrollHeight = ref(false)
+const measuredChrome = ref(CHROME_FALLBACK)
+const oneColNatural = ref(0)
+/** Viewport Y of the menu top. Above the click when the full menu would otherwise run off the bottom. */
+const placedTop = ref<number | null>(null)
+
+/**
+ * Visible browser window, not the monitor.
+ * visualViewport tracks a non-fullscreen window; innerHeight is the fallback.
+ */
+function visibleWindowHeight(): number {
+  return window.visualViewport?.height ?? window.innerHeight
+}
+
+/** Full window minus the top and bottom margins. Not the space under the click. */
+function syncMenuMax() {
+  menuMaxPx.value = Math.max(0, Math.floor(visibleWindowHeight() - VIEW_MARGIN * 2))
+}
+
+/**
+ * Keep the whole menu inside the window. Start at the click, then shift up
+ * when click + height would pass the bottom. The top may sit above the click.
+ */
+function placeMenu(contentHeight: number) {
+  const vh = visibleWindowHeight()
+  const height = Math.min(Math.max(contentHeight, 1), menuMaxPx.value)
+  let top = props.target[1]
+  if (top + height > vh - VIEW_MARGIN) top = vh - VIEW_MARGIN - height
+  if (top < VIEW_MARGIN) top = VIEW_MARGIN
+  placedTop.value = Math.round(top)
+}
+
+const menuAnchor = computed((): [number, number] => [
+  props.target[0],
+  placedTop.value ?? props.target[1],
+])
+
+const menuBoxStyle = computed(() => ({
+  maxHeight: `${menuMaxPx.value}px`,
+}))
+
+const scrollBoxStyle = computed(() => {
+  const limit = `${Math.max(0, menuMaxPx.value - measuredChrome.value)}px`
+  // Two columns need a definite height so a still-tall column can scroll
+  // inside the window instead of growing the menu.
+  if (splitColumns.value && !fprView.value && pinScrollHeight.value) {
+    return { maxHeight: limit, height: limit }
+  }
+  return { maxHeight: limit }
+})
+
+function estimateItemPx(): number {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--efs-scale')
+  const scale = Number.parseFloat(raw)
+  const s = Number.isFinite(scale) && scale > 0 ? scale : 1
+  // min-height is content-box; padding and the divider sit outside it
+  return Math.max(28, 28 * s) + Math.round(10 * s) + 1
+}
+
+/** One-column stack height from the SID counts, before the DOM is measured. */
+function estimateOneColHeight(): number {
+  const item = estimateItemPx()
+  const section = Math.round(item * 0.85)
+  let lists = normalSids.value.length * item
+  if (slowSids.value.length) lists += section + slowSids.value.length * item
+  if (milSids.value.length) lists += section + milSids.value.length * item
+  if (vfrSids.value.length) lists += section + vfrSids.value.length * item
+  const point = fprPoint.value || lopPrimaryHighlight.value ? item : 0
+  return measuredChrome.value + lists + point
+}
+
+/**
+ * Sum the rendered list/section heights. Works in either layout because each
+ * list keeps its content height (the column scrolls, the list does not shrink).
+ */
+function measureStackedHeight(menu: HTMLElement): number {
+  let lists = 0
+  menu.querySelectorAll('.sid-route-list, .sid-route-section').forEach((el) => {
+    lists += (el as HTMLElement).offsetHeight
+  })
+  const head = menu.querySelector('.sid-route-top') as HTMLElement | null
+  const fpr = menu.querySelector('.sid-route-fpr') as HTMLElement | null
+  const point = menu.querySelector('.sid-route-fpr-point') as HTMLElement | null
+  const clear = menu.querySelector('.sid-route-clear') as HTMLElement | null
+  return (
+    (head?.offsetHeight ?? 0) +
+    lists +
+    (fpr?.offsetHeight ?? 0) +
+    (point?.offsetHeight ?? 0) +
+    (clear?.offsetHeight ?? 0)
+  )
+}
+
+function measureChrome(menu: HTMLElement): number {
+  const head = menu.querySelector('.sid-route-top') as HTMLElement | null
+  const foot = menu.querySelector('.sid-route-foot') as HTMLElement | null
+  const manual = menu.querySelector('.sid-route-manual') as HTMLElement | null
+  const clear = menu.querySelector('.sid-route-clear') as HTMLElement | null
+  const clearH = clear && !foot?.contains(clear) ? clear.offsetHeight : 0
+  return (head?.offsetHeight ?? 0) + (foot?.offsetHeight ?? 0) + (manual?.offsetHeight ?? 0) + clearH
+}
+
+let refineToken = 0
+
+function updateScrollPin(menu: HTMLElement) {
+  if (!splitColumns.value || fprView.value) {
+    pinScrollHeight.value = false
+    return
+  }
+  const limit = Math.max(0, menuMaxPx.value - measuredChrome.value)
+  let tallest = 0
+  menu.querySelectorAll('.sid-route-col-main, .sid-route-col-side-scroll').forEach((el) => {
+    tallest = Math.max(tallest, (el as HTMLElement).scrollHeight)
+  })
+  pinScrollHeight.value = tallest > limit + 1
+}
+
+async function refineLayout() {
+  if (!props.modelValue) return
+  const token = ++refineToken
+  syncMenuMax()
+  await nextTick()
+  if (token !== refineToken || !props.modelValue) return
+  const menu = menuEl.value
+  if (!menu) return
+  const chrome = measureChrome(menu)
+  if (chrome > 0) measuredChrome.value = chrome
+  if (!fprView.value && !loading.value && hasAnySids.value) {
+    const natural = measureStackedHeight(menu)
+    if (natural > 0) oneColNatural.value = natural
+    const nextSplit = oneColNatural.value > menuMaxPx.value + 1
+    if (nextSplit !== splitColumns.value) {
+      splitColumns.value = nextSplit
+      await nextTick()
+      if (token !== refineToken || !menuEl.value) return
+      const chromeAfter = measureChrome(menuEl.value)
+      if (chromeAfter > 0) measuredChrome.value = chromeAfter
+    }
+    updateScrollPin(menuEl.value)
+    await nextTick()
+  } else if (!fprView.value) {
+    splitColumns.value = false
+    pinScrollHeight.value = false
+  }
+  if (token !== refineToken || !menuEl.value) return
+  placeMenu(menuEl.value.offsetHeight || oneColNatural.value)
+}
+
+function onWindowChange() {
+  if (!props.modelValue) return
+  void refineLayout()
+}
+
+onMounted(() => {
+  syncMenuMax()
+  window.addEventListener('resize', onWindowChange)
+  window.visualViewport?.addEventListener('resize', onWindowChange)
+  window.visualViewport?.addEventListener('scroll', onWindowChange)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWindowChange)
+  window.visualViewport?.removeEventListener('resize', onWindowChange)
+  window.visualViewport?.removeEventListener('scroll', onWindowChange)
+})
 
 watch(
   () => props.modelValue,
@@ -202,9 +441,18 @@ watch(
       ignoreCloseUntil = Date.now() + 450
       fprView.value = false
       manualText.value = ''
+      splitColumns.value = false
+      pinScrollHeight.value = false
+      measuredChrome.value = CHROME_FALLBACK
+      placedTop.value = props.target[1]
+      syncMenuMax()
+      void refineLayout()
     } else {
       fprView.value = false
       manualText.value = ''
+      splitColumns.value = false
+      pinScrollHeight.value = false
+      placedTop.value = null
     }
   },
 )
@@ -489,6 +737,30 @@ function onClearDirect() {
 }
 
 watch(
+  () =>
+    [
+      props.target[1],
+      loading.value,
+      allSids.value.length,
+      fprView.value,
+      normalSids.value.length,
+      slowSids.value.length,
+      vfrSids.value.length,
+      milSids.value.length,
+    ] as const,
+  () => {
+    if (!props.modelValue) return
+    syncMenuMax()
+    if (!fprView.value && !loading.value && hasAnySids.value) {
+      oneColNatural.value = estimateOneColHeight()
+      splitColumns.value = oneColNatural.value > menuMaxPx.value + 1
+      placeMenu(Math.min(oneColNatural.value, menuMaxPx.value))
+    }
+    void refineLayout()
+  },
+)
+
+watch(
   () => props.modelValue,
   (open) => {
     if (open) void fetchSids()
@@ -501,6 +773,9 @@ watch(
 .sid-route-menu {
   --sid-strip-white: #ebebeb;
   --s: var(--efs-scale, 1);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   min-width: calc(132px * var(--s));
   max-width: min(92vw, calc(360px * var(--s)));
   background: #d8d8d8;
@@ -510,6 +785,96 @@ watch(
   color: #000;
   font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow: hidden;
+}
+
+.sid-route-split {
+  max-width: min(96vw, calc(560px * var(--s)));
+}
+
+.sid-route-top,
+.sid-route-foot,
+.sid-route-manual,
+.sid-route-list,
+.sid-route-section {
+  flex-shrink: 0;
+}
+
+.sid-route-foot {
+  display: flex;
+  flex-direction: column;
+}
+
+/* SID lists scroll; header and FPR / CLEAR stay outside this box. */
+.sid-route-scroll {
+  min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #222 #c8c8c8;
+}
+
+.sid-route-scroll::-webkit-scrollbar,
+.sid-route-col-main::-webkit-scrollbar,
+.sid-route-col-side-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sid-route-scroll::-webkit-scrollbar-track,
+.sid-route-col-main::-webkit-scrollbar-track,
+.sid-route-col-side-scroll::-webkit-scrollbar-track {
+  background: #c8c8c8;
+}
+
+.sid-route-scroll::-webkit-scrollbar-thumb,
+.sid-route-col-main::-webkit-scrollbar-thumb,
+.sid-route-col-side-scroll::-webkit-scrollbar-thumb {
+  background: #222;
+}
+
+.sid-route-split .sid-route-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.sid-route-col-main {
+  min-width: 0;
+  min-height: 0;
+}
+
+.sid-route-split .sid-route-col-main {
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #222 #c8c8c8;
+}
+
+.sid-route-col-side {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 2px solid #555;
+  overflow: hidden;
+}
+
+.sid-route-col-side-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #222 #c8c8c8;
 }
 
 .sid-route-top {
@@ -800,5 +1165,15 @@ watch(
   background: #1a3a6e;
   color: var(--sid-strip-white);
   box-shadow: inset 0 0 0 2px #000;
+}
+</style>
+
+<style>
+/* Vuetify sizes the overlay, but its content overflows visibly past max-height.
+   Clip here so the menu box cannot paint below the window. */
+.v-overlay__content.sid-route-overlay {
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
 }
 </style>

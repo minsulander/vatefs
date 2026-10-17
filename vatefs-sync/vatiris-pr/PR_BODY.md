@@ -1,20 +1,19 @@
 ## Summary
 
-- Add `/efs/sync/:realm/:airport[/:stripKey]` REST API for VatEFS (EFS stays local on each controller PC)
-- Syncs **scribble strokes** + **bay placement** for strip keys that already exist locally
-- Does **not** invent flight strips — those still come from EuroScope on each PC
-- Auth: `X-Vatsim-Cid` + CID must exist in `useraccount` (no OAuth), as agreed
-- Postgres table + ~1h TTL; rate limits / payload caps
-- Airport meta: `GET/PUT /efs/sync/:realm/:airport/meta` with `{ essaSep: { sep, dlv, depGap } }` for Stripview (ESOS APP/DEP)
-- Closed-beta tested via Cloudflare Tunnel + allowlist host
+- `/efs/sync` single write set for VatEFS: `/:stripKey`, `/order`, `/meta`, optional `/heartbeat`, `/ws`
+- **No** `/sep`, `/strips/:stripKey`, or `PUT /efs/:airport/:view`
+- Order + scribbles + EFS-only fields + SEP/`essaConfig` — not EuroScope status
+- `cfto` (boolean) and `atd` (`"HHmm"` or `null`) are allowed on order entries and strip bodies. `groundstate`, `clearedForTakeoff`, `sid`, and the other ES fields stay rejected.
+- Meta: `{ essaSep, essaConfig? }` — bankonfig id (`9A`, …), not UTC hour
+- ESSA Strip TV: `/order` canonical (`TWR-W`/`TWR-E` + `TAXI`|`LINEUP`|`DEPA`); transfer = absent from order
+- WS: `order` · `meta` · `strip` · `stripDeleted` · `heartbeat` · `snapshot`
+- Auth: `X-Vatsim-Cid` + allowlist / useraccount
 
 ## Test plan
 
-- [ ] Migration applies cleanly (`efs_scribble` + `efs_airport_meta`)
-- [ ] GET/PUT/DELETE with valid CID in useraccount
-- [ ] 403 when CID has no useraccount
-- [ ] Room isolation: live vs sweatbox, ESGG vs ESSA
-- [ ] Strokes sync for an existing flight strip; missing flights are not created
-- [ ] Drag placement converges for two controllers who both have the strip
-- [ ] PUT/GET `…/ESSA/meta` stores and returns `essaSep`; WS/SSE fans out `type: "meta"`
-- [ ] VatEFS Settings custom URL → `https://backend.vatiris.se` (or leave custom for self-host)
+- [ ] PUT/GET `/meta` with `{ essaSep, essaConfig: "9A" }`
+- [ ] PUT/DELETE bare `/:stripKey` (not `/strips/`)
+- [ ] Strip PUT accepts `cfto` / `atd` (`"HHmm"` or `null`); rejected for `groundstate` / `clearedForTakeoff` / `sid`
+- [ ] PUT `/order`; transferred callsign absent after TWR→APP
+- [ ] Optional `/heartbeat`; TTL refreshed by any write
+- [ ] WS fanout types match IRIS consumer

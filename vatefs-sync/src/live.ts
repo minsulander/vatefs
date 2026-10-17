@@ -8,18 +8,37 @@ import type { AirportMetaPayload, StripMeta } from "./db.js"
 
 export type LiveUpdate =
   | {
-      type: "scribble"
+      /** IRIS name; "scribble" accepted as legacy alias when publishing */
+      type: "strip" | "scribble"
       stripKey: string
       strokes: unknown[]
       strip?: StripMeta
       updatedAt: string
       updatedByCid: number | null
-      /** True when peer DELETEd the strip record (note/vehicle remove). */
       deleted?: boolean
+    }
+  | {
+      type: "stripDeleted"
+      stripKey: string
+      strokes: []
+      updatedAt: string
+      updatedByCid: number | null
+      deleted: true
     }
   | {
       type: "meta"
       meta: AirportMetaPayload
+      updatedAt: string
+      updatedByCid: number | null
+    }
+  | {
+      type: "order"
+      order: { revision: number; entries: unknown[] }
+      updatedAt: string
+      updatedByCid: number | null
+    }
+  | {
+      type: "heartbeat"
       updatedAt: string
       updatedByCid: number | null
     }
@@ -111,7 +130,15 @@ export function subscribeRoomWs(
 export function publishRoom(realm: string, airport: string, update: LiveUpdate, exceptCid?: number) {
   const set = rooms.get(roomKey(realm, airport))
   if (!set?.size) return
-  const eventName = update.type === "meta" ? "meta" : "scribble"
+  const eventName =
+    update.type === "meta" ||
+    update.type === "order" ||
+    update.type === "heartbeat" ||
+    update.type === "stripDeleted"
+      ? update.type
+      : update.type === "strip"
+        ? "strip"
+        : "strip"
   const ssePayload = `event: ${eventName}\ndata: ${JSON.stringify(update)}\n\n`
   const wsPayload = JSON.stringify(update)
   for (const client of [...set]) {

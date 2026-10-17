@@ -30,6 +30,10 @@ export type StripMeta = {
   atisGiven?: string | null
   noteText?: string
   std?: string
+  /** EFS cleared-for-takeoff. False clears the Stripview mark. */
+  cfto?: boolean
+  /** EFS ATD as UTC HHmm. Null clears a previous time. */
+  atd?: string | null
 }
 
 /** ESSA SEP/DLV/DEP GAP (and future airport-scoped fields) for Stripview. */
@@ -41,6 +45,8 @@ export type EssaSepMeta = {
 
 export type AirportMetaPayload = {
   essaSep?: EssaSepMeta
+  /** ESSA bankonfig id (QuickRef / Strip TV), e.g. "9A". */
+  essaConfig?: string
 }
 
 export type ScribbleDeps = {
@@ -107,13 +113,34 @@ export type ScribbleStore = {
   }>
 }
 
+/** ES-native / ops fields — stay on esdata; reject if present on sync strip bodies.
+ *  `cfto` and `atd` are allowed: EFS owns those for Stripview (not IRIS ground speed). */
+export const FORBIDDEN_SYNC_STRIP_KEYS = [
+  "groundstate",
+  "clearedForTakeoff",
+  "depRwy",
+  "arrRwy",
+  "sid",
+  "stand",
+  "cfl",
+  "temporaryAltitude",
+  "squawk",
+] as const
+
+export function findForbiddenSyncStripKeys(strip: unknown): string[] {
+  if (!strip || typeof strip !== "object" || Array.isArray(strip)) return []
+  return Object.keys(strip as object).filter((k) =>
+    (FORBIDDEN_SYNC_STRIP_KEYS as readonly string[]).includes(k),
+  )
+}
+
 export function validateAirportMeta(
   raw: unknown,
 ): { ok: true; meta: AirportMetaPayload } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "meta must be an object" }
   }
-  const body = raw as { essaSep?: unknown }
+  const body = raw as { essaSep?: unknown; essaConfig?: unknown }
   const out: AirportMetaPayload = {}
   if (body.essaSep !== undefined) {
     if (!body.essaSep || typeof body.essaSep !== "object" || Array.isArray(body.essaSep)) {
@@ -127,6 +154,15 @@ export function validateAirportMeta(
       return { ok: false, error: "essaSep field too long" }
     }
     out.essaSep = { sep: s.sep, dlv: s.dlv, depGap: s.depGap }
+  }
+  if (body.essaConfig !== undefined) {
+    if (
+      typeof body.essaConfig !== "string" ||
+      !/^(?:[1-8]|9[ABC]|1[0-4]|15[ABC]|16)$/.test(body.essaConfig.trim())
+    ) {
+      return { ok: false, error: "essaConfig must be a known bankonfig id" }
+    }
+    out.essaConfig = body.essaConfig.trim()
   }
   if (!out.essaSep) {
     return { ok: false, error: "essaSep required" }
@@ -355,6 +391,13 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
       if (raw == null) {
         stripMeta = null
       } else if (typeof raw === "object") {
+        const forbidden = findForbiddenSyncStripKeys(raw)
+        if (forbidden.length) {
+          res.status(400).json({
+            error: `strip must not include ES fields: ${forbidden.join(", ")}`,
+          })
+          return
+        }
         const s = raw as StripMeta
         stripMeta = {
           kind: typeof s.kind === "string" ? s.kind : undefined,
@@ -384,6 +427,13 @@ export function createScribbleRouter(deps: ScribbleDeps): Router {
                 : undefined,
           noteText: typeof s.noteText === "string" ? s.noteText : undefined,
           std: typeof s.std === "string" ? s.std : undefined,
+          cfto: typeof s.cfto === "boolean" ? s.cfto : undefined,
+          atd:
+            s.atd === null
+              ? null
+              : typeof s.atd === "string" && /^\d{4}$/.test(s.atd.trim())
+                ? s.atd.trim()
+                : undefined,
         }
       } else {
         res.status(400).json({ error: "strip must be an object or null" })

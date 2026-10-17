@@ -324,6 +324,14 @@ export function isAutoLopSsrMode(value: unknown): value is AutoLopSsrMode {
     return value === 'instant' || value === 'assume' || value === 'manual'
 }
 
+/**
+ * Hoppie ACARS logon code (same rule as TopSkyCPDLChoppieCode.txt):
+ * letters and digits only, shorter than 40 characters.
+ */
+export function isValidHoppieLogonCode(value: unknown): value is string {
+    return typeof value === 'string' && value.length > 0 && value.length < 40 && /^[a-zA-Z0-9]+$/.test(value)
+}
+
 /** UI preferences persisted in VatEFSsettings.json (local backend). */
 export interface UiSettings {
     dclSoundEnabled: boolean
@@ -382,13 +390,11 @@ export interface UiSettings {
      * Default off — enable in Options and copy the FSP URL into IRIS.
      */
     fspServerEnabled: boolean
-    /** When true, sync freehand scribble strokes via VatEFS / VatIRIS sync */
-    scribbleSyncEnabled: boolean
     /**
-     * When true, sync bay placement / reorder / note·vehicle + EFS-only flags
-     * (clearanceRead, QNH/ATIS) via the same sync endpoint.
+     * Share scribbles and strip state (placement, note/vehicle, CLR/QNH/ATIS) via VatIRIS.
+     * On by default. Turn off only when sync is causing problems.
      */
-    stripSyncEnabled: boolean
+    syncEnabled: boolean
     /**
      * Legacy persisted sync base URL — ignored in UI.
      * Effective URL is VATEFS_SYNC_URL env or https://backend.vatiris.se.
@@ -396,6 +402,11 @@ export interface UiSettings {
     scribbleSyncUrl: string
     /** VATSIM CID used as X-Vatsim-Cid for scribble sync (empty = not set) */
     vatsimCid: string
+    /**
+     * Manual Hoppie logon code. Non-empty overrides ESAA/Plugins/TopSkyCPDLChoppieCode.txt.
+     * Empty uses that file.
+     */
+    hoppieLogonCode: string
     /** Network realm for scribble rooms: auto from ES connection, or override */
     scribbleSyncRealm: 'auto' | 'live' | 'sweatbox' | 'playback' | 'local'
 }
@@ -423,11 +434,11 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     stripPrintSound: 'short',
     stripPrintMode: 'auto',
     fspServerEnabled: false,
-    scribbleSyncEnabled: true,
-    stripSyncEnabled: true,
+    syncEnabled: true,
     scribbleSyncUrl: '',
     vatsimCid: '',
     scribbleSyncRealm: 'auto',
+    hoppieLogonCode: '',
 }
 
 export interface AirportAtisInfo {

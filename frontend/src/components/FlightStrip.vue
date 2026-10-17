@@ -86,14 +86,13 @@
           type="button"
           class="efs-popup-item"
           @click.stop="sizeMenuOpen = true"
-        >Size</button>
+        >Size…</button>
         <button type="button" class="efs-popup-item" @click="onDeleteClick">Delete</button>
       </div>
     </div>
-  </v-menu>
 
-  <!-- Size submenu -->
-  <v-menu v-model="sizeMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
+  <!-- Nested so an outside click closes this menu and the strip menu together -->
+  <v-menu v-model="sizeMenuOpen" submenu :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
     <div class="efs-popup-menu" @click.stop>
       <div class="efs-popup-header">Size</div>
       <div class="efs-popup-list">
@@ -117,6 +116,69 @@
         >Compact</button>
       </div>
     </div>
+  </v-menu>
+
+  <!-- Ground state submenu -->
+  <v-menu v-model="groundStateMenuOpen" submenu :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
+    <div class="efs-popup-menu" @click.stop>
+      <div class="efs-popup-header">State</div>
+      <div class="efs-popup-list">
+        <button
+          v-for="gs in groundStateOptions"
+          :key="gs.action"
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: gs.groundstate === (strip.groundstate ?? '') && !gs.extra }"
+          @click="onGroundStateClick(gs.action)"
+        ><span class="gs-code">{{ gs.code }}</span> {{ gs.label }}</button>
+      </div>
+    </div>
+  </v-menu>
+
+  <!-- Transfer submenu -->
+  <v-menu v-model="transferMenuOpen" submenu :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
+    <div class="efs-popup-menu" @click.stop>
+      <div class="efs-popup-header">Transfer</div>
+      <div class="efs-popup-list">
+        <button
+          v-for="ctrl in store.controllers"
+          :key="ctrl.callsign"
+          type="button"
+          class="efs-popup-item efs-popup-item--stack"
+          @click="onTransferClick(ctrl.callsign)"
+        >
+          <span class="efs-popup-item-title">
+            <template v-if="ctrl.positionId">{{ ctrl.positionId }} · </template>{{ ctrl.callsign }}
+          </span>
+          <span class="efs-popup-item-sub transfer-freq">{{ ctrl.frequency }}</span>
+        </button>
+      </div>
+    </div>
+  </v-menu>
+
+  <!-- POB entry (RTC V/Z) -->
+  <v-menu v-model="pobMenuOpen" submenu :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="false">
+    <div class="efs-popup-menu" @click.stop>
+      <div class="efs-popup-header">POB</div>
+      <div class="efs-popup-search">
+        <input
+          ref="pobInputEl"
+          v-model="pobEditText"
+          class="efs-popup-search-input"
+          type="text"
+          inputmode="numeric"
+          maxlength="3"
+          placeholder="000"
+          @keydown.enter.prevent="onPobConfirm"
+          @keydown.escape.prevent="pobMenuOpen = false"
+        />
+      </div>
+      <div class="efs-popup-list">
+        <button type="button" class="efs-popup-item" @click="onPobConfirm">Set</button>
+        <button v-if="strip.pob" type="button" class="efs-popup-item" @click="onPobClear">Clear</button>
+      </div>
+    </div>
+  </v-menu>
   </v-menu>
 
   <!-- TSAC menu (within TSAT window) -->
@@ -150,68 +212,6 @@
       <div class="efs-popup-header">REA</div>
       <div class="efs-popup-list">
         <button v-if="canClearRea" type="button" class="efs-popup-item" @click="onClearReaClick">Remove REA</button>
-      </div>
-    </div>
-  </v-menu>
-
-  <!-- Ground state submenu -->
-  <v-menu v-model="groundStateMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
-    <div class="efs-popup-menu" @click.stop>
-      <div class="efs-popup-header">State</div>
-      <div class="efs-popup-list">
-        <button
-          v-for="gs in groundStateOptions"
-          :key="gs.action"
-          type="button"
-          class="efs-popup-item"
-          :class="{ selected: gs.groundstate === (strip.groundstate ?? '') && !gs.extra }"
-          @click="onGroundStateClick(gs.action)"
-        ><span class="gs-code">{{ gs.code }}</span> {{ gs.label }}</button>
-      </div>
-    </div>
-  </v-menu>
-
-  <!-- Transfer submenu -->
-  <v-menu v-model="transferMenuOpen" :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
-    <div class="efs-popup-menu" @click.stop>
-      <div class="efs-popup-header">Transfer</div>
-      <div class="efs-popup-list">
-        <button
-          v-for="ctrl in store.controllers"
-          :key="ctrl.callsign"
-          type="button"
-          class="efs-popup-item efs-popup-item--stack"
-          @click="onTransferClick(ctrl.callsign)"
-        >
-          <span class="efs-popup-item-title">
-            <template v-if="ctrl.positionId">{{ ctrl.positionId }} · </template>{{ ctrl.callsign }}
-          </span>
-          <span class="efs-popup-item-sub transfer-freq">{{ ctrl.frequency }}</span>
-        </button>
-      </div>
-    </div>
-  </v-menu>
-
-  <!-- POB entry (RTC V/Z) -->
-  <v-menu v-model="pobMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="false">
-    <div class="efs-popup-menu" @click.stop>
-      <div class="efs-popup-header">POB</div>
-      <div class="efs-popup-search">
-        <input
-          ref="pobInputEl"
-          v-model="pobEditText"
-          class="efs-popup-search-input"
-          type="text"
-          inputmode="numeric"
-          maxlength="3"
-          placeholder="000"
-          @keydown.enter.prevent="onPobConfirm"
-          @keydown.escape.prevent="pobMenuOpen = false"
-        />
-      </div>
-      <div class="efs-popup-list">
-        <button type="button" class="efs-popup-item" @click="onPobConfirm">Set</button>
-        <button v-if="strip.pob" type="button" class="efs-popup-item" @click="onPobClear">Clear</button>
       </div>
     </div>
   </v-menu>
@@ -1589,6 +1589,7 @@ import {
   releaseStripContextMenu,
 } from '@/composables/stripContextMenuShared'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
+import { insertIndexAtClientY } from '@/composables/dropPlacement'
 import {
   SCRIBBLE_INK_HEX,
   elementToScribbleRect,
@@ -3227,19 +3228,18 @@ watch(
   () =>
     [
       topExpanded.value,
-      isCompactBay.value,
       store.essaRolesMode,
       store.dclStatus,
       props.strip.callsign,
       props.strip.dclStatus,
     ] as const,
-  ([expanded, compact]) => {
+  ([expanded]) => {
     if (!store.essaRolesMode) {
       hoppieOnlineForClr.value = false
       return
     }
-    // Expander chip or compact CLNC action needs Hoppie-online for DCL label
-    if (expanded || compact) void refreshHoppieOnlineForClr()
+    // Top-expander CLR chip only. The big CLNC key stays ACK CLR / CLR.
+    if (expanded) void refreshHoppieOnlineForClr()
     else hoppieOnlineForClr.value = false
   },
 )
@@ -4890,6 +4890,7 @@ function onReaBadgeClick(event: MouseEvent) {
 /**
  * Instant / On assume: label CLNC as ACK CLR (voice-ack sets clearance flag).
  * Manual: open CLR dialog as usual.
+ * Hoppie / dclStatus never renames this key (top expander chip still shows DCL).
  */
 const showAckClrLabel = computed(
   () => store.autoLopSsr === 'instant' || store.autoLopSsr === 'assume',
@@ -4901,7 +4902,6 @@ function actionLabel(action: string): string {
   const compactPair = isCompactBay.value && effectiveActionCount.value > 1
   switch (action) {
     case 'CLNC':
-      if (showEssaDclLabel.value) return 'DCL'
       return showAckClrLabel.value ? 'ACK CLR' : 'CLR'
     case 'TXO':
       if (rtoChoiceOpen.value) return compactPair ? 'OUT' : 'TAXI OUT'
@@ -5275,19 +5275,11 @@ function handleTouchDropWithGaps(
     }
   }
 
-  // Find position based on midpoints (using touchY for consistency with desktop using clientY)
-  for (let i = 0; i < stripElements.length; i++) {
-    const element = stripElements[i]
-    if (!element) continue
-
-    const rect = element.getBoundingClientRect()
-    const midpoint = rect.top + rect.height / 2
-
-    if (touchY < midpoint) {
-      position = i
-      droppedBelowLastStrip = false
-      break
-    }
+  // Same midpoint test as the placement line (index among strips excluding the drag source).
+  const insertAt = insertIndexAtClientY(stripElements, touchY)
+  if (insertAt < stripElements.length) {
+    position = insertAt
+    droppedBelowLastStrip = false
   }
 
   // Handle same-section gap adjustments

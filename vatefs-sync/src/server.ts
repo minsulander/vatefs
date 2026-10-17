@@ -1,4 +1,4 @@
-import express from "express"
+import express, { type Request, type Response } from "express"
 import cors from "cors"
 import http from "http"
 import path from "path"
@@ -6,13 +6,19 @@ import { fileURLToPath } from "url"
 import { WebSocketServer } from "ws"
 import {
   getAirportMeta,
+  getOrder,
   initDb,
   listSince,
   purgeExpired,
   remove,
+  touchHeartbeat,
   upsert,
   upsertAirportMeta,
+  upsertOrder,
+  findForbiddenSyncStripKeys,
   validateAirportMeta,
+  validateOrderBody,
+  validateSepBody,
   validateStrokes,
   type StripMeta,
 } from "./db.js"
@@ -113,7 +119,300 @@ efs.get("/sync/:realm/:airport/stream", (req, res) => {
   console.log(`[vatefs-sync] SSE subscribe ${realm}/${airport} cid=${cid}`)
 })
 
-/** Airport meta (SEP/DLV/DEP GAP) — must be registered before :stripKey. */
+/** Locked contract: full bay order snapshot. */
+efs.put(
+  "/sync/:realm/:airport/order",
+  rateLimit({ windowMs: 60_000, max: 300 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const checked = validateOrderBody(req.body)
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    const cid = getCid(req)
+    const row = upsertOrder(realm, airport, checked.order, cid)
+    publishRoom(
+      realm,
+      airport,
+      {
+        type: "order",
+        order: row.order,
+        updatedAt: row.updatedAt,
+        updatedByCid: row.updatedByCid,
+      },
+      cid,
+    )
+    res.json({ ok: true, order: row.order, updatedAt: row.updatedAt })
+  },
+)
+
+efs.get(
+  "/sync/:realm/:airport/order",
+  rateLimit({ windowMs: 60_000, max: 360 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const row = getOrder(realm, airport)
+    if (!row) {
+      res.json({
+        order: { revision: 0, entries: [] },
+        updatedAt: new Date(0).toISOString(),
+        efsActive: false,
+      })
+      return
+    }
+    const fresh = Date.now() - Date.parse(row.lastHeartbeatAt) < 5 * 60 * 1000
+    res.json({
+      order: row.order,
+      updatedAt: row.updatedAt,
+      lastHeartbeatAt: row.lastHeartbeatAt,
+      efsActive: fresh,
+    })
+  },
+)
+
+/** Locked contract: SEP/DLV/DEP GAP. */
+efs.put(
+  "/sync/:realm/:airport/sep",
+  rateLimit({ windowMs: 60_000, max: 120 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const checked = validateSepBody(req.body)
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    const cid = getCid(req)
+    const meta = {
+      essaSep: checked.sep,
+      sep: checked.sep.sep,
+      dlv: checked.sep.dlv,
+      depGap: checked.sep.depGap,
+    }
+    const row = upsertAirportMeta(realm, airport, meta, cid)
+    touchHeartbeat(realm, airport, cid)
+    publishRoom(
+      realm,
+      airport,
+      {
+        type: "meta",
+        meta: row.meta,
+        updatedAt: row.updatedAt,
+        updatedByCid: row.updatedByCid,
+      },
+      cid,
+    )
+    res.json({ ok: true, ...checked.sep, updatedAt: row.updatedAt })
+  },
+)
+
+efs.get(
+  "/sync/:realm/:airport/sep",
+  rateLimit({ windowMs: 60_000, max: 360 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const row = getAirportMeta(realm, airport)
+    const s = row?.meta?.essaSep || {
+      sep: row?.meta?.sep ?? "",
+      dlv: row?.meta?.dlv ?? "",
+      depGap: row?.meta?.depGap ?? "",
+    }
+    res.json({
+      sep: s.sep ?? "",
+      dlv: s.dlv ?? "",
+      depGap: s.depGap ?? "",
+      updatedAt: row?.updatedAt || new Date(0).toISOString(),
+    })
+  },
+)
+
+efs.put(
+  "/sync/:realm/:airport/heartbeat",
+  rateLimit({ windowMs: 60_000, max: 120 }),
+  (req, res) => {
+    const realm = String(req.params.realm || "").toLowerCase()
+    const airport = String(req.params.airport || "").toUpperCase()
+    const room = parseRoom(realm, airport)
+    if (!room.ok) {
+      res.status(400).json({ error: room.error })
+      return
+    }
+    const cid = getCid(req)
+    const row = touchHeartbeat(realm, airport, cid)
+    publishRoom(
+      realm,
+      airport,
+      { type: "heartbeat", updatedAt: row.lastHeartbeatAt, updatedByCid: cid },
+      cid,
+    )
+    res.json({ ok: true, updatedAt: row.lastHeartbeatAt })
+  },
+)
+
+/** Locked contract strip path — same handler as legacy /:stripKey. */
+function putStripHandler(req: Request, res: Response) {
+  const realm = String(req.params.realm || "").toLowerCase()
+  const airport = String(req.params.airport || "").toUpperCase()
+  const stripKey = decodeURIComponent(String(req.params.stripKey || ""))
+  const room = parseRoom(realm, airport)
+  if (!room.ok) {
+    res.status(400).json({ error: room.error })
+    return
+  }
+  if (!stripKey || stripKey.length > 128) {
+    res.status(400).json({ error: "invalid stripKey" })
+    return
+  }
+  const body = req.body && typeof req.body === "object" ? req.body : {}
+  const hasStrokes = Object.prototype.hasOwnProperty.call(body, "strokes")
+  const hasStrip = Object.prototype.hasOwnProperty.call(body, "strip")
+  if (!hasStrokes && !hasStrip) {
+    res.status(400).json({ error: "strokes and/or strip required" })
+    return
+  }
+  let strokes: unknown[] | undefined
+  if (hasStrokes) {
+    const checked = validateStrokes((body as { strokes?: unknown }).strokes)
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    strokes = checked.strokes
+  }
+  let stripMeta: StripMeta | null | undefined
+  if (hasStrip) {
+    const raw = (body as { strip?: unknown }).strip
+    if (raw == null) {
+      stripMeta = null
+    } else if (typeof raw === "object") {
+      const forbidden = findForbiddenSyncStripKeys(raw)
+      if (forbidden.length) {
+        res.status(400).json({
+          error: `strip must not include ES fields: ${forbidden.join(", ")}`,
+        })
+        return
+      }
+      const s = raw as StripMeta
+      stripMeta = {
+        kind: typeof s.kind === "string" ? s.kind : undefined,
+        paperInfoKind: typeof s.paperInfoKind === "string" ? s.paperInfoKind : undefined,
+        airport: typeof s.airport === "string" ? s.airport.toUpperCase() : undefined,
+        callsign: typeof s.callsign === "string" ? s.callsign : undefined,
+        aircraftType: typeof s.aircraftType === "string" ? s.aircraftType : undefined,
+        adep: typeof s.adep === "string" ? s.adep : undefined,
+        ades: typeof s.ades === "string" ? s.ades : undefined,
+        flightRules: typeof s.flightRules === "string" ? s.flightRules : undefined,
+        bayId: typeof s.bayId === "string" ? s.bayId : undefined,
+        sectionId: typeof s.sectionId === "string" ? s.sectionId : undefined,
+        position: typeof s.position === "number" && Number.isFinite(s.position) ? s.position : undefined,
+        bottom: typeof s.bottom === "boolean" ? s.bottom : undefined,
+        clearanceRead: typeof s.clearanceRead === "boolean" ? s.clearanceRead : undefined,
+        qnhGiven:
+          s.qnhGiven === null
+            ? null
+            : typeof s.qnhGiven === "number" && Number.isFinite(s.qnhGiven)
+              ? s.qnhGiven
+              : undefined,
+        atisGiven:
+          s.atisGiven === null ? null : typeof s.atisGiven === "string" ? s.atisGiven : undefined,
+        noteText: typeof s.noteText === "string" ? s.noteText : undefined,
+        std: typeof s.std === "string" ? s.std : undefined,
+        cfto: typeof s.cfto === "boolean" ? s.cfto : undefined,
+        atd:
+          s.atd === null
+            ? null
+            : typeof s.atd === "string" && /^\d{4}$/.test(s.atd.trim())
+              ? s.atd.trim()
+              : undefined,
+      }
+    } else {
+      res.status(400).json({ error: "strip must be an object or null" })
+      return
+    }
+  }
+  const cid = getCid(req)
+  const row = upsert(realm, airport, stripKey, strokes, stripMeta, cid)
+  publishRoom(
+    realm,
+    airport,
+    {
+      type: "strip",
+      stripKey: row.stripKey,
+      strokes: row.strokes,
+      ...(row.stripMeta ? { strip: row.stripMeta } : {}),
+      updatedAt: row.updatedAt,
+      updatedByCid: row.updatedByCid,
+    },
+    cid,
+  )
+  res.json({
+    ok: true,
+    stripKey: row.stripKey,
+    updatedAt: row.updatedAt,
+    updatedByCid: row.updatedByCid,
+  })
+}
+
+function deleteStripHandler(req: Request, res: Response) {
+  const realm = String(req.params.realm || "").toLowerCase()
+  const airport = String(req.params.airport || "").toUpperCase()
+  const stripKey = decodeURIComponent(String(req.params.stripKey || ""))
+  const room = parseRoom(realm, airport)
+  if (!room.ok) {
+    res.status(400).json({ error: room.error })
+    return
+  }
+  const cid = getCid(req)
+  remove(realm, airport, stripKey, cid)
+  const updatedAt = new Date().toISOString()
+  publishRoom(
+    realm,
+    airport,
+    {
+      type: "stripDeleted",
+      stripKey,
+      strokes: [],
+      updatedAt,
+      updatedByCid: cid,
+      deleted: true,
+    },
+    cid,
+  )
+  res.json({ ok: true })
+}
+
+efs.put("/sync/:realm/:airport/strips/:stripKey", rateLimit({ windowMs: 60_000, max: 300 }), putStripHandler)
+efs.delete(
+  "/sync/:realm/:airport/strips/:stripKey",
+  rateLimit({ windowMs: 60_000, max: 120 }),
+  deleteStripHandler,
+)
+
+/** Legacy airport meta (SEP) — prefer /sep. Must be registered before :stripKey. */
 efs.get(
   "/sync/:realm/:airport/meta",
   rateLimit({ windowMs: 60_000, max: 360 }),
@@ -180,132 +479,12 @@ efs.put(
   },
 )
 
-efs.put(
-  "/sync/:realm/:airport/:stripKey",
-  rateLimit({ windowMs: 60_000, max: 300 }),
-  (req, res) => {
-    const realm = String(req.params.realm || "").toLowerCase()
-    const airport = String(req.params.airport || "").toUpperCase()
-    const stripKey = decodeURIComponent(String(req.params.stripKey || ""))
-    const room = parseRoom(realm, airport)
-    if (!room.ok) {
-      res.status(400).json({ error: room.error })
-      return
-    }
-    if (!stripKey || stripKey.length > 128) {
-      res.status(400).json({ error: "invalid stripKey" })
-      return
-    }
-    const body = req.body && typeof req.body === "object" ? req.body : {}
-    const hasStrokes = Object.prototype.hasOwnProperty.call(body, "strokes")
-    const hasStrip = Object.prototype.hasOwnProperty.call(body, "strip")
-    if (!hasStrokes && !hasStrip) {
-      res.status(400).json({ error: "strokes and/or strip required" })
-      return
-    }
-    let strokes: unknown[] | undefined
-    if (hasStrokes) {
-      const checked = validateStrokes((body as { strokes?: unknown }).strokes)
-      if (!checked.ok) {
-        res.status(400).json({ error: checked.error })
-        return
-      }
-      strokes = checked.strokes
-    }
-    let stripMeta: StripMeta | null | undefined
-    if (hasStrip) {
-      const raw = (body as { strip?: unknown }).strip
-      if (raw == null) {
-        stripMeta = null
-      } else if (typeof raw === "object") {
-        const s = raw as StripMeta
-        stripMeta = {
-          kind: typeof s.kind === "string" ? s.kind : undefined,
-          paperInfoKind: typeof s.paperInfoKind === "string" ? s.paperInfoKind : undefined,
-          airport: typeof s.airport === "string" ? s.airport.toUpperCase() : undefined,
-          callsign: typeof s.callsign === "string" ? s.callsign : undefined,
-          aircraftType: typeof s.aircraftType === "string" ? s.aircraftType : undefined,
-          adep: typeof s.adep === "string" ? s.adep : undefined,
-          ades: typeof s.ades === "string" ? s.ades : undefined,
-          flightRules: typeof s.flightRules === "string" ? s.flightRules : undefined,
-          bayId: typeof s.bayId === "string" ? s.bayId : undefined,
-          sectionId: typeof s.sectionId === "string" ? s.sectionId : undefined,
-          position: typeof s.position === "number" && Number.isFinite(s.position) ? s.position : undefined,
-          bottom: typeof s.bottom === "boolean" ? s.bottom : undefined,
-          clearanceRead: typeof s.clearanceRead === "boolean" ? s.clearanceRead : undefined,
-          qnhGiven:
-            s.qnhGiven === null
-              ? null
-              : typeof s.qnhGiven === "number" && Number.isFinite(s.qnhGiven)
-                ? s.qnhGiven
-                : undefined,
-          atisGiven:
-            s.atisGiven === null
-              ? null
-              : typeof s.atisGiven === "string"
-                ? s.atisGiven
-                : undefined,
-          noteText: typeof s.noteText === "string" ? s.noteText : undefined,
-          std: typeof s.std === "string" ? s.std : undefined,
-        }
-      } else {
-        res.status(400).json({ error: "strip must be an object or null" })
-        return
-      }
-    }
-    const cid = getCid(req)
-    const row = upsert(realm, airport, stripKey, strokes, stripMeta, cid)
-    publishRoom(
-      realm,
-      airport,
-      {
-        type: "scribble",
-        stripKey: row.stripKey,
-        strokes: row.strokes,
-        ...(row.stripMeta ? { strip: row.stripMeta } : {}),
-        updatedAt: row.updatedAt,
-        updatedByCid: row.updatedByCid,
-      },
-      cid,
-    )
-    res.json({
-      ok: true,
-      stripKey: row.stripKey,
-      updatedAt: row.updatedAt,
-      updatedByCid: row.updatedByCid,
-    })
-  },
-)
-
+/** Legacy strip paths — prefer /strips/:stripKey. */
+efs.put("/sync/:realm/:airport/:stripKey", rateLimit({ windowMs: 60_000, max: 300 }), putStripHandler)
 efs.delete(
   "/sync/:realm/:airport/:stripKey",
   rateLimit({ windowMs: 60_000, max: 120 }),
-  (req, res) => {
-    const realm = String(req.params.realm || "").toLowerCase()
-    const airport = String(req.params.airport || "").toUpperCase()
-    const stripKey = decodeURIComponent(String(req.params.stripKey || ""))
-    const room = parseRoom(realm, airport)
-    if (!room.ok) {
-      res.status(400).json({ error: room.error })
-      return
-    }
-    const cid = getCid(req)
-    remove(realm, airport, stripKey, cid)
-    publishRoom(
-      realm,
-      airport,
-      {
-        type: "scribble",
-        stripKey,
-        strokes: [],
-        updatedAt: new Date().toISOString(),
-        updatedByCid: cid,
-        deleted: true,
-      },
-      cid,
-    )
-    res.json({ ok: true })
-  },
+  deleteStripHandler,
 )
 
 app.use("/efs", efs)

@@ -21,7 +21,7 @@ export type {
     ScribbleStrokePayload,
 } from "./types.js"
 
-export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind, isAutoLopSsrMode } from "./types.js"
+export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind, isAutoLopSsrMode, isValidHoppieLogonCode } from "./types.js"
 
 export {
     ESSA_RWY_COMBINATIONS,

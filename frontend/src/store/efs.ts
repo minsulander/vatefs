@@ -598,11 +598,13 @@ export const useEfsStore = defineStore("efs", () => {
     const stripPrintSound = ref<StripPrintSound>(DEFAULT_UI_SETTINGS.stripPrintSound)
     const stripPrintMode = ref<StripPrintMode>(DEFAULT_UI_SETTINGS.stripPrintMode)
     const fspServerEnabled = ref(DEFAULT_UI_SETTINGS.fspServerEnabled)
-    const scribbleSyncEnabled = ref(DEFAULT_UI_SETTINGS.scribbleSyncEnabled)
-    const stripSyncEnabled = ref(DEFAULT_UI_SETTINGS.stripSyncEnabled)
+    const syncEnabled = ref(DEFAULT_UI_SETTINGS.syncEnabled)
     const scribbleSyncUrl = ref(DEFAULT_UI_SETTINGS.scribbleSyncUrl)
     const vatsimCid = ref(DEFAULT_UI_SETTINGS.vatsimCid)
     const scribbleSyncRealm = ref(DEFAULT_UI_SETTINGS.scribbleSyncRealm)
+    const hoppieLogonCode = ref(DEFAULT_UI_SETTINGS.hoppieLogonCode)
+    /** True when TopSkyCPDLChoppieCode.txt has a valid code (backend). */
+    const hoppieFileCodePresent = ref(false)
     /** True after first userSettings apply — used for one-shot CID prompt */
     const userSettingsLoaded = ref(false)
     const vatIrisSignInOpen = ref(false)
@@ -625,7 +627,7 @@ export const useEfsStore = defineStore("efs", () => {
         suppressPrintSoundUntil = Math.max(suppressPrintSoundUntil, Date.now() + ms)
     }
 
-    function applyUserSettings(settings: UiSettings, available?: boolean) {
+    function applyUserSettings(settings: UiSettings, available?: boolean, fileCodePresent?: boolean) {
         dclSoundEnabled.value = settings.dclSoundEnabled
         flashChangedTimes.value = settings.flashChangedTimes
         flashTsatWindow.value = settings.flashTsatWindow
@@ -667,14 +669,10 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.fspServerEnabled === 'boolean'
                 ? settings.fspServerEnabled
                 : DEFAULT_UI_SETTINGS.fspServerEnabled
-        scribbleSyncEnabled.value =
-            typeof settings.scribbleSyncEnabled === 'boolean'
-                ? settings.scribbleSyncEnabled
-                : DEFAULT_UI_SETTINGS.scribbleSyncEnabled
-        stripSyncEnabled.value =
-            typeof settings.stripSyncEnabled === 'boolean'
-                ? settings.stripSyncEnabled
-                : DEFAULT_UI_SETTINGS.stripSyncEnabled
+        syncEnabled.value =
+            typeof settings.syncEnabled === 'boolean'
+                ? settings.syncEnabled
+                : DEFAULT_UI_SETTINGS.syncEnabled
         scribbleSyncUrl.value =
             typeof settings.scribbleSyncUrl === 'string'
                 ? settings.scribbleSyncUrl
@@ -689,6 +687,11 @@ export const useEfsStore = defineStore("efs", () => {
             settings.scribbleSyncRealm === 'auto'
                 ? settings.scribbleSyncRealm
                 : DEFAULT_UI_SETTINGS.scribbleSyncRealm
+        hoppieLogonCode.value =
+            typeof settings.hoppieLogonCode === 'string'
+                ? settings.hoppieLogonCode
+                : DEFAULT_UI_SETTINGS.hoppieLogonCode
+        if (typeof fileCodePresent === 'boolean') hoppieFileCodePresent.value = fileCodePresent
         if (typeof available === 'boolean') autoParkAvailable.value = available
         userSettingsLoaded.value = true
     }
@@ -710,10 +713,10 @@ export const useEfsStore = defineStore("efs", () => {
         if (isStripPrintSound(partial.stripPrintSound)) stripPrintSound.value = partial.stripPrintSound
         if (isStripPrintMode(partial.stripPrintMode)) stripPrintMode.value = partial.stripPrintMode
         if (typeof partial.fspServerEnabled === 'boolean') fspServerEnabled.value = partial.fspServerEnabled
-        if (typeof partial.scribbleSyncEnabled === 'boolean') scribbleSyncEnabled.value = partial.scribbleSyncEnabled
-        if (typeof partial.stripSyncEnabled === 'boolean') stripSyncEnabled.value = partial.stripSyncEnabled
+        if (typeof partial.syncEnabled === 'boolean') syncEnabled.value = partial.syncEnabled
         if (typeof partial.scribbleSyncUrl === 'string') scribbleSyncUrl.value = partial.scribbleSyncUrl
         if (typeof partial.vatsimCid === 'string') vatsimCid.value = partial.vatsimCid
+        if (typeof partial.hoppieLogonCode === 'string') hoppieLogonCode.value = partial.hoppieLogonCode.trim()
         if (
             partial.scribbleSyncRealm === 'auto' ||
             partial.scribbleSyncRealm === 'live' ||
@@ -750,7 +753,7 @@ export const useEfsStore = defineStore("efs", () => {
     function syncStripScribbles(stripId: string, pushRemote = true) {
         const strokes = getStripScribbles(stripId)
         sendMessage({ type: 'scribbleSet', stripId, strokes })
-        if (pushRemote && scribbleSyncEnabled.value) {
+        if (pushRemote && syncEnabled.value) {
             sendMessage({ type: 'scribbleSyncPush', stripId })
         }
     }
@@ -893,7 +896,11 @@ export const useEfsStore = defineStore("efs", () => {
                         controllers.value = message.controllers
                         break
                     case 'userSettings':
-                        applyUserSettings(message.settings, message.autoParkAvailable)
+                        applyUserSettings(
+                            message.settings,
+                            message.autoParkAvailable,
+                            message.hoppieFileCodePresent,
+                        )
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -3199,11 +3206,12 @@ export const useEfsStore = defineStore("efs", () => {
         stripPrintSound,
         stripPrintMode,
         fspServerEnabled,
-        scribbleSyncEnabled,
-        stripSyncEnabled,
+        syncEnabled,
         scribbleSyncUrl,
         vatsimCid,
         scribbleSyncRealm,
+        hoppieLogonCode,
+        hoppieFileCodePresent,
         userSettingsLoaded,
         cidDialogOpen,
         cidDialogSuggested,

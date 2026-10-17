@@ -55,7 +55,7 @@ import type {
     AirportAtisInfo,
     UiSettings,
 } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode, isPaperInfoKind } from "@vatefs/common"
+import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode, isPaperInfoKind, isValidHoppieLogonCode } from "@vatefs/common"
 import type { AutoLopSsrMode, FlightStrip, Gap, Section, ScribbleStrokePayload } from "@vatefs/common"
 import { store } from "./store.js"
 import * as scribbleStore from "./scribble-store.js"
@@ -71,8 +71,12 @@ import {
     isOfflineVatsimRealm,
     onConnectionTypeChanged,
     pushEssaSepMetaToRemote,
+    scheduleStripviewLayoutPush,
+    pushStripCftoAtdIfChanged,
+    forgetStripCftoAtd,
     resolveRealm,
 } from "./vatefs-sync.js"
+import { isIrisStripviewPlacement } from "./iris-efs-order.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -168,7 +172,16 @@ import { resolveEsggPreferredSid, collectEsggSidsForTmaExit } from "./esgg-sid.j
 import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
 import { loadCtrData, checkCtrAtPosition, getCtrHealth } from "./ctr-data.js"
 import { mockMyselfUpdate } from "./mockPluginMessages.js"
-import { loadHoppieConfig, getLogonCode, getDclAirports, fillDclTemplate, fillDclTemplateWithMarkers } from "./hoppie-config.js"
+import {
+    loadHoppieConfig,
+    getLogonCode,
+    getFileLogonCode,
+    getDclAirports,
+    getHoppieLogonSource,
+    setManualLogonCode,
+    fillDclTemplate,
+    fillDclTemplateWithMarkers,
+} from "./hoppie-config.js"
 import {
     loadTopSkyAirspace,
     getAppClrTypes,
@@ -367,23 +380,34 @@ const localFeedState = {
     cdmLocal: { ok: false, detail: "Not found" } as FeedStatusItem,
 }
 
-function updateHoppieConfigFeedState(euroscopeDir: string) {
-    const hoppie = loadHoppieConfig(euroscopeDir)
-    const codeOk = !!hoppie.logonCode
-    const tmplOk = hoppie.dclTemplates.size > 0
+function refreshHoppieConfigFeedState() {
+    const source = getHoppieLogonSource()
+    const codeOk = source !== "none"
+    const tmplCount = getDclAirports().length
+    const tmplOk = tmplCount > 0
+    const codeLabel = source === "manual" ? "Manual code" : "Code"
     if (codeOk && tmplOk) {
         localFeedState.hoppieConfig = {
             ok: true,
-            detail: `Code + ${hoppie.dclTemplates.size} DCL template(s)`,
+            detail: `${codeLabel} + ${tmplCount} DCL template(s)`,
         }
     } else if (codeOk || tmplOk) {
         localFeedState.hoppieConfig = {
             ok: false,
-            detail: codeOk ? "Code OK, templates missing" : "Templates OK, code missing",
+            detail: codeOk
+                ? source === "manual"
+                    ? "Manual code, templates missing"
+                    : "Code OK, templates missing"
+                : "Templates OK, code missing",
         }
     } else {
         localFeedState.hoppieConfig = { ok: false, detail: "Not found" }
     }
+}
+
+function updateHoppieConfigFeedState(euroscopeDir: string) {
+    loadHoppieConfig(euroscopeDir)
+    refreshHoppieConfigFeedState()
 }
 
 if (EUROSCOPE_DIR) {
@@ -505,6 +529,18 @@ let lastConnectionType: number | undefined
 {
     const saved = loadUserSettings()
     currentUiSettings = resolveUiSettings(saved)
+    // One sync switch. Older files stored two toggles; drop those and keep the merged value.
+    if (
+        typeof saved.syncEnabled !== "boolean" ||
+        typeof saved.scribbleSyncEnabled === "boolean" ||
+        typeof saved.stripSyncEnabled === "boolean"
+    ) {
+        saveUserSettings({ syncEnabled: currentUiSettings.syncEnabled })
+    }
+    setManualLogonCode(currentUiSettings.hoppieLogonCode)
+    if (EUROSCOPE_DIR || currentUiSettings.hoppieLogonCode) {
+        refreshHoppieConfigFeedState()
+    }
     setForceIdealAppDepFrequency(currentUiSettings.showAppDepXcFrequency)
 }
 flightStore.setAutoParkEnabledGetter(() => currentUiSettings.autoParkEnabled)
@@ -1015,12 +1051,19 @@ function broadcastStrip(
     if (options?.cleanReprint) message.cleanReprint = true
     if (options?.playPrintAnim) message.playPrintAnim = true
     broadcast(message, options?.exclude)
+    // Full IRIS /order snapshot (transferred→APP omit stripKey).
+    // Order entries carry cfto/atd so the debounce skip still publishes them.
+    // Also PUT the strip body when that signature changes (not on every scribble).
+    if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
+    pushStripCftoAtdIfChanged(strip)
 }
 
 // Broadcast a strip delete
 function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
     const message: StripDeleteMessage = { type: "stripDelete", stripId }
     broadcast(message, exclude)
+    forgetStripCftoAtd(stripId)
+    if (canPublishEssaStripview()) scheduleStripviewLayoutPush()
 }
 
 /** Push current trash list so clients stay in sync across reconnect without opening the dialog. */
@@ -1312,8 +1355,33 @@ function canEditEssaSepIndicators(): boolean {
     return roles.some((r) => r === "TWR-E" || r === "TWR-W" || String(r).startsWith("TWR"))
 }
 
+/** TWR or GND may publish bay order + SEP snapshot for Strip TV / APP. */
+function canPublishEssaStripview(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const airports = (staticConfig.myAirports ?? []).map((a) => a.toUpperCase())
+    if (!airports.includes("ESSA")) return false
+    const roles = staticConfig.essaRoles ?? []
+    return roles.some(
+        (r) =>
+            r === "TWR-E" ||
+            r === "TWR-W" ||
+            String(r).startsWith("TWR") ||
+            String(r).startsWith("GND"),
+    )
+}
+
 function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
     return (ESSA_SEP_CYCLE[field] as readonly (string | null)[]).some((v) => v === value)
+}
+
+/** ESSA bankonfig id from ES ARR/DEP (+ AUP prefer), e.g. "9A". */
+function resolveCurrentEssaConfigId(): string | null {
+    if (!isEssaRolesConfig(staticConfig)) return null
+    const ops = getEssaOps()
+    const prefer = getAupR16Status().suggestConfigId
+    return resolveEssaRwyConfigId(ops?.arr ?? [], ops?.dep ?? [], new Date(), {
+        preferConfigId: prefer,
+    })
 }
 
 /** Build ESSA SEP/DLV/DEP GAP message (roles mode + ESSA ops only). */
@@ -1324,10 +1392,7 @@ function buildEssaSepIndicatorsMessage(): EssaSepIndicatorsMessage | null {
     const dep = ops?.dep ?? []
     const sccMap = atisService?.getEssaScc() ?? new Map()
     const metar = atisService?.getMetarText("ESSA") ?? null
-    const prefer = getAupR16Status().suggestConfigId
-    const configId = resolveEssaRwyConfigId(arr, dep, new Date(), {
-        preferConfigId: prefer,
-    })
+    const configId = resolveCurrentEssaConfigId()
     const auto = computeEssaSepIndicators({
         configId,
         arrRunways: arr,
@@ -1349,13 +1414,17 @@ function sendEssaSepIndicators(socket: WebSocket) {
 function broadcastEssaSepIndicators() {
     const message = buildEssaSepIndicatorsMessage()
     if (message) broadcast(message)
-    // TWR publishes effective values to IRIS for Stripview (ESOS APP/DEP)
+    // TWR → PUT …/meta { essaSep, essaConfig }; TWR/GND → PUT …/order
     if (message && canEditEssaSepIndicators()) {
         void pushEssaSepMetaToRemote({
             sep: message.sep,
             dlv: message.dlv,
             depGap: message.depGap,
+            essaConfig: resolveCurrentEssaConfigId(),
         })
+    }
+    if (canPublishEssaStripview()) {
+        scheduleStripviewLayoutPush()
     }
 }
 
@@ -1669,22 +1738,62 @@ function sendDclStatus(socket: WebSocket) {
     sendMessage(socket, message)
 }
 
-function sendUserSettings(socket: WebSocket) {
-    const message: UserSettingsMessage = {
+function userSettingsMessage(): UserSettingsMessage {
+    return {
         type: "userSettings",
         settings: { ...currentUiSettings },
         autoParkAvailable: isAutoParkAvailable(),
+        hoppieFileCodePresent: !!getFileLogonCode(),
     }
-    sendMessage(socket, message)
+}
+
+function sendUserSettings(socket: WebSocket) {
+    sendMessage(socket, userSettingsMessage())
 }
 
 function broadcastUserSettings() {
-    const message: UserSettingsMessage = {
-        type: "userSettings",
-        settings: { ...currentUiSettings },
-        autoParkAvailable: isAutoParkAvailable(),
+    broadcast(userSettingsMessage())
+}
+
+/**
+ * Log in to Hoppie with the effective logon code (manual override, else plugin file).
+ */
+async function loginHoppie(): Promise<void> {
+    if (isOfflineVatsimRealm()) {
+        updateDclStatus("unavailable")
+        return
     }
-    broadcast(message)
+    const logonCode = getLogonCode()
+    const callsign = getDclCallsign()
+
+    if (!logonCode || !callsign) {
+        updateDclStatus("error", "No logon code or DCL airport available")
+        return
+    }
+
+    if (hoppieService) {
+        hoppieService.logout()
+        hoppieService = null
+    }
+
+    hoppieService = new HoppieService(logonCode, callsign, {
+        onMessage: (from, type, packet) => {
+            console.log(`[HOPPIE] Received: ${from} ${type} ${packet}`)
+            const msg: HoppieMessage = { type: "hoppieMessage", from, messageType: type, packet }
+            broadcast(msg)
+
+            if (type === "telex") {
+                handleDclRequest(from, packet)
+            } else if (type === "cpdlc") {
+                handleCpdlcResponse(from, packet)
+            }
+        },
+        onStatusChange: (status, error) => {
+            updateDclStatus(status, error)
+        },
+    })
+
+    await hoppieService.login()
 }
 
 /**
@@ -3084,8 +3193,12 @@ function applyRemoteScribble(
 
     if (applyMeta) {
         // Shared bay placement (all strip types). Flight strips are never invented — only moved if present.
+        // IRIS Stripview coords (TWR-W/TAXI, …) are not EFS bays. Applying them
+        // pulls a TAXIWAY DEP strip off the layout and out of the IRIS order.
+        const irisPlacement = isIrisStripviewPlacement(meta?.bayId, meta?.sectionId)
         if (
             strip &&
+            !irisPlacement &&
             meta?.bayId &&
             meta?.sectionId &&
             (strip.bayId !== meta.bayId ||
@@ -3144,7 +3257,9 @@ function applyRemoteScribble(
             }
         }
 
-        // EFS-only flight flags (CLR correct / CTL / CTO / softGA stay on EuroScope)
+        // EFS-only flight flags (CLR correct / CTL / CTO / softGA stay on EuroScope).
+        // cfto and atd are EFS-owned for Stripview. Do not copy inbound values
+        // onto the flight — IRIS must not echo a different ATD or CFTO back.
         if (strip && strip.stripType !== "note" && strip.stripType !== "vehicle") {
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {
@@ -3235,6 +3350,7 @@ initScribbleSync({
     getSettings: () => currentUiSettings,
     getConnectionType: () => lastConnectionType,
     getStripById: (id) => store.getStrip(id),
+    getAllStrips: () => store.getAllStrips(),
     getAirports: () => staticConfig.myAirports || [],
     onApplyRemote: applyRemoteScribble,
     onNeedVatIrisSignIn: (detail) => {
@@ -3242,6 +3358,17 @@ initScribbleSync({
     },
     onRealmChanged: (realm) => {
         syncOnlineNetworkServices(realm)
+    },
+    canPublishIrisOrder: () => canPublishEssaStripview(),
+    getEssaSepIndicators: () => {
+        const m = buildEssaSepIndicatorsMessage()
+        if (!m) return null
+        return {
+            sep: m.sep,
+            dlv: m.dlv,
+            depGap: m.depGap,
+            essaConfig: resolveCurrentEssaConfigId(),
+        }
     },
 })
 restartScribbleSyncPolling()
@@ -5532,43 +5659,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
         case "dclAction": {
             if (message.action === "login") {
-                if (isOfflineVatsimRealm()) {
-                    updateDclStatus("unavailable")
-                    break
-                }
-                const logonCode = getLogonCode()
-                const callsign = getDclCallsign()
-
-                if (!logonCode || !callsign) {
-                    updateDclStatus("error", "No logon code or DCL airport available")
-                    break
-                }
-
-                // Clean up existing service
-                if (hoppieService) {
-                    hoppieService.logout()
-                    hoppieService = null
-                }
-
-                hoppieService = new HoppieService(logonCode, callsign, {
-                    onMessage: (from, type, packet) => {
-                        console.log(`[HOPPIE] Received: ${from} ${type} ${packet}`)
-                        const msg: HoppieMessage = { type: "hoppieMessage", from, messageType: type, packet }
-                        broadcast(msg)
-
-                        // Route to DCL handlers
-                        if (type === "telex") {
-                            handleDclRequest(from, packet)
-                        } else if (type === "cpdlc") {
-                            handleCpdlcResponse(from, packet)
-                        }
-                    },
-                    onStatusChange: (status, error) => {
-                        updateDclStatus(status, error)
-                    },
-                })
-
-                await hoppieService.login()
+                await loginHoppie()
             } else if (message.action === "logout") {
                 if (hoppieService) {
                     hoppieService.logout()
@@ -5641,6 +5732,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "updateUserSettings": {
             const update: Partial<UiSettings> = {}
             const incoming = message.settings
+            let hoppieCodeChanged = false
             if (typeof incoming.dclSoundEnabled === "boolean") {
                 currentUiSettings.dclSoundEnabled = incoming.dclSoundEnabled
                 update.dclSoundEnabled = incoming.dclSoundEnabled
@@ -5706,13 +5798,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.fspServerEnabled = incoming.fspServerEnabled
                 update.fspServerEnabled = incoming.fspServerEnabled
             }
-            if (typeof incoming.scribbleSyncEnabled === "boolean") {
-                currentUiSettings.scribbleSyncEnabled = incoming.scribbleSyncEnabled
-                update.scribbleSyncEnabled = incoming.scribbleSyncEnabled
-            }
-            if (typeof incoming.stripSyncEnabled === "boolean") {
-                currentUiSettings.stripSyncEnabled = incoming.stripSyncEnabled
-                update.stripSyncEnabled = incoming.stripSyncEnabled
+            if (typeof incoming.syncEnabled === "boolean") {
+                currentUiSettings.syncEnabled = incoming.syncEnabled
+                update.syncEnabled = incoming.syncEnabled
             }
             if (typeof incoming.scribbleSyncUrl === "string") {
                 // Persisted for migration only — UI no longer edits; env / VatIRIS default wins in client
@@ -5736,19 +5824,49 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.scribbleSyncRealm = incoming.scribbleSyncRealm
                 update.scribbleSyncRealm = incoming.scribbleSyncRealm
             }
+            if (typeof incoming.hoppieLogonCode === "string") {
+                const trimmed = incoming.hoppieLogonCode.trim()
+                if (trimmed === "" || isValidHoppieLogonCode(trimmed)) {
+                    const prev = getLogonCode()
+                    currentUiSettings.hoppieLogonCode = trimmed
+                    update.hoppieLogonCode = trimmed
+                    setManualLogonCode(trimmed)
+                    hoppieCodeChanged = getLogonCode() !== prev
+                    refreshHoppieConfigFeedState()
+                }
+            }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)
-                console.log(`[SETTINGS] Updated: ${JSON.stringify(update)}`)
+                const logged = { ...update }
+                if (typeof logged.hoppieLogonCode === "string") {
+                    logged.hoppieLogonCode = logged.hoppieLogonCode
+                        ? `set (${logged.hoppieLogonCode.length} chars)`
+                        : "cleared"
+                }
+                console.log(`[SETTINGS] Updated: ${JSON.stringify(logged)}`)
                 broadcastUserSettings()
+                if (typeof update.hoppieLogonCode === "string") {
+                    if (hoppieCodeChanged) {
+                        const wasConnected = !!hoppieService?.isConnected()
+                        if (hoppieService) {
+                            hoppieService.logout()
+                            hoppieService = null
+                        }
+                        if (wasConnected && getLogonCode() && getDclCallsign() && !isOfflineVatsimRealm()) {
+                            await loginHoppie()
+                        } else {
+                            recalculateDclAvailability()
+                        }
+                    }
+                    maybeBroadcastStatusIfFeedsChanged()
+                }
                 if (
-                    typeof update.scribbleSyncEnabled === "boolean" ||
-                    typeof update.stripSyncEnabled === "boolean" ||
+                    typeof update.syncEnabled === "boolean" ||
                     typeof update.scribbleSyncUrl === "string" ||
                     typeof update.vatsimCid === "string" ||
                     typeof update.scribbleSyncRealm === "string"
                 ) {
-                    const wantsSync =
-                        currentUiSettings.scribbleSyncEnabled || currentUiSettings.stripSyncEnabled
+                    const wantsSync = currentUiSettings.syncEnabled
                     if (wantsSync && !/^\d{4,10}$/.test(currentUiSettings.vatsimCid.trim())) {
                         const suggested = suggestCidFromEsPrf(EUROSCOPE_DIR)
                         broadcast({

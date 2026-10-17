@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { flightStripsIn, insertIndexAtClientY } from '@/composables/dropPlacement'
 
 export interface DragData {
   stripId: string
@@ -15,9 +16,10 @@ export interface DragData {
 export interface TouchDropPlacement {
   sectionId: string
   bayId: string
-  /** Index among top strips (length = append at end). Null when bottom / trash. */
+  /** Index among non-dragging top strips (length = append at end). Null when bottom / trash. */
   insertIndex: number | null
   isBottom: boolean
+  clientY: number
 }
 
 // Global state for touch drag operations
@@ -37,18 +39,8 @@ const touchDropPlacement = ref<TouchDropPlacement | null>(null)
  * (not only “above” → previous section bottom).
  */
 function computeTopInsertIndex(container: Element, clientY: number): number {
-  const strips = Array.from(container.querySelectorAll('.flight-strip:not(.dragging)'))
-  if (strips.length === 0) {
-    // Empty bay with only info strips: still allow append (index 0)
-    return 0
-  }
-  for (let i = 0; i < strips.length; i++) {
-    const el = strips[i]
-    if (!el) continue
-    const rect = el.getBoundingClientRect()
-    if (clientY < rect.top + rect.height / 2) return i
-  }
-  return strips.length
+  // Same midpoint test as the mouse placement line and the drop commit.
+  return insertIndexAtClientY(flightStripsIn(container, false), clientY)
 }
 
 function clearTouchDropPlacement() {
@@ -79,7 +71,7 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
   }
 
   if (isOverBottom) {
-    touchDropPlacement.value = { sectionId, bayId, insertIndex: null, isBottom: true }
+    touchDropPlacement.value = { sectionId, bayId, insertIndex: null, isBottom: true, clientY }
     const dropTarget =
       (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
     return { dropTarget, isOverBottom: true }
@@ -87,7 +79,7 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
 
   // Drop on section header → insert at top of that section
   if (headerEl && sectionEl?.contains(headerEl)) {
-    touchDropPlacement.value = { sectionId, bayId, insertIndex: 0, isBottom: false }
+    touchDropPlacement.value = { sectionId, bayId, insertIndex: 0, isBottom: false, clientY }
     const topContainer = sectionEl.querySelector('.top-strips-container') as HTMLElement | null
     const dropTarget =
       (sectionEl.querySelector('.section-content') as HTMLElement | null) || topContainer
@@ -98,7 +90,7 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
     (elementUnder?.closest('.top-strips-container') as HTMLElement | null) ||
     (sectionEl?.querySelector('.top-strips-container') as HTMLElement | null)
   const insertIndex = topContainer ? computeTopInsertIndex(topContainer, clientY) : 0
-  touchDropPlacement.value = { sectionId, bayId, insertIndex, isBottom: false }
+  touchDropPlacement.value = { sectionId, bayId, insertIndex, isBottom: false, clientY }
 
   const dropTarget =
     (elementUnder?.closest('.section-content') as HTMLElement | null) ||
