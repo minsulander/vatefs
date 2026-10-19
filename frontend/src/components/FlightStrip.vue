@@ -5821,7 +5821,13 @@ function onGroundStateClick(action: string) {
   align-items: stretch;
   flex: 1;
   min-width: 0;
-  height: 100%;
+  /*
+   * Stretch to the strip body. height:100% does not resolve in the zoom
+   * overlay, so blank strips collapsed to a thin band of grid lines and
+   * scribbles could not use the white area below.
+   */
+  align-self: stretch;
+  height: auto;
   min-height: 0;
   max-height: none;
   background: #fff;
