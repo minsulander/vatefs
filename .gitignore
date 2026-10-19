@@ -33,3 +33,4 @@ coverage
 /backend/public/fdp/*.*json
 /vatefs*.msi
 /notes
+/tmp-capture-frames/
