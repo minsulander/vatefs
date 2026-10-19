@@ -1,11 +1,7 @@
 <template>
     <v-app theme="dark">
         <div v-if="bannerVisible && updateInfo" class="efs-update-banner" role="status">
-            <span>
-                Newer VatEFS {{ updateInfo.latestVersion }} is available
-                (you have {{ updateInfo.currentVersion }}).
-                Unload the EuroScope plugin before replacing the DLL, then install the update.
-            </span>
+            <span>{{ updateBannerText }}</span>
             <a class="efs-update-link" :href="updateInfo.htmlUrl" target="_blank" rel="noopener">
                 Open release
             </a>
@@ -18,7 +14,7 @@
 </template>
 
 <script lang="ts" setup>
-import { watch } from "vue"
+import { computed, watch } from "vue"
 import { useEfsStore } from "./store/efs"
 import { useEfsUiScale } from "./composables/useEfsUiScale"
 import { useScreenWakeLock } from "./composables/useScreenWakeLock"
@@ -32,6 +28,18 @@ useEfsUiScale()
 useScreenWakeLock()
 const { updateInfo, bannerVisible, dismissBanner } = useAppUpdateCheck()
 startBayBackground()
+
+const updateBannerText = computed(() => {
+  const info = updateInfo.value
+  if (!info) return ''
+  const dllHint = 'Unload the plugin or close EuroScope before installing the update.'
+  const outdated: string[] = []
+  if (info.appOutdated) outdated.push(`App ${info.currentAppVersion} is outdated`)
+  if (info.pluginOutdated && info.currentPluginVersion) {
+    outdated.push(`ES plugin ${info.currentPluginVersion} is outdated`)
+  }
+  return `${outdated.join('. ')}. VatEFS ${info.latestVersion} is available. ${dllHint}`
+})
 // ESSA keeps cold grey bay bg; RTC uses warm grey palette
 watch(
   () => efs.multiAirport,
