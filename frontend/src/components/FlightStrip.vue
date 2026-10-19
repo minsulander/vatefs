@@ -87,9 +87,53 @@
           class="efs-popup-item"
           @click.stop="sizeMenuOpen = true"
         >Size…</button>
+        <button
+          v-if="store.isPaperLook && canDragStrip && !isLargeView"
+          type="button"
+          class="efs-popup-item"
+          @click.stop="klackMenuOpen = true"
+        >Klack…</button>
+        <button
+          v-if="!store.isPaperLook && !isNote && !isVehicle && !isLargeView"
+          type="button"
+          class="efs-popup-item"
+          @click.stop="highlightMenuOpen = true"
+        >Highlight…</button>
         <button type="button" class="efs-popup-item" @click="onDeleteClick">Delete</button>
       </div>
     </div>
+
+    <v-menu v-model="klackMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ + 1" :close-on-content-click="true">
+      <div class="efs-popup-menu" @click.stop>
+        <div class="efs-popup-header">Klack</div>
+        <div class="efs-popup-list">
+          <button type="button" class="efs-popup-item" @click="onKlackMenu('right')">RIGHT</button>
+          <button type="button" class="efs-popup-item" @click="onKlackMenu('left')">LEFT</button>
+          <button
+            v-if="strip.klack"
+            type="button"
+            class="efs-popup-item"
+            @click="onKlackMenu(null)"
+          >Reset Klack</button>
+        </div>
+      </div>
+    </v-menu>
+
+    <v-menu v-model="highlightMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ + 1" :close-on-content-click="true">
+      <div class="efs-popup-menu" @click.stop>
+        <div class="efs-popup-header">Highlight</div>
+        <div class="efs-popup-list">
+          <button type="button" class="efs-popup-item" @click="onHighlightMenu('local')">Local (L)</button>
+          <button type="button" class="efs-popup-item" @click="onHighlightMenu('global')">Global (G)</button>
+          <button
+            v-if="strip.highlight"
+            type="button"
+            class="efs-popup-item"
+            @click="onHighlightMenu(null)"
+          >Clear</button>
+        </div>
+      </div>
+    </v-menu>
 
   <!-- Nested so an outside click closes this menu and the strip menu together -->
   <v-menu v-model="sizeMenuOpen" submenu :target="menuPosition" location="end" offset="150" :z-index="overlayMenuZ" :close-on-content-click="true">
@@ -222,6 +266,32 @@
   <XflMenu v-model="xflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <AhdMenu v-model="ahdMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
 
+  <div
+    ref="stripHostEl"
+    class="strip-host"
+    :class="{
+      'strip-host--paper': store.isPaperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+    }"
+    :style="klackHostStyle"
+  >
+    <div
+      v-if="klackPulling"
+      class="klack-drop-layer"
+      aria-hidden="true"
+    >
+      <div
+        class="klack-drop-slot klack-drop-slot--left"
+        :class="{ active: klackPullTarget === 'left' }"
+      />
+      <div
+        class="klack-drop-slot klack-drop-slot--flush"
+        :class="{ active: klackPullTarget === null }"
+      />
+      <div
+        class="klack-drop-slot klack-drop-slot--right"
+        :class="{ active: klackPullTarget === 'right' }"
+      />
+    </div>
   <div ref="stripElement" class="flight-strip"
     :class="[stripTypeClass, {
       dragging: isDragging,
@@ -248,9 +318,20 @@
       'dimmed-data': dimmedData,
       'no-drag': !canDragStrip && !isLargeView,
       'rtc-layout': store.multiAirport,
+      'klack-left': store.isPaperLook && !klackPulling && strip.klack === 'left',
+      'klack-right': store.isPaperLook && !klackPulling && strip.klack === 'right',
+      'klack-pulling': klackPulling,
+      'saab-hl': !store.isPaperLook && !!strip.highlight,
+      'saab-hl-local': !store.isPaperLook && strip.highlight === 'local',
+      'saab-hl-global': !store.isPaperLook && strip.highlight === 'global',
     }]"
+    :style="klackPullStyle"
     :data-strip-id="strip.id"
-    :draggable="canDragStrip ? true : false"
+    :draggable="canDragStrip && !store.isPaperLook && !klackGestureActive ? true : false"
+    @pointerdown="onPaperPointerDown"
+    @pointermove="onPaperPointerMove"
+    @pointerup="onPaperPointerUp"
+    @pointercancel="onPaperPointerUp"
     @dragstart="onDragStart"
     @dragend="onDragEnd"
     @touchstart="onDragAreaTouchStart"
@@ -1505,9 +1586,16 @@
         </div>
         <span
           class="exp-tma-exit"
-          :class="{ ghost: !tmaExitPoint }"
-          :title="tmaExitPoint ? `TMA exit ${tmaExitPoint}` : 'TMA exit'"
-        >{{ tmaExitPoint || '----' }}</span>
+          :class="{
+            ghost: !tmaExitPoint,
+            'hl-clickspot': !store.isPaperLook,
+          }"
+          :title="tmaExitHighlightTitle"
+          @click.stop="onTmaExitHighlightClick"
+        >
+          <span class="exp-tma-exit-text">{{ tmaExitPoint || '----' }}</span>
+          <span v-if="strip.highlight" class="saab-hl-badge">{{ strip.highlight === 'global' ? 'G' : 'L' }}</span>
+        </span>
         <svg
           v-if="showStripScribbles"
           class="strip-scribble-layer"
@@ -1536,6 +1624,7 @@
         </svg>
       </div>
     </template>
+  </div>
   </div>
 </template>
 
@@ -1576,6 +1665,7 @@ import {
   releaseStripContextMenu,
 } from '@/composables/stripContextMenuShared'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
+import { paperKlackPullBayIds } from '@/composables/paperKlack'
 import { insertIndexAtClientY } from '@/composables/dropPlacement'
 import {
   SCRIBBLE_INK_HEX,
@@ -1940,6 +2030,8 @@ const ahdMenuOpen = ref(false)
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
 const sizeMenuOpen = ref(false)
+const klackMenuOpen = ref(false)
+const highlightMenuOpen = ref(false)
 const pobMenuOpen = ref(false)
 const pobEditText = ref('')
 const pobInputEl = ref<HTMLInputElement | null>(null)
@@ -1952,9 +2044,280 @@ const reaMenuOpen = ref(false)
 function closeStripContextMenu() {
   menuOpen.value = false
   sizeMenuOpen.value = false
+  klackMenuOpen.value = false
+  highlightMenuOpen.value = false
   groundStateMenuOpen.value = false
   transferMenuOpen.value = false
   pobMenuOpen.value = false
+}
+
+function onKlackMenu(klack: 'left' | 'right' | null) {
+  menuOpen.value = false
+  klackMenuOpen.value = false
+  store.setKlack(props.strip.id, klack)
+}
+
+function onHighlightMenu(highlight: 'local' | 'global' | null) {
+  menuOpen.value = false
+  highlightMenuOpen.value = false
+  store.setHighlight(props.strip.id, highlight)
+}
+
+/** Cycle highlight at TMA-exit clickspot: off → L → G → off */
+function onTmaExitHighlightClick() {
+  if (store.isPaperLook || props.isLargeView) return
+  if (props.strip.stripType === 'note' || props.strip.stripType === 'vehicle') return
+  const cur = props.strip.highlight
+  const next: 'local' | 'global' | null =
+    cur == null ? 'local' : cur === 'local' ? 'global' : null
+  store.setHighlight(props.strip.id, next)
+}
+
+const tmaExitHighlightTitle = computed(() => {
+  const exit = tmaExitPoint.value
+  const base = exit ? `TMA exit ${exit}` : 'TMA exit'
+  if (store.isPaperLook) return base
+  const hl = props.strip.highlight
+  if (hl === 'global') return `${base} · Highlight G (click to clear)`
+  if (hl === 'local') return `${base} · Highlight L (click → G)`
+  return `${base} · Click to highlight (L)`
+})
+
+/**
+ * Paper pointer gestures: sideways pull → klack (with drop slots);
+ * vertical drag → bay move via touch-drag clone (HTML5 drag is off on paper).
+ *
+ * Klacked strips use position:fixed so the overhang paints above neighbouring
+ * columns (overflow/stacking inside the bay cannot cover a fixed layer).
+ */
+const KLACK_BASE_PX = 28
+const PAPER_ARM_PX = 8
+const klackGestureActive = ref(false)
+const klackPulling = ref(false)
+const klackPullX = ref(0)
+const klackPullTarget = ref<'left' | 'right' | null>(null)
+const klackAmtPx = ref(KLACK_BASE_PX)
+const stripHostEl = ref<HTMLElement | null>(null)
+let paperPointerId: number | null = null
+let paperStartX = 0
+let paperStartY = 0
+let klackBaseX = 0
+let paperBayDragging = false
+
+function setKlackPullBayActive(active: boolean) {
+  const bayId = props.bayId || props.strip.bayId
+  if (!bayId) return
+  if (active) paperKlackPullBayIds.add(bayId)
+  else paperKlackPullBayIds.delete(bayId)
+}
+
+function readKlackAmtPx(): number {
+  const el = stripElement.value
+  if (!el) return KLACK_BASE_PX
+  const styles = getComputedStyle(el)
+  const bay = parseFloat(styles.getPropertyValue('--bay-scale')) || 0
+  const stripSc = parseFloat(styles.getPropertyValue('--strip-scale')) || 0
+  return KLACK_BASE_PX * (bay || stripSc || 1)
+}
+
+function klackSnapTarget(x: number): 'left' | 'right' | null {
+  const amt = klackAmtPx.value
+  if (x <= -amt * 0.45) return 'left'
+  if (x >= amt * 0.45) return 'right'
+  return null
+}
+
+function klackSnapX(target: 'left' | 'right' | null): number {
+  if (target === 'left') return -klackAmtPx.value
+  if (target === 'right') return klackAmtPx.value
+  return 0
+}
+
+/** Bay-drag a klacked strip → clear klack before cloning. */
+function clearKlackForBayDrag() {
+  if (props.strip.klack === 'left' || props.strip.klack === 'right') {
+    store.setKlack(props.strip.id, null)
+  }
+  klackPulling.value = false
+  klackPullX.value = 0
+  klackPullTarget.value = null
+  setKlackPullBayActive(false)
+}
+
+/** Live sideways pull — in-flow translate (bay clips vertically; column raise handles neighbours). */
+const klackPullStyle = computed(() => {
+  if (!store.isPaperLook || !klackPulling.value) return undefined
+  return {
+    transform: `translateX(${klackPullX.value}px)`,
+    transition: 'none',
+  } as Record<string, string>
+})
+
+const klackHostStyle = computed(() => {
+  if (!store.isPaperLook) return undefined
+  return {
+    '--klack-amt': `${klackAmtPx.value || KLACK_BASE_PX}px`,
+  }
+})
+
+function pointerAsTouch(e: PointerEvent): Touch {
+  return { clientX: e.clientX, clientY: e.clientY } as Touch
+}
+
+function finishPaperBayDrop() {
+  const result = touchDrag.endDrag()
+  if (result.isTrashDrop && result.data) {
+    store.deleteStrip(result.data.stripId)
+  } else if (result.dropTarget && result.data) {
+    const sectionEl = result.dropTarget.closest('.efs-section')
+    const bayEl = sectionEl?.closest('.efs-bay')
+    const targetSectionId = sectionEl?.getAttribute('data-section-id')
+    const targetBayId = bayEl?.getAttribute('data-bay-id')
+    if (targetSectionId && targetBayId) {
+      if (result.isBottomDrop) {
+        store.moveStripToBottom(
+          result.data.stripId,
+          targetBayId,
+          targetSectionId,
+          result.dropPosition,
+        )
+      } else {
+        handleTouchDropWithGaps(
+          result.data,
+          targetBayId,
+          targetSectionId,
+          result.dropTarget,
+          result.draggedStripTop,
+          result.touchY,
+        )
+      }
+    }
+  }
+  isDragging.value = false
+  markStripDragEnded()
+  paperBayDragging = false
+}
+
+function onPaperPointerDown(e: PointerEvent) {
+  if (!store.isPaperLook || props.isLargeView || !canDragStrip.value) return
+  if (e.button !== 0) return
+  if (e.pointerType === 'touch') return // touch uses long-press path + move below
+  const t = e.target as HTMLElement | null
+  if (
+    t?.closest('button') ||
+    t?.closest('input') ||
+    t?.closest('textarea') ||
+    t?.closest('a')
+  ) {
+    return
+  }
+  paperPointerId = e.pointerId
+  paperStartX = e.clientX
+  paperStartY = e.clientY
+  klackAmtPx.value = readKlackAmtPx()
+  klackBaseX = klackSnapX(props.strip.klack ?? null)
+  klackPullX.value = klackBaseX
+  klackPullTarget.value = props.strip.klack ?? null
+  klackGestureActive.value = false
+  klackPulling.value = false
+  paperBayDragging = false
+  // Do NOT setPointerCapture here — it retargets click away from C/S (zoom) / cells.
+  // Capture only once a klack or bay-drag gesture arms (below).
+}
+
+function capturePaperPointer(pointerId: number) {
+  try {
+    stripElement.value?.setPointerCapture(pointerId)
+  } catch {
+    /* ignore */
+  }
+}
+
+function onPaperPointerMove(e: PointerEvent) {
+  if (paperPointerId !== e.pointerId) return
+  if (!store.isPaperLook) return
+
+  if (paperBayDragging) {
+    touchDrag.moveDrag(pointerAsTouch(e))
+    return
+  }
+
+  const dx = e.clientX - paperStartX
+  const dy = e.clientY - paperStartY
+
+  if (!klackPulling.value) {
+    if (Math.abs(dx) < PAPER_ARM_PX && Math.abs(dy) < PAPER_ARM_PX) return
+
+    if (Math.abs(dx) > Math.abs(dy) * 1.15) {
+      // Sideways → klack pull (in-flow translate; column raised over neighbours)
+      capturePaperPointer(e.pointerId)
+      klackAmtPx.value = readKlackAmtPx()
+      klackPulling.value = true
+      klackGestureActive.value = true
+      setKlackPullBayActive(true)
+      e.preventDefault()
+    } else if (Math.abs(dy) >= PAPER_ARM_PX) {
+      // Vertical → bay drag: revert klack, then clone the in-flow strip
+      capturePaperPointer(e.pointerId)
+      paperBayDragging = true
+      klackGestureActive.value = true
+      isDragging.value = true
+      clearKlackForBayDrag()
+      const pointer = pointerAsTouch(e)
+      nextTick(() => {
+        if (!stripElement.value || !paperBayDragging) return
+        const rect = stripElement.value.getBoundingClientRect()
+        touchDrag.startDrag(
+          stripElement.value,
+          {
+            stripId: props.strip.id,
+            bayId: props.bayId,
+            sectionId: props.sectionId,
+            isBottom: props.strip.bottom,
+            originalTop: rect.top,
+            originalBottom: rect.bottom,
+            stripHeight: rect.height,
+            dragOffsetY: pointer.clientY - rect.top,
+          },
+          pointer,
+        )
+      })
+      return
+    } else {
+      return
+    }
+  }
+
+  const max = klackAmtPx.value * 1.4
+  const nextX = Math.max(-max, Math.min(max, klackBaseX + dx))
+  klackPullX.value = nextX
+  klackPullTarget.value = klackSnapTarget(nextX)
+}
+
+function onPaperPointerUp(e: PointerEvent) {
+  if (paperPointerId !== e.pointerId) return
+  try {
+    stripElement.value?.releasePointerCapture(e.pointerId)
+  } catch {
+    /* ignore */
+  }
+  paperPointerId = null
+
+  if (paperBayDragging) {
+    finishPaperBayDrop()
+  } else if (klackPulling.value) {
+    const target = klackPullTarget.value
+    const cur = props.strip.klack ?? null
+    if (target !== cur) store.setKlack(props.strip.id, target)
+    klackPulling.value = false
+    klackPullX.value = 0
+    klackPullTarget.value = null
+    setKlackPullBayActive(false)
+  }
+
+  window.setTimeout(() => {
+    klackGestureActive.value = false
+  }, 0)
 }
 
 watch(menuOpen, (open) => {
@@ -1971,6 +2334,7 @@ watch(pobMenuOpen, (open) => {
 
 onUnmounted(() => {
   releaseStripContextMenu(closeStripContextMenu)
+  setKlackPullBayActive(false)
 })
 
 const sidCellLabel = computed(() =>
@@ -2180,9 +2544,37 @@ function quantizeStripScale(raw: number, max: number): number {
  */
 const SCROLLBAR_WIDTH_DEADBAND_PX = 18
 
+function readBayScaleForStrip(el: HTMLElement): number {
+  // Prefer the bay node — klack position:fixed must not rely on strip inheritance quirks
+  const bayEl = el.closest('.efs-bay')
+  const raw = getComputedStyle(bayEl ?? el).getPropertyValue('--bay-scale').trim()
+  return parseFloat(raw) || 1
+}
+
 function updateStripScale(force = false) {
   const el = stripElement.value
   if (!el) return
+
+  /*
+   * Paper: fonts/layout follow --bay-scale via CSS (`--strip-scale: var(--bay-scale)`).
+   * Never write inline --strip-scale — a stale value from klack/width RO stuck until reload.
+   */
+  if (store.isPaperLook && !props.isLargeView) {
+    const s = quantizeStripScale(readBayScaleForStrip(el), 2.2)
+    // Drop stuck inline scale from older klack/width paths — CSS var(--bay-scale) must win
+    if (el.style.getPropertyValue('--strip-scale')) {
+      el.style.removeProperty('--strip-scale')
+    }
+    if (!force && s === stripScale.value) return
+    stripScale.value = s
+    el.querySelectorAll<HTMLElement>('.fit-font').forEach((node) => {
+      node.style.fontSize = ''
+    })
+    if (callsignTextEl.value) callsignTextEl.value.style.fontSize = ''
+    // HINDER / Bogsering / etc. still use .fit-font; flight grid is pure CSS
+    fitAllBoxFonts()
+    return
+  }
 
   // Zoom overlay: use deterministic --zoom-strip-scale from panel width (no RO dither)
   if (props.isLargeView) {
@@ -2254,6 +2646,9 @@ function attachStripScaleObserver() {
   stripResizeObs = new ResizeObserver((entries) => {
     // Zoomed strip scale is driven by --zoom-strip-scale / Size %, not RO width
     if (props.isLargeView) return
+    // Paper fonts come from bay CSS vars — strip width chatter (klack float) must not
+    // run the scale/fit loop. stripScale ref is refreshed on mount / bay-driven force.
+    if (store.isPaperLook) return
     const entry = entries[0]
     const w =
       entry?.contentBoxSize?.[0]?.inlineSize ??
@@ -4981,6 +5376,10 @@ function actionButtonClass(action: string): Record<string, boolean> {
 
 // Mouse/pointer drag handlers (desktop)
 function onDragStart(event: DragEvent) {
+  if (klackGestureActive.value) {
+    event.preventDefault()
+    return
+  }
   if (!canDragStrip.value) {
     event.preventDefault()
     return
@@ -5055,33 +5454,71 @@ function onDragAreaTouchStart(event: TouchEvent) {
   touchStarted = true
 
   const touch = event.touches[0]
+  if (touch) {
+    paperStartX = touch.clientX
+    paperStartY = touch.clientY
+    klackAmtPx.value = readKlackAmtPx()
+    klackBaseX = klackSnapX(props.strip.klack ?? null)
+    klackPullX.value = klackBaseX
+    klackPullTarget.value = props.strip.klack ?? null
+  }
 
   // Start drag after a short delay to distinguish from scroll
   longPressTimer = window.setTimeout(() => {
-    if (touchStarted && stripElement.value && touch) {
+    if (touchStarted && stripElement.value && touch && !klackPulling.value) {
       // Prevent context menu by stopping the event chain early
       event.preventDefault()
       isDragging.value = true
-      const rect = stripElement.value.getBoundingClientRect()
-      touchDrag.startDrag(stripElement.value, {
-        stripId: props.strip.id,
-        bayId: props.bayId,
-        sectionId: props.sectionId,
-        isBottom: props.strip.bottom,
-        originalTop: rect.top,
-        originalBottom: rect.bottom,
-        stripHeight: rect.height,
-        dragOffsetY: touch.clientY - rect.top
-      }, touch)
+      clearKlackForBayDrag()
+      nextTick(() => {
+        if (!touchStarted || !stripElement.value || klackPulling.value) return
+        const rect = stripElement.value.getBoundingClientRect()
+        touchDrag.startDrag(stripElement.value, {
+          stripId: props.strip.id,
+          bayId: props.bayId,
+          sectionId: props.sectionId,
+          isBottom: props.strip.bottom,
+          originalTop: rect.top,
+          originalBottom: rect.bottom,
+          stripHeight: rect.height,
+          dragOffsetY: touch.clientY - rect.top
+        }, touch)
+      })
     }
   }, LONG_PRESS_DELAY)
 }
 
 function onDragAreaTouchMove(event: TouchEvent) {
   if (!touchStarted) return
+  const touch = event.touches[0]
+  if (!touch) return
 
-  if (isDragging.value && event.touches.length === 1 && event.touches[0]) {
-    touchDrag.moveDrag(event.touches[0])
+  // Paper: horizontal slide → klack (cancel long-press bay drag)
+  if (store.isPaperLook && !isDragging.value && !props.isLargeView) {
+    const dx = touch.clientX - paperStartX
+    const dy = touch.clientY - paperStartY
+    if (!klackPulling.value) {
+      if (Math.abs(dx) >= PAPER_ARM_PX && Math.abs(dx) > Math.abs(dy) * 1.15) {
+        if (longPressTimer) {
+          clearTimeout(longPressTimer)
+          longPressTimer = null
+        }
+        klackAmtPx.value = readKlackAmtPx()
+        klackPulling.value = true
+        klackGestureActive.value = true
+        setKlackPullBayActive(true)
+      }
+    }
+    if (klackPulling.value) {
+      const max = klackAmtPx.value * 1.4
+      klackPullX.value = Math.max(-max, Math.min(max, klackBaseX + dx))
+      klackPullTarget.value = klackSnapTarget(klackPullX.value)
+      return
+    }
+  }
+
+  if (isDragging.value) {
+    touchDrag.moveDrag(touch)
   }
 }
 
@@ -5089,6 +5526,19 @@ function onDragAreaTouchEnd(event: TouchEvent) {
   if (longPressTimer) {
     clearTimeout(longPressTimer)
     longPressTimer = null
+  }
+
+  if (klackPulling.value) {
+    const target = klackPullTarget.value
+    const cur = props.strip.klack ?? null
+    if (target !== cur) store.setKlack(props.strip.id, target)
+    klackPulling.value = false
+    klackPullX.value = 0
+    klackPullTarget.value = null
+    klackGestureActive.value = false
+    setKlackPullBayActive(false)
+    touchStarted = false
+    return
   }
 
   if (isDragging.value) {
@@ -5689,11 +6139,16 @@ function onGroundStateClick(action: string) {
 /* ── Paper FPS flight strips (ESGG) — cream body, VatFSP grid in SAAB size ── */
 .flight-strip.look-paper {
   /*
-   * Same 400×50 design ratio as SAAB. Height follows --bay-scale (bay width) so
-   * strips match paper section headers; --strip-scale alone is a bit smaller
-   * (margins/padding) and made strips shorter than headers.
+   * Same 400×50 design ratio as SAAB. Height + fonts follow --bay-scale (bay width)
+   * so strips match paper section headers; JS also locks --strip-scale to bay-scale
+   * so klack width chatter cannot shrink fonts mid-gesture.
    */
+  --strip-scale: var(--bay-scale, 1);
   --strip-body-h: calc(50px * var(--bay-scale, var(--strip-scale)));
+  /* Size to body — do not stretch with a tall strip-host (klack placeholder / flex) */
+  height: max-content;
+  flex-grow: 0;
+  align-self: flex-start;
   background: #fff;
   font-family: "Microsoft Sans Serif", "Segoe UI", Arial, Helvetica, sans-serif;
   /* Let WTC scribble circle paint past the letter box (bay + zoom) */
@@ -5704,6 +6159,11 @@ function onGroundStateClick(action: string) {
   box-shadow:
     0 calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) rgba(0, 0, 0, 0.28),
     0 calc(2px * var(--strip-scale)) calc(3px * var(--strip-scale)) rgba(0, 0, 0, 0.2);
+}
+.flight-strip.paper-info-holder {
+  height: max-content;
+  flex-grow: 0;
+  align-self: flex-start;
 }
 
 /*
@@ -6805,6 +7265,126 @@ function onGroundStateClick(action: string) {
   width: 100%;
   margin: 0;
   cursor: default;
+}
+
+/* Host keeps drop slots outside the strip's overflow:hidden frame */
+.strip-host {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  /* Never flex-stretch taller than the strip — that left empty frame above/below the grid */
+  align-self: flex-start;
+  flex-grow: 0;
+  height: max-content;
+}
+.strip-host--paper {
+  overflow: visible;
+}
+/* Klacked strip stays under same-column headers; column raise handles neighbour bays */
+.strip-host--paper:has(.klack-left),
+.strip-host--paper:has(.klack-right),
+.strip-host--paper:has(.klack-pulling) {
+  position: relative;
+  z-index: 1;
+}
+.klack-drop-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+/*
+ * Klack snap targets — teal like .drop-placement-line.
+ * Left slot: only far-left “[”; right slot: only far-right “]”; flush: no brackets.
+ */
+.klack-drop-slot {
+  --klack-bracket: rgb(0, 150, 180);
+  --klack-bracket-glow: rgba(0, 150, 180, 0.45);
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  opacity: 0.35;
+  box-sizing: border-box;
+}
+.klack-drop-slot--left {
+  transform: translateX(calc(-1 * var(--klack-amt, 28px)));
+}
+.klack-drop-slot--left::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 2px;
+  width: 10px;
+  box-sizing: border-box;
+  border-color: var(--klack-bracket);
+  border-style: solid;
+  border-width: 3px 0 3px 3px;
+  border-radius: 1px 0 0 1px;
+  filter: drop-shadow(0 0 0.5px var(--klack-bracket-glow));
+}
+.klack-drop-slot--right {
+  transform: translateX(var(--klack-amt, 28px));
+}
+.klack-drop-slot--right::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  right: 2px;
+  width: 10px;
+  box-sizing: border-box;
+  border-color: var(--klack-bracket);
+  border-style: solid;
+  border-width: 3px 3px 3px 0;
+  border-radius: 0 1px 1px 0;
+  filter: drop-shadow(0 0 0.5px var(--klack-bracket-glow));
+}
+.klack-drop-slot--flush {
+  /* Home / no-klack target — no bracket chrome */
+  opacity: 0;
+}
+.klack-drop-slot.active {
+  opacity: 1;
+}
+.klack-drop-slot--flush.active {
+  opacity: 0;
+}
+
+/* Paper klack: in-flow translate — bay clips vertically; column z-index covers neighbours */
+.flight-strip.look-paper.klack-right {
+  transform: translateX(calc(28px * var(--bay-scale, var(--strip-scale))));
+}
+.flight-strip.look-paper.klack-left {
+  transform: translateX(calc(-28px * var(--bay-scale, var(--strip-scale))));
+}
+.flight-strip.look-paper.klack-pulling {
+  /* transform from klackPullStyle while dragging sideways */
+  z-index: 1;
+}
+
+/* SAAB Highlight option 1 — amber wash + G/L badge (no physical offset) */
+.flight-strip.saab-hl {
+  box-shadow: inset 0 0 0 9999px rgba(255, 176, 0, 0.28);
+}
+.flight-strip.saab-hl-global {
+  box-shadow: inset 0 0 0 9999px rgba(255, 152, 0, 0.36);
+}
+.exp-tma-exit.hl-clickspot {
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+.saab-hl-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  color: #7a4a00;
+  pointer-events: none;
 }
 
 .strip-scribble-layer {

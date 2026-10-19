@@ -766,7 +766,41 @@ class EfsStore {
                 bottom: next.bottom,
             })
         }
+        // Preserve paper klack / SAAB highlight across regenerations unless the update sets them
+        if (existing?.klack && next.klack === undefined) {
+            next = { ...next, klack: existing.klack }
+        }
+        if (existing?.highlight && next.highlight === undefined) {
+            next = { ...next, highlight: existing.highlight }
+        }
         this.strips.set(next.id, next)
+        return next
+    }
+
+    /** Paper sideways offset (synced). Pass null/undefined to clear. */
+    setStripKlack(stripId: string, klack: 'left' | 'right' | null | undefined): FlightStrip | undefined {
+        const existing = this.strips.get(stripId)
+        if (!existing) return undefined
+        const next: FlightStrip =
+            klack === 'left' || klack === 'right'
+                ? { ...existing, klack }
+                : { ...existing, klack: undefined }
+        this.strips.set(stripId, next)
+        return next
+    }
+
+    /** SAAB highlight. `global` is broadcast; `local` stays on this backend for all WS clients. */
+    setStripHighlight(
+        stripId: string,
+        highlight: 'local' | 'global' | null | undefined,
+    ): FlightStrip | undefined {
+        const existing = this.strips.get(stripId)
+        if (!existing) return undefined
+        const next: FlightStrip =
+            highlight === 'local' || highlight === 'global'
+                ? { ...existing, highlight }
+                : { ...existing, highlight: undefined }
+        this.strips.set(stripId, next)
         return next
     }
 

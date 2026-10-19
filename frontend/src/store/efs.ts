@@ -1596,11 +1596,13 @@ export const useEfsStore = defineStore("efs", () => {
     // Actions
     /**
      * Drag lock from EuroScope assume/track owner (`ownedByOther` / ownerCallsign / ownerSi).
-     * Sole exception (paper): incoming transfer to me.
+     * Transfer parties (in or out) may still move; otherwise only the assume owner.
      */
     function isStripOwnedByOther(strip: FlightStrip): boolean {
         if (strip.stripType === 'note' || strip.stripType === 'vehicle') return false
-        if (strip.transferPending === 'in' || strip.isAssumed) return false
+        if (strip.transferPending === 'in' || strip.transferPending === 'out' || strip.isAssumed) {
+            return false
+        }
         if (strip.ownedByOther) return true
         const owner = strip.ownerCallsign?.trim()
         const mine = myCallsign.value.trim()
@@ -1611,10 +1613,12 @@ export const useEfsStore = defineStore("efs", () => {
         return false
     }
 
+    /** Notes/vehicles always; else assume owner, or either party while a transfer is pending. */
     function allowMoveOwnedStrip(strip: FlightStrip): boolean {
         if (strip.stripType === 'note' || strip.stripType === 'vehicle') return true
-        if (!isStripOwnedByOther(strip)) return true
-        return isPaperLook.value && strip.transferPending === 'in'
+        if (strip.isAssumed) return true
+        if (strip.transferPending === 'in' || strip.transferPending === 'out') return true
+        return !isStripOwnedByOther(strip)
     }
 
     function moveStripToSection(
@@ -2223,6 +2227,34 @@ export const useEfsStore = defineStore("efs", () => {
             qnh,
             ...(atis !== undefined ? { atis } : {}),
         })
+    }
+
+    /** Paper sideways offset (klack). Null resets. Synced to peers. */
+    function setKlack(stripId: string, klack: 'left' | 'right' | null) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            const next =
+                klack === 'left' || klack === 'right'
+                    ? { ...strip, klack }
+                    : { ...strip, klack: undefined }
+            strips.value.set(stripId, next)
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'setKlack', stripId, klack })
+    }
+
+    /** SAAB highlight (amber wash). Null clears. `global` syncs; `local` stays on this backend. */
+    function setHighlight(stripId: string, highlight: 'local' | 'global' | null) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            const next =
+                highlight === 'local' || highlight === 'global'
+                    ? { ...strip, highlight }
+                    : { ...strip, highlight: undefined }
+            strips.value.set(stripId, next)
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'setHighlight', stripId, highlight })
     }
 
     /**
@@ -3162,6 +3194,8 @@ export const useEfsStore = defineStore("efs", () => {
         setCtoc,
         setAtd,
         setQnhGiven,
+        setKlack,
+        setHighlight,
         availableConfigs,
         activeConfig,
         switchConfig,

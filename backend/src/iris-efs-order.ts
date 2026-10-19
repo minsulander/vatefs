@@ -89,6 +89,10 @@ export type StripEfsFields = {
     clrReadSuppressed?: boolean
     /** Paper col 5 CLR correct, separate from the collapsed clearanceRead bit. */
     clearanceReadback?: boolean
+    /** Paper sideways offset (klack). Null clears on peers. */
+    klack?: 'left' | 'right' | null
+    /** SAAB global highlight (local is not published). */
+    highlight?: 'global' | null
 }
 
 export type IrisSepPayload = {
@@ -351,11 +355,13 @@ export function buildStripEfsFields(
         fields.kind = "note"
         fields.noteText = strip.noteText ?? ""
         if (strip.paperInfoKind) fields.paperInfoKind = strip.paperInfoKind
+        fields.klack = strip.klack ?? null
         return fields
     }
     if (strip.stripType === "vehicle") {
         fields.kind = "vehicle"
         if (strip.std) fields.std = strip.std
+        fields.klack = strip.klack ?? null
         return fields
     }
 
@@ -389,6 +395,8 @@ export function buildStripEfsFields(
     fields.clrReadSuppressed = !!strip.paperClrReadSuppressed
     fields.clearanceReadback = !!(strip.clearanceReadback || strip.clearance)
     fields.clearanceRead = !!(strip.clearanceRead || strip.clearance || strip.clearanceReadback)
+    fields.klack = strip.klack ?? null
+    fields.highlight = strip.highlight === "global" ? "global" : null
     if (opts?.includeQnhAtisClear) {
         fields.qnhGiven = strip.qnhGiven ?? null
         fields.atisGiven = strip.atisGiven ?? null

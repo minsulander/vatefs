@@ -121,18 +121,40 @@ export function useTouchDrag() {
     // --strip-scale / fitted fonts from the live strip are preserved (cssText would wipe them).
     const clone = element.cloneNode(true) as HTMLElement
     clone.classList.add('drag-clone')
+    clone.classList.remove('klack-float', 'klack-left', 'klack-right', 'klack-pulling', 'dragging')
+    // Layout size (not getBoundingClientRect) — avoids stretched clones from fixed/transformed strips
+    const w = element.offsetWidth || rect.width
+    const h = element.offsetHeight || rect.height
     clone.style.position = 'fixed'
     clone.style.left = `${rect.left}px`
     clone.style.top = `${rect.top}px`
-    clone.style.width = `${rect.width}px`
-    clone.style.height = `${rect.height}px`
+    clone.style.width = `${w}px`
+    clone.style.height = `${h}px`
+    clone.style.maxWidth = `${w}px`
+    clone.style.transform = 'none'
     clone.style.zIndex = '9999'
     clone.style.pointerEvents = 'none'
     clone.style.opacity = '0.9'
     clone.style.margin = '0'
     clone.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'
-    const stripScale = element.style.getPropertyValue('--strip-scale')
-    if (stripScale) clone.style.setProperty('--strip-scale', stripScale)
+    // Clone is under document.body — pin numeric bay/body sizes (calc() vars
+    // alone collapse when --bay-scale is not inherited from the bay).
+    const cs = getComputedStyle(element)
+    const bayScale = cs.getPropertyValue('--bay-scale').trim()
+    const bodyEl = element.querySelector(
+      '.paper-with-actions, .paper-info-body',
+    ) as HTMLElement | null
+    const bodyPx = bodyEl?.offsetHeight || 0
+    if (bayScale) {
+      clone.style.setProperty('--bay-scale', bayScale)
+      clone.style.setProperty('--strip-scale', bayScale)
+    }
+    if (bodyPx > 0) {
+      clone.style.setProperty('--strip-body-h', `${bodyPx}px`)
+      // Match outer box to content — avoid tall empty frame around a short grid
+      const frameTb = parseFloat(cs.getPropertyValue('--frame-tb')) || 0
+      clone.style.height = `${bodyPx + frameTb * 2}px`
+    }
     document.body.appendChild(clone)
     dragClone.value = clone
 

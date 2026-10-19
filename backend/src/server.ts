@@ -3090,6 +3090,7 @@ function applyRemoteScribble(
               atisGiven?: string | null
               noteText?: string
               std?: string
+              klack?: 'left' | 'right' | null
           }
         | undefined,
     updatedAt: string,
@@ -3361,6 +3362,36 @@ function applyRemoteScribble(
                         stripId = strip.id
                     }
                 }
+            }
+        }
+    }
+
+    // Paper klack lives on the strip store (survives flight regenerations)
+    if (applyMeta && meta && "klack" in meta) {
+        const nextKlack =
+            meta.klack === "left" || meta.klack === "right" ? meta.klack : null
+        const local = store.getStrip(stripId)
+        const prev = local?.klack ?? null
+        if (prev !== nextKlack) {
+            const withKlack = store.setStripKlack(stripId, nextKlack)
+            if (withKlack) {
+                broadcastStrip(withKlack)
+                stripId = withKlack.id
+            }
+        }
+    }
+
+    // SAAB global highlight (local is never published on the wire)
+    if (applyMeta && meta && "highlight" in meta) {
+        const nextHl = meta.highlight === "global" ? "global" : null
+        const local = store.getStrip(stripId)
+        const prev = local?.highlight === "global" ? "global" : null
+        // Do not wipe a peer's local-only highlight when remote clears global
+        if (prev !== nextHl && (nextHl === "global" || local?.highlight === "global")) {
+            const withHl = store.setStripHighlight(stripId, nextHl)
+            if (withHl) {
+                broadcastStrip(withHl)
+                stripId = withHl.id
             }
         }
     }
@@ -6891,6 +6922,39 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             console.log(
                 `[QNH] ${qnhStrip.callsign} given → ${qnh ?? "(clear)"}` +
                     (flight.atisGiven ? ` ATIS ${flight.atisGiven}` : ""),
+            )
+            break
+        }
+
+        case "setKlack": {
+            if (!staticConfig.isController) break
+            const klack =
+                message.klack === "left" || message.klack === "right" ? message.klack : null
+            const updated = store.setStripKlack(message.stripId, klack)
+            if (!updated) break
+            broadcastStrip(updated)
+            void pushStripToRemote(updated.id)
+            console.log(
+                `[KLACK] ${updated.callsign || updated.id} → ${klack ?? "reset"}`,
+            )
+            break
+        }
+
+        case "setHighlight": {
+            if (!staticConfig.isController) break
+            const highlight =
+                message.highlight === "local" || message.highlight === "global"
+                    ? message.highlight
+                    : null
+            const updated = store.setStripHighlight(message.stripId, highlight)
+            if (!updated) break
+            broadcastStrip(updated)
+            // Global highlight follows strip sync; local is still broadcast to same-backend clients
+            if (highlight === "global" || highlight == null) {
+                void pushStripToRemote(updated.id)
+            }
+            console.log(
+                `[HIGHLIGHT] ${updated.callsign || updated.id} → ${highlight ?? "off"}`,
             )
             break
         }

@@ -2697,7 +2697,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   flex-shrink: 0;
 }
 
-/* Top strips container - scrollable */
+/* Top strips container - scrollable (paper overrides overflow in EfsBay--paper) */
 .top-strips-container {
   flex: 1;
   overflow-y: auto;

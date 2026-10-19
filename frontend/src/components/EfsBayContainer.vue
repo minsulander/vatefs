@@ -31,6 +31,7 @@
             'bay-column--flash': store.flashingColumnIndex === index,
             'bay-column--paper': store.isPaperLook,
             'bay-column--table-fixed': tableScroll,
+            'bay-column--klack-raised': store.isPaperLook && bayHasKlack(bay.id),
           }"
           :style="store.multiAirport ? { '--bay-accent': columnAccent(index) } : undefined"
           @click="onColumnClick(index, $event)"
@@ -59,6 +60,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import { paperKlackPullBayIds } from '@/composables/paperKlack'
 import EfsBay from './EfsBay.vue'
 import EfsTopBar from './EfsTopBar.vue'
 import EfsBottomBar from './EfsBottomBar.vue'
@@ -67,6 +69,19 @@ const store = useEfsStore()
 const bays = computed(() => store.getBays)
 const scrollEl = ref<HTMLElement | null>(null)
 const colWidthPx = ref('25%')
+
+/** Any strip in this bay is klacked (or mid-pull) — raise the column above neighbours. */
+function bayHasKlack(bayId: string): boolean {
+  void store.stripsVersion
+  void paperKlackPullBayIds.size
+  if (paperKlackPullBayIds.has(bayId)) return true
+  for (const strip of store.strips.values()) {
+    if (strip.bayId === bayId && (strip.klack === 'left' || strip.klack === 'right')) {
+      return true
+    }
+  }
+  return false
+}
 
 const visibleCols = computed(() => {
   const n = store.esggVisibleColumns
@@ -197,6 +212,11 @@ function onContainerClick() {
   min-height: 0;
 }
 
+/* Paper: let klack paint across column gutters (table-scroll keeps its own overflow) */
+.efs-bay-container--paper .efs-bay-content:not(.efs-bay-content--table-scroll) {
+  overflow: visible;
+}
+
 /* Physical table: 4 bay-widths visible; scrollbar along the bottom for bay5 */
 .efs-bay-content--table-scroll {
   overflow-x: auto;
@@ -267,6 +287,9 @@ function onContainerClick() {
 
 .bay-column--paper {
   background: transparent;
+  overflow: visible;
+  position: relative;
+  z-index: 0;
 }
 
 /* Full coloured frame around each column — multi-airport only */
@@ -372,6 +395,26 @@ function onContainerClick() {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
+</style>
+
+<!-- Unscoped: klack raise wins over neighbour columns only (same-column headers stay on top) -->
+<style>
+.bay-column.bay-column--klack-raised {
+  z-index: 100 !important;
+  position: relative;
+  /* Let horizontal klack leave this column into the neighbour */
+  overflow: visible !important;
+}
+.efs-bay-container--paper .efs-bay-content:not(.efs-bay-content--table-scroll) {
+  overflow: visible !important;
+}
+.efs-bay-container--paper .bay-row--paper {
+  overflow: visible;
+  isolation: isolate;
+}
+</style>
+
+<style scoped>
 .efs-notify--info {
   background: #1565c0;
   color: #fff;

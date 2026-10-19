@@ -244,6 +244,18 @@ export interface FlightStrip {
 
     // Multi-airport column mode: which airport this strip instance belongs to
     airport?: string
+
+    /**
+     * Paper (ESGG) sideways offset — "klackat". Synced to other EFS clients.
+     * `left` / `right` shift the strip in the bay; omit / undefined = flush.
+     */
+    klack?: 'left' | 'right'
+
+    /**
+     * SAAB strip highlight (no physical offset). Synced when `global`.
+     * Badge shows G (global) or L (local-only).
+     */
+    highlight?: 'local' | 'global'
 }
 
 export interface Section {

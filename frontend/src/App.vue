@@ -1,5 +1,16 @@
 <template>
     <v-app theme="dark">
+        <div v-if="bannerVisible && updateInfo" class="efs-update-banner" role="status">
+            <span>
+                Newer VatEFS {{ updateInfo.latestVersion }} is available
+                (you have {{ updateInfo.currentVersion }}).
+                Unload the EuroScope plugin before replacing the DLL, then install the update.
+            </span>
+            <a class="efs-update-link" :href="updateInfo.htmlUrl" target="_blank" rel="noopener">
+                Open release
+            </a>
+            <button type="button" class="efs-update-dismiss" @click="dismissBanner">Dismiss</button>
+        </div>
         <router-view />
         <CidDialog />
         <VatIrisSignInDialog />
@@ -10,12 +21,16 @@
 import { watch } from "vue"
 import { useEfsStore } from "./store/efs"
 import { useEfsUiScale } from "./composables/useEfsUiScale"
+import { useScreenWakeLock } from "./composables/useScreenWakeLock"
+import { useAppUpdateCheck } from "./composables/useAppUpdateCheck"
 import { setBayBgRtcPalette, startBayBackground } from "./composables/useBayBackground"
 import CidDialog from "./components/CidDialog.vue"
 import VatIrisSignInDialog from "./components/VatIrisSignInDialog.vue"
 
 const efs = useEfsStore()
 useEfsUiScale()
+useScreenWakeLock()
+const { updateInfo, bannerVisible, dismissBanner } = useAppUpdateCheck()
 startBayBackground()
 // ESSA keeps cold grey bay bg; RTC uses warm grey palette
 watch(
@@ -41,6 +56,35 @@ watch(
 </script>
 
 <style>
+.efs-update-banner {
+    position: relative;
+    z-index: 3000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 8px 12px;
+    background: #3a3420;
+    color: #f5e6b8;
+    font: 600 13px/1.35 system-ui, "Segoe UI", sans-serif;
+    border-bottom: 1px solid #6a5a28;
+}
+.efs-update-link {
+    color: #ffe08a;
+    font-weight: 700;
+    text-decoration: underline;
+}
+.efs-update-dismiss {
+    margin-left: auto;
+    appearance: none;
+    border: 1px solid #8a7a40;
+    background: transparent;
+    color: #f5e6b8;
+    padding: 2px 10px;
+    cursor: pointer;
+    font: inherit;
+}
+
 /* Global styles for touch drag-and-drop */
 body.touch-dragging {
     overflow: hidden !important;

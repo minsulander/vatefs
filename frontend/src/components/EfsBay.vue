@@ -489,8 +489,16 @@ onMounted(() => {
   --bay-pipe-inset: calc(var(--bay-panel-w) + var(--bay-pipe-gap));
   /* Vertical only: same gap between strips and above/below headers */
   --paper-strip-gap: max(2px, calc(2px * var(--bay-scale, 1)));
+  /* Room for sideways klack past the column edge into the neighbour bay */
+  --paper-klack-bleed: calc(40px * var(--bay-scale, 1));
   position: relative;
-  overflow: hidden;
+  /*
+   * Vertical clip flush with bay; expand clip box horizontally so klack can
+   * paint into the adjacent column (overflow-clip-margin is unreliable on
+   * overflow-y:auto scrollports).
+   */
+  overflow: visible;
+  clip-path: inset(0 calc(-1 * var(--paper-klack-bleed)));
   /* Soft desk shading: brighter center, darker borders */
   background-color: var(--efs-paper-bay-mid, #89653b);
   background-image:
@@ -518,6 +526,8 @@ onMounted(() => {
   position: relative;
   z-index: 2;
   background: transparent;
+  overflow: visible;
+  isolation: isolate;
 }
 
 /* Same layer as pipes — flush columns → double panel width between bays */
@@ -580,10 +590,34 @@ onMounted(() => {
   border-left: none;
   border-right: none;
   border-bottom-color: rgba(0, 0, 0, 0.12);
+  overflow: visible;
+  position: relative;
+  z-index: 1;
 }
 
+/* Same-column headers cover klacked strips that slide under them */
+.efs-bay--paper :deep(.section-header) {
+  position: relative;
+  z-index: 4;
+}
+
+/*
+ * Vertical scroll. Widen the scrollport with padding + negative margin so
+ * sideways klack paints into the padding (still inside this box) and can reach
+ * the bay clip-path bleed / neighbour column — without using overflow-x:visible
+ * (which would compute to auto when overflow-y is auto).
+ */
 .efs-bay--paper :deep(.section-content) {
   background: transparent;
+  overflow-x: clip;
+  overflow-y: auto;
+  margin-left: calc(-1 * var(--paper-klack-bleed));
+  margin-right: calc(-1 * var(--paper-klack-bleed));
+  padding-left: var(--paper-klack-bleed);
+  padding-right: var(--paper-klack-bleed);
+  min-height: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* SAAB 400×50 body ratio; bay-scale so notes/vehicles match flight strips + headers */
@@ -596,7 +630,7 @@ onMounted(() => {
   --strip-body-h: calc(25px * var(--bay-scale, var(--strip-scale)));
 }
 
-/* Vertical spacing only — strip↔strip = strip↔header; sideways unchanged */
+/* Strip list: under headers; horizontal klack clipped at bay with side bleed only */
 .efs-bay--paper :deep(.top-strips-container),
 .efs-bay--paper :deep(.bottom-strips-container) {
   display: flex;
@@ -604,6 +638,11 @@ onMounted(() => {
   padding: var(--paper-strip-gap) 2px;
   gap: var(--paper-strip-gap);
   box-sizing: border-box;
+  overflow: visible;
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .efs-bay--paper :deep(.top-strips-container .flight-strip.look-paper),
 .efs-bay--paper :deep(.top-strips-container .flight-strip.paper-info-holder),
