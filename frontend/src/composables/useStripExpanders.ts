@@ -102,6 +102,20 @@ export function collapseTopExpanderOnCdAllToTsatIfNoCtot(
   collapseTopExpanderIfNoCtot(stripId, ctot)
 }
 
+export function getStripExpanderState(stripId: string): StripExpanderState {
+  const s = ensure(stripId)
+  return { top: s.top, bottom: s.bottom }
+}
+
+export function setStripExpanderState(
+  stripId: string,
+  state: Partial<StripExpanderState>,
+): void {
+  const s = ensure(stripId)
+  if (typeof state.top === 'boolean') s.top = state.top
+  if (typeof state.bottom === 'boolean') s.bottom = state.bottom
+}
+
 /** Shared expander open state — bay strip and zoomed strip stay in sync. */
 export function useStripExpanders(stripId: Ref<string> | string): {
   topExpanded: WritableComputedRef<boolean>

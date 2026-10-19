@@ -13,6 +13,7 @@ export type {
     DclMode,
     UiSettings,
     AutoLopSsrMode,
+    AutoFitStripSizeMode,
     StripPrintSound,
     StripPrintMode,
     StripLook,
@@ -21,7 +22,14 @@ export type {
     ScribbleStrokePayload,
 } from "./types.js"
 
-export { DEFAULT_UI_SETTINGS, PAPER_INFO_KINDS, isPaperInfoKind, isAutoLopSsrMode, isValidHoppieLogonCode } from "./types.js"
+export {
+    DEFAULT_UI_SETTINGS,
+    PAPER_INFO_KINDS,
+    isPaperInfoKind,
+    isAutoLopSsrMode,
+    isAutoFitStripSizeMode,
+    isValidHoppieLogonCode,
+} from "./types.js"
 
 export {
     ESSA_RWY_COMBINATIONS,

@@ -260,6 +260,15 @@ import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import { useStripOrderFlip } from '@/composables/useStripOrderFlip'
+import {
+  autoFitApplying,
+  autoFitLayoutEpoch,
+  clearAutoFitState,
+  isAutoFitExemptSection,
+  runAutoFitStripSize,
+} from '@/composables/useAutoFitStripSize'
+import { isCdAllOrTsatSection } from '@/composables/useStripExpanders'
+import { useUiScalePercent } from '@/composables/useEfsUiScale'
 import FlightStrip from './FlightStrip.vue'
 import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
 import MapInfoStrip from './MapInfoStrip.vue'
@@ -1600,32 +1609,178 @@ watch(
     if (n > 0 && prev === 0) {
       freezeSectionHeightForAutoMove()
     }
+    if (n === 0 && prev > 0) {
+      scheduleAutoFitRecheck()
+    }
   },
   { flush: 'sync' },
 )
+
+/** SAAB auto-fit: event-driven recheck (option A) + scroll-center first-in-sequence. */
+const uiScalePercent = useUiScalePercent()
+let autoFitTimer: ReturnType<typeof setTimeout> | null = null
+let autoFitRunning = false
+let autoFitQueued = false
+
+function stripCanCompact(stripId: string): boolean {
+  const strip = store.strips.get(stripId)
+  if (!strip) return false
+  const t = strip.stripType
+  return t === 'departure' || t === 'arrival' || t === 'local' || t === 'vfr'
+}
+
+/** Ignore layout noise right after a fit pass (scrollbar show/hide, etc.). */
+let autoFitSettleUntil = 0
+
+/** @param force skip settle lock (strip list / header height — intentional). */
+function scheduleAutoFitRecheck(force = false) {
+  if (store.isPaperLook) return
+  if (stickBottomZone.value) return
+  if (store.autoMovingStripIds.size > 0) return
+  if (autoFitApplying.value) return
+  if (!force && Date.now() < autoFitSettleUntil) return
+  if (autoFitTimer) clearTimeout(autoFitTimer)
+  autoFitTimer = setTimeout(() => {
+    autoFitTimer = null
+    void runScheduledAutoFit()
+  }, 80)
+}
+
+async function runScheduledAutoFit() {
+  if (store.isPaperLook) return
+  if (stickBottomZone.value) return
+  if (store.autoMovingStripIds.size > 0) return
+  if (autoFitApplying.value) {
+    autoFitQueued = true
+    return
+  }
+  if (autoFitRunning) {
+    autoFitQueued = true
+    return
+  }
+  const el = topContainer.value
+  if (!el) return
+  autoFitRunning = true
+  try {
+    do {
+      autoFitQueued = false
+      await runAutoFitStripSize({
+        container: el,
+        visualIds: topStripIds.value,
+        addFromTop: props.section.addFromTop !== false,
+        canCompact: stripCanCompact,
+        allowSizeFit:
+          store.autoFitStripSizeMode === 'all' ||
+          (store.autoFitStripSizeMode === 'standard' &&
+            !isAutoFitExemptSection(props.section.id)),
+        growBack:
+          store.autoFitStripSizeMode !== 'off' && store.autoFitStripSizeGrowBack,
+        // CD ALL / TSAT / PENDING DEP / CLEARED: keep bottom in view when scrolled
+        scrollToBottom: isCdAllOrTsatSection(props.section.id),
+      })
+    } while (autoFitQueued && !autoFitApplying.value)
+    // Scrollbar appearing/disappearing must not immediately re-run fit
+    autoFitSettleUntil = Date.now() + 180
+    if (el) {
+      lastAutoFitClientH = el.clientHeight
+      lastAutoFitClientW = el.clientWidth
+    }
+  } finally {
+    autoFitRunning = false
+  }
+}
+
+watch(
+  [topStripIds, () => props.section.height, sectionGaps],
+  () => {
+    scheduleAutoFitRecheck(true)
+  },
+  { flush: 'post' },
+)
+
+watch(
+  [
+    () => store.autoFitStripSizeMode,
+    () => store.autoFitStripSizeGrowBack,
+    autoFitLayoutEpoch,
+    uiScalePercent,
+  ],
+  () => {
+    scheduleAutoFitRecheck(true)
+  },
+  { flush: 'post' },
+)
+
+watch(topStripIds, (ids, prev) => {
+  if (!prev) return
+  for (const id of prev) {
+    if (!ids.includes(id)) clearAutoFitState(id)
+  }
+})
+
+function onWindowResizeForAutoFit() {
+  scheduleAutoFitRecheck()
+}
+
+/** Viewport size only (header drag / bay scale) — not content height (avoids fit loops). */
+let autoFitViewportObserver: ResizeObserver | null = null
+let lastAutoFitClientH = 0
+let lastAutoFitClientW = 0
 
 onMounted(() => {
   // Dropping in another section (e.g. above KLARERING) often skips this section's
   // dragleave — left a cyan insert/header indicator until reload.
   document.addEventListener('dragend', clearDragHighlights, true)
   document.addEventListener('drop', clearDragHighlights, true)
+  window.addEventListener('resize', onWindowResizeForAutoFit)
 
-  if (!stickBottomZone.value) return
+  scheduleAutoFitRecheck()
+
   const el = topContainer.value
-  if (!el || typeof ResizeObserver === 'undefined') return
-  pendingScrollObserver = new ResizeObserver(() => {
-    if (stickBottomZone.value && store.autoMovingStripIds.size === 0) {
-      pinStickBottomScroll()
+  if (el && typeof ResizeObserver !== 'undefined') {
+    if (stickBottomZone.value) {
+      pendingScrollObserver = new ResizeObserver(() => {
+        if (stickBottomZone.value && store.autoMovingStripIds.size === 0) {
+          pinStickBottomScroll()
+        }
+      })
+      pendingScrollObserver.observe(el)
+    } else if (!store.isPaperLook) {
+      lastAutoFitClientH = el.clientHeight
+      lastAutoFitClientW = el.clientWidth
+      autoFitViewportObserver = new ResizeObserver(() => {
+        const c = topContainer.value
+        if (!c || autoFitApplying.value || autoFitRunning) return
+        // Height matters for fit. Ignore width-only changes (scrollbar gutter)
+        // which otherwise shrink↔grow forever on the knife-edge.
+        const h = c.clientHeight
+        const w = c.clientWidth
+        const heightDelta = h - lastAutoFitClientH
+        const heightChanged = Math.abs(heightDelta) >= 2
+        const widthOnly =
+          !heightChanged && Math.abs(w - lastAutoFitClientW) > 0
+        lastAutoFitClientH = h
+        lastAutoFitClientW = w
+        if (widthOnly) return
+        if (!heightChanged) return
+        // Height growth must always recheck (grow-back). Settle lock would
+        // otherwise swallow header-drag enlarges on flexing last sections.
+        scheduleAutoFitRecheck(heightDelta > 0)
+      })
+      autoFitViewportObserver.observe(el)
     }
-  })
-  pendingScrollObserver.observe(el)
+  }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('dragend', clearDragHighlights, true)
   document.removeEventListener('drop', clearDragHighlights, true)
+  window.removeEventListener('resize', onWindowResizeForAutoFit)
+  if (autoFitTimer) clearTimeout(autoFitTimer)
   pendingScrollObserver?.disconnect()
   pendingScrollObserver = null
+  autoFitViewportObserver?.disconnect()
+  autoFitViewportObserver = null
 })
 
 const {

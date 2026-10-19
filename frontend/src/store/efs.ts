@@ -1,11 +1,12 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind, EssaSepIndicators, EssaSepOverrides, EssaSepField } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, AutoFitStripSizeMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind, EssaSepIndicators, EssaSepOverrides, EssaSepField } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
     gapKey,
     DEFAULT_UI_SETTINGS,
+    isAutoFitStripSizeMode,
     isAutoLopSsrMode,
     resolveEssaRwyConfigId,
     computeEssaSepIndicators,
@@ -603,6 +604,8 @@ export const useEfsStore = defineStore("efs", () => {
     const vatsimCid = ref(DEFAULT_UI_SETTINGS.vatsimCid)
     const scribbleSyncRealm = ref(DEFAULT_UI_SETTINGS.scribbleSyncRealm)
     const hoppieLogonCode = ref(DEFAULT_UI_SETTINGS.hoppieLogonCode)
+    const autoFitStripSizeMode = ref<AutoFitStripSizeMode>(DEFAULT_UI_SETTINGS.autoFitStripSizeMode)
+    const autoFitStripSizeGrowBack = ref(DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack)
     /** True when TopSkyCPDLChoppieCode.txt has a valid code (backend). */
     const hoppieFileCodePresent = ref(false)
     /** True after first userSettings apply — used for one-shot CID prompt */
@@ -691,6 +694,13 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.hoppieLogonCode === 'string'
                 ? settings.hoppieLogonCode
                 : DEFAULT_UI_SETTINGS.hoppieLogonCode
+        autoFitStripSizeMode.value = isAutoFitStripSizeMode(settings.autoFitStripSizeMode)
+            ? settings.autoFitStripSizeMode
+            : DEFAULT_UI_SETTINGS.autoFitStripSizeMode
+        autoFitStripSizeGrowBack.value =
+            typeof settings.autoFitStripSizeGrowBack === 'boolean'
+                ? settings.autoFitStripSizeGrowBack
+                : DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack
         if (typeof fileCodePresent === 'boolean') hoppieFileCodePresent.value = fileCodePresent
         if (typeof available === 'boolean') autoParkAvailable.value = available
         userSettingsLoaded.value = true
@@ -717,6 +727,12 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.scribbleSyncUrl === 'string') scribbleSyncUrl.value = partial.scribbleSyncUrl
         if (typeof partial.vatsimCid === 'string') vatsimCid.value = partial.vatsimCid
         if (typeof partial.hoppieLogonCode === 'string') hoppieLogonCode.value = partial.hoppieLogonCode.trim()
+        if (isAutoFitStripSizeMode(partial.autoFitStripSizeMode)) {
+            autoFitStripSizeMode.value = partial.autoFitStripSizeMode
+        }
+        if (typeof partial.autoFitStripSizeGrowBack === 'boolean') {
+            autoFitStripSizeGrowBack.value = partial.autoFitStripSizeGrowBack
+        }
         if (
             partial.scribbleSyncRealm === 'auto' ||
             partial.scribbleSyncRealm === 'live' ||
@@ -3249,6 +3265,8 @@ export const useEfsStore = defineStore("efs", () => {
         vatsimCid,
         scribbleSyncRealm,
         hoppieLogonCode,
+        autoFitStripSizeMode,
+        autoFitStripSizeGrowBack,
         hoppieFileCodePresent,
         userSettingsLoaded,
         cidDialogOpen,

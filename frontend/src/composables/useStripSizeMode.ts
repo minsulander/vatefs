@@ -3,7 +3,16 @@ import { computed, reactive, type Ref, unref, type WritableComputedRef } from 'v
 /** Bay strip size: normal (full SAAB body) or compact (half-height). Zoom is separate. */
 export type StripSizeMode = 'normal' | 'compact'
 
+/** Ceiling size before auto-fit reduced a strip (survives autofit-module HMR with size). */
+export interface StripFitBaseline {
+  compact: boolean
+  top: boolean
+  bottom: boolean
+}
+
 const sizeById = reactive<Record<string, StripSizeMode>>({})
+/** Kept next to sizeById so compact strips still know their grow ceiling after HMR. */
+const fitBaselineById = reactive<Record<string, StripFitBaseline>>({})
 
 function ensure(stripId: string): StripSizeMode {
   return sizeById[stripId] ?? 'normal'
@@ -23,6 +32,18 @@ export function setStripSizeMode(stripId: string, mode: StripSizeMode): void {
 
 export function isStripCompact(stripId: string): boolean {
   return ensure(stripId) === 'compact'
+}
+
+export function getStripFitBaseline(stripId: string): StripFitBaseline | undefined {
+  return fitBaselineById[stripId]
+}
+
+export function setStripFitBaseline(stripId: string, baseline: StripFitBaseline): void {
+  fitBaselineById[stripId] = { ...baseline }
+}
+
+export function clearStripFitBaseline(stripId: string): void {
+  delete fitBaselineById[stripId]
 }
 
 /** Shared size mode — bay strip and zoomed strip stay in sync for compact flag. */

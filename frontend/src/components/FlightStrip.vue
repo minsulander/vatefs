@@ -932,7 +932,7 @@
           class="ctrl-arrow expander-arrow mirrored"
           :class="topArrowClass"
           :title="topArrowTitle"
-          @click.stop="topExpanded = false"
+          @click.stop="onCollapseTopExpander"
         ><span class="arrow-glyph">▲</span></button>
         <div class="exp-chips">
           <!-- ARR: ATIS/MET + QNH only; DEP chips below -->
@@ -1105,7 +1105,7 @@
             class="ctrl-arrow strip-left-up"
             :class="topArrowClass"
             :title="topArrowTitle"
-            @click.stop="topExpanded = true"
+            @click.stop="onExpandTopExpander"
           ><span class="arrow-glyph">▲</span></button>
           <!-- P/A between FRUL and top expander ▲ when expanded (tobtSetBy) -->
           <span
@@ -1177,7 +1177,7 @@
               class="ctrl-arrow strip-left-dn"
               :class="{ 'arrow-stale': showTsacStaleArrow }"
               :title="showTsacStaleArrow ? 'TSAT changed - open bottom menu and click TSAC box' : 'Bottom menu'"
-              @click.stop="bottomExpanded = true"
+              @click.stop="onExpandBottomExpander"
             ><span class="arrow-glyph">▼</span></button>
             <button
               v-else-if="showTsacBox"
@@ -1528,7 +1528,7 @@
             class="ctrl-arrow expander-arrow mirrored"
             :class="{ 'arrow-stale': showTsacStaleArrow }"
             :title="showTsacStaleArrow ? 'TSAT changed - click TSAC box to update' : 'Close bottom menu'"
-            @click.stop="bottomExpanded = false"
+            @click.stop="onCollapseBottomExpander"
           ><span class="arrow-glyph">▼</span></button>
           <button type="button" class="exp-chip" @click.stop="onRemarksClick">RMK</button>
           <button type="button" class="exp-chip" @click.stop="onFplClick">FPL</button>
@@ -1686,6 +1686,7 @@ import {
   collapseStripExpanders,
   useStripExpanders,
 } from '@/composables/useStripExpanders'
+import { adoptManualStripFitBaseline } from '@/composables/useAutoFitStripSize'
 import { useStripSizeMode } from '@/composables/useStripSizeMode'
 import { useZoomStripScalePercent } from '@/composables/useStripZoomScale'
 import ClearanceDialog from './ClearanceDialog.vue'
@@ -2402,6 +2403,7 @@ function onSizeExpanded() {
   isCompact.value = false
   topExpanded.value = true
   bottomExpanded.value = true
+  adoptManualStripFitBaseline(props.strip.id)
   nextTick(() => scheduleStripScale(true))
 }
 
@@ -2409,6 +2411,7 @@ function onSizeNormal() {
   menuOpen.value = false
   isCompact.value = false
   collapseStripExpanders(props.strip.id)
+  adoptManualStripFitBaseline(props.strip.id)
   nextTick(() => scheduleStripScale(true))
 }
 
@@ -2417,7 +2420,28 @@ function onSizeCompact() {
   if (!canCompactStrip.value || props.isLargeView) return
   collapseStripExpanders(props.strip.id)
   isCompact.value = true
+  adoptManualStripFitBaseline(props.strip.id)
   nextTick(() => scheduleStripScale(true))
+}
+
+function onExpandTopExpander() {
+  topExpanded.value = true
+  adoptManualStripFitBaseline(props.strip.id)
+}
+
+function onCollapseTopExpander() {
+  topExpanded.value = false
+  adoptManualStripFitBaseline(props.strip.id)
+}
+
+function onExpandBottomExpander() {
+  bottomExpanded.value = true
+  adoptManualStripFitBaseline(props.strip.id)
+}
+
+function onCollapseBottomExpander() {
+  bottomExpanded.value = false
+  adoptManualStripFitBaseline(props.strip.id)
 }
 
 /**
@@ -3783,6 +3807,7 @@ function onFrulClick() {
     topExpanded.value = true
     bottomExpanded.value = true
   }
+  adoptManualStripFitBaseline(props.strip.id)
 }
 
 const callsignBoxTitle = computed(() => {

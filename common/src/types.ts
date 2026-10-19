@@ -346,6 +346,18 @@ export function isAutoLopSsrMode(value: unknown): value is AutoLopSsrMode {
 }
 
 /**
+ * SAAB auto-fit strip size:
+ * - off — never auto-resize
+ * - standard — fit all bays except CD ALL / TSAT / DEP / PENDING DEP
+ * - all — fit every bay (including those)
+ */
+export type AutoFitStripSizeMode = 'off' | 'standard' | 'all'
+
+export function isAutoFitStripSizeMode(value: unknown): value is AutoFitStripSizeMode {
+    return value === 'off' || value === 'standard' || value === 'all'
+}
+
+/**
  * Hoppie ACARS logon code (same rule as TopSkyCPDLChoppieCode.txt):
  * letters and digits only, shorter than 40 characters.
  */
@@ -430,6 +442,16 @@ export interface UiSettings {
     hoppieLogonCode: string
     /** Network realm for scribble rooms: auto from ES connection, or override */
     scribbleSyncRealm: 'auto' | 'live' | 'sweatbox' | 'playback' | 'local'
+    /**
+     * SAAB only: auto-reduce strip size to fit the bay
+     * (Expanded→Normal→Compact), last-in-sequence first. Default: standard.
+     */
+    autoFitStripSizeMode: AutoFitStripSizeMode
+    /**
+     * SAAB only: when auto-fit mode is not off, grow strips back toward their
+     * pre-reduction size when space frees up. On by default.
+     */
+    autoFitStripSizeGrowBack: boolean
 }
 
 /** Stroke payload for local + remote scribble sync */
@@ -460,6 +482,8 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     vatsimCid: '',
     scribbleSyncRealm: 'auto',
     hoppieLogonCode: '',
+    autoFitStripSizeMode: 'standard',
+    autoFitStripSizeGrowBack: true,
 }
 
 export interface AirportAtisInfo {

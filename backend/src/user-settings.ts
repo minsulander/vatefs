@@ -4,8 +4,20 @@
 
 import fs from "fs"
 import path from "path"
-import type { AutoLopSsrMode, DclMode, StripPrintMode, StripPrintSound, UiSettings } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
+import type {
+    AutoFitStripSizeMode,
+    AutoLopSsrMode,
+    DclMode,
+    StripPrintMode,
+    StripPrintSound,
+    UiSettings,
+} from "@vatefs/common"
+import {
+    DEFAULT_UI_SETTINGS,
+    isAutoFitStripSizeMode,
+    isAutoLopSsrMode,
+    isValidHoppieLogonCode,
+} from "@vatefs/common"
 
 function isStripPrintSound(value: unknown): value is StripPrintSound {
     return value === "off" || value === "short" || value === "long"
@@ -80,6 +92,12 @@ export interface UserSettings {
     scribbleSyncRealm?: UiSettings["scribbleSyncRealm"]
     /** Manual Hoppie logon code. Empty uses the ESAA plugin file. */
     hoppieLogonCode?: string
+    /** @deprecated Prefer autoFitStripSizeMode; true→standard, false→off */
+    autoFitStripSize?: boolean
+    /** SAAB: off | standard | all */
+    autoFitStripSizeMode?: AutoFitStripSizeMode
+    /** SAAB: grow strips back when space frees */
+    autoFitStripSizeGrowBack?: boolean
 }
 
 let settingsPath: string | undefined
@@ -126,6 +144,7 @@ export function saveUserSettings(update: Partial<UserSettings>) {
     delete merged.stripSyncEnabled
     if (merged.autoLopSsr !== undefined) delete merged.autoDepSquawkCfl
     if (merged.rtcAssrSimulation !== undefined) delete merged.rtcSsrSimulation
+    if (merged.autoFitStripSizeMode !== undefined) delete merged.autoFitStripSize
     try {
         fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2), "utf-8")
     } catch (err) {
@@ -203,5 +222,18 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
                 ? saved.scribbleSyncRealm
                 : DEFAULT_UI_SETTINGS.scribbleSyncRealm,
         hoppieLogonCode: resolveHoppieLogonCode(saved.hoppieLogonCode),
+        autoFitStripSizeMode: resolveAutoFitStripSizeMode(saved),
+        autoFitStripSizeGrowBack:
+            typeof saved.autoFitStripSizeGrowBack === "boolean"
+                ? saved.autoFitStripSizeGrowBack
+                : DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack,
     }
+}
+
+function resolveAutoFitStripSizeMode(saved: UserSettings): AutoFitStripSizeMode {
+    if (isAutoFitStripSizeMode(saved.autoFitStripSizeMode)) return saved.autoFitStripSizeMode
+    if (typeof saved.autoFitStripSize === "boolean") {
+        return saved.autoFitStripSize ? "standard" : "off"
+    }
+    return DEFAULT_UI_SETTINGS.autoFitStripSizeMode
 }

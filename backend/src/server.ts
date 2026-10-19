@@ -55,7 +55,13 @@ import type {
     AirportAtisInfo,
     UiSettings,
 } from "@vatefs/common"
-import { DEFAULT_UI_SETTINGS, isAutoLopSsrMode, isPaperInfoKind, isValidHoppieLogonCode } from "@vatefs/common"
+import {
+    DEFAULT_UI_SETTINGS,
+    isAutoFitStripSizeMode,
+    isAutoLopSsrMode,
+    isPaperInfoKind,
+    isValidHoppieLogonCode,
+} from "@vatefs/common"
 import type { AutoLopSsrMode, FlightStrip, Gap, Section, ScribbleStrokePayload } from "@vatefs/common"
 import { store } from "./store.js"
 import * as scribbleStore from "./scribble-store.js"
@@ -5938,6 +5944,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     hoppieCodeChanged = getLogonCode() !== prev
                     refreshHoppieConfigFeedState()
                 }
+            }
+            if (isAutoFitStripSizeMode(incoming.autoFitStripSizeMode)) {
+                currentUiSettings.autoFitStripSizeMode = incoming.autoFitStripSizeMode
+                update.autoFitStripSizeMode = incoming.autoFitStripSizeMode
+            }
+            if (typeof incoming.autoFitStripSizeGrowBack === "boolean") {
+                currentUiSettings.autoFitStripSizeGrowBack = incoming.autoFitStripSizeGrowBack
+                update.autoFitStripSizeGrowBack = incoming.autoFitStripSizeGrowBack
             }
             if (Object.keys(update).length > 0) {
                 saveUserSettings(update)

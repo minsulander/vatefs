@@ -15,6 +15,7 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
+    "test:autofit": "tsx src/composables/useAutoFitStripSize.test.ts",
     "format": "prettier --write src/"
   },
   "dependencies": {
@@ -31,9 +32,11 @@
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.2",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.18.6",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.8.1",
+    "jsdom": "^29.1.1",
     "npm-run-all2": "^8.0.4",
     "prettier": "3.6.2",
     "sass-embedded": "^1.93.2",

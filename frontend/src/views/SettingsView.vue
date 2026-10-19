@@ -1,4 +1,4 @@
-﻿<template>
+<template>
     <v-app-bar color="#2b2d31" height="30" elevation="0">
         <v-btn variant="text" color="grey" to="/"
             ><v-icon>mdi-chevron-left</v-icon> RETURN TO APP</v-btn
@@ -284,6 +284,45 @@
                 Only works with ES in focus, so when EFS is running on (other) networked device!
             </p>
 
+            <template v-if="!efs.isPaperLook">
+                <div class="scribble-mode-option mb-4 mt-2">
+                    <div class="ui-scale-label">Auto resize strips</div>
+                    <v-btn-toggle
+                        :model-value="efs.autoFitStripSizeMode"
+                        mandatory
+                        density="comfortable"
+                        color="amber-darken-2"
+                        class="scribble-mode-toggle"
+                        @update:model-value="onAutoFitStripSizeMode"
+                    >
+                        <v-btn value="off" class="text-none" size="small">Off</v-btn>
+                        <v-btn value="standard" class="text-none" size="small">Standard</v-btn>
+                        <v-btn value="all" class="text-none" size="small">All bays</v-btn>
+                    </v-btn-toggle>
+                    <p class="text-caption text-grey mt-1">
+                        SAAB only. When a bay cannot fit all strips, reduce size
+                        (Expanded → Normal → Compact), last-in-sequence first.
+                        Standard: skips CD ALL / TSAT / DEP / PENDING DEP.
+                        All bays: includes those sections. Default: Standard.
+                    </p>
+                </div>
+
+                <v-switch
+                    color="white"
+                    base-color="grey-darken-1"
+                    hide-details
+                    label="Auto enlarge strips"
+                    class="mt-2"
+                    :disabled="efs.autoFitStripSizeMode === 'off'"
+                    :model-value="efs.autoFitStripSizeGrowBack"
+                    @update:model-value="onAutoFitStripSizeGrowBack"
+                />
+                <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                    When auto resize is not off, increase size again when space frees up
+                    (not larger than before the auto reduction). On by default.
+                </p>
+            </template>
+
             <h2 class="settings-section-title">VatEFS sync</h2>
 
             <v-switch
@@ -381,7 +420,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
 import { useEfsStore } from "@/store/efs"
-import { isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
+import { isAutoFitStripSizeMode, isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
 import {
     useUiScalePercent,
     setUiScalePercent,
@@ -568,6 +607,16 @@ function onRtcAssrSimulation(value: boolean | null) {
 function onContactMeEnabled(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ contactMeEnabled: value })
+}
+
+function onAutoFitStripSizeMode(value: unknown) {
+    if (!isAutoFitStripSizeMode(value)) return
+    efs.updateUserSettings({ autoFitStripSizeMode: value })
+}
+
+function onAutoFitStripSizeGrowBack(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ autoFitStripSizeGrowBack: value })
 }
 
 function onShowTobtSetByA(value: boolean | null) {
