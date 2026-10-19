@@ -249,12 +249,12 @@ let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
 let activeConfigFile = path.basename(cliArgs.config ?? getDefaultConfigPath(dataDir))
 
 /**
- * One-shot callsign→config pick after the first primed myselfUpdate at startup.
- * Disabled when `--config` was passed, or after the user switches manually.
- * Later logins in the same process do not switch again.
+ * Callsign→config pick on first primed myselfUpdate and whenever the login callsign changes.
+ * Disabled when `--config` was passed. A manual switch sticks until the callsign changes.
  */
-let configAutoSelectPending = !cliArgs.config
 let configManuallySelected = false
+/** Uppercase callsign we last auto-selected (or skipped) for — same callsign must not reload. */
+let lastAutoSelectCallsign: string | null = null
 
 /** EuroScope "not primed" primary frequency */
 function isPrimedFrequency(frequency: number | undefined | null): boolean {
@@ -431,8 +431,8 @@ if (EUROSCOPE_DIR) {
                 const config = loadConfig(configInfo.fullPath)
                 applyConfig(config)
                 activeConfigFile = savedSettings.activeConfig
-                // Keep auto-select pending: first primed myselfUpdate may switch
-                // from the login callsign. Manual switch still locks.
+                // Saved layout restored; first primed myselfUpdate may switch
+                // from the login callsign. Manual switch sticks until callsign changes.
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
@@ -1485,7 +1485,6 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
 
     if (opts?.manual) {
         configManuallySelected = true
-        configAutoSelectPending = false
     }
 
     console.log(`Switching config to: ${configInfo.name} (${file})`)
@@ -1519,26 +1518,36 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
 }
 
 /**
- * First primed myselfUpdate at startup → pick ESSA / ESGG / RTC / 1RWY3BAY from the login callsign.
+ * Primed myselfUpdate → pick ESSA / ESGG / RTC / 1RWY3BAY from the login callsign.
+ * Re-runs only when the callsign changes (same callsign must not reload the store).
  * Unmatched positions leave the restored layout alone.
- * No-op after that decision, after a manual switchConfig, or when `--config` was used.
+ * Manual switchConfig sticks until the callsign changes; `--config` disables auto-select.
  */
 function maybeAutoSelectConfigFromCallsign(
     frequency: number | undefined,
     callsign?: string | null,
 ): void {
-    if (!configAutoSelectPending || configManuallySelected || cliArgs.config) {
-        configAutoSelectPending = false
-        return
-    }
+    if (cliArgs.config) return
     if (!isPrimedFrequency(frequency)) return
     const cs = (callsign ?? "").trim()
     if (!cs) return
+    const key = cs.toUpperCase()
+
+    // Same login — already decided (or manually locked for this callsign)
+    if (lastAutoSelectCallsign === key) return
+
+    // New login: clear manual lock from the previous callsign
+    if (lastAutoSelectCallsign != null && configManuallySelected) {
+        console.log(`[CONFIG] Callsign changed (${lastAutoSelectCallsign} → ${key}); clearing manual layout lock`)
+        configManuallySelected = false
+    }
+    lastAutoSelectCallsign = key
+
+    if (configManuallySelected) return
 
     const file = configFileForLoginCallsign(cs)
-    configAutoSelectPending = false
     if (!file) {
-        console.log(`[CONFIG] Auto-select skipped — ${cs.toUpperCase()} has no layout mapping`)
+        console.log(`[CONFIG] Auto-select skipped — ${key} has no layout mapping`)
         return
     }
     if (!availableConfigs.some((c) => c.file === file)) {
@@ -1546,11 +1555,11 @@ function maybeAutoSelectConfigFromCallsign(
         return
     }
     if (activeConfigFile === file) {
-        console.log(`[CONFIG] Auto-select OK — already on ${file} for ${cs.toUpperCase()}`)
+        console.log(`[CONFIG] Auto-select OK — already on ${file} for ${key}`)
         return
     }
     console.log(
-        `[CONFIG] Auto-select ${file} for ${cs.toUpperCase()} (primed ${frequency!.toFixed(3)})`,
+        `[CONFIG] Auto-select ${file} for ${key} (primed ${frequency!.toFixed(3)})`,
     )
     switchConfig(file)
 }
@@ -7977,7 +7986,7 @@ udpIn.on("message", (msg, rinfo) => {
                 ensureAupR16Service()
             }
 
-            // Startup only: ESSA_* / ESGG_* / ESSR_*|ESOS_*|ESMM_* / ESMS*TWR|ESMS*GND → layout. Once.
+            // ESSA_* / ESGG_* / ESSR_*|ESOS_*|ESMM_* / ESMS*TWR|ESMS*GND → layout (on callsign change).
             maybeAutoSelectConfigFromCallsign(
                 msg.frequency ?? staticConfig.myFrequency,
                 msg.callsign ?? staticConfig.myCallsign,

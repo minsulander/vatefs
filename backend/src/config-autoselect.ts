@@ -1,5 +1,5 @@
 /**
- * Login-callsign → layout file, used once at EFS startup.
+ * Login-callsign → layout file (startup + when the login callsign changes).
  * Prefix includes the underscore so ESSA_ does not match ESSR_.
  */
 const CONFIG_BY_CALLSIGN_PREFIX: ReadonlyArray<readonly [string, string]> = [
