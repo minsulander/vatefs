@@ -2249,9 +2249,13 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
-    /** Hide live ES ASSR (manual/coordination mode) for this strip. */
+    /**
+     * Hide live ES ASSR (manual/coordination mode) for this strip.
+     * RTC layout only, and only verbal-ACC departure airports — never ESSA/ESGG,
+     * arrivals, or local. An assigned EuroScope code stays visible otherwise.
+     */
     function isSsrCoordinationActive(strip: FlightStrip): boolean {
-        if (!rtcAssrSimulation.value) return false
+        if (!rtcAssrSimulation.value || !multiAirport.value) return false
         if (!requiresSsrCoordination(strip.adep, { stripType: strip.stripType })) return false
         if (ssrCoordOverrideIds.value.has(strip.id)) return false
         return true

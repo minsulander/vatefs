@@ -625,6 +625,12 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
     }
 }
 
+/** Paper ESGG: push CTL / DCL / CLR marks to other EFS clients. */
+function pushPaperStripIfNeeded(stripId: string | undefined) {
+    if (staticConfig.look !== "paper" || !stripId) return
+    void pushStripToRemote(stripId)
+}
+
 /**
  * After flight state changes in mock mode, re-evaluate section rules and broadcast.
  * Handles section moves, position shifts, and gap adjustments.
@@ -2697,6 +2703,9 @@ function sendDclClearance(
     flight.dclPdcNumber = pdc
     flight.dclClearance = plainClearance
     flight.dclSentAt = Date.now()
+    flight.paperClrReadSuppressed = undefined
+    flight.dclDismissed = undefined
+    flight.syncedDclMark = undefined
     // Proactive has no REQUEST; clear request timestamp so REQUEST timeout does not apply
     if (reason === "proactive") {
         flight.dclRequestedAt = undefined
@@ -2722,6 +2731,7 @@ function sendDclClearance(
     if (strip) {
         store.updateStripFromFlight(strip)
         broadcastStrip(strip)
+        pushPaperStripIfNeeded(strip.id)
     }
 
     return true
@@ -2876,7 +2886,7 @@ function handleDclRequest(from: string, packet: string) {
  * Parses: /data2/<pilot_seq>/<our_seq>/N/(WILCO|UNABLE)
  */
 function handleCpdlcResponse(from: string, packet: string) {
-    const match = packet.match(/^\/data2\/(\d+)\/(\d+)\/\w+\/(WILCO|UNABLE)$/i)
+    const match = packet.match(/^\/data2\/(\d+)\/(\d+)\/\w+\/(WILCO|ROGER|UNABLE)$/i)
     if (!match) return
 
     const [, , ourSeqStr, response] = match
@@ -2896,9 +2906,12 @@ function handleCpdlcResponse(from: string, packet: string) {
     const dclCallsign = getDclCallsign()
     const { time, date } = formatTimestamp()
 
-    if (response!.toUpperCase() === "WILCO" && flight.dclStatus === "SENT") {
-        console.log(`[DCL] WILCO from ${from} for flight ${flight.callsign}`)
+    const responseWord = response!.toUpperCase()
+    if ((responseWord === "WILCO" || responseWord === "ROGER") && flight.dclStatus === "SENT") {
+        console.log(`[DCL] ${responseWord} from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "DONE"
+        flight.paperClrReadSuppressed = undefined
+        flight.dclDismissed = undefined
         flight.dclSentAt = undefined
         flight.dclRequestedAt = undefined
 
@@ -2936,8 +2949,9 @@ function handleCpdlcResponse(from: string, packet: string) {
         if (strip) {
             store.updateStripFromFlight(strip)
             broadcastStrip(strip)
+            pushPaperStripIfNeeded(strip.id)
         }
-    } else if (response!.toUpperCase() === "UNABLE") {
+    } else if (responseWord === "UNABLE") {
         console.log(`[DCL] UNABLE from ${from} for flight ${flight.callsign}`)
         flight.dclStatus = "UNABLE"
         flight.dclSentAt = undefined
@@ -3068,6 +3082,10 @@ function applyRemoteScribble(
               position?: number
               bottom?: boolean
               clearanceRead?: boolean
+              clearanceReadback?: boolean
+              ctl?: boolean
+              dclMark?: boolean
+              clrReadSuppressed?: boolean
               qnhGiven?: number | null
               atisGiven?: string | null
               noteText?: string
@@ -3174,6 +3192,7 @@ function applyRemoteScribble(
         // IRIS Stripview coords (TWR-W/TAXI, …) are not EFS bays. Applying them
         // pulls a TAXIWAY DEP strip off the layout and out of the IRIS order.
         const irisPlacement = isIrisStripviewPlacement(meta?.bayId, meta?.sectionId)
+        let holdSyncedPlacement = false
         if (
             strip &&
             !irisPlacement &&
@@ -3200,6 +3219,7 @@ function applyRemoteScribble(
                     !isAnonymousSpecialStripId(moved.strip.id)
                 ) {
                     flightStore.markManualPlacement(moved.strip.id)
+                    holdSyncedPlacement = true
                 }
                 broadcastStrip(moved.strip)
                 strip = moved.strip
@@ -3242,6 +3262,69 @@ function applyRemoteScribble(
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {
                 let flagsChanged = false
+                let ctlChanged = false
+                if (
+                    staticConfig.look === "paper" &&
+                    typeof meta?.ctl === "boolean" &&
+                    !!flight.clearedToLand !== meta.ctl
+                ) {
+                    flight.clearedToLand = meta.ctl
+                    flagsChanged = true
+                    ctlChanged = true
+                }
+                const localDclActive =
+                    flight.dclStatus === "SENT" ||
+                    flight.dclStatus === "DONE" ||
+                    flight.dclStatus === "WILCO"
+                const ownsHoppieDcl = flight.dclSeqNumber != null && localDclActive
+                if (staticConfig.look === "paper" && meta && !ownsHoppieDcl) {
+                    if (
+                        typeof meta.clrReadSuppressed === "boolean" &&
+                        !!flight.paperClrReadSuppressed !== meta.clrReadSuppressed
+                    ) {
+                        flight.paperClrReadSuppressed = meta.clrReadSuppressed || undefined
+                        flagsChanged = true
+                    }
+                    if (typeof meta.dclMark === "boolean" && !localDclActive) {
+                        if (meta.dclMark && !meta.clrReadSuppressed) {
+                            if (!flight.syncedDclMark) {
+                                flight.syncedDclMark = true
+                                flagsChanged = true
+                            }
+                            if (flight.dclDismissed) {
+                                flight.dclDismissed = undefined
+                                flagsChanged = true
+                            }
+                        } else if (flight.syncedDclMark || meta.clrReadSuppressed) {
+                            if (flight.syncedDclMark) {
+                                flight.syncedDclMark = undefined
+                                flagsChanged = true
+                            }
+                            if (!flight.dclDismissed) {
+                                flight.dclDismissed = true
+                                flagsChanged = true
+                            }
+                        }
+                    }
+                    if (typeof meta.clearanceReadback === "boolean") {
+                        if (meta.clearanceReadback && !flight.clearanceReadback) {
+                            flight.clearanceReadback = true
+                            flagsChanged = true
+                        } else if (
+                            !meta.clearanceReadback &&
+                            flight.clearanceReadback &&
+                            !flight.clearance
+                        ) {
+                            flight.clearanceReadback = false
+                            flagsChanged = true
+                        }
+                    }
+                }
+                // Peer placement + CTL must survive the fingerprint change CTL itself causes,
+                // or this client immediately yanks PÅ BANAN back to PÅ TAXI.
+                if ((holdSyncedPlacement || ctlChanged) && flight.lastSectionRule === "manual") {
+                    flight.placementStickyKey = flightStore.placementStickyFingerprint(flight)
+                }
                 if (meta?.clearanceRead !== undefined && !!flight.clearanceRead !== !!meta.clearanceRead) {
                     // Do not clear ES CLR via sync — only the local paper "read" bit
                     if (meta.clearanceRead) {
@@ -4623,6 +4706,23 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         reevaluateAndBroadcast(strip.callsign)
                         void pushStripToRemote(strip.id)
                     }
+                } else if (message.action === "dismissPaperDcl") {
+                    // Paper col 4: clear the DCL word. Right box (CLR correct) stays.
+                    if (flight && staticConfig.look === "paper") {
+                        flight.paperClrReadSuppressed = true
+                        flight.dclDismissed = true
+                        flight.syncedDclMark = undefined
+                        reevaluateAndBroadcast(strip.callsign)
+                        pushPaperStripIfNeeded(strip.id)
+                    }
+                } else if (message.action === "restorePaperClrRead") {
+                    // Next click after DCL dismiss: normal CLR-read check, DCL stays hidden.
+                    if (flight && staticConfig.look === "paper") {
+                        flight.paperClrReadSuppressed = false
+                        flight.clearanceRead = true
+                        reevaluateAndBroadcast(strip.callsign)
+                        pushPaperStripIfNeeded(strip.id)
+                    }
                 } else if (message.action === "toggleClearanceReadback") {
                     // Paper FPS col 5 (CLR correct) — sets/clears EuroScope CLR flag.
                     // Checking 5 also checks 4. ES CLR on shows both as checked.
@@ -4637,22 +4737,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             } satisfies OutboundPluginCommand),
                         )
                         flightStore.applyOptimisticClearance(strip.callsign, desired)
-                        // Voice CLR correct clears pending DCL state (same as toggleClearanceFlag)
-                        if (desired && flight.dclStatus) {
-                            console.log(`[DCL] Clearing DCL state for ${strip.callsign} (CLR correct)`)
-                            flight.dclStatus = undefined
-                            flight.dclMessage = undefined
-                            flight.dclClearance = undefined
-                            flight.dclSeqNumber = undefined
-                            flight.dclPdcNumber = undefined
-                            flight.dclSentAt = undefined
-                            flight.dclRequestedAt = undefined
-                        }
+                        // Paper: checking CLR correct must keep the DCL word in the left box.
                         // CD/DEL: CLR correct on → ASSUME (undo does not RELEASE)
                         if (desired) {
                             assumeCdDelKlareringDep(flight, strip.stripType, "CLR correct")
                         }
                         reevaluateAndBroadcast(strip.callsign)
+                        pushPaperStripIfNeeded(strip.id)
                     }
                 // GOA: MISAP_ + MAP heading/CFL (ESSA Appendix A or ESGG H020/H200 + A030)
                 } else if (message.action === "GOA") {
@@ -4859,6 +4950,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         assumePendingAppInboundOnCtl(strip, flight)
                     }
                     reevaluateAndBroadcast(strip.callsign)
+                    pushPaperStripIfNeeded(strip.id)
                 }
 
                 // When toggling clearance flag (user pressed OK for voice clearance), clear DCL state
@@ -5007,6 +5099,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
 
                     reevaluateAndBroadcast(strip.callsign)
+                    if (message.action === "CTL" || message.action === "unsetCTL") {
+                        pushPaperStripIfNeeded(strip.id)
+                    }
                 } else if (
                     message.action === "toggleClearanceFlag" ||
                     message.action === "ASSUME" ||

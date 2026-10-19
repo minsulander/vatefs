@@ -151,6 +151,15 @@ export interface FlightStrip {
     dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
     dclMessage?: string           // Original pilot request text
     dclClearance?: string         // Filled-out clearance template for preview
+    /**
+     * Paper CLR-read: DCL text was dismissed. Hides the DCL mark and the left
+     * check until the next explicit read click. Synced to other EFS clients.
+     */
+    paperClrReadSuppressed?: boolean
+    /** Paper: DCL word dismissed and must not return on the next read click. */
+    dclDismissed?: boolean
+    /** Peer sync: show DCL in the paper CLR-read box when this client has no Hoppie status. */
+    syncedDclMark?: boolean
 
     // Transfer frequency (shown on XFER button when handoff target matches next controller)
     xferFrequency?: string

@@ -2954,10 +2954,20 @@ class FlightStore {
                     flight.clearanceHoldUntil = undefined
                 }
                 flight.clearance = message.clearance
-                // Keep paper col 4/5 in lockstep with ES CLR
+                // Keep paper col 4/5 in lockstep with ES CLR.
+                // A confirmed DCL (WILCO/ROGER) keeps the right-box check if ES never latches CLR.
+                const dclConfirmed =
+                    flight.dclStatus === "DONE" || flight.dclStatus === "WILCO"
+                const keepPaperDclReadback =
+                    this.config.look === "paper" &&
+                    dclConfirmed &&
+                    !!flight.clearanceReadback &&
+                    !message.clearance
                 if (message.clearance) {
                     flight.clearanceRead = true
                     flight.clearanceReadback = true
+                } else if (keepPaperDclReadback) {
+                    // leave clearanceRead / clearanceReadback (right box stays checked)
                 } else {
                     flight.clearanceRead = false
                     flight.clearanceReadback = false
@@ -4918,6 +4928,11 @@ class FlightStore {
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclClearance: flight.dclClearance,
+            paperClrReadSuppressed: paperFresh
+                ? undefined
+                : flight.paperClrReadSuppressed || undefined,
+            dclDismissed: paperFresh ? undefined : flight.dclDismissed || undefined,
+            syncedDclMark: paperFresh ? undefined : flight.syncedDclMark || undefined,
             // CDM times only on ESSA IFR departures (not VFR / local)
             tobt: cdmEligible ? flight.tobt : undefined,
             tsat: cdmEligible ? flight.tsat : undefined,
@@ -5359,6 +5374,9 @@ class FlightStore {
     private resetFlightForFreshPrint(flight: Flight): void {
         flight.clearanceRead = false
         flight.clearanceReadback = false
+        flight.paperClrReadSuppressed = undefined
+        flight.dclDismissed = undefined
+        flight.syncedDclMark = undefined
         flight.qnhGiven = undefined
         flight.atisGiven = undefined
         flight.weatherGiven = undefined

@@ -81,6 +81,14 @@ export type StripEfsFields = {
     cfto?: boolean
     /** EFS ATD as UTC HHmm. Null clears a previous time. */
     atd?: string | null
+    /** Paper CTL (cleared to land) — EFS sync so peers show the same L and bay. */
+    ctl?: boolean
+    /** Paper CLR-read shows the DCL word (not the check). */
+    dclMark?: boolean
+    /** Paper: DCL dismissed; hide left check until the next read click. */
+    clrReadSuppressed?: boolean
+    /** Paper col 5 CLR correct, separate from the collapsed clearanceRead bit. */
+    clearanceReadback?: boolean
 }
 
 export type IrisSepPayload = {
@@ -369,6 +377,17 @@ export function buildStripEfsFields(
 
     fields.cfto = !!strip.clearedForTakeoff
     fields.atd = normalizeAtd(strip.atd)
+    fields.ctl = !!strip.clearedToLand
+    const dclShown =
+        !strip.paperClrReadSuppressed &&
+        !strip.dclDismissed &&
+        (strip.dclStatus === "SENT" ||
+            strip.dclStatus === "DONE" ||
+            strip.dclStatus === "WILCO" ||
+            !!strip.syncedDclMark)
+    fields.dclMark = dclShown
+    fields.clrReadSuppressed = !!strip.paperClrReadSuppressed
+    fields.clearanceReadback = !!(strip.clearanceReadback || strip.clearance)
     fields.clearanceRead = !!(strip.clearanceRead || strip.clearance || strip.clearanceReadback)
     if (opts?.includeQnhAtisClear) {
         fields.qnhGiven = strip.qnhGiven ?? null

@@ -689,7 +689,7 @@
               type="button"
               class="pg-clr-check"
               :class="{
-                checked: paperClearanceRead || paperShowDclRead,
+                checked: paperLeftMarkOn || paperShowDclRead,
                 disabled: !canUsePaperClickspots,
                 'pg-clr-dcl': paperShowDclRead,
               }"
@@ -699,7 +699,7 @@
             >
               <span v-if="paperShowDclRead" class="pg-dcl-mark">DCL</span>
               <svg
-                v-else-if="paperClearanceRead && !hasClrReadScribble"
+                v-else-if="paperLeftMarkOn && !hasClrReadScribble"
                 class="pg-clr-mark"
                 viewBox="0 0 24 24"
                 aria-hidden="true"
@@ -789,28 +789,12 @@
             <button
               type="button"
               class="pg-atis-qnh"
-              :class="{ 'has-stamp': !!paperAtisQnhStamp, stale: paperAtisQnhStale }"
+              :class="{ 'has-stamp': !!paperAtisQnhStamp }"
               :title="paperTip('ATIS/QNH', 'Stamp ATIS + QNH')"
               :disabled="!canStampAtisQnh && !paperAtisQnhStamp"
               @click.stop="onPaperAtisQnhClick"
             >
-              <span v-if="paperAtisQnhStamp" class="pg-atis-qnh-val">
-                <svg class="pg-atis-qnh-scribble" viewBox="0 0 48 32" aria-hidden="true">
-                  <path
-                    class="pg-wtc-pen"
-                    d="M10.5 6.2
-                       C18.2 3.8 30.5 3.6 38.2 6.5
-                       C44.1 8.8 46.2 14.2 45.4 19.1
-                       C44.4 25.2 38.1 28.8 30.2 29.4
-                       C21.8 30.0 12.6 28.2 7.4 23.6
-                       C3.2 19.9 2.8 13.8 6.6 9.6
-                       C9.4 6.5 14.8 5.2 20.2 5.8
-                       C26.8 6.6 33.4 9.2 37.6 12.8"
-                    fill="none"
-                  />
-                </svg>
-                {{ paperAtisQnhStamp }}
-              </span>
+              <span v-if="paperAtisQnhStamp" class="pg-atis-qnh-val">{{ paperAtisQnhStamp }}</span>
             </button>
           </div>
           <div v-else class="pg-rte-rfl pg-rte-rfl-arr pg-mid-rule" />
@@ -1127,7 +1111,8 @@
             class="strip-time strip-time-bot fit-font"
             :class="[
               {
-                ghost: !secondaryTimeValue,
+                ghost: !secondaryTimeValue && !faceAssr,
+                'has-face-assr': !!faceAssr,
                 'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
                 'squawk-empty':
                   secondaryTimeKind === 'assr' &&
@@ -1160,7 +1145,8 @@
             </template>
             <template v-else>
               <span v-if="secondaryTimeLabel" class="strip-time-lbl">{{ secondaryTimeLabel }}</span>
-              <span class="strip-time-val">{{ secondaryTimeValue || '----' }}</span>
+              <span class="strip-time-val">{{ secondaryTimeValue || (faceAssr ? '' : '----') }}</span>
+              <span v-if="faceAssr" class="strip-time-assr">{{ faceAssr }}</span>
             </template>
           </div>
         </div>
@@ -2508,6 +2494,10 @@ function paperTip(shortLabel: string, longLabel: string): string {
 const paperClearanceRead = computed(
   () => !!(props.strip.clearance || props.strip.clearanceReadback || props.strip.clearanceRead),
 )
+/** Left check is hidden after DCL dismiss until the next explicit read click. */
+const paperLeftMarkOn = computed(
+  () => paperClearanceRead.value && !props.strip.paperClrReadSuppressed,
+)
 /** Paper col 5 — CLR correct (sets ES CLR; also on when ES CLR) */
 const paperClearanceReadback = computed(
   () => !!(props.strip.clearance || props.strip.clearanceReadback),
@@ -2518,8 +2508,10 @@ const paperClearanceReadback = computed(
  */
 const paperShowDclRead = computed(() => {
   if (isArrLayout.value || hasClrReadScribble.value) return false
+  if (props.strip.paperClrReadSuppressed || props.strip.dclDismissed) return false
   const s = props.strip.dclStatus
-  return s === 'SENT' || s === 'DONE' || s === 'WILCO'
+  if (s === 'SENT' || s === 'DONE' || s === 'WILCO') return true
+  return !!props.strip.syncedDclMark
 })
 
 /** True while we auto-opened CLR for a paper DCL REQUEST (dismiss on auto/semi send). */
@@ -2567,6 +2559,15 @@ function onPaperClearanceReadClick() {
     if (localReadOnly) {
       store.sendStripAction(props.strip.id, 'toggleClearanceRead')
     }
+    return
+  }
+  // DCL ink: first click clears it (right box stays). Next click adds the normal read check.
+  if (paperShowDclRead.value) {
+    store.sendStripAction(props.strip.id, 'dismissPaperDcl')
+    return
+  }
+  if (props.strip.paperClrReadSuppressed) {
+    store.sendStripAction(props.strip.id, 'restorePaperClrRead')
     return
   }
   store.sendStripAction(props.strip.id, 'toggleClearanceRead')
@@ -3309,16 +3310,14 @@ const canSetQnh = computed(() =>
   canEditAssignedData.value && currentQnh.value != null
 )
 
-/** Paper col 6 bottom: ATIS letter + QNH stamp */
+/** Paper col 6 bottom: ATIS letter + last QNH digit (1036 → A6). No change highlight. */
 const paperAtisQnhStamp = computed(() => {
   const qnh = props.strip.qnhGiven
-  if (qnh == null) return ''
+  if (qnh == null || !Number.isFinite(qnh)) return ''
+  const digit = String(Math.abs(Math.round(qnh)) % 10)
   const letter = (props.strip.atisGiven || '').trim().toUpperCase()
-  return letter ? `${letter}${qnh}` : String(qnh)
+  return letter ? `${letter}${digit}` : digit
 })
-
-/** Paper stamp amber if QNH or ATIS letter changed since ack. */
-const paperAtisQnhStale = computed(() => qnhStale.value || atisStale.value)
 
 const canStampAtisQnh = computed(
   () =>
@@ -4211,6 +4210,16 @@ const secondaryTimeTitle = computed(() => {
 
 const ssrCoordActive = computed(() => store.isSsrCoordinationActive(props.strip))
 const displayAssr = computed(() => store.displayAssrForStrip(props.strip))
+/**
+ * RTC face squawk when the bottom slot is TSAT/CTOT (ESSA CDM) and this airport
+ * is not in verbal-ACC manual SSR. Otherwise the assigned ES code has nowhere to show.
+ */
+const faceAssr = computed(() => {
+  if (!store.multiAirport) return ''
+  if (secondaryTimeKind.value === 'assr') return ''
+  if (ssrCoordActive.value) return ''
+  return displayAssr.value
+})
 
 /** RTC: ASSR lives in the main strip only — never duplicate in bottom expander */
 const showBottomExpAssr = computed(() => !store.multiAirport)
@@ -6587,20 +6596,6 @@ function onGroundStateClick(action: string) {
   color: #000;
 }
 
-.pg-atis-qnh-scribble {
-  position: absolute;
-  inset: -80% -40%;
-  width: 180%;
-  height: 260%;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 3;
-}
-
-.pg-atis-qnh.stale .pg-atis-qnh-val {
-  color: #b06a00;
-}
-
 .pg-ctot {
   grid-area: ctot;
   display: grid;
@@ -7664,6 +7659,19 @@ function onGroundStateClick(action: string) {
   text-overflow: clip;
   color: #000;
   white-space: nowrap;
+}
+/* RTC: ES squawk under TSAT/CTOT when that slot is not already ASSR */
+.strip-time.has-face-assr {
+  flex-direction: column;
+  gap: 0;
+  line-height: 1;
+}
+.strip-time-assr {
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #000;
+  line-height: 1;
 }
 /* CTOT and cancelled CTOT (SLC/SCL) — bold + amber */
 .strip-time.time-ctot,

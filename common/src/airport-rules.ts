@@ -157,7 +157,9 @@ export type SsrCoordinationOpts = {
 
 /**
  * True when ADEP uses verbal-ACC SSR coordination (hide ES ASSR until override).
- * Local strips are exempt at every airport on the list. Independent of EST / NeedsCoordination.
+ * Only departures (and callers that omit strip type). Arrivals and local strips
+ * always show the EuroScope code — ESSA/ESGG top-down must not blank an assigned SSR.
+ * Independent of EST / NeedsCoordination. ESSA, ESGG, and ESTL are not in the set.
  */
 export function requiresSsrCoordination(
     adep: string | undefined | null,
@@ -166,7 +168,8 @@ export function requiresSsrCoordination(
     if (!adep) return false
     const icao = adep.trim().toUpperCase()
     if (!SSR_COORDINATION_AIRPORTS.has(icao)) return false
-    if ((opts?.stripType || "").toLowerCase() === "local") return false
+    const kind = (opts?.stripType || "").toLowerCase()
+    if (kind === "local" || kind === "arrival") return false
     return true
 }
 

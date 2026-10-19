@@ -265,9 +265,10 @@
                 @update:model-value="onRtcAssrSimulation"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                For LOP verbal-ACC SSR airports (ESCF, ESGJ, ESGT, …), hide live ES ASSR until you
-                enter a manual code (click) or double-click to generate via TopSky and show ES ASSR.
-                Local flights always show ES ASSR. On by default.
+                RTC only. Departures from LOP verbal-ACC SSR airports (ESCF, ESGJ, ESGT, …): hide
+                live ES ASSR until you enter a manual code (click) or double-click to generate via
+                TopSky. ESSA, ESGG, arrivals, and local flights always show the EuroScope code.
+                On by default.
             </p>
 
             <v-switch

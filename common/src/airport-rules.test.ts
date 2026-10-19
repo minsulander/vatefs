@@ -47,6 +47,10 @@ assert(requiresSsrCoordination("ESOE", { stripType: "local" }) === false, "ESOE 
 assert(requiresSsrCoordination("ESCF", { stripType: "local" }) === false, "ESCF local exempt")
 assert(requiresSsrCoordination("ESPE", { stripType: "departure" }) === true, "ESPE dep SSR coord")
 assert(requiresSsrCoordination("ESOE", { stripType: "departure" }) === true, "ESOE dep SSR coord")
+assert(requiresSsrCoordination("ESSA") === false, "ESSA never SSR coord")
+assert(requiresSsrCoordination("ESSA", { stripType: "departure" }) === false, "ESSA dep never SSR coord")
+assert(requiresSsrCoordination("ESOE", { stripType: "arrival" }) === false, "arrival shows ES SSR")
+assert(requiresSsrCoordination("ESCF", { stripType: "arrival" }) === false, "ESCF arrival shows ES SSR")
 assert(requiresSsrCoordination(undefined) === false, "undefined adep SSR")
 
 // ESSA heavy take-off RWY (01L/19R) — auto-LOP shared resolver

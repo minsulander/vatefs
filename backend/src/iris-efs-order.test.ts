@@ -46,6 +46,12 @@ function strip(
         transferPending: partial.transferPending,
         runway: partial.runway,
         clearanceRead: partial.clearanceRead,
+        clearance: partial.clearance,
+        clearanceReadback: partial.clearanceReadback,
+        clearedToLand: partial.clearedToLand,
+        dclStatus: partial.dclStatus,
+        dclDismissed: partial.dclDismissed,
+        paperClrReadSuppressed: partial.paperClrReadSuppressed,
         qnhGiven: partial.qnhGiven,
         noteText: partial.noteText,
         atd: partial.atd,
@@ -339,6 +345,43 @@ check("cfto and atd on order entries and strip bodies", () => {
     )
     assert.equal("cfto" in vehicle, false)
     assert.equal("atd" in vehicle, false)
+})
+
+check("paper CTL and DCL marks are EFS sync fields", () => {
+    const ctl = buildStripEfsFields(
+        strip({
+            callsign: "ARR1",
+            sectionId: "runway",
+            stripType: "arrival",
+            clearedToLand: true,
+        }),
+    )
+    assert.equal(ctl.ctl, true)
+    assert.equal(ctl.dclMark, false)
+    const dcl = buildStripEfsFields(
+        strip({
+            callsign: "DEP1",
+            sectionId: "cleared",
+            dclStatus: "DONE",
+            clearanceReadback: true,
+        }),
+    )
+    assert.equal(dcl.dclMark, true)
+    assert.equal(dcl.clearanceReadback, true)
+    assert.equal(dcl.clrReadSuppressed, false)
+    const dismissed = buildStripEfsFields(
+        strip({
+            callsign: "DEP2",
+            sectionId: "cleared",
+            dclStatus: "DONE",
+            dclDismissed: true,
+            paperClrReadSuppressed: true,
+        }),
+    )
+    assert.equal(dismissed.dclMark, false)
+    assert.equal(dismissed.clrReadSuppressed, true)
+    assert.equal(assertNoForbiddenSyncKeys(ctl).length, 0)
+    assert.equal(assertNoForbiddenSyncKeys(dcl).length, 0)
 })
 
 console.log(`\n${passed} passed`)

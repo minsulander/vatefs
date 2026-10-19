@@ -120,6 +120,12 @@ export interface Flight {
 
     // DCL (Data-Link Clearance) state
     dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
+    /** Paper: DCL mark dismissed; left CLR check hidden until the next read click. */
+    paperClrReadSuppressed?: boolean
+    /** Paper: DCL word dismissed; stays off when the left check is restored. */
+    dclDismissed?: boolean
+    /** Peer EFS sync: show DCL in the paper CLR-read box without local Hoppie state. */
+    syncedDclMark?: boolean
     dclMessage?: string           // Original pilot request text
     dclClearance?: string         // Filled-out clearance template for preview
     dclSeqNumber?: number         // Our CPDLC sequence number (to match WILCO/UNABLE)
