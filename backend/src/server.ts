@@ -111,6 +111,7 @@ import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } fro
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
 import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
+import { configFileForLoginCallsign } from "./config-autoselect.js"
 import type { ConfigFileInfo } from "./config-loader.js"
 import {
     isMultiAirportConfig,
@@ -248,8 +249,9 @@ let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
 let activeConfigFile = path.basename(cliArgs.config ?? getDefaultConfigPath(dataDir))
 
 /**
- * One-shot airport→config pick after first primed myselfUpdate.
+ * One-shot callsign→config pick after the first primed myselfUpdate at startup.
  * Disabled when `--config` was passed, or after the user switches manually.
+ * Later logins in the same process do not switch again.
  */
 let configAutoSelectPending = !cliArgs.config
 let configManuallySelected = false
@@ -258,34 +260,6 @@ let configManuallySelected = false
 function isPrimedFrequency(frequency: number | undefined | null): boolean {
     if (frequency == null || !(frequency > 0)) return false
     return Math.abs(frequency - 199.998) > 0.001
-}
-
-/** True when we should use RTC (multiairport) — ESSR login or online ESSR positions. */
-function isEssrRtcSession(callsign?: string | null): boolean {
-    const self = (callsign ?? staticConfig.myCallsign ?? "").toUpperCase()
-    if (self.startsWith("ESSR")) return true
-    const online = staticConfig.onlineControllers
-    if (!online) return false
-    for (const ctrl of online.values()) {
-        if (ctrl.callsign.toUpperCase().startsWith("ESSR")) return true
-    }
-    return false
-}
-
-/**
- * Pick layout for the current session:
- * - RTC only for ESSR (self or online ESSR positions)
- * - else ESSA if in rwyconfig, else ESGG
- */
-function configFileForDiscoveredAirports(
-    airports: string[],
-    callsign?: string | null,
-): string | undefined {
-    if (isEssrRtcSession(callsign)) return "multiairport.yml"
-    const set = new Set(airports.map((a) => a.toUpperCase()))
-    if (set.has("ESSA")) return "essa.yml"
-    if (set.has("ESGG")) return "esgg.yml"
-    return undefined
 }
 
 // Load initial configuration from YAML file
@@ -458,7 +432,7 @@ if (EUROSCOPE_DIR) {
                 applyConfig(config)
                 activeConfigFile = savedSettings.activeConfig
                 // Keep auto-select pending: first primed myselfUpdate may switch
-                // RTC→ESSA/ESGG (or to RTC when ESSR is online). Manual switch still locks.
+                // from the login callsign. Manual switch still locks.
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
@@ -1545,13 +1519,11 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
 }
 
 /**
- * First primed myselfUpdate → pick ESSA / ESGG / RTC once.
- * RTC only when self or online controllers are ESSR_*; otherwise ESSA/ESGG from rwyconfig.
- * No-op after manual switchConfig or when `--config` was used.
- * May leave a restored RTC layout if the session is not ESSR.
+ * First primed myselfUpdate at startup → pick ESSA / ESGG / RTC / 1RWY3BAY from the login callsign.
+ * Unmatched positions leave the restored layout alone.
+ * No-op after that decision, after a manual switchConfig, or when `--config` was used.
  */
-function maybeAutoSelectConfigFromAirports(
-    airports: string[],
+function maybeAutoSelectConfigFromCallsign(
     frequency: number | undefined,
     callsign?: string | null,
 ): void {
@@ -1560,28 +1532,25 @@ function maybeAutoSelectConfigFromAirports(
         return
     }
     if (!isPrimedFrequency(frequency)) return
-    // ESSR RTC needs callsign/online list; ESSA/ESGG need discovered airports
-    const essr = isEssrRtcSession(callsign)
-    if (!essr && airports.length === 0) return
+    const cs = (callsign ?? "").trim()
+    if (!cs) return
 
-    const file = configFileForDiscoveredAirports(airports, callsign)
-    if (!file) return
+    const file = configFileForLoginCallsign(cs)
+    configAutoSelectPending = false
+    if (!file) {
+        console.log(`[CONFIG] Auto-select skipped — ${cs.toUpperCase()} has no layout mapping`)
+        return
+    }
     if (!availableConfigs.some((c) => c.file === file)) {
         console.warn(`[CONFIG] Auto-select skipped — ${file} not in config directory`)
-        configAutoSelectPending = false
         return
     }
-
-    configAutoSelectPending = false
     if (activeConfigFile === file) {
-        console.log(`[CONFIG] Auto-select OK — already on ${file}`)
+        console.log(`[CONFIG] Auto-select OK — already on ${file} for ${cs.toUpperCase()}`)
         return
     }
-    const reason = essr
-        ? "ESSR position online / logged in"
-        : `airports [${airports.join(", ")}]`
     console.log(
-        `[CONFIG] Auto-select ${file} (${reason}, primed ${frequency!.toFixed(3)})`,
+        `[CONFIG] Auto-select ${file} for ${cs.toUpperCase()} (primed ${frequency!.toFixed(3)})`,
     )
     switchConfig(file)
 }
@@ -8008,11 +7977,8 @@ udpIn.on("message", (msg, rinfo) => {
                 ensureAupR16Service()
             }
 
-            // First primed session: ESSR→RTC, ESSA→essa.yml, else ESGG→esgg.yml
-            maybeAutoSelectConfigFromAirports(
-                staticConfig.activeAirports?.length
-                    ? staticConfig.activeAirports
-                    : staticConfig.myAirports,
+            // Startup only: ESSA_* / ESGG_* / ESSR_*|ESOS_*|ESMM_* / ESMS*TWR|ESMS*GND → layout. Once.
+            maybeAutoSelectConfigFromCallsign(
                 msg.frequency ?? staticConfig.myFrequency,
                 msg.callsign ?? staticConfig.myCallsign,
             )
