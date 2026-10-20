@@ -5,18 +5,26 @@ ESAA (Sweden) FIR use only for now.
 
 Work in progress, experimental software, use at your own risk, yadiyada...
 
-![teaser](frontend/public/screenshots/teaser.png)
+Multiple layouts and looks — e.g. **ESGG** paper strips, **ESSA** SAAB-style
+role bays, and **RTC** multi-airport — plus other airport/bay configs.
+
+![Example views: ESGG paper, ESSA, and RTC](frontend/public/screenshots/teaser.png)
 
 ## Instructions for controllers
 
-1. Install the `.msi` package.
-2. In EuroScope: **OTHER SET** → **Plug-ins…** → load `C:\Program Files\VatEFS\VatEFS.dll`.
+1. Install the `.msi` package (default: `C:\Program Files\VatEFS`).
+   The installer opens Windows Firewall for the backend so iPads and other
+   devices on your LAN can connect (TCP 17770).
+2. In EuroScope: **OTHER SET** → **Plug-ins…** → load
+   `C:\Program Files\VatEFS\VatEFS.dll`.
 3. Allow the plugin to draw on the radar screen.
 
 ![Allow the plugin to draw on the radar screen](frontend/public/screenshots/draw-permissions.png)
 
 4. Connect to VATSIM, then type `.efs start`. You should get a message from VatEFS with a link.
 5. Open that link in a web browser (port 17770). On the same PC, `http://localhost:17770/` works too.
+
+A short copy of these steps is also in `C:\Program Files\VatEFS\README.txt` after install.
 
 ## Building & Running
 
