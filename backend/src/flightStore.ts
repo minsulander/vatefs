@@ -57,6 +57,7 @@ import {
     FAA_TO_ICAO,
     formatCflMenuLabel,
     formatFaaEquipDisplay,
+    essaPhysicalPairForRunway,
     hasForcedSidInRoute,
     hasSlowRemark,
     isIfrSidEligible,
@@ -999,17 +1000,38 @@ class FlightStore {
     }
 
     /**
-     * ESSA arr/dep runway ends currently assigned on flight plans (for RWY headers).
+     * ESSA arr/dep runway ends that should open an extra RWY header beyond active
+     * EuroScope rwyconfig. Any strip with a forced/selected runway whose physical
+     * pair is not already covered by the active ARR/DEP config adds that header
+     * (e.g. DEP 08 while config is 01L). Runways already present (01L while
+     * config is 01L/01L) do not open a second bay.
      */
     getEssaAssignedRunways(): { arr: string[]; dep: string[] } {
+        const activePairs = new Set<string>()
+        const essaActive = this.config.activeRunways?.['ESSA']
+        if (essaActive) {
+            for (const r of [...essaActive.arr, ...essaActive.dep]) {
+                const pair = essaPhysicalPairForRunway(r)
+                if (pair) activePairs.add(pair.id)
+            }
+        }
+
         const arr = new Set<string>()
         const dep = new Set<string>()
+        const consider = (rwy: string | undefined, into: Set<string>) => {
+            if (!rwy) return
+            const pair = essaPhysicalPairForRunway(rwy)
+            if (!pair || activePairs.has(pair.id)) return
+            into.add(rwy.toUpperCase())
+        }
+
         for (const flight of this.flights.values()) {
             if (flight.deleted || flight.manuallyDeleted) continue
+            if (!this.stripAssignments.has(flight.callsign)) continue
             const originIsEssa = flight.origin === 'ESSA'
             const destIsEssa = flight.destination === 'ESSA'
-            if (destIsEssa && flight.arrRwy) arr.add(flight.arrRwy.toUpperCase())
-            if (originIsEssa && flight.depRwy) dep.add(flight.depRwy.toUpperCase())
+            if (destIsEssa) consider(flight.arrRwy, arr)
+            if (originIsEssa) consider(flight.depRwy, dep)
         }
         return {
             arr: [...arr].sort(),

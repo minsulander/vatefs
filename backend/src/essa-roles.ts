@@ -491,7 +491,8 @@ export interface EssaRunwaySectionPlacement {
 
 /**
  * Collect unique physical runway pairs that need headers:
- * active ARR/DEP from RWY config, plus runways assigned on flight plans.
+ * active ARR/DEP from RWY config, plus strip-assigned ends on pairs not already
+ * covered by that config (see flightStore.getEssaAssignedRunways).
  *
  * Column preference is driven by **active** RWY config so FPL assignments cannot
  * flip an ARR-only strip into the DEP column (which made RUNWAY headers jump

@@ -99,6 +99,31 @@ check("ARR-only active pair stays ARR column even if FPL has dep on that strip",
     assert.equal(dep!.preferDepColumn, true)
 })
 
+check("active 01L alone → only 01L/19R header (no FPL assigned)", () => {
+    const placements = collectEssaRunwayPairs(
+        { ESSA: { arr: ["01L"], dep: ["01L"] } },
+        ["ESSA"],
+        { arr: [], dep: [] },
+    )
+    assert.deepEqual(
+        placements.map((p) => p.pair.id),
+        ["01L_19R"],
+    )
+})
+
+check("stale FPL dep 19L still opens 01R/19L when passed as assigned", () => {
+    // collectEssaRunwayPairs itself still honours assigned; flightStore gates what is passed in.
+    const placements = collectEssaRunwayPairs(
+        { ESSA: { arr: ["01L"], dep: ["01L"] } },
+        ["ESSA"],
+        { arr: [], dep: ["19L"] },
+    )
+    assert.deepEqual(
+        placements.map((p) => p.pair.id).sort(),
+        ["01L_19R", "01R_19L"],
+    )
+})
+
 check("ARR-only header inserts between CTR ARR and TAXI ARR in bay1", () => {
     const layout: EfsLayout = {
         bays: [
