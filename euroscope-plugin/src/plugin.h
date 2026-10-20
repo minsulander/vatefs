@@ -7,6 +7,7 @@
 #include "json.hpp"
 #include <ctime>
 #include <map>
+#include <set>
 #include <string>
 
 namespace VatEFS
@@ -247,6 +248,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
 
     // Last sent tracking|handoff ownership per callsign (detects ES-initiated assume/transfer/accept)
     std::map<std::string, std::string> lastOwnershipSnapshot;
+    // Callsigns for which we have posted a flightPlanDataUpdate (CAD/VCH can arrive first)
+    std::set<std::string> fplPushedCallsigns;
 
     // Last sent VCH hold-short (annotation 4) per callsign
     std::map<std::string, std::string> lastHoldShortSnapshot;
@@ -272,6 +275,13 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     /** Append tracking/handoff callsigns + sector indicators (SI) from EuroScope */
     void AppendOwnershipFields(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan,
                                std::stringstream *out = nullptr);
+    /**
+     * CAD / VCH polls can fire before EuroScope emits OnFlightPlanFlightPlanDataUpdate
+     * (e.g. after .getfp). Push a full FPL once so the backend has ADEP/ADES for strips.
+     */
+    void EnsureFlightPlanPushed(EuroScopePlugIn::CFlightPlan FlightPlan);
+    /** Attach ADEP/ADES/ALTN/ATYP when CAD arrives without a prior FPL message. */
+    void AppendBasicFlightPlanFields(nlohmann::json &message, EuroScopePlugIn::CFlightPlan FlightPlan);
 };
 
 class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen

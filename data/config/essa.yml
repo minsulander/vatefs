@@ -219,11 +219,13 @@ sectionRules:
     priority: 115
 
   # GND: after assuming a vacated arrival, move INBOUND → TAXI ARR
+  # clearedToLand: false — keep CTL traffic on runway even if airborne flickers false on short final
   taxi_arr_assumed_gnd:
     sectionId: taxi_arr
     direction: arrival
     airborne: false
     onRunway: false
+    clearedToLand: false
     controller: myself
     myRole: [GND]
     priority: 105
@@ -233,6 +235,7 @@ sectionRules:
     direction: local
     airborne: false
     onRunway: false
+    clearedToLand: false
     controller: myself
     myRole: [GND]
     priority: 105

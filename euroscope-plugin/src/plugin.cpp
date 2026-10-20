@@ -424,10 +424,44 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
 
         DebugMessage(out.str());
         PostJson(message, "OnFlightPlanFlightPlanDataUpdate");
+        fplPushedCallsigns.insert(callsign);
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanFlightPlanDataUpdate exception: ") + e.what());
     } catch (...) {
         DisplayMessage("OnFlightPlanFlightPlanDataUpdate: Unknown exception");
+    }
+}
+
+void VatEFSPlugin::EnsureFlightPlanPushed(EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    if (!FlightPlan.IsValid()) return;
+    const char *csRaw = FlightPlan.GetCallsign();
+    if (!csRaw || csRaw[0] == '\0') return;
+    std::string cs = csRaw;
+    if (fplPushedCallsigns.count(cs)) return;
+    OnFlightPlanFlightPlanDataUpdate(FlightPlan);
+}
+
+void VatEFSPlugin::AppendBasicFlightPlanFields(nlohmann::json &message,
+                                               EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    try {
+        if (!FlightPlan.IsValid()) return;
+        EuroScopePlugIn::CFlightPlanData fpData = FlightPlan.GetFlightPlanData();
+        if (!fpData.IsReceived()) return;
+        const char *origin = fpData.GetOrigin();
+        if (origin && strlen(origin) > 0 && strlen(origin) < 10)
+            SetJsonIfValidUtf8(message, "origin", origin);
+        const char *destination = fpData.GetDestination();
+        if (destination && strlen(destination) > 0 && strlen(destination) < 10)
+            SetJsonIfValidUtf8(message, "destination", destination);
+        const char *alternate = fpData.GetAlternate();
+        if (alternate && strlen(alternate) > 0 && strlen(alternate) < 10)
+            SetJsonIfValidUtf8(message, "alternate", alternate);
+        const char *aircraftType = fpData.GetAircraftFPType();
+        if (aircraftType && strlen(aircraftType) > 0 && strlen(aircraftType) < 20)
+            SetJsonIfValidUtf8(message, "aircraftType", aircraftType);
+    } catch (...) {
     }
 }
 
@@ -436,6 +470,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
     try {
         if (disabled || !FilterFlightPlan(FlightPlan)) return;
 
+        // CAD often arrives before / without a separate FPL callback (e.g. FP GET).
+        EnsureFlightPlanPushed(FlightPlan);
 
         std::string callsign = FlightPlan.GetCallsign();
         if (callsign.empty() || callsign.length() > 20) {
@@ -687,6 +723,8 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             out << " unknown data type " << DataType;
             break;
         }
+        // Belt-and-suspenders: backend can create a strip from CAD alone if FPL was lost
+        AppendBasicFlightPlanFields(message, FlightPlan);
         // for (int i = 0; i < 9; i++) {
         //     const char* annotation = ctrData.GetFlightStripAnnotation(i);
         //     if (annotation && strlen(annotation) > 0 && strlen(annotation) < 50) { // Reasonable length limit
@@ -715,6 +753,7 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
         lastCtlSnapshot.erase(cs);
         lastEfsGaSnapshot.erase(cs);
         lastGrpStandSnapshot.erase(cs);
+        fplPushedCallsigns.erase(cs);
     }
     nlohmann::json message = nlohmann::json::object();
     message["type"] = "flightPlanDisconnect";
@@ -4466,9 +4505,12 @@ void VatEFSPlugin::PollVchAnnotationChanges()
 
         if (!hsChanged && !ctlChanged && !efsGaChanged && !estChanged) continue;
 
+        EnsureFlightPlanPushed(fp);
+
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
         SetJsonIfValidUtf8(message, "callsign", cs.c_str());
+        AppendBasicFlightPlanFields(message, fp);
         if (hsChanged) {
             DebugMessage(std::string("HoldShort change ") + cs + ": " +
                          (hsIt != lastHoldShortSnapshot.end() ? hsIt->second : "(none)") + " -> " +

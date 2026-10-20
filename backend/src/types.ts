@@ -403,6 +403,11 @@ export interface ControllerAssignedDataUpdateMessage {
     arc?: number
     ahdg?: number
     direct?: string
+    /** Present when CAD arrives before / without a separate FPL message */
+    origin?: string
+    destination?: string
+    alternate?: string
+    aircraftType?: string
 }
 
 export interface FlightPlanDisconnectMessage {

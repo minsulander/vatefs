@@ -373,14 +373,10 @@ class EfsStore {
                 }
                 if (!update.strip) continue
 
-                if (update.sectionChanged && update.previousSection) {
-                    this.recomputePositions(
-                        update.previousSection.bayId,
-                        update.previousSection.sectionId,
-                        false
-                    )
-                }
-
+                // Apply the strip first so it leaves the old section, then recompute
+                // old-section positions. Recomputing first would still see the mover in
+                // the old section and overwrite flightStore back to the previous sectionId
+                // (runway↔taxi flicker on short final).
                 const allowPos =
                     !!(update.isNew || update.sectionChanged || update.allowPositionChange)
                 const applied = this.applyStripUpdate(
@@ -388,6 +384,14 @@ class EfsStore {
                     allowPos ? { allowPositionChange: true } : undefined
                 )
                 strips.push(applied)
+
+                if (update.sectionChanged && update.previousSection) {
+                    this.recomputePositions(
+                        update.previousSection.bayId,
+                        update.previousSection.sectionId,
+                        false
+                    )
+                }
 
                 if (allowPos && update.shiftedCallsigns && update.shiftedCallsigns.length > 0) {
                     if (!shiftedStrips) shiftedStrips = []
@@ -528,7 +532,19 @@ class EfsStore {
                 if (changed.length > 0) console.log(`Strip ${result.strip.callsign} fields: ${changed.join(', ')}`)
             }
 
-            // If section changed, we need to recompute positions in both old and new sections
+            // Same-slot GS/field updates pin appearance order; new/moved strips
+            // (and APP-transfer sticky-top bumps) may change position
+            const allowPos =
+                !!(isNew || result.sectionChanged || result.allowPositionChange)
+            // Move strip into the new section first, then recompute the old section.
+            // Doing recompute first still includes this strip under previousSection and
+            // setStripAssignment would undo the flightStore section change (short-final
+            // runway↔taxi oscillation).
+            const appliedStrip = this.applyStripUpdate(
+                result.strip,
+                allowPos ? { allowPositionChange: true } : undefined
+            )
+
             if (result.sectionChanged && result.previousSection) {
                 this.recomputePositions(
                     result.previousSection.bayId,
@@ -536,15 +552,6 @@ class EfsStore {
                     false
                 )
             }
-
-            // Same-slot GS/field updates pin appearance order; new/moved strips
-            // (and APP-transfer sticky-top bumps) may change position
-            const allowPos =
-                !!(isNew || result.sectionChanged || result.allowPositionChange)
-            const appliedStrip = this.applyStripUpdate(
-                result.strip,
-                allowPos ? { allowPositionChange: true } : undefined
-            )
 
             // Handle shifted strips and gaps (from add-from-top / sticky-top bump)
             let shiftedStrips: FlightStrip[] | undefined

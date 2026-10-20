@@ -3094,6 +3094,16 @@ class FlightStore {
 
         // Update flight data
         this.applyOwnershipFromPlugin(flight, message, 'ASSIGN')
+        // CAD can arrive before FPL (plugin EnsureFlightPlanPushed / AppendBasicFlightPlanFields).
+        // Apply ADEP/ADES so strips become eligible without waiting for a separate FPL packet.
+        if (message.origin !== undefined && message.origin) flight.origin = message.origin
+        if (message.destination !== undefined && message.destination) {
+            flight.destination = message.destination
+        }
+        if (message.alternate !== undefined && message.alternate) flight.alternate = message.alternate
+        if (message.aircraftType !== undefined && message.aircraftType) {
+            flight.aircraftType = message.aircraftType
+        }
         // Any CAD means ES has reported assigned data for this FP (Refresh always sends CAD).
         // Critical for deferring TopSky SSR allocate until existing ASSR can land.
         flight.controllerAssignedSeen = true
@@ -3564,8 +3574,10 @@ class FlightStore {
         } else if (
             wasAirborne &&
             message.altitude <= airborneThreshold &&
-            ((!gsKnown || gs! <= groundSpeedThreshold) ||
-                message.altitude <= defNotAirborneThreshold)
+            // Short final is often below field+30 with GS still >> 55 (flare over threshold).
+            // Clearing airborne on altitude alone yanked CTL strips to taxi_arr while still
+            // flying — require slow GS when known; alt-only fallback only if GS unknown.
+            (gsKnown ? gs! <= groundSpeedThreshold : message.altitude <= defNotAirborneThreshold)
         ) {
             // Aircraft has landed
             flight.airborne = false
