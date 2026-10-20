@@ -596,8 +596,12 @@ function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight:
     switch (command.type) {
         case "setGroundstate": {
             let state = command.value
-            // ESSA stand exceptions: drag-to-push_start should set STUP, not PUSH
-            if (state === "PUSH" && standRequiresStartupInsteadOfPush(flight.stand, flight.engineType)) {
+            // ESSA stand + type: drag-to-push_start should set STUP when no push-back
+            if (
+                state === "PUSH" &&
+                isEssaRolesConfig(staticConfig) &&
+                standRequiresStartupInsteadOfPush(flight.stand, flight.aircraftType, flight.engineType)
+            ) {
                 state = "STUP"
             }
             sendUdp(JSON.stringify({ type: "setGroundState", callsign, state }))
@@ -4112,24 +4116,16 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     `[MOVE] ${result.strip.callsign}: CD→GND READY+XFER + pin above S/P → ${gndCs}`,
                                 )
                             } else {
-                                // No GND online — set S/P (covering GND ourselves)
-                                let spState = "PUSH"
-                                if (
-                                    standRequiresStartupInsteadOfPush(
-                                        flight.stand,
-                                        flight.engineType,
-                                    )
-                                ) {
-                                    spState = "STUP"
-                                }
+                                // No GND online — set PUSH (covering GND ourselves).
+                                // ESGG does not use ESSA stand push/startup remapping.
                                 executeMoveCommand(
-                                    { type: "setGroundstate", value: spState },
+                                    { type: "setGroundstate", value: "PUSH" },
                                     result.strip.callsign,
                                     flight,
                                 )
                                 stateChanged = true
                                 console.log(
-                                    `[MOVE] ${result.strip.callsign}: S/P ${spState} (CD drop START-UP, no GND)`,
+                                    `[MOVE] ${result.strip.callsign}: S/P PUSH (CD drop START-UP, no GND)`,
                                 )
                             }
                         }

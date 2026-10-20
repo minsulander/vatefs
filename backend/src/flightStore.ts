@@ -4491,8 +4491,15 @@ class FlightStore {
             if (isTrackedByMe) {
                 // We're the tracking controller - show action from rules
                 let defaultAction = determineActionForFlight(flight, sectionId, actionConfig)
-                // ESSA: stand/engine exceptions → STUP instead of PUSH
-                defaultAction = remapPushActionForStand(defaultAction, flight.stand, flight.engineType)
+                // ESSA: stand + aircraft type → STUP instead of PUSH when no push-back
+                if (isEssaRolesConfig(actionConfig)) {
+                    defaultAction = remapPushActionForStand(
+                        defaultAction,
+                        flight.stand,
+                        flight.aircraftType,
+                        flight.engineType,
+                    )
+                }
                 if (defaultAction === 'LU') {
                     // LU (line up) — show paired with CTO so controller can choose either
                     actions = ['LU', 'CTO']

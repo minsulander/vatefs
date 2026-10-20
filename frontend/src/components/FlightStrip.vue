@@ -1508,6 +1508,7 @@
               {
                 'fit-font': isCompactBay,
                 'action-ack-clr': isCompactBay && action === 'CLNC' && showAckClrLabel,
+                'action-start-up': action === 'STUP' && store.essaRolesMode,
               },
             ]"
             :title="action === 'CONTACTME' ? 'EuroScope .contactme (needs ES window focus)' : undefined"
@@ -5348,7 +5349,9 @@ function actionLabel(action: string): string {
     case 'XFER': return 'TRANS'
     case 'PARK': return 'TERM'
     case 'GOA': return 'G/A'
-    case 'STUP': return 'S/U'
+    case 'STUP':
+      // ESSA: two lines in the 48px action key (see .action-start-up)
+      return store.essaRolesMode ? 'START\nUP' : 'S/U'
     case 'PUSH': return 'PUSH'
     default: return action
   }
@@ -8967,6 +8970,12 @@ function onGroundStateClick(action: string) {
 }
 .flight-strip.strip-compact .action-button.action-ack-clr .action-text {
   white-space: normal; /* ACK / CLR may stack */
+}
+.action-button.action-start-up .action-text,
+.flight-strip.strip-compact .action-button.action-start-up .action-text {
+  white-space: pre-line; /* START\nUP stack in 48px key */
+  line-height: 1.05;
+  max-width: 100%;
 }
 .flight-strip.strip-compact .action-freq {
   white-space: nowrap;
