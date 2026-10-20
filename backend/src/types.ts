@@ -222,6 +222,11 @@ export interface Flight {
     manuallyDeleted?: boolean // Strip was manually deleted by user (won't auto-restore)
     noSectionFound?: boolean  // No section rule matched this flight (logged once)
     deletedByBeyondRange?: boolean // Deleted by beyond-range rule (arrivals auto-restore when in range)
+    /**
+     * FPL fingerprint captured when delete_parked* soft-deleted the strip.
+     * A later outbound FPL with a different fingerprint auto-revives a new dep cycle.
+     */
+    parkTrashFplKey?: string
 
     // Rule tracking
     lastSectionRule?: string  // ID of the last section rule that matched, or 'manual' for manual drag, 'default' for default section

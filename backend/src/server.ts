@@ -8340,14 +8340,23 @@ udpIn.on("message", (msg, rinfo) => {
                         !u.isNew &&
                         !u.restored &&
                         !!(u.sectionChanged || u.allowPositionChange)
-                    const opts: { autoMoved?: boolean; cleanReprint?: boolean } = {}
+                    const opts: {
+                        autoMoved?: boolean
+                        cleanReprint?: boolean
+                        playPrintAnim?: boolean
+                    } = {}
                     if (autoMoved) opts.autoMoved = true
-                    if (result.cleanReprint) opts.cleanReprint = true
+                    if (result.cleanReprint) {
+                        opts.cleanReprint = true
+                        if (staticConfig.look === "paper") opts.playPrintAnim = true
+                    }
                     broadcastStrip(
                         strip,
-                        opts.autoMoved || opts.cleanReprint ? opts : undefined,
+                        opts.autoMoved || opts.cleanReprint || opts.playPrintAnim
+                            ? opts
+                            : undefined,
                     )
-                    // Paper G/A clean reprint: clear synced ink for this strip id
+                    // Paper clean reprint (G/A or turnaround DEP): clear synced ink
                     if (result.cleanReprint && staticConfig.look === "paper") {
                         scribbleStore.clearScribbles(strip.id)
                         broadcastScribbleUpdate(strip.id, [])
@@ -8403,10 +8412,34 @@ udpIn.on("message", (msg, rinfo) => {
                     }
                 }
 
-                broadcastStrip(result.strip, autoMoved ? { autoMoved: true } : undefined)
+                const stripBroadcastOpts: {
+                    autoMoved?: boolean
+                    cleanReprint?: boolean
+                    playPrintAnim?: boolean
+                } = {}
+                if (autoMoved) stripBroadcastOpts.autoMoved = true
+                if (result.cleanReprint) {
+                    stripBroadcastOpts.cleanReprint = true
+                    if (staticConfig.look === "paper") stripBroadcastOpts.playPrintAnim = true
+                }
+                broadcastStrip(
+                    result.strip,
+                    Object.keys(stripBroadcastOpts).length ? stripBroadcastOpts : undefined,
+                )
+                if (result.cleanReprint && staticConfig.look === "paper") {
+                    scribbleStore.clearScribbles(result.strip.id)
+                    broadcastScribbleUpdate(result.strip.id, [])
+                    void pushStripToRemote(result.strip.id)
+                }
 
                 // Log based on what kind of change occurred
-                if (result.restored) {
+                if (result.cleanReprint) {
+                    console.log(
+                        `Strip ${result.strip.callsign} clean DEP reprint → ${result.strip.sectionId}`,
+                    )
+                    const newFlight = flightStore.getFlight(result.strip.callsign)
+                    if (newFlight) maybeAutoPrepNewDeparture(result.strip, newFlight)
+                } else if (result.restored) {
                     console.log(`Strip ${result.strip.callsign} restored -> ${result.strip.sectionId}`)
                 } else if (result.isNew) {
                     console.log(`Strip ${result.strip.callsign} created -> ${result.strip.sectionId}`)

@@ -4,8 +4,9 @@
  * Retention (documented):
  * - TRASH_MAX_ENTRIES = 100 (was unbounded Map; soft cap so memory stays bounded)
  * - TRASH_TTL_MS = 24 hours (entries older than this are pruned)
- * - PARK/TERM (delete_parked*) stay soft-deleted until trash restore or pilot disconnect
- *   (no auto-revive when EuroScope groundstate later changes e.g. to TAXI)
+ * - PARK/TERM (delete_parked*) stay soft-deleted until trash restore, pilot disconnect,
+ *   or a new outbound FPL (same callsign turnaround at any myAirport) — not on GS-only changes.
+ *   Turnaround prints a clean DEP strip and keeps the ARR snapshot in trash.
  *
  * Trash survives store.clear() / reconnect / AoR refresh so WS blips do not wipe it.
  */
@@ -83,6 +84,10 @@ const KNOWN_CAUSES: Record<string, KnownCause> = {
     delete_parked_local: {
         reason: 'Local parked',
         ruleName: 'delete_parked_local',
+    },
+    turnaround_fpl: {
+        reason: 'New departure flight plan (turnaround)',
+        ruleName: 'turnaround_fpl',
     },
     delete_beyond_range: {
         reason: 'Beyond radar / visibility range',

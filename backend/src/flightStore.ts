@@ -16,7 +16,20 @@ import type {
     GroundState
 } from "./types.js"
 import { flightHasRequiredData } from "./types.js"
-import { staticConfig, determineSectionForFlight, determineActionForFlight, setMyCallsign, shouldDeleteFlight, getFieldElevationForFlight, getControllerFrequency, getControllerPositionId, getFrequencyForCallsign, getControllerCallsign, getCallsignForPositionId, parseControllerRole } from "./config.js"
+import {
+    staticConfig,
+    determineSectionForFlight,
+    determineActionForFlight,
+    setMyCallsign,
+    shouldDeleteFlight,
+    getFieldElevationForFlight,
+    getControllerFrequency,
+    getControllerPositionId,
+    getFrequencyForCallsign,
+    getControllerCallsign,
+    getCallsignForPositionId,
+    parseControllerRole,
+} from "./config.js"
 import {
     formatEsggAppSi,
     resolveEsggDepApp,
@@ -104,6 +117,92 @@ export function normalizeAssignedSquawk(raw: string | undefined | null): string 
 export function hasValidAssignedSquawk(raw: string | undefined | null): boolean {
     const next = normalizeAssignedSquawk(raw)
     return typeof next === "string" && next.length === 4
+}
+
+/** FPL identity used to detect same-CS turnaround after delete_parked. */
+export function flightPlanFingerprint(
+    flight: Pick<Flight, "origin" | "destination" | "eobt" | "route">,
+): string {
+    return [
+        (flight.origin || "").toUpperCase(),
+        (flight.destination || "").toUpperCase(),
+        (flight.eobt || "").trim(),
+        (flight.route || "").trim().toUpperCase(),
+    ].join("|")
+}
+
+export function isParkTrashDeleteRule(ruleId: string | undefined): boolean {
+    return ruleId === "delete_parked" || ruleId === "delete_parked_local"
+}
+
+/**
+ * Park-trash turnaround: a new outbound FPL (same callsign, origin at our airport)
+ * should start a fresh departure cycle (CD ALL / pending_dep).
+ * Groundstate-only changes (e.g. TAXI) do not revive.
+ */
+export function shouldAutoReviveParkTrash(
+    flight: Pick<
+        Flight,
+        | "deleted"
+        | "manuallyDeleted"
+        | "lastDeleteRule"
+        | "parkTrashFplKey"
+        | "origin"
+        | "destination"
+        | "eobt"
+        | "route"
+    >,
+    myAirports: readonly string[],
+): boolean {
+    if (!flight.deleted || flight.manuallyDeleted) return false
+    if (!isParkTrashDeleteRule(flight.lastDeleteRule)) return false
+    const origin = (flight.origin || "").toUpperCase()
+    if (!origin || !myAirports.some((a) => a.toUpperCase() === origin)) return false
+    const key = flightPlanFingerprint(flight)
+    if (!flight.parkTrashFplKey) return false
+    return key !== flight.parkTrashFplKey
+}
+
+/**
+ * Reset arrival/park leftovers so rules place a fresh uncleared departure
+ * (pending_dep / CD ALL / KLARERING — any airport layout).
+ */
+export function beginNewDepartureCycleAfterPark(flight: Flight): void {
+    flight.deleted = false
+    flight.deletedByBeyondRange = false
+    flight.lastDeleteRule = undefined
+    flight.noSectionFound = false
+    flight.parkTrashFplKey = undefined
+    flight.suppressParkDelete = true
+    flight.clearance = false
+    flight.clearedToLand = false
+    flight.airborne = false
+    flight.atd = undefined
+    flight.ata = undefined
+    flight.missedApproach = false
+    flight.efsGoAround = false
+    const gs = (flight.groundstate || "").toUpperCase()
+    // Arrival/park leftovers block pending_dep; keep ONFREQ/STUP/PUSH/TAXI for live dep flow
+    if (gs === "PARK" || gs === "ARR" || gs === "TXIN" || gs === "DEPA") {
+        flight.groundstate = ""
+        flight.groundstateClearedUntil = Date.now() + 15_000
+    }
+}
+
+/**
+ * True when FPL flipped arrival → outbound dep/local at our airport (same-CS turnaround).
+ * Airport-agnostic — uses myAirports, not ESSA-only.
+ */
+export function isArrivalToOutboundTurnaroundFpl(
+    prev: Pick<Flight, "origin" | "destination">,
+    next: Pick<Flight, "origin" | "destination">,
+    myAirports: readonly string[],
+): boolean {
+    const ours = (icao: string | undefined) =>
+        !!icao && myAirports.some((a) => a.toUpperCase() === icao.toUpperCase())
+    const wasArrival = ours(prev.destination) && !ours(prev.origin)
+    const nowOutbound = ours(next.origin) // departure or local
+    return wasArrival && nowOutbound
 }
 
 /**
@@ -1390,6 +1489,10 @@ class FlightStore {
         if (deleteState.shortCircuit) {
             return deleteState.shortCircuit
         }
+        if (deleteState.parkTurnaroundRevive) {
+            // ARR stays in trash; print a clean DEP (do not set restored — that wipes trash)
+            return this.reprintCleanDepartureAfterTurnaround(flight)
+        }
 
         const hasRequiredData = flightHasRequiredData(flight)
         if (!hasRequiredData || flight.deleted) {
@@ -1467,11 +1570,26 @@ class FlightStore {
                     if (deleteResult.ruleId === 'delete_beyond_range') {
                         flight.deletedByBeyondRange = true
                     }
+                    if (isParkTrashDeleteRule(deleteResult.ruleId)) {
+                        flight.parkTrashFplKey = flightPlanFingerprint(flight)
+                    }
                     this.stripAssignments.delete(stripId)
                     deletedStripIds.push(stripId)
                     multiUpdates.push({ deleteStripId: stripId, softDeleted: true })
                 }
                 continue
+            }
+
+            // Same-CS turnaround: new outbound FPL after delete_parked → fresh dep strip
+            if (
+                !hadAssignment &&
+                flight.deleted &&
+                shouldAutoReviveParkTrash(flight, scoped.myAirports)
+            ) {
+                beginNewDepartureCycleAfterPark(flight)
+                console.log(
+                    `Flight ${callsign} restored from park trash — new departure FPL (${airport})`,
+                )
             }
 
             const targetSection = determineSectionForFlight(flight, scoped, airport)
@@ -1735,6 +1853,8 @@ class FlightStore {
         deleteResult: ReturnType<typeof shouldDeleteFlight>
         wasDeleted: boolean
         shortCircuit?: ProcessMessageResult
+        /** New outbound FPL after delete_parked — clean DEP reprint, keep ARR in trash */
+        parkTurnaroundRevive?: boolean
     } {
         const wasDeleted = flight.deleted ?? false
         const deleteResult = shouldDeleteFlight(flight, this.config)
@@ -1755,6 +1875,9 @@ class FlightStore {
             if (deleteResult.ruleId === 'delete_beyond_range') {
                 flight.deletedByBeyondRange = true
             }
+            if (isParkTrashDeleteRule(deleteResult.ruleId)) {
+                flight.parkTrashFplKey = flightPlanFingerprint(flight)
+            }
             console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
             return {
                 deleteResult,
@@ -1764,13 +1887,18 @@ class FlightStore {
         }
 
         if (!deleteResult.shouldDelete && wasDeleted && !flight.manuallyDeleted) {
-            // PARK/TERM soft-deletes stay in trash until manual restore or pilot disconnect
-            // (do not auto-revive when ES groundstate later changes e.g. to TAXI).
-            const parkTrash =
-                flight.lastDeleteRule === 'delete_parked' ||
-                flight.lastDeleteRule === 'delete_parked_local'
+            // PARK/TERM soft-deletes stay in trash until manual restore, pilot disconnect,
+            // or a new outbound FPL (same CS turnaround). Do not revive on GS-only changes.
+            const parkTrash = isParkTrashDeleteRule(flight.lastDeleteRule)
             if (parkTrash) {
-                // keep deleted
+                if (shouldAutoReviveParkTrash(flight, this.config.myAirports)) {
+                    beginNewDepartureCycleAfterPark(flight)
+                    console.log(
+                        `Flight ${callsign} park-trash turnaround — new departure FPL (clean DEP reprint)`,
+                    )
+                    return { deleteResult, wasDeleted, parkTurnaroundRevive: true }
+                }
+                // else keep deleted
             } else if (flight.noSectionFound) {
                 const targetSection = determineSectionForFlight(flight, this.config)
                 if (targetSection) {
@@ -1796,6 +1924,66 @@ class FlightStore {
         }
 
         return { deleteResult, wasDeleted }
+    }
+
+    /**
+     * Same-CS turnaround: trash the ARR strip (if still on the bay) and print a
+     * clean DEP strip. Keeps an already-parked ARR snapshot in trash (do not
+     * send softDelete when nothing is active — that would wipe trash by id).
+     * Works for every airport / look; paper clients get cleanReprint print anim.
+     */
+    private reprintCleanDepartureAfterTurnaround(flight: Flight): ProcessMessageResult {
+        const callsign = flight.callsign
+        const prevAssignment = this.stripAssignments.get(callsign)
+        const hadActive = !!prevAssignment
+
+        beginNewDepartureCycleAfterPark(flight)
+        this.resetFlightForFreshPrint(flight)
+        this.stripAssignments.delete(callsign)
+        this.markStripPrinted(callsign)
+
+        // Trash meta for the ARR bay strip (store reads flight.lastDeleteRule on stash)
+        if (hadActive) flight.lastDeleteRule = 'turnaround_fpl'
+
+        const created = this.resolveStripResult(callsign, flight, true, false)
+        if (!created.strip) {
+            return {
+                flight,
+                ...(hadActive
+                    ? { deleteStripId: callsign, softDeleted: true, deletedStripIds: [callsign] }
+                    : {}),
+                cleanReprint: true,
+                freshReprint: true,
+            }
+        }
+
+        const multiUpdates: NonNullable<ProcessMessageResult['multiUpdates']> = []
+        if (hadActive) {
+            multiUpdates.push({ deleteStripId: callsign, softDeleted: true })
+        }
+        multiUpdates.push({
+            strip: created.strip,
+            isNew: true,
+            sectionChanged: true,
+            previousSection: prevAssignment
+                ? { bayId: prevAssignment.bayId, sectionId: prevAssignment.sectionId }
+                : undefined,
+            shiftedCallsigns: created.shiftedCallsigns,
+            allowPositionChange: true,
+        })
+
+        console.log(
+            `[TURNAROUND] ${callsign}: ${hadActive ? 'trash ARR + ' : ''}clean DEP reprint → ${created.strip.sectionId}`,
+        )
+
+        return {
+            flight,
+            cleanReprint: true,
+            freshReprint: true,
+            multiUpdates,
+            strip: created.strip,
+            shiftedCallsigns: created.shiftedCallsigns,
+        }
     }
 
     /**
@@ -2686,6 +2874,14 @@ class FlightStore {
         const hadRequiredData = flightHasRequiredData(flight)
         const prevController = flight.controller
         const prevHandoff = flight.handoffTargetController
+        const prevFpl = {
+            origin: flight.origin,
+            destination: flight.destination,
+            eobt: flight.eobt,
+            route: flight.route,
+        }
+        const prevFingerprint = flightPlanFingerprint(prevFpl)
+        const hadActiveStrip = this.stripAssignments.has(callsign)
 
         // Update flight data
         if (message.origin !== undefined) flight.origin = message.origin
@@ -2794,6 +2990,29 @@ class FlightStore {
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         // ESSA heavy DEP RWY (01L/19R) is applied in auto-LOP prep (server autoAssignCflAndSquawk)
         flight.lastUpdate = Date.now()
+
+        // Active ARR strip + new outbound FPL (turnaround before PARK): trash ARR, clean DEP print.
+        // Park-trash path is handled inside finalizeFlightStrips / applyDeleteRules.
+        const fplChanged = flightPlanFingerprint(flight) !== prevFingerprint
+        if (
+            hadActiveStrip &&
+            !flight.deleted &&
+            !flight.manuallyDeleted &&
+            fplChanged &&
+            isArrivalToOutboundTurnaroundFpl(prevFpl, flight, this.config.myAirports)
+        ) {
+            console.log(
+                `Flight ${callsign} turnaround FPL while ARR on bay — trash ARR, clean DEP reprint`,
+            )
+            const result = this.withTransferSound(
+                this.reprintCleanDepartureAfterTurnaround(flight),
+                prevController,
+                prevHandoff,
+                flight,
+            )
+            if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
+            return result
+        }
 
         const result = this.withTransferSound(
             this.finalizeFlightStrips(

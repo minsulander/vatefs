@@ -362,11 +362,13 @@ class EfsStore {
                     if (existing && update.softDeleted) {
                         const flight = flightStore.getFlight(existing.callsign)
                         this.stashDeletedStrip(existing, flight?.lastDeleteRule)
-                    } else {
+                    } else if (existing && !update.softDeleted) {
+                        // Hard delete of an active strip — drop trash entry for this id
                         this.deletedStrips.delete(update.deleteStripId)
                     }
+                    // softDeleted with no active strip: leave trash alone (park ARR snapshot)
                     this.strips.delete(update.deleteStripId)
-                    deletedStripIds.push(update.deleteStripId)
+                    if (existing) deletedStripIds.push(update.deleteStripId)
                     continue
                 }
                 if (!update.strip) continue
@@ -577,6 +579,7 @@ class EfsStore {
                 setScratchValue: result.setScratchValue,
                 clearHs: result.clearHs,
                 ...scratchClear,
+                ...goaReprint,
                 transferSound
             }
         }
