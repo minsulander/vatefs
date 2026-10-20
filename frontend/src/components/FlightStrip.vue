@@ -9028,9 +9028,11 @@ function onGroundStateClick(action: string) {
   text-align: center;
 }
 .action-freq {
-  font-size: var(--fs-action-sm);
-  font-weight: 600;
+  /* Same size as TRANS / READY label on the action key */
+  font-size: var(--fs-action);
+  font-weight: 700;
   text-align: center;
+  margin-top: calc(2px * var(--strip-scale));
 }
 .action-button.action-highlight,
 .action-button.action-clnc-highlight {
