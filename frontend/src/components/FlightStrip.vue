@@ -8823,11 +8823,31 @@ function onGroundStateClick(action: string) {
 .cell-sid:not(.ghost) {
   font-size: var(--fs-data-lg);
 }
-/* ESSA preferred DEP-E / ARR-E — black SID box; cell-sid has border:none */
+/* ESSA preferred DEP-E / ARR-E — black frame only; cell size stays put.
+   Non-RTC SID has no databox margin, so the frame is inset to the same
+   outer edge as STD/CFL/AHD/RWY. */
 .cell-sid.sid-mdi-box:not(.ghost) {
-  box-shadow: inset 0 0 0 3px #111;
+  position: relative;
+  box-shadow: none;
 }
+.strip-main .cell-sid.sid-mdi-box:not(.ghost)::after {
+  content: '';
+  position: absolute;
+  left: var(--frame-inset-x);
+  right: var(--frame-inset-x);
+  /* Two-thirds of the way from the shared databox inset to the cell edge */
+  top: calc(var(--frame-visual-pad-y) / 3);
+  bottom: calc((var(--frame-inset-y-outer) + var(--frame-visual-pad-y)) / 3);
+  border: 3px solid #111;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+/* RTC SID is already margin-inset like the other databoxes */
 .flight-strip.rtc-layout .strip-main .cell-sid.sid-mdi-box:not(.ghost)::after {
+  left: 0;
+  right: 0;
+  top: calc(var(--frame-visual-pad-y) / 3);
+  bottom: calc(var(--frame-visual-pad-y) / 3);
   border: 3px solid #111;
 }
 /* Uncleared XFL/CFL/AHD/SID (value present) — same amber as pending transfer */
