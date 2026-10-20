@@ -1369,7 +1369,7 @@
                 <!-- Landing △ with rounded corners — fills viewBox nearly edge-to-edge -->
                 <path d="M2.5 0.8 H21.5 Q23.6 0.8 22.2 3.2 L13.2 21.2 Q12 23.4 10.8 21.2 L1.8 3.2 Q0.4 0.8 2.5 0.8 Z" />
               </svg>
-              <span v-if="triangleTimeText" class="cto-ctot">{{ triangleTimeText }}</span>
+              <span v-if="triangleTimeText" class="cto-ctot ata">{{ triangleTimeText }}</span>
             </div>
             <!-- Compact G/A: CFL replaces STD; otherwise stand -->
             <div
@@ -1429,7 +1429,7 @@
               <span
                 v-if="triangleTimeText"
                 class="cto-ctot"
-                :class="{ scl: !strip.atd && showCtotCancelled }"
+                :class="{ atd: !!strip.atd, scl: !strip.atd && showCtotCancelled }"
               >{{ triangleTimeText }}</span>
             </div>
           </template>
@@ -8759,15 +8759,20 @@ function onGroundStateClick(action: string) {
   stroke: #008001;
   stroke-width: 2.75;
 }
-/* ATA sits in landing △ (point down) — slightly lower + smaller than prior -27%/11px */
+/* ATA sits in landing △ (point down) — high in the wide upper mass */
 .cell-cto .clearance-triangle.landing ~ .cto-ctot {
-  transform: translateY(-12%);
-  font-size: calc(9px * var(--strip-scale));
+  transform: translateY(-28%);
+  font-size: calc(8.5px * var(--strip-scale));
 }
-/* Takeoff △ time — nudge into the lower mass of the triangle */
+/* Takeoff △ time (CTOT) — nudge into the lower mass of the triangle */
 .cell-cto .clearance-triangle.takeoff ~ .cto-ctot {
   transform: translateY(22%);
   font-size: calc(10px * var(--strip-scale));
+}
+/* ATD — smaller and slightly below center so the digits stay inside the outline */
+.cell-cto .clearance-triangle.takeoff ~ .cto-ctot.atd {
+  transform: translateY(16%);
+  font-size: calc(9px * var(--strip-scale));
 }
 .cell-cto .clearance-triangle.active {
   fill: #008001;
