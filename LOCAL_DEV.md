@@ -1,6 +1,6 @@
 # VatEFS – lokal development
 
-Kör frontend + backend lokalt så du kan tweaka UI/regler samtidigt som appen körs. Hot reload på båda.
+Kör frontend + backend lokalt så du kan tweaka UI/regler samtidigt som appen körs. Hot reload på båda två.
 
 ## Krav
 
