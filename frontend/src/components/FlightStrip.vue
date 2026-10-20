@@ -8764,14 +8764,13 @@ function onGroundStateClick(action: string) {
   transform: translateY(-28%);
   font-size: calc(8.5px * var(--strip-scale));
 }
-/* Takeoff △ time (CTOT) — nudge into the lower mass of the triangle */
+/* Takeoff △ time (CTOT / ATD) — same spot in the lower mass */
 .cell-cto .clearance-triangle.takeoff ~ .cto-ctot {
-  transform: translateY(22%);
+  transform: translateY(16%);
   font-size: calc(10px * var(--strip-scale));
 }
-/* ATD — smaller and slightly below center so the digits stay inside the outline */
+/* ATD — slightly smaller than CTOT, same position */
 .cell-cto .clearance-triangle.takeoff ~ .cto-ctot.atd {
-  transform: translateY(16%);
   font-size: calc(9px * var(--strip-scale));
 }
 .cell-cto .clearance-triangle.active {
