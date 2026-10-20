@@ -1345,11 +1345,23 @@ function canEditEssaSepIndicators(): boolean {
     return roles.some((r) => r === "TWR-E" || r === "TWR-W" || String(r).startsWith("TWR"))
 }
 
-/** TWR or GND may publish bay order + SEP snapshot for Strip TV / APP. */
+/**
+ * TWR or GND at ESSA may publish bay order + SEP for Strip TV / APP.
+ * Use ESSA's own myRolesByAirport — not the cross-airport union that drives
+ * essaRoles layout (APP covering ESCM/ESSB as TWR would otherwise publish).
+ */
 function canPublishEssaStripview(): boolean {
     if (!isEssaRolesConfig(staticConfig)) return false
     const airports = (staticConfig.myAirports ?? []).map((a) => a.toUpperCase())
     if (!airports.includes("ESSA")) return false
+    const byAirport = staticConfig.myRolesByAirport
+    if (byAirport) {
+        for (const [apt, roles] of byAirport) {
+            if (apt.toUpperCase() !== "ESSA") continue
+            return roles.some((r) => r === "TWR" || r === "GND")
+        }
+    }
+    // Fallback before myRolesByAirport is primed: physical ESSA layout roles
     const roles = staticConfig.essaRoles ?? []
     return roles.some(
         (r) =>
@@ -1358,6 +1370,20 @@ function canPublishEssaStripview(): boolean {
             String(r).startsWith("TWR") ||
             String(r).startsWith("GND"),
     )
+}
+
+/** True when this session covers ESSA tower (top-down or ESSA_*_TWR). */
+function sessionCoversEssaTower(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const byAirport = staticConfig.myRolesByAirport
+    if (byAirport) {
+        for (const [apt, roles] of byAirport) {
+            if (apt.toUpperCase() !== "ESSA") continue
+            return roles.includes("TWR")
+        }
+    }
+    const roles = staticConfig.essaRoles ?? []
+    return roles.some((r) => r === "TWR-E" || r === "TWR-W" || String(r).startsWith("TWR"))
 }
 
 function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
@@ -3462,6 +3488,7 @@ initScribbleSync({
         syncOnlineNetworkServices(realm)
     },
     canPublishIrisOrder: () => canPublishEssaStripview(),
+    sessionCoversEssaTower: () => sessionCoversEssaTower(),
     getEssaSepIndicators: () => {
         const m = buildEssaSepIndicatorsMessage()
         if (!m) return null

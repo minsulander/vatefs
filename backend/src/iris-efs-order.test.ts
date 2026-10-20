@@ -6,6 +6,11 @@ import {
     buildStripEfsFields,
     formatIrisSep,
     irisStripKey,
+    isAppOrDepCallsign,
+    isEssaAerodromeCallsign,
+    isLeavingAerodromeForStripview,
+    isReleasedOrUnicomLabel,
+    mergeEssaIrisOrderForSplitPublish,
     stripMatchesRemoteKey,
     isEssaStripviewOrderStrip,
     isIrisStripviewPlacement,
@@ -44,6 +49,10 @@ function strip(
         clearedForTakeoff: partial.clearedForTakeoff,
         isAssumed: partial.isAssumed,
         transferPending: partial.transferPending,
+        ownerCallsign: partial.ownerCallsign,
+        ownerSi: partial.ownerSi,
+        transferCallsign: partial.transferCallsign,
+        transferSi: partial.transferSi,
         runway: partial.runway,
         clearanceRead: partial.clearanceRead,
         clearance: partial.clearance,
@@ -100,6 +109,23 @@ check("sep bare values", () => {
     })
 })
 
+check("callsign classifiers: APP/DEP vs aerodrome vs released", () => {
+    assert.equal(isAppOrDepCallsign("ESSA_E_APP"), true)
+    assert.equal(isAppOrDepCallsign("ESSA_W_DEP"), true)
+    assert.equal(isAppOrDepCallsign("ESSA_R_APP"), false)
+    assert.equal(isAppOrDepCallsign("ESSA_W_TWR"), false)
+    assert.equal(isEssaAerodromeCallsign("ESSA_E_GND"), true)
+    assert.equal(isEssaAerodromeCallsign("ESSA_W_TWR"), true)
+    assert.equal(isEssaAerodromeCallsign("ESSA_S_TWR"), true)
+    assert.equal(isEssaAerodromeCallsign("ESSA_DEL"), true)
+    assert.equal(isEssaAerodromeCallsign("ESSA_E_APP"), false)
+    assert.equal(isEssaAerodromeCallsign("ESSA_W_DEP"), false)
+    assert.equal(isEssaAerodromeCallsign("ESOS_3_CTR"), false)
+    assert.equal(isReleasedOrUnicomLabel("released"), true)
+    assert.equal(isReleasedOrUnicomLabel(undefined, "released"), true)
+    assert.equal(isReleasedOrUnicomLabel("UNICOM"), true)
+})
+
 check("reorder: TWR-W/E + TAXI|LINEUP|DEPA", () => {
     const order = buildEssaIrisOrder(
         [
@@ -133,12 +159,11 @@ check("reorder: TWR-W/E + TAXI|LINEUP|DEPA", () => {
     assert.ok(keys.includes("TWR-W/TAXI/SASW"))
     assert.ok(keys.includes("TWR-E/LINEUP/SASE"))
     assert.ok(keys.includes("TWR-W/DEPA/CFTOW"))
-    // Dry-run print
     console.log("DRY-RUN reorder payload:\n", JSON.stringify(order, null, 2))
     assert.equal(assertNoForbiddenSyncKeys(order).length, 0)
 })
 
-check("ctr_dep stays until transfer or release", () => {
+check("ctr_dep stays for TWR owner; drops on APP/DEP handoff and release", () => {
     const order = buildEssaIrisOrder(
         [
             strip({
@@ -146,12 +171,14 @@ check("ctr_dep stays until transfer or release", () => {
                 sectionId: "taxi_dep",
                 groundstate: "TAXI",
                 runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
             }),
             strip({
                 callsign: "AIR",
                 sectionId: "ctr_dep",
                 groundstate: "DEPA",
                 runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
                 isAssumed: true,
             }),
             strip({
@@ -159,15 +186,35 @@ check("ctr_dep stays until transfer or release", () => {
                 sectionId: "ctr_dep",
                 groundstate: "DEPA",
                 runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
                 isAssumed: true,
                 transferPending: "out",
+                transferCallsign: "ESSA_E_APP",
+            }),
+            strip({
+                callsign: "DEPX",
+                sectionId: "ctr_dep",
+                groundstate: "DEPA",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "ESSA_W_DEP",
             }),
             strip({
                 callsign: "REL",
                 sectionId: "ctr_dep",
                 groundstate: "DEPA",
                 runway: "01L",
+                ownerCallsign: undefined,
                 isAssumed: false,
+            }),
+            strip({
+                callsign: "APP",
+                sectionId: "ctr_dep",
+                groundstate: "DEPA",
+                runway: "01L",
+                ownerCallsign: "ESSA_E_APP",
+                isAssumed: true,
             }),
         ],
         1,
@@ -176,10 +223,17 @@ check("ctr_dep stays until transfer or release", () => {
     assert.ok(keys.includes("TWR-W/TAXI/STAY"))
     assert.ok(keys.includes("TWR-W/DEPA/AIR"))
     assert.ok(!keys.some((k) => k.endsWith("/XFER")))
+    assert.ok(!keys.some((k) => k.endsWith("/DEPX")))
     assert.ok(!keys.some((k) => k.endsWith("/REL")))
+    assert.ok(!keys.some((k) => k.endsWith("/APP")))
     assert.equal(
         isEssaStripviewOrderStrip(
-            strip({ callsign: "AIR", sectionId: "ctr_dep", isAssumed: true }),
+            strip({
+                callsign: "AIR",
+                sectionId: "ctr_dep",
+                ownerCallsign: "ESSA_W_TWR",
+                isAssumed: true,
+            }),
         ),
         true,
     )
@@ -190,11 +244,250 @@ check("ctr_dep stays until transfer or release", () => {
                 sectionId: "taxi_dep",
                 groundstate: "TAXI",
                 transferPending: "out",
+                transferCallsign: "ESSA_E_APP",
             }),
         ),
         false,
     )
     console.log("DRY-RUN ctr-dep payload:\n", JSON.stringify(order, null, 2))
+})
+
+check("TWR→Unicom (released) drops from stripview", () => {
+    assert.equal(
+        isLeavingAerodromeForStripview({
+            transferPending: "out",
+            transferCallsign: "released",
+            ownerCallsign: "ESSA_W_TWR",
+        }),
+        true,
+    )
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "U1",
+                sectionId: "ctr_dep",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "released",
+                transferSi: "released",
+            }),
+        ),
+        false,
+    )
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "U2",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "UNICOM",
+            }),
+        ),
+        false,
+    )
+})
+
+check("split TWR↔TWR and GND↔GND handoffs stay on stripview", () => {
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "TW2TW",
+                sectionId: "ctr_dep",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "ESSA_E_TWR",
+            }),
+        ),
+        true,
+    )
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "G2G",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_GND",
+                transferPending: "out",
+                transferCallsign: "ESSA_E_GND",
+            }),
+        ),
+        true,
+    )
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "G2T",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_GND",
+                transferPending: "out",
+                transferCallsign: "ESSA_W_TWR",
+            }),
+        ),
+        true,
+    )
+    const order = buildEssaIrisOrder(
+        [
+            strip({
+                callsign: "TW2TW",
+                sectionId: "ctr_dep",
+                groundstate: "DEPA",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "ESSA_E_TWR",
+            }),
+            strip({
+                callsign: "G2G",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "19R",
+                ownerCallsign: "ESSA_W_GND",
+                transferPending: "out",
+                transferCallsign: "ESSA_N_GND",
+            }),
+        ],
+        3,
+    )
+    const keys = order.entries.map((e) => e.stripKey)
+    assert.ok(keys.includes("TW2TW"))
+    assert.ok(keys.includes("G2G"))
+})
+
+check("top-down TWR cover keeps assumed ctr_dep until APP handoff", () => {
+    const assumed = strip({
+        callsign: "TOP",
+        sectionId: "ctr_dep",
+        groundstate: "DEPA",
+        runway: "01L",
+        isAssumed: true,
+        // no ownerCallsign — covering APP acting as TWR
+    })
+    assert.equal(isEssaStripviewOrderStrip(assumed), false)
+    assert.equal(isEssaStripviewOrderStrip(assumed, { sessionCoversEssaTower: true }), true)
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                ...assumed,
+                transferPending: "out",
+                transferCallsign: "ESSA_E_APP",
+            }),
+            { sessionCoversEssaTower: true },
+        ),
+        false,
+    )
+})
+
+check("APP assume/release does not keep strip on stripview without TWR owner", () => {
+    // APP assumed after accepting TWR handoff — already left aerodrome ownership
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "SAS722",
+                sectionId: "ctr_dep",
+                ownerCallsign: "ESSA_E_APP",
+                isAssumed: true,
+            }),
+        ),
+        false,
+    )
+    // APP release → cleared owner
+    assert.equal(
+        isEssaStripviewOrderStrip(
+            strip({
+                callsign: "SAS2669",
+                sectionId: "ctr_dep",
+                ownerCallsign: undefined,
+                isAssumed: false,
+            }),
+        ),
+        false,
+    )
+})
+
+check("split-order merge keeps peer strips and drops local leavers", () => {
+    const westLocal = buildEssaIrisOrder(
+        [
+            strip({
+                callsign: "WEST1",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+            }),
+            strip({
+                callsign: "GONE",
+                sectionId: "ctr_dep",
+                groundstate: "DEPA",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "ESSA_E_APP",
+            }),
+        ],
+        5,
+    )
+    // GONE left — not in local order
+    assert.ok(!westLocal.entries.some((e) => e.stripKey === "GONE"))
+    assert.ok(westLocal.entries.some((e) => e.stripKey === "WEST1"))
+
+    const remote = [
+        {
+            stripKey: "WEST1",
+            bayId: "TWR-W",
+            sectionId: "TAXI",
+            position: 0,
+            cfto: false,
+            atd: null,
+        },
+        {
+            stripKey: "EAST1",
+            bayId: "TWR-E",
+            sectionId: "LINEUP",
+            position: 0,
+            cfto: false,
+            atd: null,
+        },
+        {
+            stripKey: "GONE",
+            bayId: "TWR-W",
+            sectionId: "DEPA",
+            position: 0,
+            cfto: true,
+            atd: "1012",
+        },
+    ]
+
+    const merged = mergeEssaIrisOrderForSplitPublish(
+        westLocal,
+        remote,
+        [
+            strip({
+                callsign: "WEST1",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+            }),
+            strip({
+                callsign: "GONE",
+                sectionId: "ctr_dep",
+                groundstate: "DEPA",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+                transferPending: "out",
+                transferCallsign: "ESSA_E_APP",
+            }),
+            // EAST1 not in local strips — peer ownership
+        ],
+    )
+    const keys = merged.entries.map((e) => e.stripKey).sort()
+    assert.deepEqual(keys, ["EAST1", "WEST1"])
+    assert.ok(!keys.includes("GONE"))
 })
 
 check("StripEfsFields: bayId TWR-W/E from dep RWY role", () => {
@@ -227,9 +520,6 @@ check("StripEfsFields: bayId TWR-W/E from dep RWY role", () => {
 })
 
 check("TAXI order matches EFS top to bottom", () => {
-    // taxi_dep addFromTop inserts at position 0. EfsSection renders ascending
-    // position under the header, so 0 is the visual top and the highest
-    // position is the visual bottom. Published TAXI position follows that.
     const order = buildEssaIrisOrder(
         [
             strip({
@@ -310,7 +600,6 @@ check("cfto and atd on order entries and strip bodies", () => {
     assert.equal(byKey.get("TAXI1")?.atd, null)
     assert.equal(byKey.get("RTO1")?.cfto, false)
     assert.equal(byKey.get("RTO1")?.atd, null)
-    // Same bay: EFS top (TAXI1 pos 1) before EFS bottom (RTO1 pos 4)
     const taxiKeys = order.entries
         .filter((e) => e.sectionId === "TAXI")
         .map((e) => e.stripKey)

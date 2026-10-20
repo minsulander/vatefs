@@ -16,8 +16,10 @@ import {
     buildStripEfsFields,
     formatIrisSep,
     irisStripKey,
+    mergeEssaIrisOrderForSplitPublish,
     normalizeAtd,
     stripMatchesRemoteKey,
+    type IrisOrderEntry,
     type IrisOrderPayload,
     type StripEfsFields,
 } from "./iris-efs-order.js"
@@ -50,6 +52,10 @@ let onNeedVatIrisSignIn: (detail?: string) => void = () => {}
 let onRealmChanged: (realm: ScribbleRealm) => void = () => {}
 /** True when this session may publish ESSA order/SEP/heartbeat (TWR/GND). */
 let canPublishIrisOrder: () => boolean = () => false
+/** True when this session covers ESSA TWR (top-down or ESSA_*_TWR). */
+let sessionCoversEssaTower: () => boolean = () => false
+/** Last known remote /order entries (ours + peer split TWR/GND). */
+let lastRemoteOrderEntries: IrisOrderEntry[] = []
 let getEssaSepIndicators: () => {
     sep: string
     dlv: string
@@ -82,6 +88,7 @@ export function initScribbleSync(opts: {
     onNeedVatIrisSignIn?: (detail?: string) => void
     onRealmChanged?: (realm: ScribbleRealm) => void
     canPublishIrisOrder?: () => boolean
+    sessionCoversEssaTower?: () => boolean
     getEssaSepIndicators?: () => {
         sep: string
         dlv: string
@@ -98,6 +105,7 @@ export function initScribbleSync(opts: {
     if (opts.onNeedVatIrisSignIn) onNeedVatIrisSignIn = opts.onNeedVatIrisSignIn
     if (opts.onRealmChanged) onRealmChanged = opts.onRealmChanged
     if (opts.canPublishIrisOrder) canPublishIrisOrder = opts.canPublishIrisOrder
+    if (opts.sessionCoversEssaTower) sessionCoversEssaTower = opts.sessionCoversEssaTower
     if (opts.getEssaSepIndicators) getEssaSepIndicators = opts.getEssaSepIndicators
 }
 
@@ -195,7 +203,32 @@ function syncKeyForStrip(strip: FlightStrip): string {
 
 /** EFS-only strip body for PUT …/strips/:stripKey (no ES status). */
 function stripMeta(strip: FlightStrip, opts?: { includeQnhAtisClear?: boolean }): StripSyncMeta {
-    return buildStripEfsFields(strip, opts)
+    return buildStripEfsFields(strip, {
+        ...opts,
+        sessionCoversEssaTower: sessionCoversEssaTower(),
+    })
+}
+
+function rememberRemoteOrder(entries: unknown): void {
+    if (!Array.isArray(entries)) return
+    const next: IrisOrderEntry[] = []
+    for (const e of entries) {
+        if (!e || typeof e !== "object") continue
+        const row = e as Record<string, unknown>
+        const stripKey = typeof row.stripKey === "string" ? row.stripKey : ""
+        const bayId = typeof row.bayId === "string" ? row.bayId : ""
+        const sectionId = typeof row.sectionId === "string" ? row.sectionId : ""
+        if (!stripKey || !bayId || !sectionId) continue
+        next.push({
+            stripKey,
+            bayId,
+            sectionId,
+            position: typeof row.position === "number" ? row.position : 0,
+            cfto: !!row.cfto,
+            atd: typeof row.atd === "string" ? row.atd : null,
+        })
+    }
+    lastRemoteOrderEntries = next
 }
 
 function baseUrl(): string | undefined {
@@ -334,8 +367,17 @@ let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 /** Optional heartbeat — any write also refreshes IRIS 5 min TTL; keep ≤2 min when quiet. */
 const HEARTBEAT_MS = 90_000
 
+function stripviewOpts() {
+    return { sessionCoversEssaTower: sessionCoversEssaTower() }
+}
+
+/** Local stripview snapshot, then merge peer split-position entries. */
 export function peekEssaOrderPayload(revision = orderRevision + 1): IrisOrderPayload {
-    return buildEssaIrisOrder(getAllStrips(), revision, "ESSA")
+    const strips = getAllStrips()
+    const opts = stripviewOpts()
+    const local = buildEssaIrisOrder(strips, revision, "ESSA", opts)
+    if (lastRemoteOrderEntries.length === 0) return local
+    return mergeEssaIrisOrderForSplitPublish(local, lastRemoteOrderEntries, strips, opts)
 }
 
 export async function pushIrisOrderToRemote(
@@ -353,7 +395,7 @@ export async function pushIrisOrderToRemote(
     // Skip if bay order unchanged (unless force — e.g. sync start)
     if (!opts?.force && !payload && entriesJson === lastPushedOrderEntriesJson) return true
     orderRevision += 1
-    const body = payload ?? buildEssaIrisOrder(getAllStrips(), orderRevision, "ESSA")
+    const body = payload ?? peekEssaOrderPayload(orderRevision)
     const json = JSON.stringify(body)
     const base = baseUrl()
     if (!base) return false
@@ -366,6 +408,7 @@ export async function pushIrisOrderToRemote(
         return false
     }
     lastPushedOrderEntriesJson = JSON.stringify(body.entries)
+    lastRemoteOrderEntries = body.entries.map((e) => ({ ...e }))
     noteSuccess()
     return true
 }
@@ -636,13 +679,21 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
             strip?: StripSyncMeta
             updatedAt?: string
             deleted?: boolean
+            /** Peer / self order fanout — cache for split TWR/GND merge */
+            order?: { revision?: number; entries?: unknown[] }
             /** snapshot on connect */
             strips?: Record<
                 string,
                 { strokes?: unknown[]; strip?: StripSyncMeta; updatedAt?: string }
             >
         }
-        if (msg.type === "hello" || msg.type === "heartbeat" || msg.type === "order") return
+        if (msg.type === "hello" || msg.type === "heartbeat") return
+        if (msg.type === "order") {
+            if (apt.toUpperCase() === "ESSA" && msg.order?.entries) {
+                rememberRemoteOrder(msg.order.entries)
+            }
+            return
+        }
         if (msg.type === "meta") return // SEP is TWR-owned; peers don't apply airport meta locally yet
         if (msg.type === "snapshot" && msg.strips && typeof msg.strips === "object") {
             for (const [syncKey, row] of Object.entries(msg.strips)) {
@@ -792,6 +843,21 @@ function startLiveStreams() {
     recomputeAnyWsOpen()
 }
 
+/** GET current ESSA /order so split merge has peer entries before first PUT. */
+async function fetchRemoteEssaOrder(): Promise<void> {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return
+    if (!getAirports().map((a) => a.toUpperCase()).includes("ESSA")) return
+    const base = baseUrl()
+    if (!base) return
+    const realm = resolveRealm(settings)
+    const url = `${base}/efs/sync/${realm}/ESSA/order`
+    const result = await fetchJson(url, { method: "GET", cid: settings.vatsimCid.trim() })
+    if (!result.ok) return
+    const entries = (result.json as { order?: { entries?: unknown } } | undefined)?.order?.entries
+    if (entries) rememberRemoteOrder(entries)
+}
+
 /** Keep WebSocket live; 15s poll is safety only (reload button also calls pollRemote). */
 export function startScribbleSyncPolling(intervalMs = 15_000) {
     stopScribbleSyncPolling()
@@ -803,7 +869,10 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
         startLiveStreams()
     }, intervalMs)
     void pollRemote()
-    void pushIrisOrderToRemote(undefined, { force: true })
+    void (async () => {
+        await fetchRemoteEssaOrder()
+        await pushIrisOrderToRemote(undefined, { force: true })
+    })()
     void refreshEssaMetaToRemote(true)
     void pushIrisHeartbeat("ESSA")
     for (const strip of getAllStrips()) pushStripCftoAtdIfChanged(strip)
@@ -816,6 +885,7 @@ export function stopScribbleSyncPolling() {
     stopIrisHeartbeat()
     lastPollOk = false
     lastPushedOrderEntriesJson = ""
+    lastRemoteOrderEntries = []
     lastPushedSepJson = ""
     lastCftoAtdSig.clear()
     refreshHealth()

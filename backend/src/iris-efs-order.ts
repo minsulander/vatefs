@@ -4,7 +4,9 @@
  * Publishes EFS-owned bay order, plus the EFS CFTO flag and ATD (HHmm).
  * IRIS must use these instead of its own ground-speed track.
  * ESSA Strip TV bayIds: TWR-W / TWR-E; sections: TAXI | LINEUP | DEPA.
- * Moving to CTR DEP (airborne) keeps the strip. Transfer or release removes it.
+ *
+ * Stripview drops when tower/ground hands off to APP, DEP, or Unicom
+ * (label "released"). Split TWR↔TWR and GND↔GND handoffs keep the strip.
  */
 
 import {
@@ -101,6 +103,12 @@ export type IrisSepPayload = {
     depGap: string
 }
 
+/** Options for stripview membership (TWR top-down cover). */
+export type IrisStripviewOpts = {
+    /** This session covers ESSA TWR (myRolesByAirport ESSA includes TWR). */
+    sessionCoversEssaTower?: boolean
+}
+
 /** stripKey: UPPERCASE callsign for aircraft; stable id for synthetic/empty CS. */
 /** UTC HHmm, or null when EFS has no ATD (clears a previous value). */
 export function normalizeAtd(value: string | null | undefined): string | null {
@@ -188,23 +196,118 @@ export function irisDepSectionForStrip(strip: {
     return null
 }
 
-export function isEssaStripviewOrderStrip(strip: Pick<
+/** EuroScope Unknown/Unicom handoff — SI/callsign "released" or UNICOM. */
+export function isReleasedOrUnicomLabel(
+    callsign?: string | null,
+    si?: string | null,
+): boolean {
+    const cs = (callsign || "").trim().toUpperCase()
+    const s = (si || "").trim().toUpperCase()
+    return (
+        cs === "RELEASED" ||
+        cs === "UNICOM" ||
+        s === "RELEASED" ||
+        s === "UNICOM"
+    )
+}
+
+/**
+ * APP or DEP (not remote-tower _R_APP / _R_CTR).
+ * `_DEP` is matched explicitly — parseControllerRole treats it as TWR.
+ */
+export function isAppOrDepCallsign(callsign?: string | null): boolean {
+    const cs = (callsign || "").trim().toUpperCase()
+    if (!cs) return false
+    if (cs.endsWith("_DEP")) return true
+    if (cs.endsWith("_R_APP") || cs.endsWith("_R_CTR")) return false
+    if (cs.endsWith("_APP")) return true
+    return false
+}
+
+/**
+ * ESSA aerodrome positions: DEL / GND / TWR (incl. TWR-S, remote tower).
+ * Split TWR↔TWR and GND↔GND handoffs stay on stripview.
+ */
+export function isEssaAerodromeCallsign(callsign?: string | null): boolean {
+    const cs = (callsign || "").trim().toUpperCase()
+    if (!cs || isReleasedOrUnicomLabel(cs)) return false
+    if (isAppOrDepCallsign(cs)) return false
+    if (cs.endsWith("_CTR") && !cs.endsWith("_R_CTR")) return false
+    if (cs.endsWith("_DEL") || cs.endsWith("_GND") || cs.endsWith("_TWR")) return true
+    if (cs.endsWith("_R_APP") || cs.endsWith("_R_CTR")) return true
+    return false
+}
+
+type OwnershipStrip = Pick<
     FlightStrip,
-    | "callsign"
-    | "sectionId"
-    | "stripType"
-    | "groundstate"
-    | "airport"
-    | "clearedForTakeoff"
-    | "isAssumed"
+    | "ownerCallsign"
+    | "ownerSi"
+    | "transferCallsign"
+    | "transferSi"
     | "transferPending"
->): boolean {
+    | "isAssumed"
+>
+
+/** True when this strip is leaving the aerodrome (APP/DEP/Unicom/released). */
+export function isLeavingAerodromeForStripview(strip: OwnershipStrip): boolean {
+    const target = strip.transferCallsign
+    const targetSi = strip.transferSi
+    if (strip.transferPending === "out") {
+        if (isReleasedOrUnicomLabel(target, targetSi)) return true
+        if (isAppOrDepCallsign(target)) return true
+        // Pending handoff to another GND/TWR — stay
+        if (isEssaAerodromeCallsign(target)) return false
+        // Unknown target with pending out — treat as leaving
+        if (target || targetSi) return true
+    }
+    const owner = strip.ownerCallsign
+    const ownerSi = strip.ownerSi
+    if (isReleasedOrUnicomLabel(owner, ownerSi)) return true
+    if (isAppOrDepCallsign(owner)) return true
+    // Owner is ACC/CTR (not remote tower)
+    const o = (owner || "").trim().toUpperCase()
+    if (o.endsWith("_CTR") && !o.endsWith("_R_CTR")) return true
+    return false
+}
+
+/**
+ * Whether a departure still belongs on TWR Stripview.
+ * Drops on TWR→APP/DEP and TWR→Unicom (released). Keeps split TWR/GND handoffs.
+ */
+export function isEssaStripviewOrderStrip(
+    strip: Pick<
+        FlightStrip,
+        | "callsign"
+        | "sectionId"
+        | "stripType"
+        | "groundstate"
+        | "airport"
+        | "clearedForTakeoff"
+        | "isAssumed"
+        | "transferPending"
+        | "ownerCallsign"
+        | "ownerSi"
+        | "transferCallsign"
+        | "transferSi"
+    >,
+    opts?: IrisStripviewOpts,
+): boolean {
     if (strip.stripType === "note" || strip.stripType === "vehicle") return false
     if (strip.stripType === "arrival") return false
-    // XFER to APP/DEP — drop even if the strip has not changed section yet.
-    if (strip.transferPending === "out") return false
-    // CTR DEP: keep while still assumed. Release clears assume and drops the strip.
-    if (isCtrDepSection(strip.sectionId)) return !!strip.isAssumed
+
+    // Leaving aerodrome (APP/DEP/Unicom) — drop even on taxi/runway.
+    if (isLeavingAerodromeForStripview(strip)) return false
+
+    if (isCtrDepSection(strip.sectionId)) {
+        // Top-down TWR cover + assumed + no leave → stay
+        if (opts?.sessionCoversEssaTower && strip.isAssumed) return true
+        // Owned by ESSA GND/TWR/DEL → stay (airborne until TWR→APP)
+        if (isEssaAerodromeCallsign(strip.ownerCallsign)) return true
+        // Cleared owner (completed release) or APP/CTR — already handled by isLeaving;
+        // empty owner with no assume → off
+        return false
+    }
+
     if (isTransferredOffTwrgndBay(strip.sectionId)) return false
     if (!isStripviewOrderSectionId(strip.sectionId)) return false
     const gs = (strip.groundstate || "").toUpperCase()
@@ -226,38 +329,43 @@ type Ranked = {
     callsign: string
 }
 
+type StripviewStrip = Pick<
+    FlightStrip,
+    | "id"
+    | "syncKey"
+    | "callsign"
+    | "sectionId"
+    | "position"
+    | "stripType"
+    | "groundstate"
+    | "clearedForTakeoff"
+    | "runway"
+    | "airport"
+    | "isAssumed"
+    | "transferPending"
+    | "ownerCallsign"
+    | "ownerSi"
+    | "transferCallsign"
+    | "transferSi"
+    | "atd"
+>
+
 /**
  * Build IRIS /order payload for ESSA Strip TV + APP bay mirror.
- * Only TWR-W/E + TAXI|LINEUP|DEPA entries. CTR DEP stays until transfer or release.
+ * Only TWR-W/E + TAXI|LINEUP|DEPA entries. CTR DEP stays until TWR→APP/DEP/Unicom.
  */
 export function buildEssaIrisOrder(
-    strips: ReadonlyArray<
-        Pick<
-            FlightStrip,
-            | "id"
-            | "syncKey"
-            | "callsign"
-            | "sectionId"
-            | "position"
-            | "stripType"
-            | "groundstate"
-            | "clearedForTakeoff"
-            | "runway"
-            | "airport"
-            | "isAssumed"
-            | "transferPending"
-            | "atd"
-        >
-    >,
+    strips: ReadonlyArray<StripviewStrip>,
     revision: number,
     airport = "ESSA",
+    opts?: IrisStripviewOpts,
 ): IrisOrderPayload {
     const apt = airport.toUpperCase()
     const ranked: Ranked[] = []
     for (const s of strips) {
         const stripApt = (s.airport || "").toUpperCase()
         if (stripApt && stripApt !== apt) continue
-        if (!isEssaStripviewOrderStrip(s)) continue
+        if (!isEssaStripviewOrderStrip(s, opts)) continue
         const sectionId = irisDepSectionForStrip(s)
         if (!sectionId) continue
         const stripKey = irisStripKey(s)
@@ -311,16 +419,88 @@ export function buildEssaIrisOrder(
         })
     }
 
+    return sortIrisOrderEntries(entries, revision)
+}
+
+function sortIrisOrderEntries(entries: IrisOrderEntry[], revision: number): IrisOrderPayload {
     // Stable overall order: bay W then E, section DEPA → LINEUP → TAXI, then position
     const sectionRank = (s: string) => (s === "DEPA" ? 0 : s === "LINEUP" ? 1 : 2)
     const bayRank = (b: string) => (b === "TWR-W" ? 0 : 1)
-    entries.sort((a, b) => {
+    const sorted = [...entries].sort((a, b) => {
         if (a.bayId !== b.bayId) return bayRank(a.bayId) - bayRank(b.bayId)
         if (a.sectionId !== b.sectionId) return sectionRank(a.sectionId) - sectionRank(b.sectionId)
         return a.position - b.position
     })
+    return { revision, entries: sorted }
+}
 
-    return { revision, entries }
+/**
+ * Merge local order with last remote snapshot for split TWR/GND publishers.
+ * - Replace entries for flights this client knows and still on stripview
+ * - Drop keys this client has that left to APP/DEP/Unicom
+ * - Keep remote keys this client does not have (other split position)
+ */
+export function mergeEssaIrisOrderForSplitPublish(
+    local: IrisOrderPayload,
+    remoteEntries: ReadonlyArray<IrisOrderEntry>,
+    localStrips: ReadonlyArray<StripviewStrip>,
+    opts?: IrisStripviewOpts,
+): IrisOrderPayload {
+    const knownKeys = new Set<string>()
+    const dropKeys = new Set<string>()
+    for (const s of localStrips) {
+        const key = irisStripKey(s).toUpperCase()
+        if (!key) continue
+        const apt = (s.airport || "").toUpperCase()
+        if (apt && apt !== "ESSA") continue
+        knownKeys.add(key)
+        if (!isEssaStripviewOrderStrip(s, opts)) {
+            dropKeys.add(key)
+        }
+    }
+
+    const localByKey = new Map(local.entries.map((e) => [e.stripKey.toUpperCase(), e]))
+    const merged = new Map<string, IrisOrderEntry>()
+
+    for (const e of remoteEntries) {
+        const k = e.stripKey.toUpperCase()
+        if (dropKeys.has(k)) continue
+        if (knownKeys.has(k)) {
+            const loc = localByKey.get(k)
+            if (loc) merged.set(k, { ...loc })
+            // known but not in local order (shouldn't happen if still on stripview) → skip
+            continue
+        }
+        // Other position's strip — keep
+        merged.set(k, { ...e })
+    }
+
+    for (const e of local.entries) {
+        const k = e.stripKey.toUpperCase()
+        if (dropKeys.has(k)) continue
+        merged.set(k, { ...e })
+    }
+
+    // Re-number positions within bay+section
+    const groups = new Map<string, IrisOrderEntry[]>()
+    for (const e of merged.values()) {
+        const g = `${e.bayId}|${e.sectionId}`
+        const list = groups.get(g) || []
+        list.push(e)
+        groups.set(g, list)
+    }
+    const entries: IrisOrderEntry[] = []
+    for (const [, list] of groups) {
+        const ordered = [...list].sort((a, b) => {
+            if (a.position !== b.position) return a.position - b.position
+            return a.stripKey.localeCompare(b.stripKey)
+        })
+        ordered.forEach((e, i) => {
+            entries.push({ ...e, position: i })
+        })
+    }
+
+    return sortIrisOrderEntries(entries, local.revision)
 }
 
 /**
@@ -329,10 +509,12 @@ export function buildEssaIrisOrder(
  */
 export function buildStripEfsFields(
     strip: FlightStrip,
-    opts?: { includeQnhAtisClear?: boolean },
+    opts?: { includeQnhAtisClear?: boolean; sessionCoversEssaTower?: boolean },
 ): StripEfsFields {
     const stripKey = irisStripKey(strip)
-    const onStripview = isEssaStripviewOrderStrip(strip)
+    const onStripview = isEssaStripviewOrderStrip(strip, {
+        sessionCoversEssaTower: opts?.sessionCoversEssaTower,
+    })
     let bayId = strip.bayId
     let sectionId = strip.sectionId
     let position = strip.position
