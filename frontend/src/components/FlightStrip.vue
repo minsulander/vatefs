@@ -4879,7 +4879,8 @@ function openEobtMenuFromContext() {
 }
 
 const showTobtSetBy = computed(() => {
-  if (!showCdm.value || isFls.value) return false
+  // P/A is "TOBT by" — only while TB is primary; hide after TB→TT (PUSH&START+)
+  if (!showCdm.value || isFls.value || primaryTimeKind.value !== 'tobt') return false
   if (props.strip.tobtSetBy === 'P') return true
   if (props.strip.tobtSetBy === 'A') return store.showTobtSetByA
   return false
