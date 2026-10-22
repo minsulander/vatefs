@@ -1066,8 +1066,8 @@ const sortModeTitle = computed(() => {
 /**
  * Fixed sort field per section:
  * - Classic (non-ESSA): always EOBT
- * - ESSA pending_dep (CD ALL): TOBT → EOBT
- * - ESSA cleared (TSAT): TSAT → EOBT
+ * - ESSA pending_dep (CD ALL): TOBT → EOBT (asc — earliest at top)
+ * - ESSA cleared (TSAT): TSAT → EOBT (desc — earliest / first at bottom)
  */
 function activeTimeSortField(): TimeSortField {
   if (!useCdmSortLabels.value) return 'etobt'
@@ -1077,6 +1077,9 @@ function activeTimeSortField(): TimeSortField {
 }
 
 function activeTimeSortDir(): TimeSortDir {
+  // ESSA/SAAB TSAT: earliest (first in sequence) at bottom — same as INBOUND APP ETA.
+  // CD ALL / classic EOBT remain earliest-at-top (asc).
+  if (useCdmSortLabels.value && isClearedSectionId(props.section.id)) return 'desc'
   return 'asc'
 }
 
@@ -1673,9 +1676,13 @@ async function runScheduledAutoFit() {
         container: el,
         visualIds: topStripIds.value,
         // Size priority follows first-in-sequence, not insert addFromTop.
-        // ESSA/SAAB INBOUND APP: ETA puts earliest (first) at the bottom — keep
+        // ESSA/SAAB INBOUND APP + TSAT: earliest (first) at visual bottom — keep
         // that strip maximised (preferTop:false). Other bays: first at visual top.
-        preferTop: !(hasEssa.value && isInboundAppSection.value),
+        preferTop: !(
+          hasEssa.value &&
+          (isInboundAppSection.value ||
+            (useCdmSortLabels.value && isClearedSectionId(props.section.id)))
+        ),
         canCompact: stripCanCompact,
         allowSizeFit:
           store.autoFitStripSizeMode === 'all' ||

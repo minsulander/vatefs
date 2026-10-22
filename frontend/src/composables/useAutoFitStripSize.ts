@@ -200,7 +200,7 @@ async function waitLayout(): Promise<void> {
  * Auto-fit size priority follows **first-in-sequence** in the visual list.
  *
  * `preferTop: true` (default) — first is visual top: shrink bottom→top, grow top→bottom.
- * `preferTop: false` — first is visual bottom (ESSA/SAAB INBOUND APP ETA order):
+ * `preferTop: false` — first is visual bottom (ESSA/SAAB INBOUND APP ETA / TSAT order):
  * shrink top→bottom, grow bottom→top, so the earliest/first strip stays full.
  */
 export function shrinkOrderIds(visualIds: string[], preferTop = true): string[] {
@@ -257,7 +257,7 @@ export interface AutoFitRunOptions {
   /**
    * When true (default), first-in-sequence is visual top — keep it largest
    * (shrink bottom-first, grow top-first). When false, first is visual bottom
-   * (ESSA INBOUND APP) — keep the bottom strip largest instead.
+   * (ESSA INBOUND APP / TSAT) — keep the bottom strip largest instead.
    * Prefer over section.addFromTop (insert position ≠ size priority).
    */
   preferTop?: boolean

@@ -75,7 +75,9 @@ layout:
     bay4:
       sections:
         cleared:
-          # Cleared IFR, waiting for push/startup (CD and GND)
+          # Cleared IFR, waiting for push/startup (CD and GND).
+          # TSAT order: earliest (first in sequence) at bottom — same as INBOUND APP ETA;
+          # auto-fit preferTop:false when size-fit is enabled for this bay.
           title: TSAT
           addFromTop: true
           visibleFor: [CD, GND]

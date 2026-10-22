@@ -60,7 +60,7 @@ async function main() {
     )
     assert(firstInSequenceId(ids, true) === 'top', 'preferTop first = visual top')
   }
-  // --- preferTop:false — first at visual bottom (ESSA INBOUND APP ETA) ---
+  // --- preferTop:false — first at visual bottom (ESSA INBOUND APP ETA / TSAT) ---
   {
     const ids = ['top', 'mid', 'bot']
     assert(
