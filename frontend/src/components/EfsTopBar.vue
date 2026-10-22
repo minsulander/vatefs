@@ -1,7 +1,7 @@
 <template>
   <div class="efs-top-bar text-body-2 text-grey">
-      <!-- Main menu: ESSA RWY / roles -->
-      <v-menu v-if="efs.essaRolesMode" v-model="mainMenuOpen" location="bottom" offset="4">
+      <!-- Main menu: Handover Assistant (+ ESSA RWY / roles when applicable) -->
+      <v-menu v-model="mainMenuOpen" location="bottom" offset="4">
         <template #activator="{ props: menuProps }">
           <button
             type="button"
@@ -15,27 +15,34 @@
         </template>
         <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
           <div class="efs-popup-list">
-            <div class="efs-popup-section">ESSA</div>
             <button
               type="button"
-              class="efs-popup-item efs-popup-item--stack"
-              :class="{ 'is-manual': efs.essaRwyConfigManual }"
-              @click="onMainMenuEssaRwy"
-              @mouseenter="onEssaRwyHoverEnter"
-              @mouseleave="onEssaRwyHoverLeave"
-            >
-              <span class="efs-popup-item-title">RWY config</span>
-              <span class="efs-popup-item-sub">{{ essaRwyLabel || '-' }}{{ efs.essaRwyConfigManual ? ' · MANUAL' : '' }}</span>
-            </button>
-            <button
-              type="button"
-              class="efs-popup-item efs-popup-item--stack"
-              :class="{ 'is-manual': efs.essaRolesManual }"
-              @click="onMainMenuEssaRoles"
-            >
-              <span class="efs-popup-item-title">Roles</span>
-              <span class="efs-popup-item-sub">{{ essaRolesLabel }}{{ efs.essaRolesManual ? ' · MANUAL' : '' }}</span>
-            </button>
+              class="efs-popup-item"
+              @click="onMainMenuHandoverAssistant"
+            >Handover Assistant</button>
+            <template v-if="efs.essaRolesMode">
+              <div class="efs-popup-section">ESSA</div>
+              <button
+                type="button"
+                class="efs-popup-item efs-popup-item--stack"
+                :class="{ 'is-manual': efs.essaRwyConfigManual }"
+                @click="onMainMenuEssaRwy"
+                @mouseenter="onEssaRwyHoverEnter"
+                @mouseleave="onEssaRwyHoverLeave"
+              >
+                <span class="efs-popup-item-title">RWY config</span>
+                <span class="efs-popup-item-sub">{{ essaRwyLabel || '-' }}{{ efs.essaRwyConfigManual ? ' · MANUAL' : '' }}</span>
+              </button>
+              <button
+                type="button"
+                class="efs-popup-item efs-popup-item--stack"
+                :class="{ 'is-manual': efs.essaRolesManual }"
+                @click="onMainMenuEssaRoles"
+              >
+                <span class="efs-popup-item-title">Roles</span>
+                <span class="efs-popup-item-sub">{{ essaRolesLabel }}{{ efs.essaRolesManual ? ' · MANUAL' : '' }}</span>
+              </button>
+            </template>
           </div>
         </div>
       </v-menu>
@@ -753,6 +760,11 @@ const menuEsRwysLabel = computed(() => {
   })
   return parts.join(' · ')
 })
+
+function onMainMenuHandoverAssistant() {
+  mainMenuOpen.value = false
+  efs.openHandoverAssistant({ reason: 'menu' })
+}
 
 function onMainMenuEssaRwy() {
   mainMenuOpen.value = false

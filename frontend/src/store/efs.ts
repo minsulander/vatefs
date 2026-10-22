@@ -609,6 +609,20 @@ export const useEfsStore = defineStore("efs", () => {
     const hoppieLogonCode = ref(DEFAULT_UI_SETTINGS.hoppieLogonCode)
     const autoFitStripSizeMode = ref<AutoFitStripSizeMode>(DEFAULT_UI_SETTINGS.autoFitStripSizeMode)
     const autoFitStripSizeGrowBack = ref(DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack)
+    /** Handover Assistant: auto-ASSUME inbound HA transfers (default on) */
+    const handoverAssistantAutoAssume = ref(DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume)
+    /** Handover Assistant dialog open */
+    const handoverAssistantOpen = ref(false)
+    /** Last primed primary freq (MHz) — used to prefer matching targets after unprime */
+    const handoverAssistantPreferredFreq = ref<number | undefined>()
+    let lastPrimedFrequency: number | undefined
+    /**
+     * Wall-clock ms when primary became primed this session.
+     * Switching between two primed frequencies keeps the same start (continuous priming).
+     * Cleared on unprime. Used to suppress Handover Assistant auto-open until ≥5 min.
+     */
+    let primaryPrimedSinceMs: number | undefined
+    const HANDOVER_AUTO_OPEN_MIN_PRIMED_MS = 5 * 60 * 1000
     /** True when TopSkyCPDLChoppieCode.txt has a valid code (backend). */
     const hoppieFileCodePresent = ref(false)
     /** True after first userSettings apply — used for one-shot CID prompt */
@@ -704,6 +718,10 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.autoFitStripSizeGrowBack === 'boolean'
                 ? settings.autoFitStripSizeGrowBack
                 : DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack
+        handoverAssistantAutoAssume.value =
+            typeof settings.handoverAssistantAutoAssume === 'boolean'
+                ? settings.handoverAssistantAutoAssume
+                : DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume
         if (typeof fileCodePresent === 'boolean') hoppieFileCodePresent.value = fileCodePresent
         if (typeof available === 'boolean') autoParkAvailable.value = available
         userSettingsLoaded.value = true
@@ -736,6 +754,9 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.autoFitStripSizeGrowBack === 'boolean') {
             autoFitStripSizeGrowBack.value = partial.autoFitStripSizeGrowBack
         }
+        if (typeof partial.handoverAssistantAutoAssume === 'boolean') {
+            handoverAssistantAutoAssume.value = partial.handoverAssistantAutoAssume
+        }
         if (
             partial.scribbleSyncRealm === 'auto' ||
             partial.scribbleSyncRealm === 'live' ||
@@ -746,6 +767,84 @@ export const useEfsStore = defineStore("efs", () => {
             scribbleSyncRealm.value = partial.scribbleSyncRealm
         }
         sendMessage({ type: 'updateUserSettings', settings: partial })
+    }
+
+    function isPrimedPrimaryFrequency(frequency: number | undefined | null): boolean {
+        if (frequency == null || !(frequency > 0)) return false
+        if (Math.abs(frequency - 199.998) <= 0.001) return false
+        if (Math.abs(frequency - 199.98) <= 0.001) return false
+        return true
+    }
+
+    function countAssumedFlightStrips(): number {
+        let n = 0
+        for (const s of strips.value.values()) {
+            if (s.isAssumed && s.stripType !== 'note' && s.stripType !== 'vehicle') n++
+        }
+        return n
+    }
+
+    /** Open Handover Assistant (manual menu or auto on unprime). */
+    function openHandoverAssistant(opts?: { preferredFrequency?: number; reason?: string }) {
+        if (opts?.preferredFrequency != null && isPrimedPrimaryFrequency(opts.preferredFrequency)) {
+            handoverAssistantPreferredFreq.value = opts.preferredFrequency
+        } else if (lastPrimedFrequency != null) {
+            handoverAssistantPreferredFreq.value = lastPrimedFrequency
+        }
+        handoverAssistantOpen.value = true
+        if (opts?.reason) {
+            console.log(`[Handover Assistant] Open (${opts.reason})`)
+        }
+    }
+
+    function closeHandoverAssistant() {
+        handoverAssistantOpen.value = false
+    }
+
+    /**
+     * Track primary frequency for unprime → auto-open Handover Assistant.
+     * Call whenever myFrequency is updated from status / myselfUpdate.
+     * Auto-open only if primary was primed ≥5 minutes (avoids connect-time false opens).
+     * Manual menu open is not gated here.
+     */
+    function onMyFrequencyUpdated(next: number | undefined) {
+        const prev = myFrequency.value
+        const wasPrimed = isPrimedPrimaryFrequency(prev)
+        const nowPrimed = isPrimedPrimaryFrequency(next)
+        if (wasPrimed && prev != null) {
+            lastPrimedFrequency = prev
+        }
+        myFrequency.value = next
+
+        if (!wasPrimed && nowPrimed) {
+            // Fresh prime (connect or after unprime) — start the session timer
+            primaryPrimedSinceMs = Date.now()
+        } else if (wasPrimed && nowPrimed) {
+            // Primed → primed (freq/AoR switch): keep timer; still continuous priming
+            if (primaryPrimedSinceMs == null) {
+                primaryPrimedSinceMs = Date.now()
+            }
+        } else if (wasPrimed && !nowPrimed) {
+            const primedMs =
+                primaryPrimedSinceMs != null ? Date.now() - primaryPrimedSinceMs : 0
+            primaryPrimedSinceMs = undefined
+            if (
+                primedMs >= HANDOVER_AUTO_OPEN_MIN_PRIMED_MS &&
+                countAssumedFlightStrips() > 0
+            ) {
+                openHandoverAssistant({
+                    preferredFrequency: lastPrimedFrequency,
+                    reason: 'primary frequency dropped',
+                })
+            } else if (countAssumedFlightStrips() > 0) {
+                console.log(
+                    `[Handover Assistant] Skip auto-open (primed only ${(primedMs / 1000).toFixed(0)}s, need ≥300s)`,
+                )
+            }
+        } else {
+            // Unprimed → unprimed
+            primaryPrimedSinceMs = undefined
+        }
     }
 
     function applyScribbleUpdate(stripId: string, strokes: ScribbleStrokePayload[]) {
@@ -929,6 +1028,29 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'notify':
                         showNotify(message.text, message.level)
                         break
+                    case 'handoverAssistantResult': {
+                        const transferred = message.transferred?.length ?? 0
+                        const failed = message.failed ?? []
+                        if (failed.length === 0) {
+                            showNotify(
+                                transferred > 0
+                                    ? `Handover Assistant: transferred ${transferred} strip${transferred === 1 ? '' : 's'} to ${message.targetCallsign}`
+                                    : 'Handover Assistant: no strips transferred',
+                                'info',
+                            )
+                        } else {
+                            const failList = failed
+                                .map((f: { callsign: string; reason: string }) =>
+                                    f.callsign ? `${f.callsign} (${f.reason})` : f.reason,
+                                )
+                                .join(', ')
+                            showNotify(
+                                `Handover Assistant: ${transferred} ok, ${failed.length} failed — ${failList}`,
+                                'error',
+                            )
+                        }
+                        break
+                    }
                     case 'deletedStrips':
                         applyDeletedStrips(message.strips)
                         break
@@ -1285,7 +1407,9 @@ export const useEfsStore = defineStore("efs", () => {
         feeds.value = message.feeds ?? null
         backendVersion.value = message.backendVersion
         pluginVersion.value = message.pluginVersion
-        myFrequency.value = typeof message.frequency === 'number' ? message.frequency : undefined
+        onMyFrequencyUpdated(
+            typeof message.frequency === 'number' ? message.frequency : undefined,
+        )
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
         essaRolesMode.value = message.essaRolesMode ?? false
@@ -3056,6 +3180,19 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function handoverAssistantTransfer(targetCallsign: string, stripIds?: string[]) {
+        const ids =
+            stripIds ??
+            [...strips.value.values()]
+                .filter((s) => s.isAssumed && s.stripType !== 'note' && s.stripType !== 'vehicle')
+                .map((s) => s.id)
+        sendMessage({
+            type: 'handoverAssistantTransfer',
+            targetCallsign,
+            stripIds: ids,
+        })
+    }
+
     function recomputePositions(bayId: string, sectionId: string, bottom: boolean) {
         const sectionStrips = bottom
             ? getBottomStrips(bayId, sectionId)
@@ -3084,6 +3221,7 @@ export const useEfsStore = defineStore("efs", () => {
         notifyText,
         notifyLevel,
         notifyVisible,
+        showNotify,
         dismissNotify,
         getBays,
         layout,
@@ -3248,6 +3386,12 @@ export const useEfsStore = defineStore("efs", () => {
         controllers,
         releaseStrip,
         manualTransfer,
+        handoverAssistantTransfer,
+        handoverAssistantOpen,
+        handoverAssistantPreferredFreq,
+        handoverAssistantAutoAssume,
+        openHandoverAssistant,
+        closeHandoverAssistant,
         dclSoundEnabled,
         flashChangedTimes,
         flashTsatWindow,

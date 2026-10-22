@@ -452,6 +452,11 @@ export interface UiSettings {
      * pre-reduction size when space frees up. On by default.
      */
     autoFitStripSizeGrowBack: boolean
+    /**
+     * Handover Assistant: automatically ASSUME strips transferred to you
+     * (including bulk handover transfers). Default on.
+     */
+    handoverAssistantAutoAssume: boolean
 }
 
 /** Stroke payload for local + remote scribble sync */
@@ -484,6 +489,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     hoppieLogonCode: '',
     autoFitStripSizeMode: 'standard',
     autoFitStripSizeGrowBack: true,
+    handoverAssistantAutoAssume: true,
 }
 
 export interface AirportAtisInfo {

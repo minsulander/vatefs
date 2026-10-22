@@ -265,10 +265,15 @@ let configManuallySelected = false
 /** Uppercase callsign we last auto-selected (or skipped) for — same callsign must not reload. */
 let lastAutoSelectCallsign: string | null = null
 
-/** EuroScope "not primed" primary frequency */
+/**
+ * EuroScope "not primed" primary frequency.
+ * SDK docs cite 199.980; live ES often reports ~199.998.
+ */
 function isPrimedFrequency(frequency: number | undefined | null): boolean {
     if (frequency == null || !(frequency > 0)) return false
-    return Math.abs(frequency - 199.998) > 0.001
+    if (Math.abs(frequency - 199.998) <= 0.001) return false
+    if (Math.abs(frequency - 199.98) <= 0.001) return false
+    return true
 }
 
 // Load initial configuration from YAML file
@@ -527,6 +532,9 @@ let lastConnectionType: number | undefined
     setForceIdealAppDepFrequency(currentUiSettings.showAppDepXcFrequency)
 }
 flightStore.setAutoParkEnabledGetter(() => currentUiSettings.autoParkEnabled)
+flightStore.setHandoverAssistantAutoAssumeGetter(
+    () => currentUiSettings.handoverAssistantAutoAssume,
+)
 flightStore.setStripPrintModeGetter(() => currentUiSettings.stripPrintMode)
 
 function isAutoParkAvailable(): boolean {
@@ -6144,6 +6152,106 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "handoverAssistantTransfer": {
+            const targetCallsign = (message.targetCallsign || "").trim().toUpperCase()
+            const transferred: string[] = []
+            const failed: { callsign: string; reason: string }[] = []
+
+            if (!targetCallsign) {
+                broadcast({
+                    type: "handoverAssistantResult",
+                    targetCallsign: "",
+                    transferred: [],
+                    failed: [{ callsign: "", reason: "No target controller" }],
+                })
+                break
+            }
+            // Handover Assistant only targets Swedish login callsigns (ES*)
+            if (!targetCallsign.startsWith("ES")) {
+                broadcast({
+                    type: "handoverAssistantResult",
+                    targetCallsign,
+                    transferred: [],
+                    failed: [{ callsign: targetCallsign, reason: "Target must be an ES* callsign" }],
+                })
+                break
+            }
+
+            const requestedIds =
+                Array.isArray(message.stripIds) && message.stripIds.length > 0
+                    ? message.stripIds
+                    : store.getAllStrips().filter((s) => s.isAssumed).map((s) => s.id)
+
+            for (const stripId of requestedIds) {
+                const strip = store.getStrip(stripId)
+                if (!strip) {
+                    failed.push({ callsign: stripId, reason: "Strip not found" })
+                    continue
+                }
+                if (strip.stripType === "note" || strip.stripType === "vehicle") {
+                    failed.push({ callsign: strip.callsign, reason: "Not a flight strip" })
+                    continue
+                }
+                if (!strip.isAssumed) {
+                    failed.push({ callsign: strip.callsign, reason: "Not assumed by me" })
+                    continue
+                }
+
+                const flight = flightStore.getFlight(strip.callsign)
+                try {
+                    // Mark for relieving auto-assume (EFSHO scratch propagates via ES)
+                    sendUdp(
+                        JSON.stringify({
+                            type: "setScratch",
+                            callsign: strip.callsign,
+                            value: "EFSHO",
+                        } satisfies OutboundPluginCommand),
+                    )
+                    sendUdp(
+                        JSON.stringify({
+                            type: "transfer",
+                            callsign: strip.callsign,
+                            targetCallsign,
+                        } satisfies OutboundPluginCommand),
+                    )
+                    if (flight) {
+                        flight.handoffTargetController = targetCallsign
+                        flight.handoffOptimisticUntil = Date.now() + 5000
+                        if (isAppOrDepCallsign(targetCallsign)) {
+                            clearHsHpForAppDepTransfer(flight, strip.callsign)
+                        }
+                        // Restore remarks/HP scratch after peers have seen EFSHO
+                        const restore = buildCombinedScratch(flight.remarks, flight.hp)
+                        setTimeout(() => {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "setScratch",
+                                    callsign: strip.callsign,
+                                    value: restore,
+                                } satisfies OutboundPluginCommand),
+                            )
+                        }, 8000)
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
+                    transferred.push(strip.callsign)
+                    console.log(`[Handover Assistant] Transferred ${strip.callsign} → ${targetCallsign}`)
+                } catch (err) {
+                    failed.push({
+                        callsign: strip.callsign,
+                        reason: err instanceof Error ? err.message : "Transfer failed",
+                    })
+                }
+            }
+
+            broadcast({
+                type: "handoverAssistantResult",
+                targetCallsign,
+                transferred,
+                failed,
+            })
+            break
+        }
+
         case "dclAction": {
             if (message.action === "login") {
                 await loginHoppie()
@@ -6252,6 +6360,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (typeof incoming.autoParkEnabled === "boolean") {
                 currentUiSettings.autoParkEnabled = incoming.autoParkEnabled
                 update.autoParkEnabled = incoming.autoParkEnabled
+            }
+            if (typeof incoming.handoverAssistantAutoAssume === "boolean") {
+                currentUiSettings.handoverAssistantAutoAssume = incoming.handoverAssistantAutoAssume
+                update.handoverAssistantAutoAssume = incoming.handoverAssistantAutoAssume
             }
             if (isAutoLopSsrMode(incoming.autoLopSsr)) {
                 currentUiSettings.autoLopSsr = incoming.autoLopSsr
@@ -8420,17 +8532,31 @@ udpIn.on("message", (msg, rinfo) => {
                 }
             }
 
-            // Detect primary frequency / AoR change (same callsign, different freq)
+            // Detect primary frequency / AoR change (same callsign, different freq).
+            // Prime ↔ unprime must NOT clear strips (Handover Assistant needs them after unprime).
             const previousFrequency = staticConfig.myFrequency
             const frequencyChanged =
                 msg.frequency != null &&
                 previousFrequency != null &&
                 Math.abs(previousFrequency - msg.frequency) > 0.001
+            const previousPrimed = isPrimedFrequency(previousFrequency)
+            const nextPrimed = isPrimedFrequency(msg.frequency)
+            /** Real AoR switch (two primed freqs), not drop/restore of primary */
+            const aorFrequencyChanged =
+                frequencyChanged && previousPrimed && nextPrimed
 
-            if (msg.frequency) {
+            if (msg.frequency != null) {
                 setMyFrequency(msg.frequency)
                 if (frequencyChanged) {
-                    console.log(`My frequency changed: ${previousFrequency!.toFixed(3)} -> ${msg.frequency.toFixed(3)} (AoR)`)
+                    const kind =
+                        previousPrimed && !nextPrimed
+                            ? "unprimed"
+                            : !previousPrimed && nextPrimed
+                              ? "primed"
+                              : "AoR"
+                    console.log(
+                        `My frequency changed: ${previousFrequency!.toFixed(3)} -> ${msg.frequency.toFixed(3)} (${kind})`,
+                    )
                 }
             }
 
@@ -8578,8 +8704,9 @@ udpIn.on("message", (msg, rinfo) => {
             // Recalculate DCL availability when airports change
             recalculateDclAvailability()
 
-            // If callsign or primary frequency (AoR) changed, clear store and tell clients to refresh
-            if ((callsignChanged && previousCallsign) || frequencyChanged) {
+            // If callsign or real AoR frequency changed, clear store and tell clients to refresh.
+            // Unprime/reprime keeps strips so Handover Assistant can transfer after dropping primary.
+            if ((callsignChanged && previousCallsign) || aorFrequencyChanged) {
                 if (callsignChanged && previousCallsign) {
                     console.log(`Callsign changed from ${previousCallsign} to ${msg.callsign}, clearing store`)
                 } else {
@@ -8595,11 +8722,12 @@ udpIn.on("message", (msg, rinfo) => {
 
             // After cold start, reconnect, callsign, or AoR frequency change, dump FPs + CDM
             // from the plugin. ES only pushes clearance/CDM on status changes, not on connect.
+            // Skip full refresh on prime/unprime so existing strips are not wiped/replaced.
             if (
                 pendingColdPluginRefresh ||
                 pendingPluginRefreshAfterReconnect ||
                 (callsignChanged && previousCallsign) ||
-                frequencyChanged
+                aorFrequencyChanged
             ) {
                 pendingColdPluginRefresh = false
                 pendingPluginRefreshAfterReconnect = false
@@ -8637,6 +8765,29 @@ udpIn.on("message", (msg, rinfo) => {
                     reevaluateAndBroadcast(cs)
                 }
             }
+            // Handover Assistant: auto-ASSUME inbound HA-marked transfers
+            if (result.autoAssumeCallsigns?.length) {
+                for (const cs of result.autoAssumeCallsigns) {
+                    sendUdp(
+                        JSON.stringify({
+                            type: "assume",
+                            callsign: cs,
+                        } satisfies OutboundPluginCommand),
+                    )
+                    const f = flightStore.getFlight(cs)
+                    if (f) {
+                        f.controller = staticConfig.myCallsign
+                        f.controllerId = staticConfig.myPositionId
+                        f.handoffTargetController = ""
+                        f.handoffTargetControllerId = undefined
+                        f.handoffOptimisticUntil = undefined
+                        f.ownershipOptimisticUntil = Date.now() + 5000
+                        f.handoverAssistantInbound = undefined
+                        reevaluateAndBroadcast(cs)
+                    }
+                }
+            }
+
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.transferSound && currentUiSettings.transferSoundsEnabled) {
                 playTransferSound(result.transferSound)

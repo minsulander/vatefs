@@ -196,6 +196,20 @@
             </p>
 
             <v-switch
+                color="white"
+                base-color="grey-darken-1"
+                hide-details
+                label="Handover Assistant: auto-assume"
+                class="mt-2"
+                :model-value="efs.handoverAssistantAutoAssume"
+                @update:model-value="onHandoverAssistantAutoAssume"
+            />
+            <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                When on, automatically assume strips transferred to you via Handover Assistant.
+                On by default. How it works: open Handover Assistant from the main menu.
+            </p>
+
+            <v-switch
                 v-if="showAppDepXcOption"
                 color="white"
                 base-color="grey-darken-1"
@@ -572,6 +586,11 @@ function onDclSound(value: boolean | null) {
 function onTransferSounds(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ transferSoundsEnabled: value })
+}
+
+function onHandoverAssistantAutoAssume(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ handoverAssistantAutoAssume: value })
 }
 
 function onFlashChangedTimes(value: boolean | null) {

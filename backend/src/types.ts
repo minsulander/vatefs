@@ -244,6 +244,11 @@ export interface Flight {
     handoffOptimisticUntil?: number
     /** Until this timestamp, ignore empty tracking echoes after EFS ASSUME */
     ownershipOptimisticUntil?: number
+    /**
+     * Inbound handoff was marked by Handover Assistant (EFSHO scratch).
+     * Relieving EFS with auto-assume ON will ASSUME when handoff targets us.
+     */
+    handoverAssistantInbound?: boolean
     /** Until this timestamp, ignore stale non-empty groundstate from ES after NOSTATE clear */
     groundstateClearedUntil?: number
     /**

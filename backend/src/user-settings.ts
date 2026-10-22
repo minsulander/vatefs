@@ -98,6 +98,8 @@ export interface UserSettings {
     autoFitStripSizeMode?: AutoFitStripSizeMode
     /** SAAB: grow strips back when space frees */
     autoFitStripSizeGrowBack?: boolean
+    /** Handover Assistant: auto-ASSUME inbound transfers */
+    handoverAssistantAutoAssume?: boolean
 }
 
 let settingsPath: string | undefined
@@ -227,6 +229,10 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.autoFitStripSizeGrowBack === "boolean"
                 ? saved.autoFitStripSizeGrowBack
                 : DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack,
+        handoverAssistantAutoAssume:
+            typeof saved.handoverAssistantAutoAssume === "boolean"
+                ? saved.handoverAssistantAutoAssume
+                : DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume,
     }
 }
 

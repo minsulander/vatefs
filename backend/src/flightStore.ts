@@ -303,6 +303,12 @@ export interface ProcessMessageResult {
     /** Transfer sound to play (handoff request / accept / refuse) */
     transferSound?: 'request' | 'accept' | 'refuse'
 
+    /**
+     * Handover Assistant: auto-ASSUME these callsigns (inbound HA transfers).
+     * May include the primary flight plus any deferred when EFSHO arrived after handoff.
+     */
+    autoAssumeCallsigns?: string[]
+
     /** Clear EFS soft G/A annotation (ann 5) in EuroScope */
     unsetEfsGoAround?: boolean
 
@@ -826,6 +832,9 @@ class FlightStore {
     /** User setting: Auto PARK for assumed arrivals at stands (default on). */
     private getAutoParkEnabled: () => boolean = () => true
 
+    /** Handover Assistant: auto-ASSUME inbound HA-marked transfers (default on). */
+    private getHandoverAssistantAutoAssume: () => boolean = () => true
+
     /** Paper-look print mode (auto default). Only gates when config.look === 'paper'. */
     private getStripPrintMode: () => StripPrintMode = () => 'auto'
 
@@ -883,6 +892,10 @@ class FlightStore {
 
     setAutoParkEnabledGetter(getter: () => boolean): void {
         this.getAutoParkEnabled = getter
+    }
+
+    setHandoverAssistantAutoAssumeGetter(getter: () => boolean): void {
+        this.getHandoverAssistantAutoAssume = getter
     }
 
     setStripPrintModeGetter(getter: () => StripPrintMode): void {
@@ -1408,6 +1421,15 @@ class FlightStore {
             this.config.myCallsign
         )
         if (sound) result.transferSound = sound
+
+        // Handover Assistant: auto-ASSUME inbound HA-marked handoffs when setting is on
+        if (
+            sound === 'request' &&
+            flight.handoverAssistantInbound &&
+            this.shouldAutoAssumeHandover(flight)
+        ) {
+            this.queueAutoAssume(result, flight)
+        }
 
         // ESGG paper: APP assumed our outbound G/A XFER → retire strip, reprint clean ARR in INBOUND
         if (
@@ -3304,6 +3326,10 @@ class FlightStore {
                 flight.weatherGivenHoldOffUntil = undefined
             }
         }
+        // Handover Assistant mark (relieving side detects via ES scratch)
+        if (message.scratch === 'EFSHO' || message.scratch === '/EFSHO/') {
+            flight.handoverAssistantInbound = true
+        }
         // Empty scratch must NOT clear weatherGiven (TopSky often pulses WX_ then clears)
         // Combine EFS soft G/A + TopSky: EFSGA on ⇒ MA (keep CTL if already set)
         if (flight.efsGoAround) {
@@ -3458,6 +3484,10 @@ class FlightStore {
             prevHandoff,
             flight
         )
+        // EFSHO may arrive after handoff target — catch deferred auto-assume
+        if (this.shouldAutoAssumeHandover(flight)) {
+            this.queueAutoAssume(result, flight)
+        }
         if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
         if (clearScratchpadCallsign) {
             result.clearScratchpadCallsign = clearScratchpadCallsign
@@ -3468,6 +3498,10 @@ class FlightStore {
         }
         if (restoreScratchValue !== undefined) {
             result.setScratchValue = restoreScratchValue
+        }
+        // After HA auto-assume, restore remarks/HP scratch (EFSHO is protocol-only)
+        if (result.autoAssumeCallsigns?.includes(callsign) && result.setScratchValue === undefined) {
+            result.setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
         }
         return result
     }
@@ -3867,6 +3901,24 @@ class FlightStore {
                 !!flight.handoffTargetControllerId &&
                 flight.handoffTargetControllerId.toUpperCase() === mySi)
         )
+    }
+
+    private shouldAutoAssumeHandover(flight: Flight): boolean {
+        return (
+            !!flight.handoverAssistantInbound &&
+            this.getHandoverAssistantAutoAssume() &&
+            this.config.isController === true &&
+            this.isHandoffToMe(flight) &&
+            !this.isControlledByMe(flight)
+        )
+    }
+
+    private queueAutoAssume(result: ProcessMessageResult, flight: Flight): void {
+        flight.handoverAssistantInbound = undefined
+        const list = result.autoAssumeCallsigns ?? []
+        if (!list.includes(flight.callsign)) list.push(flight.callsign)
+        result.autoAssumeCallsigns = list
+        console.log(`[Handover Assistant] Auto-ASSUME ${flight.callsign}`)
     }
 
     /** Pending inbound handoff to me (any owner — APP/CTR/…). */

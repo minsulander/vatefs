@@ -431,10 +431,12 @@ export function setMyRole(role: ControllerRole): boolean {
     )
 }
 
-/** EuroScope "not primed" primary frequency (~199.998). */
+/** EuroScope "not primed" primary frequency (~199.998; SDK cites 199.980). */
 function isPrimedControllerFrequency(frequency: number): boolean {
     if (!(frequency > 0)) return false
-    return Math.abs(frequency - 199.998) > 0.001
+    if (Math.abs(frequency - 199.998) <= 0.001) return false
+    if (Math.abs(frequency - 199.98) <= 0.001) return false
+    return true
 }
 
 /** Case-insensitive lookup key for onlineControllers map. */

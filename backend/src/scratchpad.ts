@@ -47,7 +47,9 @@ export function isProtocolScratch(scratch: string): boolean {
         scratch === "EST_" ||
         scratch === "IRREG_" ||
         scratch === "WX_" ||
-        scratch === "NOSTATE"
+        scratch === "NOSTATE" ||
+        scratch === "EFSHO" ||
+        scratch === "/EFSHO/"
     ) {
         return true
     }

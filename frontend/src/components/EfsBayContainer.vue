@@ -48,6 +48,11 @@
       </div>
     </div>
     <EfsBottomBar />
+    <HandoverAssistantDialog
+      :model-value="store.handoverAssistantOpen"
+      :preferred-frequency="store.handoverAssistantPreferredFreq"
+      @update:model-value="onHandoverAssistantOpen"
+    />
     <div
       v-if="store.notifyVisible"
       class="efs-notify"
@@ -64,11 +69,17 @@ import { paperKlackPullBayIds } from '@/composables/paperKlack'
 import EfsBay from './EfsBay.vue'
 import EfsTopBar from './EfsTopBar.vue'
 import EfsBottomBar from './EfsBottomBar.vue'
+import HandoverAssistantDialog from './HandoverAssistantDialog.vue'
 
 const store = useEfsStore()
 const bays = computed(() => store.getBays)
 const scrollEl = ref<HTMLElement | null>(null)
 const colWidthPx = ref('25%')
+
+function onHandoverAssistantOpen(open: boolean) {
+  if (open) store.openHandoverAssistant()
+  else store.closeHandoverAssistant()
+}
 
 /** Any strip in this bay is klacked (or mid-pull) — raise the column above neighbours. */
 function bayHasKlack(bayId: string): boolean {
