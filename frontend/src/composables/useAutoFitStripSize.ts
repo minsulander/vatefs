@@ -196,20 +196,27 @@ async function waitLayout(): Promise<void> {
   await waitFrame()
 }
 
-export function shrinkOrderIds(visualIds: string[], addFromTop: boolean): string[] {
-  return addFromTop ? [...visualIds].reverse() : [...visualIds]
+/**
+ * Auto-fit size priority follows **first-in-sequence** in the visual list.
+ *
+ * `preferTop: true` (default) — first is visual top: shrink bottom→top, grow top→bottom.
+ * `preferTop: false` — first is visual bottom (ESSA/SAAB INBOUND APP ETA order):
+ * shrink top→bottom, grow bottom→top, so the earliest/first strip stays full.
+ */
+export function shrinkOrderIds(visualIds: string[], preferTop = true): string[] {
+  return preferTop ? [...visualIds].reverse() : [...visualIds]
 }
 
-export function growOrderIds(visualIds: string[], addFromTop: boolean): string[] {
-  return addFromTop ? [...visualIds] : [...visualIds].reverse()
+export function growOrderIds(visualIds: string[], preferTop = true): string[] {
+  return preferTop ? [...visualIds] : [...visualIds].reverse()
 }
 
 export function firstInSequenceId(
   visualIds: string[],
-  addFromTop: boolean,
+  preferTop = true,
 ): string | undefined {
   if (visualIds.length === 0) return undefined
-  return addFromTop ? visualIds[0] : visualIds[visualIds.length - 1]
+  return preferTop ? visualIds[0] : visualIds[visualIds.length - 1]
 }
 
 export function scrollStripListToBottom(container: HTMLElement): void {
@@ -222,11 +229,11 @@ export function scrollStripListToBottom(container: HTMLElement): void {
 export function centerScrollOnFirstInSequence(
   container: HTMLElement,
   visualIds: string[],
-  addFromTop: boolean,
+  preferTop = true,
 ): void {
   if (container.scrollHeight <= container.clientHeight + OVERFLOW_EPS_PX) return
 
-  const targetId = firstInSequenceId(visualIds, addFromTop)
+  const targetId = firstInSequenceId(visualIds, preferTop)
   if (!targetId) return
   const escape =
     typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
@@ -247,7 +254,15 @@ export function centerScrollOnFirstInSequence(
 export interface AutoFitRunOptions {
   container: HTMLElement
   visualIds: string[]
-  addFromTop: boolean
+  /**
+   * When true (default), first-in-sequence is visual top — keep it largest
+   * (shrink bottom-first, grow top-first). When false, first is visual bottom
+   * (ESSA INBOUND APP) — keep the bottom strip largest instead.
+   * Prefer over section.addFromTop (insert position ≠ size priority).
+   */
+  preferTop?: boolean
+  /** @deprecated Use preferTop. Treated as preferTop when preferTop omitted. */
+  addFromTop?: boolean
   canCompact: (stripId: string) => boolean
   allowSizeFit: boolean
   growBack: boolean
@@ -258,18 +273,18 @@ export async function runAutoFitStripSize(opts: AutoFitRunOptions): Promise<void
   const {
     container,
     visualIds,
-    addFromTop,
     canCompact,
     allowSizeFit,
     growBack,
     scrollToBottom = false,
   } = opts
+  const preferTop = opts.preferTop ?? opts.addFromTop ?? true
   await waitLayout()
 
   autoFitApplying.value = true
   try {
     if (allowSizeFit && visualIds.length > 0) {
-      const shrinkIds = shrinkOrderIds(visualIds, addFromTop)
+      const shrinkIds = shrinkOrderIds(visualIds, preferTop)
       let guard = shrinkIds.length * 2 + 2
       while (guard-- > 0 && containerOverflows(container)) {
         let stepped = false
@@ -284,8 +299,7 @@ export async function runAutoFitStripSize(opts: AutoFitRunOptions): Promise<void
       }
 
       if (growBack) {
-        const growIds = growOrderIds(visualIds, addFromTop)
-        const skipThisPass = new Set<string>()
+        const growIds = growOrderIds(visualIds, preferTop)
         guard = growIds.length * 2 + 4
         while (guard-- > 0) {
           // Content-based free space (scrollHeight cannot see slack when fitting)
@@ -294,7 +308,6 @@ export async function runAutoFitStripSize(opts: AutoFitRunOptions): Promise<void
 
           let stepped = false
           for (const id of growIds) {
-            if (skipThisPass.has(id)) continue
             const kind = nextGrowKind(id)
             if (!kind) continue
 
@@ -303,10 +316,11 @@ export async function runAutoFitStripSize(opts: AutoFitRunOptions): Promise<void
             await waitLayout()
 
             if (containerOverflows(container)) {
+              // Do NOT skip to a lower-priority strip — that created
+              // full–compact–full holes and could leave the last strip maximised.
               revertGrow(id, kind)
-              skipThisPass.add(id)
               await waitLayout()
-              break
+              stepped = false
             }
             break
           }
@@ -318,7 +332,7 @@ export async function runAutoFitStripSize(opts: AutoFitRunOptions): Promise<void
     if (scrollToBottom) {
       scrollStripListToBottom(container)
     } else {
-      centerScrollOnFirstInSequence(container, visualIds, addFromTop)
+      centerScrollOnFirstInSequence(container, visualIds, preferTop)
     }
   } finally {
     autoFitApplying.value = false

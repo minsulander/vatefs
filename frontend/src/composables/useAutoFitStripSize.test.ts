@@ -40,9 +40,39 @@ async function main() {
     clearAutoFitState,
     contentSpanPx,
     containerOverflows,
+    firstInSequenceId,
     freeSpacePx,
+    growOrderIds,
     runAutoFitStripSize,
+    shrinkOrderIds,
   } = await import('./useAutoFitStripSize.ts')
+
+  // --- preferTop:true — first at visual top (most SAAB bays) ---
+  {
+    const ids = ['top', 'mid', 'bot']
+    assert(
+      shrinkOrderIds(ids, true).join(',') === 'bot,mid,top',
+      'preferTop shrink starts at bottom (last visual)',
+    )
+    assert(
+      growOrderIds(ids, true).join(',') === 'top,mid,bot',
+      'preferTop grow starts at top (first visual)',
+    )
+    assert(firstInSequenceId(ids, true) === 'top', 'preferTop first = visual top')
+  }
+  // --- preferTop:false — first at visual bottom (ESSA INBOUND APP ETA) ---
+  {
+    const ids = ['top', 'mid', 'bot']
+    assert(
+      shrinkOrderIds(ids, false).join(',') === 'top,mid,bot',
+      'preferTop:false shrink starts at top (last in sequence)',
+    )
+    assert(
+      growOrderIds(ids, false).join(',') === 'bot,mid,top',
+      'preferTop:false grow starts at bottom (first in sequence)',
+    )
+    assert(firstInSequenceId(ids, false) === 'bot', 'preferTop:false first = visual bottom')
+  }
 
   function makePort(
     clientH: number,
@@ -155,7 +185,7 @@ async function main() {
   await runAutoFitStripSize({
     container: live,
     visualIds: ids,
-    addFromTop: false,
+    preferTop: true,
     canCompact: () => true,
     allowSizeFit: true,
     growBack: true,
@@ -182,7 +212,7 @@ async function main() {
   await runAutoFitStripSize({
     container: live,
     visualIds: ids,
-    addFromTop: false,
+    preferTop: true,
     canCompact: () => true,
     allowSizeFit: true,
     growBack: true,
@@ -191,6 +221,53 @@ async function main() {
   const uncompacted = ids.filter((id) => !isStripCompact(id))
   assert(uncompacted.length >= 1, 'at least one strip grew when slack appeared')
   assert(uncompacted.length < ids.length, 'not all strips grew past capacity')
+  // Prefer top: the single grown strip must be first in visual order, not last
+  assert(uncompacted[0] === 'a', 'partial grow prefers first visual strip (a), not last')
+  assert(isStripCompact('c'), 'last visual strip stays compact when only one fits')
+
+  // --- grow must not skip past a failed strip (no full–compact–full holes) ---
+  for (const id of ids) {
+    clearAutoFitState(id)
+    setStripFitBaseline(id, { compact: false, top: false, bottom: false })
+    collapseStripExpanders(id)
+    setStripSizeMode(id, 'compact')
+  }
+  // Room for first uncompact only. If grow skipped mid after a false overflow on
+  // 'a', 'c' could incorrectly grow — guard against that hole.
+  liveClientH = 110
+  refreshLive()
+  await runAutoFitStripSize({
+    container: live,
+    visualIds: ids,
+    preferTop: true,
+    canCompact: () => true,
+    allowSizeFit: true,
+    growBack: true,
+  })
+  assert(!isStripCompact('a'), 'hole-guard: top grew')
+  assert(isStripCompact('b'), 'hole-guard: mid stayed compact')
+  assert(isStripCompact('c'), 'hole-guard: bottom stayed compact (not promoted)')
+
+  // --- ESSA INBOUND APP: first-in-sequence is visual bottom ---
+  for (const id of ids) {
+    clearAutoFitState(id)
+    setStripFitBaseline(id, { compact: false, top: false, bottom: false })
+    collapseStripExpanders(id)
+    setStripSizeMode(id, 'compact')
+  }
+  liveClientH = 110
+  refreshLive()
+  await runAutoFitStripSize({
+    container: live,
+    visualIds: ids,
+    preferTop: false,
+    canCompact: () => true,
+    allowSizeFit: true,
+    growBack: true,
+  })
+  assert(!isStripCompact('c'), 'INBOUND: bottom (first in sequence) grew')
+  assert(isStripCompact('a'), 'INBOUND: top (last in sequence) stayed compact')
+  assert(isStripCompact('b'), 'INBOUND: mid stayed compact')
 
   if (failed) {
     console.error(`\n${failed} assertion(s) failed`)

@@ -1209,7 +1209,7 @@ function sortByDepTime(
   })
 }
 
-/** ETA sort for SAAB INBOUND APP — earliest at bottom (bay fills from top); missing at top. */
+/** ETA sort for SAAB INBOUND APP — earliest = first in sequence at bottom (toward CTR ARR); missing at top. */
 function sortByEta(list: FlightStripData[]): FlightStripData[] {
   const nowMin = utcNowMinutes()
   return [...list].sort((a, b) => {
@@ -1637,7 +1637,12 @@ function scheduleAutoFitRecheck(force = false) {
   if (store.isPaperLook) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
-  if (autoFitApplying.value) return
+  // During an in-flight fit, queue a follow-up — do not drop resize/list updates
+  // (dropping caused stale maximize priority and flicker after section drags).
+  if (autoFitApplying.value || autoFitRunning) {
+    autoFitQueued = true
+    return
+  }
   if (!force && Date.now() < autoFitSettleUntil) return
   if (autoFitTimer) clearTimeout(autoFitTimer)
   autoFitTimer = setTimeout(() => {
@@ -1667,7 +1672,10 @@ async function runScheduledAutoFit() {
       await runAutoFitStripSize({
         container: el,
         visualIds: topStripIds.value,
-        addFromTop: props.section.addFromTop !== false,
+        // Size priority follows first-in-sequence, not insert addFromTop.
+        // ESSA/SAAB INBOUND APP: ETA puts earliest (first) at the bottom — keep
+        // that strip maximised (preferTop:false). Other bays: first at visual top.
+        preferTop: !(hasEssa.value && isInboundAppSection.value),
         canCompact: stripCanCompact,
         allowSizeFit:
           store.autoFitStripSizeMode === 'all' ||
@@ -1750,7 +1758,7 @@ onMounted(() => {
       lastAutoFitClientW = el.clientWidth
       autoFitViewportObserver = new ResizeObserver(() => {
         const c = topContainer.value
-        if (!c || autoFitApplying.value || autoFitRunning) return
+        if (!c) return
         // Height matters for fit. Ignore width-only changes (scrollbar gutter)
         // which otherwise shrink↔grow forever on the knife-edge.
         const h = c.clientHeight
@@ -1765,6 +1773,7 @@ onMounted(() => {
         if (!heightChanged) return
         // Height growth must always recheck (grow-back). Settle lock would
         // otherwise swallow header-drag enlarges on flexing last sections.
+        // scheduleAutoFitRecheck queues when a fit is already running.
         scheduleAutoFitRecheck(heightDelta > 0)
       })
       autoFitViewportObserver.observe(el)
