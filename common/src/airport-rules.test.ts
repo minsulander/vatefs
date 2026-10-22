@@ -39,6 +39,8 @@ assert(requiresAccCoordination(undefined) === false, "undefined adep")
 
 assert(requiresSsrCoordination("ESOE") === true, "ESOE SSR coord")
 assert(requiresSsrCoordination("ESCF") === true, "ESCF SSR coord")
+assert(requiresSsrCoordination("ESNS") === true, "ESNS SSR coord")
+assert(requiresSsrCoordination("ESNS", { stripType: "departure" }) === true, "ESNS dep SSR coord")
 assert(requiresSsrCoordination("ESTL") === false, "ESTL never SSR coord")
 assert(requiresSsrCoordination("ESGG") === false, "ESGG never SSR coord")
 assert(requiresSsrCoordination("ESPE") === true, "ESPE IFR SSR coord")
