@@ -373,6 +373,27 @@ export interface DeleteRule {
 
     /** My effective roles must NOT include any of these */
     notMyRole?: ControllerRole[]
+
+    /**
+     * ESSA role-picker families that must be selected (at least one).
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+
+    /**
+     * ESSA role-picker families that must NOT be selected.
+     * Only applies in layoutMode essaRoles; otherwise the condition fails.
+     */
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+
+    /**
+     * Tracking controller's role (from callsign) must be one of these.
+     * E.g. ownerRole: [GND] when GND has assumed the aircraft.
+     */
+    ownerRole?: ControllerRole[]
+
+    /** Whether the aircraft is airborne */
+    airborne?: boolean
 }
 
 /**

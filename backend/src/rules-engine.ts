@@ -55,6 +55,11 @@ type CommonRuleConditions = {
     missedApproach?: boolean
     notOnlineRoles?: ControllerRole[]
     arrivalLike?: boolean
+    /**
+     * Tracking controller's role (from callsign) must be one of these.
+     * E.g. ownerRole: [GND] when GND has assumed.
+     */
+    ownerRole?: ControllerRole[]
 }
 
 /** CA / VA / OS / CAT2 / CAT3 — EuroScope cfl 1|2 or TopSky approachType. */
@@ -524,6 +529,13 @@ function evaluateCommonConditions(
         }
     }
 
+    // Tracking controller role (e.g. ownerRole: [GND] when GND has assumed)
+    if (rule.ownerRole) {
+        if (!flight.controller) return false
+        const ownerRole = parseControllerRole(flight.controller, config.myAirports)
+        if (!rule.ownerRole.includes(ownerRole)) return false
+    }
+
     return true
 }
 
@@ -783,13 +795,6 @@ function evaluateActionRule(
     if (rule.notParallelTwrOwner === true) {
         if (!flight.controller) return false
         if (isParallelTwr(config.myCallsign, flight.controller)) return false
-    }
-
-    // Tracking controller role (e.g. ownerRole: [TWR] for GND→TWR ROF)
-    if (rule.ownerRole) {
-        if (!flight.controller) return false
-        const ownerRole = parseControllerRole(flight.controller, config.myAirports)
-        if (!rule.ownerRole.includes(ownerRole)) return false
     }
 
     return true

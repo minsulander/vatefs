@@ -94,6 +94,10 @@ const KNOWN_CAUSES: Record<string, KnownCause> = {
         ruleName: 'delete_beyond_range',
         disconnectKind: 'radar',
     },
+    delete_arr_gnd_assumed_taxi: {
+        reason: 'Arrival assumed by GND (taxi-in)',
+        ruleName: 'delete_arr_gnd_assumed_taxi',
+    },
 }
 
 /**

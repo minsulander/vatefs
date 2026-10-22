@@ -24,6 +24,8 @@ layout:
       sections:
         inbound:
           # TWR → titled INBOUND APP; ETA≤15 gate + ETA sort (common-rules myRole TWR/APP/CTR).
+          # ETA order: earliest (first in sequence) at bottom toward CTR ARR; auto-fit
+          # keeps that bottom strip maximised (preferTop:false on ESSA INBOUND APP).
           # GND → INBOUND TWR-* (near/tower-bound rules, no ETA gate; appearance order).
           title: INBOUND
           visibleFor: [GND, TWR]
@@ -479,7 +481,7 @@ actionRules:
     myRole: [TWR, APP, CTR]
     priority: 95
 
-  # Override common-rules: ROF only once inside 20 nm of ESSA
+  # TopSky ROF (airborne APP/CTR-owned) — keep TopSky; only once inside 20 nm of ESSA
   rof_inbound_arr:
     action: ROF
     sectionId: inbound
@@ -493,6 +495,7 @@ actionRules:
     withinRangeAirports: [ESSA]
     priority: 120
 
+  # Ground ROF (TWR↔GND): backend uses custom EFS /EFSROF/ (not TopSky).
   # Override common-rules rof_taxi_dep_twr (sectionId: taxi).
   # Separate GND online → ROF on INBOUND GND-*; alone covering GND → TAXI DEP.
   rof_taxi_dep_twr:
@@ -520,6 +523,22 @@ actionRules:
     myRole: [TWR]
     essaFamilies: [GND]
     priority: 40
+
+deleteRules:
+  # TWR with separate GND online (not covering GND, GND family not selected):
+  # hide arrival once GND has assumed and taxi-in is set (TXIN / TAXI).
+  # Solo TWR covering GND, or combined GND+TWR picker, does not match.
+  delete_arr_gnd_assumed_taxi:
+    direction: arrival
+    groundstates: [TXIN, TAXI]
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [TWR]
+    notMyRole: [GND]
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    priority: 90
 
 moveRules:
   # Override common-rules taxi moves for split sections (taxi_dep)
