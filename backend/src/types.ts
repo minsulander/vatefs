@@ -249,6 +249,12 @@ export interface Flight {
      * Relieving EFS with auto-assume ON will ASSUME when handoff targets us.
      */
     handoverAssistantInbound?: boolean
+    /** Scratch pad currently holds the EFSHO handover token. */
+    efshoOnScratch?: boolean
+    /** We wrote the EFSHO token (outgoing Handover Assistant). Do not wipe our own label. */
+    efshoSetByMe?: boolean
+    /** Last time we pushed a scratch restore to drop EFSHO from the label. */
+    efshoClearAt?: number
     /** Until this timestamp, ignore stale non-empty groundstate from ES after NOSTATE clear */
     groundstateClearedUntil?: number
     /**

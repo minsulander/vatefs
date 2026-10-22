@@ -328,8 +328,7 @@ export function activeOnlineGndRoles(onlineCallsigns: Iterable<string>): EssaPos
 
 /**
  * INBOUND GND header (taxi-out from ground → TWR):
- * When TWR-only with GND online below, always list all GND positions
- * (GND-E, GND-N, GND-W) — not only the one(s) currently open.
+ * TWR-only always lists every GND position (GND-E, GND-N, GND-W).
  */
 export function resolveInboundGndTitle(
     _roles: EssaPositionRole[],
@@ -339,14 +338,15 @@ export function resolveInboundGndTitle(
     return `INBOUND ${ALL_GND_POSITIONS.join(', ')}`
 }
 
-/** Show INBOUND GND only for TWR when a separate GND is online (not when covering GND alone). */
+/**
+ * Show INBOUND GND-E, GND-N, GND-W above TAXIWAY DEP whenever the picker
+ * is TWR-only. Hidden when GND is also selected (those strips sit in TAXI DEP).
+ */
 export function shouldShowInboundGnd(
     roles: EssaPositionRole[],
-    activeGndPeers?: EssaPositionRole[]
+    _activeGndPeers?: EssaPositionRole[]
 ): boolean {
-    const families = familiesFromRoles(roles)
-    if (!families.has('TWR') || families.has('GND')) return false
-    return !!activeGndPeers && activeGndPeers.length > 0
+    return isEssaTwrOnly(roles)
 }
 
 /** Max visible ESSA columns; CD ALL + TSAT share a column when this would be exceeded */

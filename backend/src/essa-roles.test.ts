@@ -9,7 +9,9 @@ import {
     applyEssaRunwayPairLayout,
     collectEssaRunwayPairs,
     computeAutoEssaRoles,
+    filterEssaLayout,
     resolveGndRolesFromOwnerCoverage,
+    type EssaFamily,
 } from "./essa-roles.js"
 import type { EfsLayout } from "@vatefs/common"
 
@@ -157,6 +159,61 @@ check("ARR-only header inserts between CTR ARR and TAXI ARR in bay1", () => {
     assert.equal(sectionToBay.get("runway_08_26"), "bay2")
     const rwySec = out.bays.find(b => b.id === "bay2")!.sections.find(s => s.id === "runway_08_26")
     assert.equal(rwySec?.addFromTop, false)
+})
+
+check("TWR-only shows INBOUND GND-E, GND-N, GND-W above TAXIWAY DEP", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay3",
+                sections: [
+                    { id: "inbound_gnd", title: "INBOUND GND" },
+                    { id: "taxi_dep", title: "TAXIWAY DEP" },
+                    { id: "push_start", title: "PUSH BACK / START-UP" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["inbound_gnd", ["TWR"]],
+        ["taxi_dep", ["GND", "TWR"]],
+        ["push_start", ["GND"]],
+    ])
+    // No GND peers detected — bay still shows for TWR-only
+    const out = filterEssaLayout(layout, ["TWR-W"], visibleFor, ["TWR-W"], [])
+    const ids = out.bays[0]!.sections.map((s) => s.id)
+    assert.deepEqual(ids, ["inbound_gnd", "taxi_dep"])
+    assert.equal(out.bays[0]!.sections[0]!.title, "INBOUND GND-E, GND-N, GND-W")
+    assert.equal(out.bays[0]!.sections[1]!.title, "TAXIWAY DEP")
+})
+
+check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay3",
+                sections: [
+                    { id: "inbound_gnd", title: "INBOUND GND" },
+                    { id: "taxi_dep", title: "TAXIWAY DEP" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["inbound_gnd", ["TWR"]],
+        ["taxi_dep", ["GND", "TWR"]],
+    ])
+    const out = filterEssaLayout(
+        layout,
+        ["TWR-E", "GND-E"],
+        visibleFor,
+        ["TWR-E"],
+        ["GND-E"]
+    )
+    assert.deepEqual(
+        out.bays[0]!.sections.map((s) => s.id),
+        ["taxi_dep"]
+    )
 })
 
 console.log(`\n${passed} passed`)

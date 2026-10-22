@@ -519,7 +519,7 @@ check("StripEfsFields: bayId TWR-W/E from dep RWY role", () => {
     assert.equal("groundstate" in west, false)
 })
 
-check("TAXI order matches EFS top to bottom", () => {
+check("TAXI order puts EFS top at the bottom of Stripview taxiing", () => {
     const order = buildEssaIrisOrder(
         [
             strip({
@@ -556,14 +556,14 @@ check("TAXI order matches EFS top to bottom", () => {
     const taxi = order.entries.filter((e) => e.bayId === "TWR-W" && e.sectionId === "TAXI")
     assert.deepEqual(
         taxi.map((e) => e.stripKey),
-        ["TOP", "AAA", "ZZZ", "BOT"],
+        ["BOT", "ZZZ", "AAA", "TOP"],
     )
     assert.deepEqual(
         taxi.map((e) => e.position),
         [0, 1, 2, 3],
     )
-    assert.equal(taxi[0]?.stripKey, "TOP")
-    assert.equal(taxi[taxi.length - 1]?.stripKey, "BOT")
+    assert.equal(taxi[0]?.stripKey, "BOT")
+    assert.equal(taxi[taxi.length - 1]?.stripKey, "TOP")
     assert.equal(taxi[taxi.length - 1]?.position, taxi.length - 1)
 })
 
@@ -662,7 +662,7 @@ check("cfto and atd on order entries and strip bodies", () => {
     const taxiKeys = order.entries
         .filter((e) => e.sectionId === "TAXI")
         .map((e) => e.stripKey)
-    assert.deepEqual(taxiKeys, ["TAXI1", "RTO1"])
+    assert.deepEqual(taxiKeys, ["RTO1", "TAXI1"])
 
     const fields = buildStripEfsFields(cfto)
     assert.equal(fields.cfto, true)

@@ -54,9 +54,10 @@ ADD_DEFINITIONS(
 
 SET(SOURCE_FILES
     src/plugin.cpp
+    src/local-ip.cpp
     src/main.cpp
     src/Version.h.in
 )
 
 ADD_LIBRARY(VatEFS SHARED ${SOURCE_FILES})
-TARGET_LINK_LIBRARIES(VatEFS ${CMAKE_SOURCE_DIR}/external/lib/EuroScopePlugInDLL.lib crypt32.lib ws2_32.lib Shlwapi.lib)
+TARGET_LINK_LIBRARIES(VatEFS ${CMAKE_SOURCE_DIR}/external/lib/EuroScopePlugInDLL.lib crypt32.lib ws2_32.lib iphlpapi.lib Shlwapi.lib)

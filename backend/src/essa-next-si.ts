@@ -12,6 +12,7 @@ import {
     formatEssaDisplaySi,
     isEssaDynamicRunwaySectionId,
     isEssaGndOnly,
+    isEssaTwrOnly,
     isEssaRolesConfig,
     isGndOnlyInboundSection,
     parseEssaLoginId,
@@ -1254,6 +1255,12 @@ export function isEssaStripVisibleForRoles(
                 return true
             }
         }
+    }
+
+    // TWR-only: taxi-out from ground sits in INBOUND GND-* above TAXIWAY DEP.
+    // Show it even when the next-SI chain is still a GND sector.
+    if (isEssaTwrOnly(selectedRoles) && strip.sectionId === "inbound_gnd") {
+        return true
     }
 
     // TWR: arrival INBOUND APP / CTR ARR / RWY is independent of GND next-SI roles,

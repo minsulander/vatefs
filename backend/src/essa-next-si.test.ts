@@ -10,7 +10,9 @@ import {
 } from "./ese-airspace.js"
 import { __setAfvFrequenciesForTest } from "./afv-transceivers.js"
 import { staticConfig } from "./static-config.js"
-import { __test, setForceIdealAppDepFrequency } from "./essa-next-si.js"
+import { __test, isEssaStripVisibleForRoles, setForceIdealAppDepFrequency } from "./essa-next-si.js"
+import type { FlightStrip } from "@vatefs/common"
+import type { Flight } from "./types.js"
 
 const {
     depHopsFromParking,
@@ -315,6 +317,38 @@ check("CTRE covered by TW without XC → display TW freq", () => {
     assert.equal(hit!.displaySi, "TW")
     assert.equal(hit!.displayFrequency, 118.505)
     assert.equal(hit!.xc, false)
+})
+
+check("TWR-only keeps taxi-out in INBOUND GND visible", () => {
+    const prevMode = staticConfig.layoutMode
+    staticConfig.layoutMode = "essaRoles"
+    try {
+        const strip = {
+            id: "SAS1",
+            callsign: "SAS1",
+            stripType: "departure",
+            sectionId: "inbound_gnd",
+            bayId: "bay3",
+            position: 0,
+        } as FlightStrip
+        const flight = { callsign: "SAS1", groundstate: "TAXI", depRwy: "19R" } as Flight
+        assert.equal(
+            isEssaStripVisibleForRoles(flight, strip, ["TWR-W"], {
+                hopChain: [],
+                relevantRoles: ["GND-N"],
+            }),
+            true
+        )
+        assert.equal(
+            isEssaStripVisibleForRoles(flight, strip, ["GND-W"], {
+                hopChain: [],
+                relevantRoles: ["GND-N"],
+            }),
+            false
+        )
+    } finally {
+        staticConfig.layoutMode = prevMode
+    }
 })
 
 console.log(`\n${passed} passed`)

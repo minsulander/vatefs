@@ -78,6 +78,8 @@ import {
     parseCombinedScratch,
     buildCombinedScratch,
     isProtocolScratch,
+    isHandoverAssistantScratch,
+    shouldClearHandoverScratch,
     standFromGrpScratch,
 } from "./scratchpad.js"
 import { resolveIncomingGroundstate } from "./groundstate.js"
@@ -189,6 +191,28 @@ export function beginNewDepartureCycleAfterPark(flight: Flight): void {
         flight.groundstate = ""
         flight.groundstateClearedUntil = Date.now() + 15_000
     }
+}
+
+/**
+ * High-speed vacate (GS still above the airborne cutoff) after the aircraft has
+ * been on the runway. Short final is also off the polygon and already groundstate
+ * ARR — that is not a vacate until a radar hit has been inside the runway.
+ */
+export function hasVacatedRunwayAfterLanding(opts: {
+    positionKnown: boolean
+    onRunway: boolean
+    touchedRunway: boolean
+    groundstate: string | undefined
+    groundSpeed: number | undefined
+}): boolean {
+    if (!opts.positionKnown || opts.onRunway || !opts.touchedRunway) return false
+    const gsState = (opts.groundstate ?? "").toUpperCase()
+    const gsKnown = opts.groundSpeed !== undefined && Number.isFinite(opts.groundSpeed)
+    return (
+        gsState === "ARR" ||
+        gsState === "TXIN" ||
+        (gsKnown && (opts.groundSpeed as number) <= 80)
+    )
 }
 
 /**
@@ -840,6 +864,14 @@ class FlightStore {
 
     /** Callsigns explicitly printed (or auto-printed); required before strip create in manual mode. */
     private printedCallsigns: Set<string> = new Set()
+
+    /**
+     * Airborne arrivals that have had a radar hit inside a runway polygon since
+     * descending through the airborne threshold. Cleared on the next climb-out.
+     * Stops short final (ARR, still fast, not yet at the threshold) from being
+     * treated as a vacate.
+     */
+    private landingRunwayTouched: Set<string> = new Set()
 
     /**
      * ESGG paper: active APP→me inbound transfer pin session (in or leaving pin tray).
@@ -3136,12 +3168,15 @@ class FlightStore {
 
         flight.lastUpdate = Date.now()
 
-        return this.withTransferSound(
+        const result = this.withTransferSound(
             this.finalizeFlightStrips(callsign, flight, !this.stripAssignments.get(callsign)),
             prevController,
             prevHandoff,
             flight
         )
+        // Assume may have landed after the first scratch clear (written before we tracked).
+        this.maybeRestoreEfshoScratch(result, flight)
+        return result
     }
 
     /**
@@ -3326,9 +3361,17 @@ class FlightStore {
                 flight.weatherGivenHoldOffUntil = undefined
             }
         }
-        // Handover Assistant mark (relieving side detects via ES scratch)
-        if (message.scratch === 'EFSHO' || message.scratch === '/EFSHO/') {
-            flight.handoverAssistantInbound = true
+        // Handover Assistant mark (relieving side detects via ES scratch).
+        // efshoSetByMe is set only by the controller who sent the token. Everyone
+        // else clears it from the label once they are the tracking controller.
+        if (message.scratch !== undefined) {
+            if (isHandoverAssistantScratch(message.scratch)) {
+                flight.efshoOnScratch = true
+                flight.handoverAssistantInbound = true
+            } else {
+                flight.efshoOnScratch = false
+                flight.efshoClearAt = undefined
+            }
         }
         // Empty scratch must NOT clear weatherGiven (TopSky often pulses WX_ then clears)
         // Combine EFS soft G/A + TopSky: EFSGA on ⇒ MA (keep CTL if already set)
@@ -3503,7 +3546,31 @@ class FlightStore {
         if (result.autoAssumeCallsigns?.includes(callsign) && result.setScratchValue === undefined) {
             result.setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
         }
+        this.maybeRestoreEfshoScratch(result, flight)
         return result
+    }
+
+    /**
+     * Drop EFSHO from the radar label once the relieving controller tracks the flight.
+     * The write that rides along with ASSUME often fails — EuroScope rejects scratch
+     * changes until AcceptHandoff has actually made us the tracker.
+     */
+    private maybeRestoreEfshoScratch(result: ProcessMessageResult, flight: Flight): void {
+        if (
+            !shouldClearHandoverScratch({
+                efshoOnScratch: !!flight.efshoOnScratch,
+                efshoSetByMe: !!flight.efshoSetByMe,
+                trackedByMe: this.isControlledByMe(flight),
+            })
+        ) {
+            return
+        }
+        if (result.setScratchValue !== undefined) return
+        const now = Date.now()
+        if (flight.efshoClearAt !== undefined && now - flight.efshoClearAt < 1000) return
+        flight.efshoClearAt = now
+        result.setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+        console.log(`[Handover Assistant] ${flight.callsign}: clear EFSHO from label`)
     }
 
     /**
@@ -3521,6 +3588,7 @@ class FlightStore {
         }
 
         this.flights.delete(callsign)
+        this.landingRunwayTouched.delete(callsign)
         this.clearStripPrinted(callsign)
 
         if (isMultiAirportConfig(this.config)) {
@@ -3651,8 +3719,25 @@ class FlightStore {
             }
         }
 
+        const positionKnown =
+            message.latitude !== undefined && message.longitude !== undefined
+        const onRunwayNow =
+            positionKnown &&
+            !!isOnAnyRunway(
+                message.latitude as number,
+                message.longitude as number,
+                message.altitude,
+                this.config.myAirports,
+            )?.onRunway
+        // Latch pavement contact before the vacate check. Short final is off the
+        // polygon with groundstate already ARR; that must not clear airborne.
+        if (wasAirborne && message.altitude <= airborneThreshold && onRunwayNow) {
+            this.landingRunwayTouched.add(callsign)
+        }
+
         if (gateLike) {
             flight.airborne = false
+            this.landingRunwayTouched.delete(callsign)
         } else if (
             !wasAirborne &&
             message.altitude > airborneThreshold &&
@@ -3660,6 +3745,7 @@ class FlightStore {
             gs! > groundSpeedThreshold
         ) {
             flight.airborne = true
+            this.landingRunwayTouched.delete(callsign)
             // Airborne again after a landing stamp = go-around (or new dep) — clear ATA
             if (flight.ata) flight.ata = undefined
             // HP/HS are ground annotations — clear once airborne (EFS + EuroScope)
@@ -3686,22 +3772,16 @@ class FlightStore {
                 : message.altitude <= defNotAirborneThreshold
             // Vacated runway after ARR / roll-out: unlock TXI / TWR→GND XFER without waiting
             // for GS ≤ 55 (high-speed taxiways often stay above that for a while).
-            const vacated =
-                message.latitude !== undefined &&
-                message.longitude !== undefined &&
-                !isOnAnyRunway(
-                    message.latitude,
-                    message.longitude,
-                    message.altitude,
-                    this.config.myAirports,
-                )?.onRunway
-            const gsState = (flight.groundstate ?? "").toUpperCase()
-            const vacatedAfterLanding =
-                vacated &&
-                (gsState === "ARR" ||
-                    gsState === "TXIN" ||
-                    // Still rolling / taxiing in but clearly off the strip
-                    (gsKnown && gs! <= 80))
+            // Requires a prior hit on the pavement — short final is already ARR and
+            // outside the polygon, which used to bounce CTL strips to taxi_arr and
+            // back onto the runway at the threshold.
+            const vacatedAfterLanding = hasVacatedRunwayAfterLanding({
+                positionKnown,
+                onRunway: onRunwayNow,
+                touchedRunway: this.landingRunwayTouched.has(callsign),
+                groundstate: flight.groundstate,
+                groundSpeed: gs,
+            })
             if (slowEnough || vacatedAfterLanding) {
                 // Aircraft has landed / vacated
                 flight.airborne = false
@@ -3709,6 +3789,13 @@ class FlightStore {
                     flight.ata = utcHhmm()
                 }
             }
+        }
+
+        // Go-around / next approach: drop the pavement latch once back above the
+        // airborne band and clear of the runway, so the following short final
+        // is not treated as an immediate vacate.
+        if (message.altitude > airborneThreshold && !onRunwayNow) {
+            this.landingRunwayTouched.delete(callsign)
         }
 
         const result = this.finalizeFlightStrips(

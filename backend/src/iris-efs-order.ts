@@ -383,8 +383,10 @@ export function buildEssaIrisOrder(
     }
 
     // Sort within bay+section.
-    // TAXI: EFS top (pos 0) → IRIS pos 0. Stripview stacks TAXI→LINEUP→DEPA
-    // top→bottom, so TAXI keeps ascending order (first taxi at top of column).
+    // Stripview stacks TAXI → LINEUP → DEPA top→bottom. Higher position within
+    // a section sits further down that section.
+    // TAXI: invert vs TAXIWAY DEP. EFS top (first in sequence, pos 0) is the
+    // bottom of the taxiing strips (highest IRIS position, closest to LINEUP).
     // LINEUP/DEPA: invert vs EFS. Stripview puts DEPA at the bottom of the
     // column; first L/U / CFTO on the EFS RWY bay must sit closest to that
     // end (highest position within the section). Publishing EFS order
@@ -401,10 +403,14 @@ export function buildEssaIrisOrder(
     for (const [, list] of groups) {
         let ordered: Ranked[]
         if (list[0]!.sectionId === "TAXI") {
-            ordered = [...list].sort((a, b) => {
-                if (a.position !== b.position) return a.position - b.position
-                return a.callsign.localeCompare(b.callsign)
-            })
+            // EFS top-first → reverse so the top TAXIWAY DEP strip is last
+            // among taxiing aircraft (bottom of the TAXI block in Stripview).
+            ordered = [...list]
+                .sort((a, b) => {
+                    if (a.position !== b.position) return a.position - b.position
+                    return a.callsign.localeCompare(b.callsign)
+                })
+                .reverse()
         } else {
             // EFS top-first → reverse so first L/U/CFTO gets the highest IRIS position
             ordered = sortRunwayLuOrder(list).reverse() as Ranked[]

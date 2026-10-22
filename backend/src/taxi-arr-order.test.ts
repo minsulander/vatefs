@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadConfig } from "./config-loader.js"
+import { loadAirports } from "./airport-data.js"
 import {
     applyConfig,
     staticConfig,
@@ -117,6 +118,55 @@ check("same-section TXIN/TAXI keep store position when flightStore assignment is
         assert.equal(store.getStrip("AAA")?.position, 0)
         assert.equal(store.getStrip("CCC")?.position, 2)
     }
+})
+
+function depFlight(callsign: string, controller: string): Flight {
+    return {
+        callsign,
+        origin: "ESSA",
+        destination: "ENGM",
+        aircraftType: "A320",
+        airborne: false,
+        groundstate: "TAXI",
+        controller,
+        latitude: 59.6519,
+        longitude: 17.9186,
+        firstSeen: Date.now(),
+        lastUpdate: Date.now(),
+    }
+}
+
+check("TAXIWAY DEP appends the last cleared taxi-out at the bottom", () => {
+    loadAirports(path.resolve(__dirname, "../../data/airports.csv"))
+    setMyCallsign("ESSA_W_GND")
+    setMyRole("GND")
+    setEssaRoles(["GND-E", "GND-N", "GND-W"], true)
+    flightStore.clear()
+
+    const first = depFlight("TXO1", "ESSA_W_GND")
+    const second = depFlight("TXO2", "ESSA_W_GND")
+    ;(flightStore as unknown as { flights: Map<string, Flight> }).flights.set("TXO1", first)
+    ;(flightStore as unknown as { flights: Map<string, Flight> }).flights.set("TXO2", second)
+
+    const a = flightStore.reevaluateStrip("TXO1")
+    const b = flightStore.reevaluateStrip("TXO2")
+    assert.equal(a.strip?.sectionId, "taxi_dep", a.strip?.sectionId)
+    assert.equal(b.strip?.sectionId, "taxi_dep", b.strip?.sectionId)
+    assert.equal(flightStore.getStripAssignment("TXO1")?.position, 0, "first cleared stays on top")
+    const secondPos = flightStore.getStripAssignment("TXO2")?.position
+    assert.ok(secondPos != null && secondPos > 0, `last cleared at bottom, pos=${secondPos}`)
+})
+
+check("TWR-only: other-owned taxi-out goes to INBOUND GND", () => {
+    setMyCallsign("ESSA_W_TWR")
+    setMyRole("TWR")
+    setEssaRoles(["TWR-E", "TWR-W"], true)
+    const other = determineSectionForFlight(depFlight("SAS9", "ESSA_E_GND"), staticConfig)
+    assert.equal(other?.sectionId, "inbound_gnd", other?.ruleId)
+    const untracked = determineSectionForFlight(depFlight("SAS8", ""), staticConfig)
+    assert.equal(untracked?.sectionId, "inbound_gnd", untracked?.ruleId)
+    const mine = determineSectionForFlight(depFlight("SAS7", "ESSA_W_TWR"), staticConfig)
+    assert.equal(mine?.sectionId, "taxi_dep", mine?.ruleId)
 })
 
 console.log("All taxi-arr order checks passed")

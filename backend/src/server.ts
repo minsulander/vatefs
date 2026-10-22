@@ -6199,7 +6199,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 const flight = flightStore.getFlight(strip.callsign)
                 try {
-                    // Mark for relieving auto-assume (EFSHO scratch propagates via ES)
+                    // Mark for relieving auto-assume (EFSHO scratch propagates via ES).
+                    // We wrote the token — do not immediately wipe it off our own label.
+                    if (flight) {
+                        flight.efshoSetByMe = true
+                        flight.efshoOnScratch = true
+                    }
                     sendUdp(
                         JSON.stringify({
                             type: "setScratch",

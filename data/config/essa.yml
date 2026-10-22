@@ -58,14 +58,17 @@ layout:
 
     bay3:
       sections:
-        # TWR with GND online below: other-owned taxi-out (mirror INBOUND APP).
-        # Hidden when alone covering GND. Assumed / inbound-transfer → TAXI DEP.
+        # TWR-only: other-owned taxi-out (mirror INBOUND APP).
+        # Header resolves to INBOUND GND-E, GND-N, GND-W.
+        # Hidden when GND is also selected. Assumed / inbound-transfer → TAXI DEP.
         inbound_gnd:
           title: INBOUND GND
           visibleFor: [TWR]
         taxi_dep:
           title: TAXIWAY DEP
-          addFromTop: true
+          # First in the taxi sequence stays on top. The last one cleared
+          # (newest taxi-out) is appended at the bottom.
+          addFromTop: false
           visibleFor: [GND, TWR]
         push_start:
           title: PUSH BACK / START-UP
@@ -167,7 +170,7 @@ sectionRules:
     myRole: [TWR]
     priority: 90
 
-  # TWR + separate GND: other-owned taxi-out → INBOUND GND-* (mirror INBOUND APP)
+  # TWR-only: other-owned taxi-out → INBOUND GND-E/N/W (mirror INBOUND APP)
   inbound_gnd_taxi_dep:
     sectionId: inbound_gnd
     direction: departure

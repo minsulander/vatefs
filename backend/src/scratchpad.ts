@@ -39,6 +39,26 @@ export function buildScratchRemarks(remarks: string | undefined): string {
     return buildCombinedScratch(remarks, undefined)
 }
 
+/** Handover Assistant mark. Protocol-only — must not stick on the radar label. */
+export function isHandoverAssistantScratch(scratch: string | undefined | null): boolean {
+    if (!scratch) return false
+    const s = scratch.trim().toUpperCase()
+    return s === "EFSHO" || s === "/EFSHO/"
+}
+
+/**
+ * Relieving controller who now tracks the flight should replace EFSHO with the
+ * real remarks/HP scratch. The controller who wrote the token still tracks it
+ * on purpose until the handoff is accepted.
+ */
+export function shouldClearHandoverScratch(opts: {
+    efshoOnScratch: boolean
+    efshoSetByMe: boolean
+    trackedByMe: boolean
+}): boolean {
+    return opts.efshoOnScratch && !opts.efshoSetByMe && opts.trackedByMe
+}
+
 /** True when scratch is a TopSky/ops message that must not update remarks or HP. */
 export function isProtocolScratch(scratch: string): boolean {
     // TopSky manual-alert / G/A scratch tokens (MISAP_, EST_, IRREG_, WX_)
@@ -48,8 +68,7 @@ export function isProtocolScratch(scratch: string): boolean {
         scratch === "IRREG_" ||
         scratch === "WX_" ||
         scratch === "NOSTATE" ||
-        scratch === "EFSHO" ||
-        scratch === "/EFSHO/"
+        isHandoverAssistantScratch(scratch)
     ) {
         return true
     }

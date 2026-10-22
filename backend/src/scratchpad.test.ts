@@ -7,7 +7,9 @@ import {
     buildCombinedScratch,
     groundstateFromScratch,
     isProtocolScratch,
+    isHandoverAssistantScratch,
     parseCombinedScratch,
+    shouldClearHandoverScratch,
     standFromGrpScratch,
 } from "./scratchpad.js"
 
@@ -100,6 +102,40 @@ check("other TopSky protocol does not become HP", () => {
         remarks: null,
         hp: null,
     })
+})
+
+check("EFSHO is protocol and stays off remarks", () => {
+    assert.equal(isProtocolScratch("EFSHO"), true)
+    assert.equal(isProtocolScratch("/EFSHO/"), true)
+    assert.equal(isHandoverAssistantScratch(" efsho "), true)
+    assert.deepEqual(parseCombinedScratch("EFSHO"), { remarks: null, hp: null })
+})
+
+check("relieving controller clears EFSHO; the writer does not", () => {
+    assert.equal(
+        shouldClearHandoverScratch({
+            efshoOnScratch: true,
+            efshoSetByMe: false,
+            trackedByMe: true,
+        }),
+        true,
+    )
+    assert.equal(
+        shouldClearHandoverScratch({
+            efshoOnScratch: true,
+            efshoSetByMe: true,
+            trackedByMe: true,
+        }),
+        false,
+    )
+    assert.equal(
+        shouldClearHandoverScratch({
+            efshoOnScratch: true,
+            efshoSetByMe: false,
+            trackedByMe: false,
+        }),
+        false,
+    )
 })
 
 check("NOSTATE / MISAP / WX_ leave fields", () => {

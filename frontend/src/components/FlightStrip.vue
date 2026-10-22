@@ -3165,7 +3165,10 @@ const canAssumeFromMenu = computed(
     !store.isStripOwnedByOther(props.strip),
 )
 
-/** Contact me — setting on, non-assumed arrivals only (controller, real flight strips) */
+/**
+ * Contact me — setting on, untracked arrivals only.
+ * Hidden when this controller or someone else already has the aircraft assumed.
+ */
 const canShowContactMe = computed(
   () =>
     store.contactMeEnabled &&
@@ -3173,7 +3176,8 @@ const canShowContactMe = computed(
     !isLocalOnlyStrip.value &&
     !isPaperEmptyFlightHolder.value &&
     props.strip.stripType === 'arrival' &&
-    !props.strip.isAssumed,
+    !props.strip.isAssumed &&
+    !props.strip.ownedByOther,
 )
 
 /**
@@ -3203,6 +3207,9 @@ watch(
  */
 const displayActions = computed(() => {
   let actions = [...(props.strip.actions || [])]
+  if (!canShowContactMe.value) {
+    actions = actions.filter((a) => a !== 'CONTACTME')
+  }
   if (canAssumeFromMenu.value && !actions.includes('ASSUME')) {
     actions = [...actions, 'ASSUME']
   }
