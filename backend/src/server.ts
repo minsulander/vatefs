@@ -84,7 +84,7 @@ import {
     forgetStripCftoAtd,
     resolveRealm,
 } from "./vatefs-sync.js"
-import { stripNmSuffix } from "./iris-efs-order.js"
+import { stripNmSuffix, isAppOrDepCallsign } from "./iris-efs-order.js"
 import { isIrisStripviewPlacement } from "./iris-efs-order.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
@@ -106,7 +106,7 @@ import {
     type ExternalPrintBody,
 } from "./fsp-api.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
-import type { EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
+import type { ControllerRole, EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
     normalizeEssaRoles,
     remapBayIdsToLayout,
@@ -757,6 +757,8 @@ type OutboundPluginCommand =
     | { type: "setEfsGoAround"; callsign: string }
     | { type: "unsetEfsGoAround"; callsign: string }
     | { type: "rof"; callsign: string }
+    /** ESSA ground DEL/GND/TWR — `/EFSROF/…` scratch, not TopSky `/ROF/…` */
+    | { type: "efsRof"; callsign: string }
     /** Brittle ES .contactme — plugin SetASEL + HOME inject */
     | { type: "contactme"; callsign: string }
     | { type: "clearScratchpad"; callsign: string }
@@ -807,6 +809,33 @@ type OutboundPluginCommand =
           squawk?: string
           cfl?: string | number
       }
+
+/**
+ * Clear HS/HP text (VCH + scratch) when handing off to APP/DEP — same moment
+ * scribbles are wiped on the frontend. No-op when neither field is set.
+ */
+function clearHsHpForAppDepTransfer(flight: Flight, callsign: string) {
+    if (flight.hs) {
+        flight.hs = undefined
+        sendUdp(
+            JSON.stringify({
+                type: "setHs",
+                callsign,
+                value: "",
+            } satisfies OutboundPluginCommand),
+        )
+    }
+    if (flight.hp) {
+        flight.hp = undefined
+        sendUdp(
+            JSON.stringify({
+                type: "setScratch",
+                callsign,
+                value: buildCombinedScratch(flight.remarks, undefined),
+            } satisfies OutboundPluginCommand),
+        )
+    }
+}
 
 /**
  * Determine the callsign of the controller to hand a flight off to.
@@ -2384,9 +2413,28 @@ function assumeCdDelKlareringDep(
     return true
 }
 
+/** DEL / GND / TWR — ESSA ground chain (not APP/CTR airborne TopSky ROF). */
+const ESSA_GROUND_ROF_ROLES: ControllerRole[] = ["DEL", "GND", "TWR"]
+
+/**
+ * ESSA SAAB ground ROF: use custom EFS `/EFSROF/…` instead of TopSky.
+ * EuroScope sector sequence on ground is broken; TopSky rejects with
+ * "incorrect sector sequence". APP/CTR (or APP-owned inbound) keeps TopSky.
+ */
+function shouldUseEssaGroundEfsRof(flight: Flight): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const myRole = getActingControllerRole() ?? staticConfig.myRole
+    if (!myRole || !ESSA_GROUND_ROF_ROLES.includes(myRole)) return false
+    const owner = (flight.controller || "").trim()
+    if (!owner) return false
+    const ownerRole = parseControllerRole(owner, staticConfig.myAirports)
+    return ESSA_GROUND_ROF_ROLES.includes(ownerRole)
+}
+
 /**
  * EFS-native ROF: mark pending request on the shared strip so the owner sees
  * pink ROF / ASSUME without TopSky scratch coordination.
+ * Also used as local fallback when scratch write fails.
  */
 function applyEfsNativeRof(callsign: string, reason?: string) {
     const key = callsign.toUpperCase()
@@ -4915,6 +4963,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
                         flight.handoffOptimisticUntil = Date.now() + 3000
+                        // APP/DEP handoff: clear HS/HP text (frontend clears matching scribbles)
+                        if (isAppOrDepCallsign(targetCallsign)) {
+                            clearHsHpForAppDepTransfer(flight, strip.callsign)
+                        }
                         // Clear incoming ROF once we hand off to the requester
                         if (flight.rofRequestFrom) flightStore.clearRofRequest(flight)
                         // ESGG paper: XFER from UTFLYGNING / soft G/A → pin bottom tray
@@ -4991,12 +5043,38 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "CTL_GS") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
                     sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
-                // ROF: try TopSky first; on failure/timeout → EFS-native (set pending ROF on strip)
+                // ROF: ESSA ground DEL↔GND↔TWR → EFS `/EFSROF/` (no TopSky).
+                // Otherwise TopSky first; on failure/timeout → EFS-native fallback.
                 } else if (message.action === "ROF") {
-                    sendUdp(JSON.stringify({ type: "rof", callsign: strip.callsign } satisfies OutboundPluginCommand))
-                    flightStore.startRofCooldown(strip.callsign, () => reevaluateAndBroadcast(strip.callsign))
-                    scheduleTopSkyRofFallback(strip.callsign)
-                    reevaluateAndBroadcast(strip.callsign)
+                    const useEfsGround =
+                        !!flight && shouldUseEssaGroundEfsRof(flight)
+                    if (useEfsGround) {
+                        sendUdp(
+                            JSON.stringify({
+                                type: "efsRof",
+                                callsign: strip.callsign,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flightStore.startRofCooldown(strip.callsign, () =>
+                            reevaluateAndBroadcast(strip.callsign),
+                        )
+                        console.log(
+                            `[ROF] ${strip.callsign}: ESSA ground EFS ROF (skip TopSky)`,
+                        )
+                        reevaluateAndBroadcast(strip.callsign)
+                    } else {
+                        sendUdp(
+                            JSON.stringify({
+                                type: "rof",
+                                callsign: strip.callsign,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flightStore.startRofCooldown(strip.callsign, () =>
+                            reevaluateAndBroadcast(strip.callsign),
+                        )
+                        scheduleTopSkyRofFallback(strip.callsign)
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
                 } else if (message.action === "toggleClearanceFlag") {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
@@ -6057,6 +6135,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (flight) {
                 flight.handoffTargetController = message.targetCallsign
                 flight.handoffOptimisticUntil = Date.now() + 3000
+                // APP/DEP handoff: clear HS/HP text (frontend clears matching scribbles)
+                if (isAppOrDepCallsign(message.targetCallsign)) {
+                    clearHsHpForAppDepTransfer(flight, strip.callsign)
+                }
                 reevaluateAndBroadcast(strip.callsign)
             }
             break
@@ -8138,12 +8220,13 @@ udpIn.on("message", (msg, rinfo) => {
         if (data.type === "rofResult") {
             const callsign = typeof data.callsign === "string" ? data.callsign.toUpperCase() : ""
             const ok = data.ok === true
+            const efsMode = data.mode === "efs"
             const error = typeof data.error === "string" ? data.error : "Failed to send ROF"
             if (!callsign) return
             if (ok) {
                 clearTopSkyRofFallback(callsign)
-                console.log(`[ROF] sent ok for ${callsign}`)
-                // Clear /ROF/… left on the scratch vehicle (TopSky often does not)
+                console.log(`[ROF] ${efsMode ? "EFS" : "TopSky"} sent ok for ${callsign}`)
+                // Clear protocol scratch on the vehicle after peers can observe it
                 const vehicle = typeof data.vehicle === "string" ? data.vehicle.toUpperCase() : ""
                 if (vehicle) {
                     setTimeout(() => {
@@ -8153,7 +8236,9 @@ udpIn.on("message", (msg, rinfo) => {
                 }
                 return
             }
-            console.log(`[ROF] TopSky failed for ${callsign}: ${error} — EFS-native fallback`)
+            console.log(
+                `[ROF] ${efsMode ? "EFS" : "TopSky"} failed for ${callsign}: ${error} — EFS-native fallback`,
+            )
             clearTopSkyRofFallback(callsign)
             applyEfsNativeRof(callsign, error)
             return
@@ -8545,6 +8630,12 @@ udpIn.on("message", (msg, rinfo) => {
                 }
                 if (delay > 0) setTimeout(clear, delay)
                 else clear()
+            }
+            // EFS ROF on a scratch vehicle → refresh TARGET strip (ROF / XFER UI)
+            if (result.refreshCallsigns?.length) {
+                for (const cs of result.refreshCallsigns) {
+                    reevaluateAndBroadcast(cs)
+                }
             }
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.transferSound && currentUiSettings.transferSoundsEnabled) {
@@ -9030,52 +9121,59 @@ function applyViffPoll(result: ViffPollResult) {
             const stsUpper = newSts?.trim().toUpperCase()
             const isSlc = stsUpper === "SLC" || stsUpper === "SCL"
             const CTOT_SLC_GRACE_MS = 180_000
-            // CTOT cancelled (network SLC): latch so strip shows SCL in the CTOT slot
-            if (newCtot) {
-                if (flight.ctot !== newCtot || flight.ctotCancelled || flight.ctotClearedAt) {
-                    flight.ctot = newCtot
+            // Local spoof / ES CDM pin: keep CTOT + cdmSts (poll was wiping SRM/CTOT spoofs)
+            if (!localFresh) {
+                // CTOT cancelled (network SLC): latch so strip shows SCL in the CTOT slot
+                if (newCtot) {
+                    if (flight.ctot !== newCtot || flight.ctotCancelled || flight.ctotClearedAt) {
+                        flight.ctot = newCtot
+                        flight.ctotCancelled = undefined
+                        flight.ctotClearedAt = undefined
+                        changed = true
+                    }
+                } else if (flight.ctot) {
+                    flight.ctot = undefined
+                    if (isSlc) {
+                        flight.ctotCancelled = true
+                        flight.ctotClearedAt = undefined
+                    } else {
+                        flight.ctotCancelled = undefined
+                        flight.ctotClearedAt = Date.now()
+                    }
+                    changed = true
+                } else if (
+                    isSlc &&
+                    !flight.ctotCancelled &&
+                    flight.ctotClearedAt != null &&
+                    Date.now() - flight.ctotClearedAt < CTOT_SLC_GRACE_MS
+                ) {
+                    flight.ctotCancelled = true
+                    flight.ctotClearedAt = undefined
+                    changed = true
+                } else if (flight.ctotCancelled && !isSlc) {
                     flight.ctotCancelled = undefined
                     flight.ctotClearedAt = undefined
                     changed = true
-                }
-            } else if (flight.ctot && localFresh) {
-                // Keep recent local ES CTOT while local CDM pin is fresh
-            } else if (flight.ctot) {
-                flight.ctot = undefined
-                if (isSlc) {
-                    flight.ctotCancelled = true
+                } else if (
+                    flight.ctotClearedAt != null &&
+                    Date.now() - flight.ctotClearedAt >= CTOT_SLC_GRACE_MS
+                ) {
                     flight.ctotClearedAt = undefined
-                } else {
-                    flight.ctotCancelled = undefined
-                    flight.ctotClearedAt = Date.now()
+                    changed = true
                 }
-                changed = true
-            } else if (
-                isSlc &&
-                !flight.ctotCancelled &&
-                flight.ctotClearedAt != null &&
-                Date.now() - flight.ctotClearedAt < CTOT_SLC_GRACE_MS
-            ) {
-                flight.ctotCancelled = true
-                flight.ctotClearedAt = undefined
-                changed = true
-            } else if (flight.ctotCancelled && !isSlc) {
+                if (flight.ctotReason !== newReason) {
+                    flight.ctotReason = newReason
+                    changed = true
+                }
+                if (flight.cdmSts !== newSts) {
+                    flight.cdmSts = newSts
+                    changed = true
+                }
+            } else if (newCtot && flight.ctot !== newCtot) {
+                // Network has a live CTOT — still allow upgrade while pin holds TOBT/TSAT
+                flight.ctot = newCtot
                 flight.ctotCancelled = undefined
                 flight.ctotClearedAt = undefined
-                changed = true
-            } else if (
-                flight.ctotClearedAt != null &&
-                Date.now() - flight.ctotClearedAt >= CTOT_SLC_GRACE_MS
-            ) {
-                flight.ctotClearedAt = undefined
-                changed = true
-            }
-            if (flight.ctotReason !== newReason) {
-                flight.ctotReason = newReason
-                changed = true
-            }
-            if (flight.cdmSts !== newSts) {
-                flight.cdmSts = newSts
                 changed = true
             }
             // Do not clear TOBT/TSAT/TTOT when HTTP omits the flight

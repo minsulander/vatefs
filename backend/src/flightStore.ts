@@ -291,8 +291,14 @@ export interface ProcessMessageResult {
     /** Clear EuroScope scratchpad for this callsign (e.g. after consuming TopSky ROF) */
     clearScratchpadCallsign?: string
 
-    /** Delay before clearScratchpadCallsign (ms); lets TopSky read outbound /ROF/ first */
+    /** Delay before clearScratchpadCallsign (ms); lets TopSky / peers read outbound ROF first */
     clearScratchpadDelayMs?: number
+
+    /**
+     * Extra callsigns to re-evaluate after this message (e.g. EFS ROF written on a
+     * scratch vehicle must refresh the TARGET strip).
+     */
+    refreshCallsigns?: string[]
 
     /** Transfer sound to play (handoff request / accept / refuse) */
     transferSound?: 'request' | 'accept' | 'refuse'
@@ -970,8 +976,8 @@ class FlightStore {
     }
 
     /**
-     * Persist an incoming TopSky ROF (/LAM/ROF/{requester}).
-     * Caller should clear the scratchpad after this (TopSky often leaves it set).
+     * Persist an incoming ROF requester (TopSky /LAM/ROF/… or EFS /EFSROF/…/…).
+     * Caller should clear the scratchpad after this when needed.
      * Flash for 1 minute; request itself stays until transfer.
      */
     setRofRequest(flight: Flight, requester: string): void {
@@ -2703,6 +2709,8 @@ class FlightStore {
                 flight.cdmSts = sts
                 changed = true
             }
+            // Pin so HTTP CDM poll cannot wipe spoofed SRM/SLC/FLS
+            if (sts) pin = true
         }
 
         if (fields.clearAll) {
@@ -2713,7 +2721,7 @@ class FlightStore {
             if (flight.ctotReason !== undefined) { flight.ctotReason = undefined; changed = true }
         }
 
-        if (pin) flight.localCdmAt = now
+        if (pin || changed) flight.localCdmAt = now
         if (!changed && !pin) return this.regenerateStrip(key)
 
         flight.lastUpdate = now
@@ -3312,18 +3320,35 @@ class FlightStore {
                 flight.missedApproachHoldUntil = undefined
             }
         }
-        // TopSky ROF: consume then clear scratch (TopSky often leaves /LAM/ROF/ and /ROF/ set)
+        // ROF: TopSky /LAM/ROF/… or /ROF/…; EFS ground /EFSROF/TARGET/REQUESTER
         let clearScratchpadCallsign: string | undefined
         let clearScratchpadDelayMs: number | undefined
+        let refreshCallsigns: string[] | undefined
         if (message.scratch !== undefined) {
             const scratch = message.scratch
             const lamRof = scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
+            const efsRof = scratch.match(/^\/EFSROF\/([^/]+)\/([^/]+)/i)
             if (lamRof?.[1]) {
                 this.setRofRequest(flight, lamRof[1])
                 clearScratchpadCallsign = callsign
                 clearScratchpadDelayMs = 100
+            } else if (efsRof?.[1] && efsRof?.[2]) {
+                // Custom EFS ROF (ESSA ground) — apply to TARGET; sender clears vehicle
+                const targetCs = efsRof[1].toUpperCase()
+                const requester = efsRof[2].toUpperCase()
+                const targetFlight =
+                    targetCs === callsign.toUpperCase() ? flight : this.flights.get(targetCs)
+                if (targetFlight) {
+                    this.setRofRequest(targetFlight, requester)
+                    if (targetCs !== callsign.toUpperCase()) {
+                        refreshCallsigns = [targetCs]
+                    }
+                }
+                console.log(
+                    `[ROF] EFS /EFSROF/ for ${targetCs} from ${requester} (via ${callsign})`,
+                )
             } else if (/^\/ROF\//i.test(scratch)) {
-                // Outbound ROF on a scratch vehicle — give TopSky time to read, then wipe
+                // Outbound TopSky ROF on a scratch vehicle — give TopSky time to read, then wipe
                 clearScratchpadCallsign = callsign
                 clearScratchpadDelayMs = 800
             }
@@ -3437,6 +3462,9 @@ class FlightStore {
         if (clearScratchpadCallsign) {
             result.clearScratchpadCallsign = clearScratchpadCallsign
             result.clearScratchpadDelayMs = clearScratchpadDelayMs
+        }
+        if (refreshCallsigns?.length) {
+            result.refreshCallsigns = refreshCallsigns
         }
         if (restoreScratchValue !== undefined) {
             result.setScratchValue = restoreScratchValue
@@ -3615,18 +3643,37 @@ class FlightStore {
             if (originMine && flight.weatherGiven && clearAirborneScratch === undefined) {
                 clearAirborneScratch = buildCombinedScratch(flight.remarks, flight.hp)
             }
-        } else if (
-            wasAirborne &&
-            message.altitude <= airborneThreshold &&
+        } else if (wasAirborne && message.altitude <= airborneThreshold) {
             // Short final is often below field+30 with GS still >> 55 (flare over threshold).
             // Clearing airborne on altitude alone yanked CTL strips to taxi_arr while still
             // flying — require slow GS when known; alt-only fallback only if GS unknown.
-            (gsKnown ? gs! <= groundSpeedThreshold : message.altitude <= defNotAirborneThreshold)
-        ) {
-            // Aircraft has landed
-            flight.airborne = false
-            if (!flight.ata && destMine && !flight.missedApproach) {
-                flight.ata = utcHhmm()
+            const slowEnough = gsKnown
+                ? gs! <= groundSpeedThreshold
+                : message.altitude <= defNotAirborneThreshold
+            // Vacated runway after ARR / roll-out: unlock TXI / TWR→GND XFER without waiting
+            // for GS ≤ 55 (high-speed taxiways often stay above that for a while).
+            const vacated =
+                message.latitude !== undefined &&
+                message.longitude !== undefined &&
+                !isOnAnyRunway(
+                    message.latitude,
+                    message.longitude,
+                    message.altitude,
+                    this.config.myAirports,
+                )?.onRunway
+            const gsState = (flight.groundstate ?? "").toUpperCase()
+            const vacatedAfterLanding =
+                vacated &&
+                (gsState === "ARR" ||
+                    gsState === "TXIN" ||
+                    // Still rolling / taxiing in but clearly off the strip
+                    (gsKnown && gs! <= 80))
+            if (slowEnough || vacatedAfterLanding) {
+                // Aircraft has landed / vacated
+                flight.airborne = false
+                if (!flight.ata && destMine && !flight.missedApproach) {
+                    flight.ata = utcHhmm()
+                }
             }
         }
 
@@ -4875,18 +4922,21 @@ class FlightStore {
             // TWR-only (GND separate): vacated arrival/local → XFER to next GND via ESSA sequence
             // (EuroScope nextController is often APP/empty, so action rules alone miss this).
             // Same for RTO → TAXI IN (departure TXIN back to gate) — ESSA may pick split GND SI.
+            // Do not require airborne===false: vacate detection unlocks XFER while the airborne
+            // flag is still sticky (same timing as TXI for GND).
             if (
                 coveringTwr &&
                 !coveringGndOnly &&
                 isTrackedByMe &&
                 transferPending !== "out" &&
-                flight.airborne === false &&
                 parseControllerRole(essaNext.callsign, actionConfig.myAirports) === "GND"
             ) {
                 const gs = flight.groundstate ?? ""
                 const rtoTaxiIn = stripType === "departure" && gs === "TXIN"
                 const vacatedArrLocal =
                     (stripType === "arrival" || stripType === "local") &&
+                    flight.airborne !== true &&
+                    (gs === "ARR" || gs === "TXIN" || gs === "" || gs === "NSTS") &&
                     (flight.latitude === undefined ||
                         flight.longitude === undefined ||
                         flight.currentAltitude === undefined ||

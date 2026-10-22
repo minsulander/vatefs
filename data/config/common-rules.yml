@@ -513,7 +513,8 @@ actionRules:
     myRole: [TWR]
     priority: 120
 
-  # TopSky ROF: taxi-out other-owned traffic (TWR only). ESSA overrides sectionId → taxi_dep.
+  # ROF: taxi-out other-owned traffic (TWR only). ESSA overrides sectionId → taxi_dep
+  # and uses custom EFS /EFSROF/ (ground chain). Non-ESSA keeps TopSky /ROF/.
   # handoffInitiated: false so inbound transfer shows ASSUME, not ROF
   rof_taxi_dep_twr:
     action: ROF
@@ -528,6 +529,7 @@ actionRules:
     priority: 40
 
   # GND ROF: TWR-owned inbound still on the runway
+  # At ESSA (essaRoles): backend sends custom EFS /EFSROF/ (not TopSky).
   # Priority above assume_arr_gnd (111) so ROF wins while TWR still owns the track
   rof_gnd_inbound_on_rwy:
     action: ROF
@@ -541,6 +543,7 @@ actionRules:
     priority: 120
 
   # GND ROF: TWR-owned inbound vacated after landing (until GND assumes)
+  # At ESSA (essaRoles): custom EFS ROF — EuroScope ground sector sequence is broken.
   # (any groundstate — only geography + ownership matter)
   rof_gnd_inbound_vacated:
     action: ROF

@@ -49,8 +49,12 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
     bool UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet = false);
-    /** Send TopSky ROF for target callsign (/ROF/TARGET/MYSELF on a writable FP). */
-    bool SendRof(const std::string &targetCallsign);
+    /**
+     * Send ROF for target callsign on a writable FP scratchpad.
+     * efsNative=false → TopSky `/ROF/TARGET/MYSELF` (sector-sequence validated).
+     * efsNative=true  → EFS `/EFSROF/TARGET/MYSELF` (no TopSky; ESSA ground DEL/GND/TWR).
+     */
+    bool SendRof(const std::string &targetCallsign, bool efsNative = false);
     /**
      * Brittle: ESC → type callsign → ASEL (numpad +) → HOME → ASEL (.contactme PM).
      * No SDK send-PM API. Requires EuroScope window focus; remapped ASEL keys break this;

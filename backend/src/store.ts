@@ -330,6 +330,7 @@ class EfsStore {
         clearHs?: boolean
         clearScratchpadCallsign?: string
         clearScratchpadDelayMs?: number
+        refreshCallsigns?: string[]
         transferSound?: ProcessMessageResult['transferSound']
         multiUpdates?: ProcessMessageResult['multiUpdates']
         cleanReprint?: boolean
@@ -342,6 +343,7 @@ class EfsStore {
             clearScratchpadCallsign: result.clearScratchpadCallsign,
             clearScratchpadDelayMs: result.clearScratchpadDelayMs,
         }
+        const refreshCallsigns = result.refreshCallsigns
         const goaReprint = {
             cleanReprint: result.cleanReprint,
             unsetEfsGoAround: result.unsetEfsGoAround,
@@ -422,6 +424,7 @@ class EfsStore {
                 clearHs: result.clearHs,
                 ...scratchClear,
                 ...goaReprint,
+                ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
                 transferSound,
                 multiUpdates: result.multiUpdates
             }
@@ -517,10 +520,14 @@ class EfsStore {
             const stripChanged = isNew || !stripsEqual(existingStrip, result.strip)
 
             // If nothing changed and no section change, skip the update
-            // (still forward scratch clears — e.g. consumed /ROF/ with no strip field change)
+            // (still forward scratch clears / EFS ROF target refresh)
             if (!stripChanged && !result.sectionChanged && !result.restored) {
-                if (transferSound || scratchClear.clearScratchpadCallsign) {
-                    return { transferSound, ...scratchClear }
+                if (transferSound || scratchClear.clearScratchpadCallsign || refreshCallsigns?.length) {
+                    return {
+                        transferSound,
+                        ...scratchClear,
+                        ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
+                    }
                 }
                 return {}
             }
@@ -587,12 +594,18 @@ class EfsStore {
                 clearHs: result.clearHs,
                 ...scratchClear,
                 ...goaReprint,
+                ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
                 transferSound
             }
         }
 
-        if (transferSound || scratchClear.clearScratchpadCallsign || result.clearHs) {
-            return { transferSound, clearHs: result.clearHs, ...scratchClear }
+        if (transferSound || scratchClear.clearScratchpadCallsign || result.clearHs || refreshCallsigns?.length) {
+            return {
+                transferSound,
+                clearHs: result.clearHs,
+                ...scratchClear,
+                ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
+            }
         }
         return {}
     }

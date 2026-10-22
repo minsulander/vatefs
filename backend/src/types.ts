@@ -209,7 +209,7 @@ export interface Flight {
      * while annotation echo catches up.
      */
     missedApproachHoldUntil?: number
-    /** TopSky ROF requester login callsign (from /LAM/ROF/{cs}; persisted until transfer) */
+    /** ROF requester login callsign (/LAM/ROF/{cs} or /EFSROF/…/{cs}; until transfer) */
     rofRequestFrom?: string
     /** Epoch ms until inbound ROF SI/XFER flash ends (request itself stays until XFER) */
     rofFlashUntil?: number

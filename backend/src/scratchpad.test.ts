@@ -82,6 +82,14 @@ check("LAM ROF does not touch HP", () => {
     })
 })
 
+check("EFS ROF does not touch HP", () => {
+    assert.deepEqual(parseCombinedScratch("/EFSROF/SAS926/ESSA_G_GND"), {
+        remarks: null,
+        hp: null,
+    })
+    assert.equal(isProtocolScratch("/EFSROF/SAS926/ESSA_G_GND"), true)
+})
+
 check("other TopSky protocol does not become HP", () => {
     assert.deepEqual(parseCombinedScratch("/RJC/S/ROF/ESSA_W_TWR"), {
         remarks: null,

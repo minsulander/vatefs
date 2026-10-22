@@ -627,6 +627,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             // /ASP-/ /ES /C_FLAG_ACK/ /C_FLAG_RESET/ MISAP_ /ROF/SAS525/ESMM_5_CTR
             // /LAM/ROF/ESMM_5_CTR
             // /ROF/RYR6Q/EKCH_F_APP
+            // VatEFS ESSA ground: /EFSROF/SAS926/ESSA_G_GND (not TopSky)
             // /COB
             // /PLU
             // /TIT
@@ -2054,15 +2055,18 @@ bool VatEFSPlugin::UpdateScratchPad(const std::string &inCallsign, const std::st
     return false;
 }
 
-bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
+bool VatEFSPlugin::SendRof(const std::string &targetCallsign, bool efsNative)
 {
-    auto postResult = [this](const std::string &callsign, bool ok, const std::string &error = "") {
+    const char *tag = efsNative ? "efsRof" : "rof";
+    auto postResult = [this, efsNative, tag](const std::string &callsign, bool ok,
+                                              const std::string &error = "") {
         nlohmann::json result = nlohmann::json::object();
         result["type"] = "rofResult";
         result["callsign"] = callsign;
         result["ok"] = ok;
+        result["mode"] = efsNative ? "efs" : "topsky";
         if (!ok && !error.empty()) result["error"] = error;
-        PostJson(result, "SendRof");
+        PostJson(result, tag);
     };
 
     try {
@@ -2071,23 +2075,26 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
             c = (char)std::toupper((unsigned char)c);
         if (target.empty()) {
             const std::string err = "Invalid callsign";
-            DisplayMessage("rof: " + err);
+            DisplayMessage(std::string(tag) + ": " + err);
             postResult(target, false, err);
             return false;
         }
         auto myself = ControllerMyself();
         if (!myself.IsValid()) {
             const std::string err = "Not logged in as controller";
-            DisplayMessage("rof: " + err);
+            DisplayMessage(std::string(tag) + ": " + err);
             postResult(target, false, err);
             return false;
         }
-        // TopSky coordination: /ROF/TARGET/REQUESTER on a scratchpad ES lets us write.
-        // Backend clears the vehicle scratch after a short delay (TopSky often leaves it set).
-        const std::string scratch = std::string("/ROF/") + target + "/" + myself.GetCallsign();
+        // TopSky: /ROF/TARGET/REQUESTER (sector-sequence validated — broken on ESSA ground).
+        // EFS:    /EFSROF/TARGET/REQUESTER (peer VatEFS backends consume; TopSky ignores).
+        // Backend clears the vehicle scratch after a short delay.
+        const std::string scratch =
+            (efsNative ? std::string("/EFSROF/") : std::string("/ROF/")) + target + "/" +
+            myself.GetCallsign();
 
         std::vector<std::string> vehicles;
-        // Prefer aircraft we track (observed TopSky vehicle for ROF)
+        // Prefer aircraft we track (observed TopSky / EFS scratch vehicle)
         for (auto fp = FlightPlanSelectFirst(); fp.IsValid(); fp = FlightPlanSelectNext(fp)) {
             if (!fp.GetTrackingControllerIsMe()) continue;
             const char *cs = fp.GetCallsign();
@@ -2120,29 +2127,30 @@ bool VatEFSPlugin::SendRof(const std::string &targetCallsign)
             auto fp = FlightPlanSelect(vehicle.c_str());
             if (!fp.IsValid()) continue;
             if (fp.GetControllerAssignedData().SetScratchPadString(scratch.c_str())) {
-                DebugMessage("ROF sent for " + target + " via " + vehicle + ": " + scratch);
-                // Include vehicle so backend can clear the scratch after TopSky reads it
+                DebugMessage(std::string(efsNative ? "EFS ROF" : "ROF") + " sent for " + target +
+                             " via " + vehicle + ": " + scratch);
                 nlohmann::json result = nlohmann::json::object();
                 result["type"] = "rofResult";
                 result["callsign"] = target;
                 result["ok"] = true;
+                result["mode"] = efsNative ? "efs" : "topsky";
                 result["vehicle"] = vehicle;
-                PostJson(result, "SendRof");
+                PostJson(result, tag);
                 return true;
             }
         }
 
-        const std::string err = "Assume at least one aircraft first (TopSky needs a tracked scratch vehicle)";
-        DisplayMessage("rof: Failed to send — " + err);
+        const std::string err = "Assume at least one aircraft first (needs a writable scratch vehicle)";
+        DisplayMessage(std::string(tag) + ": Failed to send — " + err);
         postResult(target, false, err);
         return false;
     } catch (const std::exception &e) {
         const std::string err = std::string("Exception: ") + e.what();
-        DisplayMessage("rof " + err);
+        DisplayMessage(std::string(tag) + " " + err);
         postResult(targetCallsign, false, err);
     } catch (...) {
         const std::string err = "Unknown exception";
-        DisplayMessage("rof: " + err);
+        DisplayMessage(std::string(tag) + ": " + err);
         postResult(targetCallsign, false, err);
     }
     return false;
@@ -2941,7 +2949,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     }
                 } else if (message["type"] == "rof") {
                     auto callsign = message["callsign"].get<std::string>();
-                    if (!SendRof(callsign)) {
+                    if (!SendRof(callsign, false)) {
+                        // SendRof already displayed a specific error
+                    }
+                } else if (message["type"] == "efsRof") {
+                    // ESSA ground DEL/GND/TWR — custom EFS ROF (no TopSky sector sequence)
+                    auto callsign = message["callsign"].get<std::string>();
+                    if (!SendRof(callsign, true)) {
                         // SendRof already displayed a specific error
                     }
                 } else if (message["type"] == "contactme") {

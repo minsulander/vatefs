@@ -11,7 +11,7 @@
  *   .SLOW          — slow flag (leading dot, same as other remarks)
  *   SLOW           — bare TopSky form still accepted when reading
  *
- * TopSky protocol scratches (/ROF/…, /LAM/ROF/…, /RJC/…, etc.) must not
+ * Protocol scratches (/ROF/…, /LAM/ROF/…, /EFSROF/…, /RJC/…, etc.) must not
  * touch remarks or HP — return null to leave existing fields unchanged.
  */
 
