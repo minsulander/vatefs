@@ -792,6 +792,8 @@ type OutboundPluginCommand =
     | { type: "setAsrt"; callsign: string; asrt: string }
     | { type: "setTsac"; callsign: string; tsac: string }
     | { type: "setCtoc"; callsign: string; ctoc: string }
+    /** One airway expansion. Plugin runs a single GetExtractedRoute per timer tick. */
+    | { type: "expandRoute"; callsign: string }
     | {
           type: "amendFlightPlan"
           callsign: string
@@ -8751,6 +8753,9 @@ udpIn.on("message", (msg, rinfo) => {
 
         // Try to process as plugin message
         const result = store.tryProcessPluginMessage(data)
+        for (const callsign of flightStore.takePendingRouteExpands()) {
+            sendUdp(JSON.stringify({ type: "expandRoute", callsign } satisfies OutboundPluginCommand))
+        }
 
         if (result) {
             // Clear consumed TopSky ROF scratch (/LAM/ROF/… or outbound /ROF/…)

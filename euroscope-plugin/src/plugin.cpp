@@ -275,23 +275,6 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         if (route && *route && strlen(route) < 1000)
             message["route"] = AnsiToUtf8(route);
 
-        // Airway-expanded route points (ES prediction) — FPR/DCT menu waypoints
-        {
-            EuroScopePlugIn::CFlightPlanExtractedRoute extracted = FlightPlan.GetExtractedRoute();
-            const int n = extracted.GetPointsNumber();
-            if (n > 0 && n < 256) {
-                std::string joined;
-                for (int i = 0; i < n; ++i) {
-                    const char *name = extracted.GetPointName(i);
-                    if (!name || !*name || strlen(name) >= 16) continue;
-                    if (!joined.empty()) joined.push_back(' ');
-                    joined += AnsiToUtf8(name);
-                }
-                if (!joined.empty() && joined.size() < 2000)
-                    message["extractedRoute"] = joined;
-            }
-        }
-
         // Filed cruise TAS (FPL) — shown on paper DEP strips (e.g. N0430)
         {
             int tas = fpData.GetTrueAirspeed();
@@ -2807,6 +2790,50 @@ static bool IsSidPattern(const std::string &s)
     return true;
 }
 
+void VatEFSPlugin::EnqueueRouteExpand(const std::string &callsign)
+{
+    if (callsign.empty()) return;
+    for (const auto &queued : routeExpandQueue) {
+        if (queued == callsign) return;
+    }
+    routeExpandQueue.push_back(callsign);
+}
+
+void VatEFSPlugin::ExpandOneQueuedRoute()
+{
+    if (routeExpandQueue.empty()) return;
+    const std::string callsign = routeExpandQueue.front();
+    routeExpandQueue.erase(routeExpandQueue.begin());
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) {
+            DebugMessage("expandRoute: no flight plan for " + callsign);
+            return;
+        }
+        EuroScopePlugIn::CFlightPlanExtractedRoute extracted = fp.GetExtractedRoute();
+        const int n = extracted.GetPointsNumber();
+        std::string joined;
+        if (n > 0 && n < 256) {
+            for (int i = 0; i < n; ++i) {
+                const char *name = extracted.GetPointName(i);
+                if (!name || !*name || strlen(name) >= 16) continue;
+                if (!joined.empty()) joined.push_back(' ');
+                joined += AnsiToUtf8(name);
+            }
+        }
+        nlohmann::json message = nlohmann::json::object();
+        message["type"] = "flightPlanDataUpdate";
+        message["callsign"] = callsign;
+        message["extractedRoute"] = joined.size() < 2000 ? joined : joined.substr(0, 2000);
+        PostJson(message, "expandRoute");
+        DebugMessage("expandRoute: " + callsign + " (" + std::to_string(n) + " points)");
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("expandRoute exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("expandRoute: Unknown exception");
+    }
+}
+
 void VatEFSPlugin::ReceiveUdpMessages()
 {
     if (udpReceiveSocket == nullptr) return;
@@ -2814,6 +2841,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
     try {
         SOCKET sock = reinterpret_cast<SOCKET>(udpReceiveSocket);
         char buffer[4096];
+        // Drain the socket so a burst of expandRoute requests cannot sit in
+        // front of assume/scratch. Expansion itself is one callsign per tick.
+        int drained = 0;
+        while (drained < 256) {
         sockaddr_in fromAddr;
         int fromAddrLen = sizeof(fromAddr);
 
@@ -2824,13 +2855,15 @@ void VatEFSPlugin::ReceiveUdpMessages()
             int error = WSAGetLastError();
             if (error == WSAEWOULDBLOCK || error == WSAECONNRESET) {
                 // No data available or connection reset, this is normal
-                return;
+                break;
             } else {
                 // Real error occurred
                 DisplayMessage("UDP receive error: " + std::to_string(error));
-                return;
+                break;
             }
         }
+        if (recvResult <= 0) break;
+        drained++;
 
         if (recvResult > 0) {
             buffer[recvResult] = '\0';
@@ -3086,6 +3119,12 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else if (!SendRefuseCoordination(callsign)) {
                         // SendRefuseCoordination already DisplayMessage'd
                     }
+                } else if (message["type"] == "expandRoute") {
+                    // Enqueue only. GetExtractedRoute runs once per timer tick.
+                    auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    EnqueueRouteExpand(callsign);
                 } else if (message["type"] == "refresh") {
                     Refresh();
                 } else if (message["type"] == "assume") {
@@ -4191,6 +4230,8 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 }
             }
         }
+        }
+        ExpandOneQueuedRoute();
     } catch (const std::exception &e) {
         DisplayMessage(std::string("ReceiveUdpMessages exception: ") + e.what());
     } catch (...) {

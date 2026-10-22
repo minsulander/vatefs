@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace VatEFS
 {
@@ -208,6 +209,14 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     bool pendingFullRefresh;
     /** Earliest time to run pendingFullRefresh (+2s after StartBackend for bind) */
     std::time_t fullRefreshNotBefore;
+    /**
+     * Callsigns whose airway expansion was requested because a strip spawned
+     * (or the filed route changed on an existing strip). One GetExtractedRoute
+     * per timer tick — the .efs start dump must not expand every flight plan.
+     */
+    std::vector<std::string> routeExpandQueue;
+    void EnqueueRouteExpand(const std::string &callsign);
+    void ExpandOneQueuedRoute();
     void* udpReceiveSocket; // SOCKET (using void* to avoid including winsock2.h in header)
     bool winsockInitialized;
     std::string connectionError;

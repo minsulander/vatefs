@@ -874,6 +874,12 @@ class FlightStore {
     private landingRunwayTouched: Set<string> = new Set()
 
     /**
+     * Callsigns that need one EuroScope airway expansion. Filled when a strip
+     * is spawned, or when the filed route changes on a strip that already exists.
+     */
+    private pendingRouteExpand: string[] = []
+
+    /**
      * ESGG paper: active APP→me inbound transfer pin session (in or leaving pin tray).
      * Cleared when the handoff ends.
      */
@@ -1566,6 +1572,30 @@ class FlightStore {
         }
     }
 
+    private queueRouteExpand(callsign: string): void {
+        if (!callsign || this.pendingRouteExpand.includes(callsign)) return
+        this.pendingRouteExpand.push(callsign)
+    }
+
+    /** Re-expand after a filed-route edit on a strip that is already on the bay. */
+    private queueRouteExpandIfPresent(
+        callsign: string,
+        flight: Flight,
+        result: ProcessMessageResult,
+        routeChanged: boolean,
+    ): void {
+        if (!routeChanged || flight.synthetic || flight.extractedRoute) return
+        if (!result.strip && !(result.strips && result.strips.length > 0)) return
+        this.queueRouteExpand(callsign)
+    }
+
+    /** Callsigns requested since the last take. Plugin expands one per timer tick. */
+    takePendingRouteExpands(): string[] {
+        const queued = this.pendingRouteExpand
+        this.pendingRouteExpand = []
+        return queued
+    }
+
     private finalizeFlightStrips(
         callsign: string,
         flight: Flight,
@@ -1848,6 +1878,9 @@ class FlightStore {
                 scoped
             )
             const shiftedCallsigns = this.getLastShiftedCallsigns()
+            if (isNewStrip && !flight.synthetic && !flight.extractedRoute) {
+                this.queueRouteExpand(callsign)
+            }
             strips.push(strip)
             multiUpdates.push({
                 strip,
@@ -2197,6 +2230,9 @@ class FlightStore {
             })
             flight.lastSectionRule = ruleSource
             console.log(`[RULE] ${callsign} -> ${targetSection.sectionId} (rule: ${ruleSource}, new strip)`)
+            if (!flight.synthetic && !flight.extractedRoute) {
+                this.queueRouteExpand(callsign)
+            }
         } else if (holdSection && currentAssignment) {
             // Manual RWY sequence bay, or landed ARR held on PÅ BANAN until drag to taxi
             position = currentAssignment.position
@@ -3023,6 +3059,12 @@ class FlightStore {
         const prevRoute = flight.route
         const prevSid = flight.sid
         if (message.route !== undefined) flight.route = message.route
+        const routeChanged = message.route !== undefined && message.route !== prevRoute
+        // Filed route moved — drop the old expansion so DCT falls back to the
+        // filed route until the one-shot spawn/amend expansion arrives.
+        if (routeChanged && message.extractedRoute === undefined) {
+            flight.extractedRoute = undefined
+        }
         if (message.extractedRoute !== undefined) {
             const er = message.extractedRoute.trim()
             flight.extractedRoute = er || undefined
@@ -3062,7 +3104,6 @@ class FlightStore {
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy || undefined
         if (message.sid !== undefined) flight.sid = message.sid || undefined
         // FPL/SID edit in ES: drop sticky override when FPL no longer forces that SID
-        const routeChanged = message.route !== undefined && message.route !== prevRoute
         const sidChanged =
             message.sid !== undefined && (message.sid || undefined) !== prevSid
         if (flight.sidDisplayOverride && (routeChanged || sidChanged)) {
@@ -3117,6 +3158,7 @@ class FlightStore {
                 flight,
             )
             if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
+            this.queueRouteExpandIfPresent(callsign, flight, result, routeChanged)
             return result
         }
 
@@ -3131,6 +3173,7 @@ class FlightStore {
             flight
         )
         if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
+        this.queueRouteExpandIfPresent(callsign, flight, result, routeChanged)
         return result
     }
 
