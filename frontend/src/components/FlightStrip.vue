@@ -1117,7 +1117,7 @@
           <div
             v-if="showPrimaryTime"
             class="strip-time strip-time-top fit-font"
-            :class="{ ghost: !primaryTimeValue, 'time-fls': isFls, 'time-changed': tobtChanged }"
+            :class="{ ghost: !primaryTimeValue, 'time-changed': tobtChanged }"
             :title="primaryTimeLabelTitle"
             @click.stop="onPrimaryTimeClick"
           >
@@ -1195,6 +1195,9 @@
                 ghost: !secondaryTimeValue && !faceAssr,
                 'has-face-assr': !!faceAssr,
                 'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
+                'time-fls': secondaryTimeKind === 'fls',
+                'time-cdm-sts':
+                  secondaryTimeKind === 'srm' || secondaryTimeKind === 'slc',
                 'squawk-empty':
                   secondaryTimeKind === 'assr' &&
                   !displayAssr &&
@@ -1226,7 +1229,10 @@
             </template>
             <template v-else>
               <span v-if="secondaryTimeLabel" class="strip-time-lbl">{{ secondaryTimeLabel }}</span>
-              <span class="strip-time-val">{{ secondaryTimeValue || (faceAssr ? '' : '----') }}</span>
+              <span class="strip-time-val">{{
+                secondaryTimeValue ||
+                (faceAssr || secondaryTimeKind === 'none' ? '' : '----')
+              }}</span>
               <span v-if="faceAssr" class="strip-time-assr">{{ faceAssr }}</span>
             </template>
           </div>
@@ -3927,6 +3933,47 @@ function clearScribblesInCell(sel: string): boolean {
   return false
 }
 
+/** APP/DEP (not remote-tower _R_APP / _R_CTR) — same idea as backend isAppOrDepCallsign. */
+function isAppOrDepCallsign(callsign?: string | null): boolean {
+  const cs = (callsign || '').trim().toUpperCase()
+  if (!cs) return false
+  if (cs.endsWith('_DEP')) return true
+  if (cs.endsWith('_R_APP') || cs.endsWith('_R_CTR')) return false
+  if (cs.endsWith('_APP')) return true
+  return false
+}
+
+/** Clear scribbled HS/HP (text fields are cleared on airborne / APP/DEP transfer). */
+function clearHsHpScribbles() {
+  if (store.isPaperLook) return
+  const clearedHs = clearScribblesInCell('.cell-hs')
+  const clearedHp = clearScribblesInCell('.cell-hp')
+  if (clearedHs || clearedHp) {
+    // sync already done per cell; no-op if both empty
+  }
+}
+
+// Text HS/HP clear on airborne / APP/DEP XFER — clear matching scribbles too
+watch(
+  () =>
+    ({
+      airborne: !!props.strip.airborne,
+      pending: props.strip.transferPending,
+      target: props.strip.transferCallsign,
+    }) as const,
+  (cur, prev) => {
+    if (store.isPaperLook) return
+    const becameAirborne = cur.airborne && !prev?.airborne
+    const xferToAppDep =
+      cur.pending === 'out' &&
+      isAppOrDepCallsign(cur.target) &&
+      (prev?.pending !== 'out' || !isAppOrDepCallsign(prev?.target))
+    if (becameAirborne || xferToAppDep) {
+      nextTick(() => clearHsHpScribbles())
+    }
+  },
+)
+
 function onHsClick() {
   if (clearScribblesInCell('.cell-hs')) return
   if (!canEditAssignedData.value) return
@@ -4356,11 +4403,11 @@ const showPrimaryTime = computed(() => {
 
 /**
  * Parse vIFF/CDM network status for strip UI.
- * Shown: REA (badge), FLS variants (time label + tooltip).
- * Not shown as badge: COMPLY, AIRB, ATC_ACTIV, DES, SAM, SRM, SLC (SCL shown in CTOT slot), etc.
+ * Shown: REA (badge above CTOT/TOBT); FLS / SRM / SLC replace the TSAT slot
+ * (below ATYP) — FLS alternates with subtype reason. COMPLY/AIRB/DES/SAM ignored.
  */
 function parseCdmSts(sts: string | undefined): {
-  kind: 'rea' | 'fls'
+  kind: 'rea' | 'fls' | 'srm' | 'slc'
   raw: string
   flsType?: string
   badge: string
@@ -4369,6 +4416,8 @@ function parseCdmSts(sts: string | undefined): {
   const raw = sts.trim().toUpperCase()
   if (!raw) return null
   if (raw === 'REA') return { kind: 'rea', raw, badge: 'REA' }
+  if (raw === 'SRM') return { kind: 'srm', raw, badge: 'SRM' }
+  if (raw === 'SLC' || raw === 'SCL') return { kind: 'slc', raw, badge: 'SLC' }
 
   if (raw === 'SUSP' || raw === 'FLS') {
     return { kind: 'fls', raw, badge: 'FLS' }
@@ -4409,7 +4458,25 @@ const cdmStatus = computed(() =>
 )
 
 const isFls = computed(() => cdmStatus.value?.kind === 'fls')
+const isSrm = computed(() => cdmStatus.value?.kind === 'srm')
+const isSlcSts = computed(() => cdmStatus.value?.kind === 'slc')
 const isRea = computed(() => cdmStatus.value?.kind === 'rea')
+/** FLS replaces TSAT while TOBT (TB) is still primary */
+const flsReplacesTsat = computed(
+  () => showCdm.value && !isPushStartOrLater.value && isFls.value,
+)
+/**
+ * SRM / SLC replace the below-ATYP slot only after TB → TT
+ * (PUSH&START onward, until CFTO).
+ */
+const srmSlcInSecondary = computed(
+  () =>
+    isEssaDep.value &&
+    isDepartingIfr.value &&
+    isPushStartOrLater.value &&
+    !props.strip.clearedForTakeoff &&
+    (isSrm.value || isSlcSts.value),
+)
 
 /**
  * Paper col 6 top: scribbled "Rea" only when vIFF REA is set (same as ESSA CDM path).
@@ -4454,7 +4521,7 @@ function formatHhmmColon(hhmm: string | undefined): string {
 }
 
 type PrimaryTimeKind = 'tobt' | 'ttot' | 'eobt' | 'eta' | 'none'
-type SecondaryTimeKind = 'tsat' | 'ctot' | 'scl' | 'assr' | 'none'
+type SecondaryTimeKind = 'tsat' | 'ctot' | 'scl' | 'assr' | 'fls' | 'srm' | 'slc' | 'none'
 
 /**
  * Top time window:
@@ -4488,16 +4555,8 @@ const primaryTimeValue = computed(() => {
   }
 })
 
-/** Short label: TB / TT / EB / ETA; FLS blinks when applicable */
+/** Short label: TB / TT / EB / ETA (FLS/SRM/SLC use the TSAT slot below ATYP) */
 const primaryTimeLabel = computed(() => {
-  if (isFls.value && isEssaDep.value && primaryTimeKind.value === 'tobt') {
-    const type = cdmStatus.value?.flsType
-    if (type) {
-      const phase = Math.floor(nowUtcMs.value / 2000) % 2
-      return phase === 0 ? 'FLS' : type
-    }
-    return 'FLS'
-  }
   switch (primaryTimeKind.value) {
     case 'tobt': return 'TB'
     case 'ttot': return 'TT'
@@ -4515,17 +4574,29 @@ const depArrowCtot = computed(() => {
 })
 
 /**
- * Bottom time window:
- * - ESSA DEP: TSAT until PUSH&START; then ASSR (CTOT/SCL live in dep arrow)
- * - Compact DEP: CTOT/SCL replaces ASSR (no CTOT-only triangle)
+ * Bottom time window (below ATYP):
+ * - ESSA IFR DEP + TB: FLS (alt. reason) replaces TSAT; else TSAT
+ * - ESSA IFR DEP + TT (PUSH&START+): SRM / SLC only (never ASSR)
+ * - Compact DEP: CTOT/SCL in that slot when present
  * - ARR / other airports: ASSR (squawk)
  */
 const secondaryTimeKind = computed((): SecondaryTimeKind => {
   if (isArrLayout.value) return 'assr'
-  if (isEssaDep.value && !isPushStartOrLater.value) return 'tsat'
+  if (isEssaDep.value && !isPushStartOrLater.value) {
+    if (flsReplacesTsat.value) return 'fls'
+    return 'tsat'
+  }
+  if (srmSlcInSecondary.value) {
+    if (isSrm.value) return 'srm'
+    if (isSlcSts.value) return 'slc'
+  }
   // Compact: CTOT/SCL in ASSR slot (triangle only for CFTO/ATD green)
   if (isCompactBay.value && depArrowCtot.value) {
     return depArrowCtot.value === 'SCL' ? 'scl' : 'ctot'
+  }
+  // ESSA IFR DEP: no squawk in the below-ATYP box (ASSR stays in expander / face)
+  if (isDepartingIfr.value && CDM_AIRPORTS.has(props.strip.adep)) {
+    return 'none'
   }
   return 'assr'
 })
@@ -4592,6 +4663,14 @@ function onDepArrowCtotClick(event: MouseEvent) {
   onCtotClick(event)
 }
 
+/** FLS in TSAT slot: alternate "FLS" ↔ subtype reason (2s), CDM-only */
+const flsTsatDisplay = computed(() => {
+  const type = cdmStatus.value?.flsType
+  if (!type) return 'FLS'
+  const phase = Math.floor(nowUtcMs.value / 2000) % 2
+  return phase === 0 ? 'FLS' : type
+})
+
 const secondaryTimeValue = computed(() => {
   switch (secondaryTimeKind.value) {
     case 'tsat':
@@ -4600,6 +4679,12 @@ const secondaryTimeValue = computed(() => {
       return formatHhmmColon(props.strip.ctot)
     case 'scl':
       return 'SCL'
+    case 'fls':
+      return flsTsatDisplay.value
+    case 'srm':
+      return 'SRM'
+    case 'slc':
+      return 'SLC'
     case 'assr':
       return displayAssr.value
     default:
@@ -4612,6 +4697,10 @@ const secondaryTimeLabel = computed(() => {
     case 'tsat': return secondaryTimeValue.value ? 'TS' : ''
     case 'ctot': return 'CT' // compact: CT 20:55 (same short style as TS/TB)
     case 'scl': return 'CT'
+    case 'fls':
+    case 'srm':
+    case 'slc':
+      return '' // status fills the value alone (replaces TSAT)
     case 'assr': return '' // squawk only, no "ASSR" prefix
     default: return ''
   }
@@ -4621,6 +4710,15 @@ const secondaryTimeTitle = computed(() => {
   if (secondaryTimeKind.value === 'tsat') {
     const tsat = displayTsat.value
     return tsat ? `TSAT ${tsat}` : 'TSAT'
+  }
+  if (secondaryTimeKind.value === 'fls') {
+    return flsTooltip(cdmStatus.value?.raw || 'FLS', cdmStatus.value?.flsType)
+  }
+  if (secondaryTimeKind.value === 'srm') {
+    return 'SRM — Slot Revision Message (CTOT revised)'
+  }
+  if (secondaryTimeKind.value === 'slc') {
+    return 'SLC — Slot Cancellation'
   }
   if (secondaryTimeKind.value === 'assr') return assrTitle.value
   if (secondaryTimeKind.value === 'ctot' || secondaryTimeKind.value === 'scl') return ctocTooltip.value
@@ -6122,11 +6220,28 @@ function onGroundStateClick(action: string) {
   --left-wtc-w: calc(14px * var(--strip-scale));
   --strip-left-w: calc(var(--left-arrow-w) + var(--left-atyp-w) + var(--left-wtc-w));
   --ctrl-arrow-h: calc(12px * var(--strip-scale));
-  /* Raised key chrome — soft BR shade; kept small so it fits inside the type frame */
-  --strip-key-shadow: 1px 1px 0 #aaa, 1px 2px 0 rgba(0, 0, 0, 0.10);
+  /* Raised key chrome — soft BR shade; scales with fonts/aspect (1K + zoom) */
+  --strip-key-shadow:
+    calc(1px * var(--strip-scale)) calc(1px * var(--strip-scale)) 0 #aaa,
+    calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) 0 rgba(0, 0, 0, 0.10);
   /* Room inside the blue/type border for key box-shadow (matches max shadow offset) */
-  --strip-key-shadow-pad-x: 2px;
-  --strip-key-shadow-pad-y: 2px;
+  --strip-key-shadow-pad-x: calc(2px * var(--strip-scale));
+  --strip-key-shadow-pad-y: calc(2px * var(--strip-scale));
+  /* Non-scaling SVG strokes / hairline borders — thicken with --strip-scale */
+  --strip-hairline: calc(1px * var(--strip-scale));
+  /*
+   * CLR △ stroke weight (SAAB): design unit × --strip-stroke-scale × --strip-scale.
+   * Design units are half the prior tuned px (1 / 1.35 / 2.0 / 1.15), so scale 2.0
+   * reproduced that look; 1.75 is the new factor (not an extra multiply on those px).
+   * Independent of zoom Size %.
+   */
+  --strip-stroke-scale: 1.75;
+  --strip-triangle-stroke: calc(0.5px * var(--strip-scale) * var(--strip-stroke-scale));
+  --strip-triangle-stroke-ctot: calc(0.675px * var(--strip-scale) * var(--strip-stroke-scale));
+  --strip-triangle-stroke-green: calc(1px * var(--strip-scale) * var(--strip-stroke-scale));
+  --strip-triangle-stroke-active: calc(0.575px * var(--strip-scale) * var(--strip-stroke-scale));
+  /* CLR △ box fill — slightly inset so the shape sits inside the cell */
+  --strip-triangle-size: 0.9;
   /* HP column ≈ square, slightly wider than one body row */
   /* HS / HP ≈ square; RWY just a bit wider */
   --hp-col: calc(var(--strip-body-h) / 2 + 4px * var(--strip-scale));
@@ -7646,7 +7761,7 @@ function onGroundStateClick(action: string) {
   font-size: var(--fs-action-sm);
 }
 .exp-dep-pob .exp-dep-btn.exp-dep-green {
-  box-shadow: inset 0 0 0 2px #12b33a, var(--strip-key-shadow);
+  box-shadow: inset 0 0 0 calc(2px * var(--strip-scale)) #12b33a, var(--strip-key-shadow);
   border-color: #0a8a2a;
 }
 .exp-dep-pob .exp-chip:disabled {
@@ -7817,7 +7932,7 @@ function onGroundStateClick(action: string) {
   align-items: center;
   justify-content: center;
   margin: 0;
-  border: 1px solid #c8c8c8;
+  border: var(--strip-hairline) solid #c8c8c8;
   background: #ebebeb;
   box-shadow: var(--strip-key-shadow);
   color: #000;
@@ -7846,7 +7961,7 @@ function onGroundStateClick(action: string) {
   box-sizing: border-box;
   display: grid;
   place-items: center;
-  border: 1px solid #c8c8c8;
+  border: var(--strip-hairline) solid #c8c8c8;
   border-radius: 0;
   background: #ebebeb;
   box-shadow: var(--strip-key-shadow);
@@ -8003,6 +8118,9 @@ function onGroundStateClick(action: string) {
 /* Callsign: JS sets px to fit box; max tracks --strip-scale */
 .strip-main .callsign-box {
   grid-area: cs;
+  /* Below CLR △ so tip can paint over the C/S row edge; clicks on △ hit .cell-cto */
+  position: relative;
+  z-index: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8203,7 +8321,7 @@ function onGroundStateClick(action: string) {
   align-items: center;
   justify-content: center;
   margin: 0;
-  border: 1px solid #c8c8c8;
+  border: var(--strip-hairline) solid #c8c8c8;
   background: #ebebeb;
   box-shadow: var(--strip-key-shadow);
   color: #000;
@@ -8318,7 +8436,21 @@ function onGroundStateClick(action: string) {
   font-weight: 700;
   color: #d97706;
 }
+/* FLS in TSAT slot — red */
+.strip-time.time-fls,
+.strip-time.time-fls .strip-time-lbl,
+.strip-time.time-fls .strip-time-val {
+  font-weight: 700;
+  color: #c00000;
+}
 .time-fls, .label-fls { color: #c00000; }
+/* SRM / SLC in TSAT slot — black, bolder than TB (500) */
+.strip-time.time-cdm-sts,
+.strip-time.time-cdm-sts .strip-time-lbl,
+.strip-time.time-cdm-sts .strip-time-val {
+  font-weight: 700;
+  color: #000;
+}
 .tsat-mini { color: #00a000; }
 /* TSAT window: green in ±5; yellow last minute; red after expiry */
 .strip-time.tsat-window,
@@ -8532,14 +8664,18 @@ function onGroundStateClick(action: string) {
   /*
    * Same proportions as normal CTO cell: ~0.92fr wide × half body tall
    * (≈1.8∶1 at design scale). Cap by cell so tracks stay stable.
+   * --strip-triangle-size keeps the same inset as the full strip CLR △.
    */
-  --compact-cto-h: calc(var(--strip-body-h) - 6px);
+  --compact-cto-h: calc((var(--strip-body-h) - 6px) * var(--strip-triangle-size));
   --compact-cto-aspect: 1.8;
-  width: min(100%, calc(var(--compact-cto-h) * var(--compact-cto-aspect))) !important;
+  width: min(
+    calc(100% * var(--strip-triangle-size)),
+    calc(var(--compact-cto-h) * var(--compact-cto-aspect))
+  ) !important;
   height: auto !important;
   aspect-ratio: 1.8 / 1;
   max-height: var(--compact-cto-h);
-  max-width: 100%;
+  max-width: calc(100% * var(--strip-triangle-size));
   margin: 0 !important;
   padding: 0 !important;
   transform: none !important;
@@ -8716,7 +8852,8 @@ function onGroundStateClick(action: string) {
 .cell-std:not(.ghost) {
   font-size: var(--fs-mid);
 }
-.cell-cto {
+/* .cell.cell-cto — beat later .cell { overflow:hidden } so △ tip/stroke aren't clipped */
+.cell.cell-cto {
   grid-area: cto;
   position: relative;
   display: block !important;
@@ -8725,12 +8862,17 @@ function onGroundStateClick(action: string) {
   padding: 0 !important;
   /* Bleed into neighbours so the contour meets STD/CFL frames */
   margin: 0 -1px !important;
-  overflow: hidden;
+  /*
+   * Visible: takeoff △ apex + non-scaling stroke must not be clipped at the
+   * cell edge (hidden + upward nudge previously ate the tip under C/S).
+   */
+  overflow: visible;
   align-self: stretch;
   justify-self: stretch;
   min-width: 0;
   min-height: 0;
-  z-index: 1;
+  /* Above C/S so tip paints over the row seam and receives clicks there */
+  z-index: 2;
 }
 .cell-cto.has-ctot { cursor: pointer; }
 .cell-cto .cto-ctot {
@@ -8755,58 +8897,53 @@ function onGroundStateClick(action: string) {
 .cell-cto .clearance-triangle,
 .cell-cto .clearance-triangle.mini {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 3px;
+  left: 50%;
+  right: auto;
+  top: 50%;
   display: block;
-  width: 100% !important;
-  /* Shorter so the 3px upward nudge does not clip the tip */
-  height: calc(100% - 3px) !important;
+  width: calc(100% * var(--strip-triangle-size)) !important;
+  height: calc(100% * var(--strip-triangle-size)) !important;
   margin: 0;
   padding: 0;
   border: none;
   /* Inactive: dim frame (same as all data boxes); round joins */
   fill: none;
   stroke: #d8d8d8;
-  stroke-width: 1.25;
+  stroke-width: var(--strip-triangle-stroke);
   stroke-linejoin: round;
   stroke-linecap: round;
   overflow: visible;
-  /* Nudge up so base/tip stroke stays inside the strip */
-  transform: translateY(-3px);
+  /* True center — no upward nudge (that pushed the tip into the clip edge) */
+  transform: translate(-50%, -50%);
 }
 .cell-cto .clearance-triangle:not(.active) path {
-  /* Keep outline hairline thin despite preserveAspectRatio=none stretch */
+  /* Screen-px stroke (not stretched by preserveAspectRatio=none); width tracks --strip-scale */
   vector-effect: non-scaling-stroke;
 }
 /* CTOT present: mid-grey outline (less dim than empty; thinner than ATD/ATA) */
 .cell-cto .clearance-triangle.ctot-border:not(.active) {
   stroke: #888;
-  stroke-width: 1.75;
+  stroke-width: var(--strip-triangle-stroke-ctot);
 }
 /* ATD / ATA: thicker green outline (departed / arrived) */
 .cell-cto .clearance-triangle.green-border:not(.active) {
   stroke: #008001;
-  stroke-width: 2.75;
+  stroke-width: var(--strip-triangle-stroke-green);
 }
-/* ATA sits in landing △ (point down) — high in the wide upper mass */
+/* ATA sits in landing △ (point down) — high in the wide upper mass; +8pp with ATD */
 .cell-cto .clearance-triangle.landing ~ .cto-ctot {
-  transform: translateY(-28%);
+  transform: translateY(-22%);
   font-size: calc(8.5px * var(--strip-scale));
 }
-/* Takeoff △ time (CTOT / ATD) — same spot in the lower mass */
+/* Takeoff △ time (CTOT / ATD) — same slot in lower mass */
 .cell-cto .clearance-triangle.takeoff ~ .cto-ctot {
-  transform: translateY(16%);
-  font-size: calc(10px * var(--strip-scale));
-}
-/* ATD — slightly smaller than CTOT, same position */
-.cell-cto .clearance-triangle.takeoff ~ .cto-ctot.atd {
+  transform: translateY(22%);
   font-size: calc(9px * var(--strip-scale));
 }
 .cell-cto .clearance-triangle.active {
   fill: #008001;
   stroke: #008001;
-  stroke-width: 1.5;
+  stroke-width: var(--strip-triangle-stroke-active);
   stroke-linejoin: round;
   stroke-linecap: round;
 }
@@ -8968,7 +9105,7 @@ function onGroundStateClick(action: string) {
   align-items: stretch;
   gap: 0;
   background: #ebebeb;
-  border: 1px solid #c8c8c8;
+  border: var(--strip-hairline) solid #c8c8c8;
   box-shadow: var(--strip-key-shadow);
   min-width: var(--actions-w);
   width: var(--actions-w);
