@@ -73,15 +73,18 @@ import {
     pushStripFlagsToRemote,
     deleteStripFromRemote,
     restartScribbleSyncPolling,
+    requestPeerReassertAssumed,
     getIrisSyncHealth,
     isOfflineVatsimRealm,
     onConnectionTypeChanged,
     pushEssaSepMetaToRemote,
+    noteRemoteEssaMetaApplied,
     scheduleStripviewLayoutPush,
     pushStripCftoAtdIfChanged,
     forgetStripCftoAtd,
     resolveRealm,
 } from "./vatefs-sync.js"
+import { stripNmSuffix } from "./iris-efs-order.js"
 import { isIrisStripviewPlacement } from "./iris-efs-order.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
@@ -196,7 +199,7 @@ import {
     getTransitionAltitudeFt,
 } from "./topsky-airspace.js"
 import type { DclTemplateData } from "./hoppie-config.js"
-import { HoppieService, checkHoppieStatus } from "./hoppie-service.js"
+import { HoppieService, checkHoppieStatus, checkHoppieCallsignOnline } from "./hoppie-service.js"
 import { AtisService } from "./atis-service.js"
 import { startAupR16Service, getAupR16Status, getAupR16StatusFresh, checkAupR16Change } from "./aup/service.js"
 import type { AupR16Status } from "./aup/types.js"
@@ -740,7 +743,7 @@ type OutboundPluginCommand =
     | { type: "release"; callsign: string }
     | { type: "assume"; callsign: string }
     | { type: "refuse"; callsign: string }
-    | { type: "toggleClearanceFlag"; callsign: string; desired?: boolean }
+    | { type: "toggleClearanceFlag"; callsign: string; desired?: boolean; force?: boolean }
     | { type: "resetSquawk"; callsign: string }
     | { type: "assignDepartureRunway"; callsign: string; runway: string }
     | { type: "assignArrivalRunway"; callsign: string; runway: string }
@@ -1427,21 +1430,80 @@ function sendEssaSepIndicators(socket: WebSocket) {
     if (message) sendMessage(socket, message)
 }
 
-function broadcastEssaSepIndicators() {
+function broadcastEssaSepIndicators(opts?: { skipRemotePush?: boolean }) {
     const message = buildEssaSepIndicatorsMessage()
     if (message) broadcast(message)
-    // TWR → PUT …/meta { essaSep, essaConfig }; TWR/GND → PUT …/order
-    if (message && canEditEssaSepIndicators()) {
+    // TWR → PUT …/meta { essaSep, essaSepOverrides, essaConfig }; TWR/GND → PUT …/order
+    if (message && canEditEssaSepIndicators() && !opts?.skipRemotePush) {
         void pushEssaSepMetaToRemote({
             sep: message.sep,
             dlv: message.dlv,
             depGap: message.depGap,
             essaConfig: resolveCurrentEssaConfigId(),
+            overrides: { ...essaSepOverrides },
         })
     }
     if (canPublishEssaStripview()) {
         scheduleStripviewLayoutPush()
     }
+}
+
+/** Map IRIS bare SEP ("2.5") to EFS display ("2.5 nm") matching click-cycle presets. */
+function irisSepBareToDisplay(field: EssaSepField, bare: string): string {
+    const v = stripNmSuffix(bare)
+    for (const c of ESSA_SEP_CYCLE[field]) {
+        if (c === null) continue
+        if (stripNmSuffix(c) === v) return c
+    }
+    if (v === "") return ""
+    return `${v} nm`
+}
+
+/**
+ * Apply peer / remote ESSA airport meta so all EFS clients show the same SEP/DLV/DEP GAP.
+ * Prefers explicit `essaSepOverrides` when the sync host supports them; otherwise maps bare essaSep.
+ */
+function applyRemoteEssaAirportMeta(meta: {
+    essaSep?: { sep: string; dlv: string; depGap: string }
+    essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+    essaConfig?: string
+}) {
+    if (!isEssaRolesConfig(staticConfig)) return
+    let next: EssaSepOverrides = {}
+    if (meta.essaSepOverrides && typeof meta.essaSepOverrides === "object") {
+        // Explicit override map (including `{}` = all auto)
+        for (const field of ["sep", "dlv", "depGap"] as const) {
+            const raw = meta.essaSepOverrides[field]
+            if (typeof raw !== "string") continue
+            if (!isValidEssaSepOverride(field, raw)) {
+                // Accept IRIS bare form without " nm"
+                const asDisplay = irisSepBareToDisplay(field, raw)
+                if (!isValidEssaSepOverride(field, asDisplay)) continue
+                next[field] = asDisplay
+            } else {
+                next[field] = raw
+            }
+        }
+    } else if (meta.essaSep) {
+        // Legacy hosts: treat published effective values as the shared display
+        for (const field of ["sep", "dlv", "depGap"] as const) {
+            const asDisplay = irisSepBareToDisplay(field, meta.essaSep[field])
+            if (isValidEssaSepOverride(field, asDisplay)) next[field] = asDisplay
+        }
+    } else {
+        return
+    }
+    const prev = JSON.stringify(essaSepOverrides)
+    const incoming = JSON.stringify(next)
+    if (prev === incoming) return
+    essaSepOverrides = next
+    console.log(`[ESSA SEP] applied remote overrides → ${incoming}`)
+    noteRemoteEssaMetaApplied({
+        essaSep: meta.essaSep,
+        essaSepOverrides: next,
+        essaConfig: meta.essaConfig,
+    })
+    broadcastEssaSepIndicators({ skipRemotePush: true })
 }
 
 // Send config list to a single client
@@ -1716,13 +1778,22 @@ let hoppieService: HoppieService | null = null
 let currentDclStatus: DclStatus = "unavailable"
 let currentDclError: string | undefined
 let currentDclMode: import("@vatefs/common").DclMode = loadUserSettings().dclMode ?? "manual"
+/** Another Hoppie station already online as our DCL airport (only while we are not connected). */
+let currentDclAirportStationOnline = false
+let dclAirportOnlineTimer: ReturnType<typeof setInterval> | undefined
+const DCL_AIRPORT_ONLINE_POLL_MS = 60_000
 
 getHoppieFeed = () => {
     switch (currentDclStatus) {
         case "connected":
             return { ok: true, detail: "Connected" }
         case "available":
-            return { ok: true, detail: "Available" }
+            return {
+                ok: true,
+                detail: currentDclAirportStationOnline
+                    ? `Available (${getDclCallsign() ?? "airport"} already online)`
+                    : "Available",
+            }
         case "error":
             return { ok: false, detail: currentDclError || "Error" }
         case "unavailable":
@@ -1746,16 +1817,89 @@ function getDclCallsign(): string | null {
     return null
 }
 
+function buildDclStatusMessage(): DclStatusMessage {
+    const dclAirport = getDclCallsign() ?? undefined
+    const airportStationOnline =
+        currentDclStatus !== "connected" && currentDclAirportStationOnline ? true : false
+    return {
+        type: "dclStatus",
+        status: currentDclStatus,
+        error: currentDclError,
+        dclMode: currentDclMode,
+        airportStationOnline: airportStationOnline || undefined,
+        dclAirport,
+    }
+}
+
 function updateDclStatus(status: DclStatus, error?: string) {
     currentDclStatus = status
     currentDclError = error
-    const message: DclStatusMessage = { type: "dclStatus", status, error, dclMode: currentDclMode }
-    broadcast(message)
+    if (status === "connected") {
+        currentDclAirportStationOnline = false
+        stopDclAirportOnlinePolling()
+    }
+    broadcast(buildDclStatusMessage())
+    if (status === "available" || status === "error") {
+        void refreshDclAirportOnlineFlag()
+        startDclAirportOnlinePolling()
+    } else if (status === "unavailable") {
+        currentDclAirportStationOnline = false
+        stopDclAirportOnlinePolling()
+    }
 }
 
 function sendDclStatus(socket: WebSocket) {
-    const message: DclStatusMessage = { type: "dclStatus", status: currentDclStatus, error: currentDclError, dclMode: currentDclMode }
-    sendMessage(socket, message)
+    sendMessage(socket, buildDclStatusMessage())
+}
+
+function stopDclAirportOnlinePolling() {
+    if (dclAirportOnlineTimer) {
+        clearInterval(dclAirportOnlineTimer)
+        dclAirportOnlineTimer = undefined
+    }
+}
+
+function startDclAirportOnlinePolling() {
+    if (dclAirportOnlineTimer) return
+    dclAirportOnlineTimer = setInterval(() => {
+        void refreshDclAirportOnlineFlag()
+    }, DCL_AIRPORT_ONLINE_POLL_MS)
+}
+
+/**
+ * When DCL is available (voice), check whether ESSA/ESGG is already online on Hoppie.
+ * Ping does not register us online. While we are connected, the flag is cleared.
+ */
+async function refreshDclAirportOnlineFlag() {
+    if (hoppieService?.isConnected() || currentDclStatus === "connected") {
+        if (currentDclAirportStationOnline) {
+            currentDclAirportStationOnline = false
+            broadcast(buildDclStatusMessage())
+        }
+        return
+    }
+    if (currentDclStatus !== "available" && currentDclStatus !== "error") return
+    if (isOfflineVatsimRealm()) return
+
+    const logonCode = getLogonCode()
+    const callsign = getDclCallsign()
+    if (!logonCode || !callsign) {
+        if (currentDclAirportStationOnline) {
+            currentDclAirportStationOnline = false
+            broadcast(buildDclStatusMessage())
+        }
+        return
+    }
+
+    const online = await checkHoppieCallsignOnline(logonCode, callsign, callsign)
+    // Re-check after await — user may have connected meanwhile
+    if (hoppieService?.isConnected() || currentDclStatus === "connected") return
+    if (online === currentDclAirportStationOnline) return
+    currentDclAirportStationOnline = online
+    console.log(
+        `[HOPPIE] DCL airport ${callsign} station ${online ? "ONLINE (peer may hold DCL)" : "offline"}`,
+    )
+    broadcast(buildDclStatusMessage())
 }
 
 function userSettingsMessage(): UserSettingsMessage {
@@ -1809,6 +1953,14 @@ async function loginHoppie(): Promise<void> {
             }
         },
         onStatusChange: (status, error) => {
+            // Hoppie rejects a second ESSA/ESGG login — treat as peer-held DCL
+            if (
+                status === "error" &&
+                error &&
+                /callsign already in use/i.test(error)
+            ) {
+                currentDclAirportStationOnline = true
+            }
             updateDclStatus(status, error)
         },
     })
@@ -2524,6 +2676,108 @@ function isTrackedByMeFlight(flight: Flight): boolean {
     const csEq = (a: string | undefined, b: string | undefined) =>
         !!a && !!b && a.toUpperCase() === b.toUpperCase()
     return csEq(ownerCs, myCs) || (!!mySi && !!ownerSi && mySi === ownerSi)
+}
+
+/**
+ * Peer `.efs refresh`: re-write EuroScope CLR / CFL / CTL / GS / annotations for every
+ * flight we track so VATSIM rebroadcasts them to the late-joining controller.
+ */
+function reassertAssumedFlagsToEuroScope(fromCid: number | null) {
+    const assumed = flightStore.getAllFlights().filter(isTrackedByMeFlight)
+    console.log(
+        `[reassertAssumed] from cid=${fromCid ?? "?"} — rewriting ${assumed.length} tracked flight(s)`,
+    )
+    let i = 0
+    for (const flight of assumed) {
+        const callsign = flight.callsign
+        const delay = i * 40
+        i++
+        setTimeout(() => {
+            // CLR — force flip-flop when already set so the network rebroadcasts
+            sendUdp(
+                JSON.stringify({
+                    type: "toggleClearanceFlag",
+                    callsign,
+                    desired: !!flight.clearance,
+                    force: true,
+                } satisfies OutboundPluginCommand),
+            )
+            // CFL (including 0 / ILS=1 / VA=2)
+            if (typeof flight.cfl === "number") {
+                sendUdp(
+                    JSON.stringify({
+                        type: "assignCfl",
+                        callsign,
+                        altitude: flight.cfl,
+                    } satisfies OutboundPluginCommand),
+                )
+            }
+            // CTL (VCH ann 3)
+            if (flight.clearedToLand) {
+                sendUdp(JSON.stringify({ type: "setClearedToLand", callsign } satisfies OutboundPluginCommand))
+            } else {
+                sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign } satisfies OutboundPluginCommand))
+            }
+            // Ground state
+            if (flight.groundstate !== undefined) {
+                const state = flight.groundstate === "" ? "NOSTATE" : flight.groundstate
+                sendUdp(
+                    JSON.stringify({
+                        type: "setGroundState",
+                        callsign,
+                        state,
+                    } satisfies OutboundPluginCommand),
+                )
+            }
+            // HS / DepC / EFS soft G/A annotations
+            sendUdp(
+                JSON.stringify({
+                    type: "setHs",
+                    callsign,
+                    value: flight.hs ?? "",
+                } satisfies OutboundPluginCommand),
+            )
+            sendUdp(
+                JSON.stringify({
+                    type: "setCoo",
+                    callsign,
+                    coo: !!flight.coo,
+                } satisfies OutboundPluginCommand),
+            )
+            if (flight.efsGoAround) {
+                sendUdp(JSON.stringify({ type: "setEfsGoAround", callsign } satisfies OutboundPluginCommand))
+            } else {
+                sendUdp(JSON.stringify({ type: "unsetEfsGoAround", callsign } satisfies OutboundPluginCommand))
+            }
+            // Heading / direct (mutually exclusive in ES practice)
+            if (flight.direct) {
+                sendUdp(
+                    JSON.stringify({
+                        type: "assignDirect",
+                        callsign,
+                        point: flight.direct,
+                    } satisfies OutboundPluginCommand),
+                )
+            } else if (typeof flight.ahdg === "number" && flight.ahdg > 0) {
+                sendUdp(
+                    JSON.stringify({
+                        type: "assignHeading",
+                        callsign,
+                        heading: flight.ahdg,
+                    } satisfies OutboundPluginCommand),
+                )
+            }
+            if (flight.sid) {
+                sendUdp(
+                    JSON.stringify({
+                        type: "assignSid",
+                        callsign,
+                        sid: flight.sid,
+                    } satisfies OutboundPluginCommand),
+                )
+            }
+        }, delay)
+    }
 }
 
 /** Untracked or tracked by me — never push SID/CFL/SSR onto another controller's ES ownership. */
@@ -3249,8 +3503,19 @@ function applyRemoteScribble(
                 { fromSync: true },
             )
             if (moved) {
-                // Sticky until ES groundstate / ownership / airborne / CLR changes
+                // Sticky until ES groundstate / ownership / airborne / CLR changes.
+                // Do not sticky-lock CD ALL→TSAT→PUSH against clearance / GS.
+                const syncFlight =
+                    flightStore.getFlight(moved.strip.callsign) ||
+                    flightStore.getFlight(moved.strip.id)
+                const depFlowFight =
+                    !!syncFlight &&
+                    flightStore.isDepBayFlowStickyInvalid(
+                        syncFlight,
+                        moved.strip.sectionId,
+                    )
                 if (
+                    !depFlowFight &&
                     moved.strip.stripType !== "note" &&
                     moved.strip.stripType !== "vehicle" &&
                     !isAnonymousSpecialStripId(moved.strip.id)
@@ -3487,6 +3752,12 @@ initScribbleSync({
     onRealmChanged: (realm) => {
         syncOnlineNetworkServices(realm)
     },
+    onReassertAssumed: (fromCid) => {
+        reassertAssumedFlagsToEuroScope(fromCid)
+    },
+    onApplyRemoteAirportMeta: (meta) => {
+        applyRemoteEssaAirportMeta(meta)
+    },
     canPublishIrisOrder: () => canPublishEssaStripview(),
     sessionCoversEssaTower: () => sessionCoversEssaTower(),
     getEssaSepIndicators: () => {
@@ -3497,6 +3768,7 @@ initScribbleSync({
             dlv: m.dlv,
             depGap: m.depGap,
             essaConfig: resolveCurrentEssaConfigId(),
+            overrides: { ...essaSepOverrides },
         }
     },
 })
@@ -7938,6 +8210,17 @@ udpIn.on("message", (msg, rinfo) => {
                 suggestedCid: suggested,
                 reason: "command",
             })
+            return
+        }
+
+        // `.efs refresh` — ask peer EFS sessions to re-write assumed CLR/CFL/CTL into ES
+        if (data.type === "efsRefreshRequest") {
+            const ok = requestPeerReassertAssumed()
+            console.log(
+                ok
+                    ? "[efsRefreshRequest] peer reassertAssumed published"
+                    : "[efsRefreshRequest] peer reassertAssumed not published (sync off / no WS / cooldown)",
+            )
             return
         }
 

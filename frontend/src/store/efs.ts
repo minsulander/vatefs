@@ -334,6 +334,9 @@ export const useEfsStore = defineStore("efs", () => {
     const dclStatus = ref<'unavailable' | 'available' | 'connected' | 'error'>('unavailable')
     const dclError = ref<string | undefined>(undefined)
     const dclMode = ref<DclMode>('manual')
+    /** Another Hoppie station already online as our DCL airport (while we are not connected). */
+    const dclAirportStationOnline = ref(false)
+    const dclAirport = ref<string | undefined>(undefined)
 
     // Transient toast (ROF failures, etc.)
     const notifyText = ref('')
@@ -880,6 +883,8 @@ export const useEfsStore = defineStore("efs", () => {
                         dclStatus.value = message.status
                         dclError.value = message.error
                         if (message.dclMode) dclMode.value = message.dclMode
+                        dclAirportStationOnline.value = !!message.airportStationOnline
+                        dclAirport.value = message.dclAirport
                         break
                     case 'atisUpdate':
                         applyAtisUpdate(message.airports)
@@ -3197,6 +3202,8 @@ export const useEfsStore = defineStore("efs", () => {
         dclStatus,
         dclError,
         dclMode,
+        dclAirportStationOnline,
+        dclAirport,
         dclLogin,
         dclLogout,
         dclSend,

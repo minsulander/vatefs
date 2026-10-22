@@ -288,6 +288,55 @@ export class HoppieService {
 }
 
 /**
+ * Ping Hoppie without registering online: ask whether `targetCallsign` is currently online.
+ * Used to warn CD that another station already holds the airport DCL identity (ESSA/ESGG).
+ */
+export async function checkHoppieCallsignOnline(
+    logonCode: string,
+    fromCallsign: string,
+    targetCallsign: string,
+): Promise<boolean> {
+    const logon = logonCode.trim()
+    const from = fromCallsign.trim().toUpperCase()
+    const target = targetCallsign.trim().toUpperCase()
+    if (!logon || !from || !target) return false
+
+    const params = new URLSearchParams({
+        logon,
+        from,
+        to: "SERVER",
+        type: "ping",
+        packet: target,
+    })
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT)
+    try {
+        const response = await fetch(HOPPIE_URL, {
+            method: "POST",
+            body: params,
+            signal: controller.signal,
+        })
+        const text = (await response.text()).trim()
+        if (!text.toLowerCase().startsWith("ok")) return false
+        const rest = text.slice(2).trim()
+        const tokens = rest
+            .replace(/[{}]/g, " ")
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((t) => t.toUpperCase())
+        return tokens.includes(target)
+    } catch (err) {
+        console.warn(
+            `[HOPPIE] Station online check failed for ${target}: ${err instanceof Error ? err.message : err}`,
+        )
+        return false
+    } finally {
+        clearTimeout(timeout)
+    }
+}
+
+/**
  * Check if the Hoppie ACARS network is operational.
  * Returns true if the status endpoint reports "operational", false otherwise.
  */

@@ -50,6 +50,8 @@ let getAirports: () => string[] = () => []
 let onApplyRemote: ApplyRemoteFn = () => {}
 let onNeedVatIrisSignIn: (detail?: string) => void = () => {}
 let onRealmChanged: (realm: ScribbleRealm) => void = () => {}
+/** Peer `.efs refresh` — re-write assumed CLR/CFL/CTL/etc into local EuroScope. */
+let onReassertAssumed: (fromCid: number | null) => void = () => {}
 /** True when this session may publish ESSA order/SEP/heartbeat (TWR/GND). */
 let canPublishIrisOrder: () => boolean = () => false
 /** True when this session covers ESSA TWR (top-down or ESSA_*_TWR). */
@@ -61,10 +63,23 @@ let getEssaSepIndicators: () => {
     dlv: string
     depGap: string
     essaConfig?: string | null
+    /** TWR overrides (display strings); absent key = auto */
+    overrides?: { sep?: string; dlv?: string; depGap?: string }
 } | null = () => null
+/** Apply peer / remote airport meta (SEP overrides). */
+let onApplyRemoteAirportMeta: (meta: {
+    essaSep?: { sep: string; dlv: string; depGap: string }
+    essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+    essaConfig?: string
+}) => void = () => {}
 
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let sinceByRoom = new Map<string, string>()
+/** Cooldown so a burst of peer refresh requests does not spam ES writes. */
+let lastReassertHandledAt = 0
+const REASSERT_COOLDOWN_MS = 5_000
+let lastReassertPublishedAt = 0
+const REASSERT_PUBLISH_COOLDOWN_MS = 2_000
 
 /** Active live WebSockets keyed by realm/airport */
 const streams = new Map<string, { ws: WebSocket; gen: number }>()
@@ -87,6 +102,12 @@ export function initScribbleSync(opts: {
     onApplyRemote: ApplyRemoteFn
     onNeedVatIrisSignIn?: (detail?: string) => void
     onRealmChanged?: (realm: ScribbleRealm) => void
+    onReassertAssumed?: (fromCid: number | null) => void
+    onApplyRemoteAirportMeta?: (meta: {
+        essaSep?: { sep: string; dlv: string; depGap: string }
+        essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+        essaConfig?: string
+    }) => void
     canPublishIrisOrder?: () => boolean
     sessionCoversEssaTower?: () => boolean
     getEssaSepIndicators?: () => {
@@ -94,6 +115,7 @@ export function initScribbleSync(opts: {
         dlv: string
         depGap: string
         essaConfig?: string | null
+        overrides?: { sep?: string; dlv?: string; depGap?: string }
     } | null
 }) {
     getSettings = opts.getSettings
@@ -104,6 +126,8 @@ export function initScribbleSync(opts: {
     onApplyRemote = opts.onApplyRemote
     if (opts.onNeedVatIrisSignIn) onNeedVatIrisSignIn = opts.onNeedVatIrisSignIn
     if (opts.onRealmChanged) onRealmChanged = opts.onRealmChanged
+    if (opts.onReassertAssumed) onReassertAssumed = opts.onReassertAssumed
+    if (opts.onApplyRemoteAirportMeta) onApplyRemoteAirportMeta = opts.onApplyRemoteAirportMeta
     if (opts.canPublishIrisOrder) canPublishIrisOrder = opts.canPublishIrisOrder
     if (opts.sessionCoversEssaTower) sessionCoversEssaTower = opts.sessionCoversEssaTower
     if (opts.getEssaSepIndicators) getEssaSepIndicators = opts.getEssaSepIndicators
@@ -320,6 +344,8 @@ export async function pushEssaSepMetaToRemote(
         dlv: string
         depGap: string
         essaConfig?: string | null
+        /** Display-string overrides; omit / `{}` = all auto on peers */
+        overrides?: { sep?: string; dlv?: string; depGap?: string }
     },
     opts?: { force?: boolean },
 ): Promise<boolean> {
@@ -331,7 +357,8 @@ export async function pushEssaSepMetaToRemote(
     const metaBody: {
         essaSep: { sep: string; dlv: string; depGap: string }
         essaConfig?: string
-    } = { essaSep: bare }
+        essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+    } = { essaSep: bare, essaSepOverrides: { ...(indicators.overrides ?? {}) } }
     const cfg = (indicators.essaConfig || "").trim()
     if (cfg) metaBody.essaConfig = cfg
     const metaJson = JSON.stringify(metaBody)
@@ -349,6 +376,26 @@ export async function pushEssaSepMetaToRemote(
     lastPushedSepJson = metaJson
     noteSuccess()
     return true
+}
+
+/** Mark remote meta as current so a local TWR does not immediately overwrite peers. */
+export function noteRemoteEssaMetaApplied(meta: {
+    essaSep?: { sep: string; dlv: string; depGap: string }
+    essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+    essaConfig?: string
+}) {
+    if (!meta.essaSep) return
+    const body: {
+        essaSep: { sep: string; dlv: string; depGap: string }
+        essaConfig?: string
+        essaSepOverrides?: { sep?: string; dlv?: string; depGap?: string }
+    } = {
+        essaSep: formatIrisSep(meta.essaSep),
+        essaSepOverrides: { ...(meta.essaSepOverrides ?? {}) },
+    }
+    const cfg = (meta.essaConfig || "").trim()
+    if (cfg) body.essaConfig = cfg
+    lastPushedSepJson = JSON.stringify(body)
 }
 
 /** Refresh meta (SEP + bankonfig) so IRIS TTL stays warm. */
@@ -679,6 +726,7 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
             strip?: StripSyncMeta
             updatedAt?: string
             deleted?: boolean
+            updatedByCid?: number | null
             /** Peer / self order fanout — cache for split TWR/GND merge */
             order?: { revision?: number; entries?: unknown[] }
             /** snapshot on connect */
@@ -688,13 +736,68 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
             >
         }
         if (msg.type === "hello" || msg.type === "heartbeat") return
+        if (msg.type === "meta") {
+            const meta = (msg as { meta?: unknown }).meta
+            if (!meta || typeof meta !== "object" || Array.isArray(meta)) return
+            const m = meta as {
+                essaSep?: { sep?: unknown; dlv?: unknown; depGap?: unknown }
+                essaSepOverrides?: { sep?: unknown; dlv?: unknown; depGap?: unknown }
+                essaConfig?: unknown
+            }
+            const essaSep =
+                m.essaSep &&
+                typeof m.essaSep.sep === "string" &&
+                typeof m.essaSep.dlv === "string" &&
+                typeof m.essaSep.depGap === "string"
+                    ? {
+                          sep: m.essaSep.sep,
+                          dlv: m.essaSep.dlv,
+                          depGap: m.essaSep.depGap,
+                      }
+                    : undefined
+            if (!essaSep) return
+            const overridesRaw = m.essaSepOverrides
+            let essaSepOverrides: { sep?: string; dlv?: string; depGap?: string } | undefined
+            if (overridesRaw && typeof overridesRaw === "object" && !Array.isArray(overridesRaw)) {
+                essaSepOverrides = {}
+                for (const key of ["sep", "dlv", "depGap"] as const) {
+                    const v = overridesRaw[key]
+                    if (typeof v === "string") essaSepOverrides[key] = v
+                }
+            }
+            const essaConfig = typeof m.essaConfig === "string" ? m.essaConfig : undefined
+            console.log(
+                `[vatefs-sync] meta SEP from peer ${apt}: ${JSON.stringify(essaSep)} overrides=${JSON.stringify(essaSepOverrides ?? null)}`,
+            )
+            noteRemoteEssaMetaApplied({ essaSep, essaSepOverrides, essaConfig })
+            onApplyRemoteAirportMeta({ essaSep, essaSepOverrides, essaConfig })
+            return
+        }
+        if (msg.type === "reassertAssumed") {
+            const now = Date.now()
+            if (now - lastReassertHandledAt < REASSERT_COOLDOWN_MS) {
+                console.log(
+                    `[vatefs-sync] reassertAssumed ignored (cooldown) from cid=${msg.updatedByCid ?? "?"} ${apt}`,
+                )
+                return
+            }
+            lastReassertHandledAt = now
+            const fromCid =
+                typeof msg.updatedByCid === "number" && Number.isFinite(msg.updatedByCid)
+                    ? msg.updatedByCid
+                    : null
+            console.log(
+                `[vatefs-sync] reassertAssumed from cid=${fromCid ?? "?"} room=${resolveRealm(getSettings())}/${apt}`,
+            )
+            onReassertAssumed(fromCid)
+            return
+        }
         if (msg.type === "order") {
             if (apt.toUpperCase() === "ESSA" && msg.order?.entries) {
                 rememberRemoteOrder(msg.order.entries)
             }
             return
         }
-        if (msg.type === "meta") return // SEP is TWR-owned; peers don't apply airport meta locally yet
         if (msg.type === "snapshot" && msg.strips && typeof msg.strips === "object") {
             for (const [syncKey, row] of Object.entries(msg.strips)) {
                 if (!row?.updatedAt) continue
@@ -721,6 +824,40 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
     } catch {
         // ignore malformed
     }
+}
+
+/**
+ * Publish `reassertAssumed` on every open airport room (except self via server fanout).
+ * Called when this controller types `.efs refresh` and needs peers to re-write flags.
+ */
+export function requestPeerReassertAssumed(): boolean {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) {
+        console.log("[vatefs-sync] reassertAssumed publish skipped (sync off or no CID)")
+        return false
+    }
+    const now = Date.now()
+    if (now - lastReassertPublishedAt < REASSERT_PUBLISH_COOLDOWN_MS) {
+        console.log("[vatefs-sync] reassertAssumed publish ignored (cooldown)")
+        return false
+    }
+    const payload = JSON.stringify({ type: "reassertAssumed" })
+    let sent = 0
+    for (const [room, s] of streams) {
+        if (s.ws.readyState !== WebSocket.OPEN) continue
+        try {
+            s.ws.send(payload)
+            sent++
+            console.log(`[vatefs-sync] reassertAssumed requested on ${room}`)
+        } catch (err) {
+            console.warn(
+                `[vatefs-sync] reassertAssumed send failed ${room}:`,
+                err instanceof Error ? err.message : err,
+            )
+        }
+    }
+    if (sent > 0) lastReassertPublishedAt = now
+    return sent > 0
 }
 
 function recomputeAnyWsOpen() {
@@ -858,6 +995,61 @@ async function fetchRemoteEssaOrder(): Promise<void> {
     if (entries) rememberRemoteOrder(entries)
 }
 
+/**
+ * GET ESSA /meta and apply SEP (late joiner / reconnect).
+ * Returns true when remote had essaSep (so we must not overwrite with local defaults).
+ */
+export async function fetchRemoteEssaMeta(): Promise<boolean> {
+    const settings = getSettings()
+    if (!syncTogglesOn(settings) || !validCid(settings)) return false
+    if (!getAirports().map((a) => a.toUpperCase()).includes("ESSA")) return false
+    const base = baseUrl()
+    if (!base) return false
+    const realm = resolveRealm(settings)
+    const url = `${base}/efs/sync/${realm}/ESSA/meta`
+    const result = await fetchJson(url, { method: "GET", cid: settings.vatsimCid.trim() })
+    if (!result.ok) {
+        noteAuthFailure(result.status, result.json?.error)
+        return false
+    }
+    noteSuccess()
+    const meta = (result.json as { meta?: unknown } | undefined)?.meta
+    if (!meta || typeof meta !== "object" || Array.isArray(meta)) return false
+    const m = meta as {
+        essaSep?: { sep?: unknown; dlv?: unknown; depGap?: unknown }
+        essaSepOverrides?: { sep?: unknown; dlv?: unknown; depGap?: unknown }
+        essaConfig?: unknown
+    }
+    if (
+        !m.essaSep ||
+        typeof m.essaSep.sep !== "string" ||
+        typeof m.essaSep.dlv !== "string" ||
+        typeof m.essaSep.depGap !== "string"
+    ) {
+        return false
+    }
+    const essaSep = {
+        sep: m.essaSep.sep,
+        dlv: m.essaSep.dlv,
+        depGap: m.essaSep.depGap,
+    }
+    let essaSepOverrides: { sep?: string; dlv?: string; depGap?: string } | undefined
+    if (m.essaSepOverrides && typeof m.essaSepOverrides === "object" && !Array.isArray(m.essaSepOverrides)) {
+        essaSepOverrides = {}
+        for (const key of ["sep", "dlv", "depGap"] as const) {
+            const v = m.essaSepOverrides[key]
+            if (typeof v === "string") essaSepOverrides[key] = v
+        }
+    }
+    const essaConfig = typeof m.essaConfig === "string" ? m.essaConfig : undefined
+    console.log(
+        `[vatefs-sync] fetched ESSA meta SEP=${JSON.stringify(essaSep)} overrides=${JSON.stringify(essaSepOverrides ?? null)}`,
+    )
+    noteRemoteEssaMetaApplied({ essaSep, essaSepOverrides, essaConfig })
+    onApplyRemoteAirportMeta({ essaSep, essaSepOverrides, essaConfig })
+    return true
+}
+
 /** Keep WebSocket live; 15s poll is safety only (reload button also calls pollRemote). */
 export function startScribbleSyncPolling(intervalMs = 15_000) {
     stopScribbleSyncPolling()
@@ -866,14 +1058,18 @@ export function startScribbleSyncPolling(intervalMs = 15_000) {
     startIrisHeartbeat()
     pollTimer = setInterval(() => {
         void pollRemote()
+        void fetchRemoteEssaMeta()
         startLiveStreams()
     }, intervalMs)
     void pollRemote()
     void (async () => {
+        // Apply peer SEP before any local meta PUT so late joiners don't wipe TWR values
+        const hadRemoteMeta = await fetchRemoteEssaMeta()
         await fetchRemoteEssaOrder()
         await pushIrisOrderToRemote(undefined, { force: true })
+        // Seed Strip TV only when nothing was stored yet
+        if (!hadRemoteMeta) void refreshEssaMetaToRemote(true)
     })()
-    void refreshEssaMetaToRemote(true)
     void pushIrisHeartbeat("ESSA")
     for (const strip of getAllStrips()) pushStripCftoAtdIfChanged(strip)
 }

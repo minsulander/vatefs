@@ -294,6 +294,11 @@ class DummyRadarScreen : public EuroScopePlugIn::CRadarScreen
     void ToggleClearanceFlag(const char *callsign);
     /** Toggle only if current clearance ≠ desired (ES has no absolute set API). */
     void SetClearanceFlag(const char *callsign, bool desired);
+    /**
+     * Like SetClearanceFlag, but when already at desired flip-flops once so VATSIM
+     * rebroadcasts CLR (peer reassert after `.efs refresh`).
+     */
+    void ForceClearanceFlag(const char *callsign, bool desired);
 
     private:
     VatEFSPlugin *plugin;

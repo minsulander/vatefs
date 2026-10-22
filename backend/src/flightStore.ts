@@ -52,6 +52,7 @@ import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { remapPushActionForStand } from "./essa-push-stands.js"
+import { isDepBayFlowStickyInvalid as depBayFlowStickyInvalid } from "./dep-bay-sticky.js"
 import {
     extractTmaExitPoint,
     FAA_TO_ICAO,
@@ -1082,6 +1083,14 @@ class FlightStore {
     }
 
     /**
+     * CD ALL → TSAT → PUSH → TAXI: sticky drag/sync must not fight CLR / groundstate.
+     * Examples: ACK CLR stuck in CD ALL (no PUSH key); PUSH GS stuck in TSAT.
+     */
+    isDepBayFlowStickyInvalid(flight: Flight, sectionId: string): boolean {
+        return depBayFlowStickyInvalid(flight, sectionId, this.config.look)
+    }
+
+    /**
      * Update strip assignment.
      * - 5-arg form: manual drag (also marks lastSectionRule = 'manual' when a flight exists)
      * - 2-arg form: position sync / restore without changing rule provenance
@@ -2070,7 +2079,7 @@ class FlightStore {
                 targetSection.sectionId,
             )
         // Manual / peer-synced bay: hold until groundstate / ownership / airborne / CLR changes
-        const holdManualSynced =
+        let holdManualSynced =
             !!currentAssignment &&
             ruleWantsDifferentSection &&
             flight.lastSectionRule === 'manual' &&
@@ -2083,6 +2092,19 @@ class FlightStore {
         ) {
             // ES state moved on — allow rules again
             flight.placementStickyKey = undefined
+            holdManualSynced = false
+        }
+        // CD ALL → TSAT → PUSH → TAXI: CLR / GS always win over sticky drag/sync.
+        if (
+            holdManualSynced &&
+            currentAssignment &&
+            this.isDepBayFlowStickyInvalid(flight, currentAssignment.sectionId)
+        ) {
+            console.log(
+                `[RULE] ${callsign}: release sticky ${currentAssignment.sectionId} (clr=${!!flight.clearance} gs=${flight.groundstate || ""}) → ${targetSection.sectionId}`,
+            )
+            flight.placementStickyKey = undefined
+            holdManualSynced = false
         }
         const holdSection =
             holdRwySequence ||

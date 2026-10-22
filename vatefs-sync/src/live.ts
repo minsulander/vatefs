@@ -42,6 +42,15 @@ export type LiveUpdate =
       updatedAt: string
       updatedByCid: number | null
     }
+  | {
+      /**
+       * Late-joiner `.efs refresh`: ask peers to re-write CLR/CFL/CTL/etc into ES
+       * for traffic they track so the network rebroadcasts to the requester.
+       */
+      type: "reassertAssumed"
+      updatedAt: string
+      updatedByCid: number | null
+    }
 
 type SseClient = { kind: "sse"; res: Response; cid: number }
 type WsClient = { kind: "ws"; ws: WebSocket; cid: number }
@@ -122,6 +131,24 @@ export function subscribeRoomWs(
     remove()
   }
 
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(String(raw)) as { type?: string }
+      if (msg?.type !== "reassertAssumed") return
+      publishRoom(
+        realm,
+        airport,
+        {
+          type: "reassertAssumed",
+          updatedAt: new Date().toISOString(),
+          updatedByCid: cid,
+        },
+        cid,
+      )
+    } catch {
+      // ignore malformed client messages
+    }
+  })
   ws.on("close", cleanup)
   ws.on("error", cleanup)
   return cleanup
@@ -134,7 +161,8 @@ export function publishRoom(realm: string, airport: string, update: LiveUpdate, 
     update.type === "meta" ||
     update.type === "order" ||
     update.type === "heartbeat" ||
-    update.type === "stripDeleted"
+    update.type === "stripDeleted" ||
+    update.type === "reassertAssumed"
       ? update.type
       : update.type === "strip"
         ? "strip"

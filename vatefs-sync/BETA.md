@@ -25,9 +25,15 @@
 
 On realm **Sweatbox** or **Local** (forced or Auto from ES), Hoppie DCL, vIFF, VATSIM ATIS, and AFV transceiver polling are disabled (live VATSIM only).
 
+## `.efs refresh` (peer flag reassert)
+
+Late joiner types `.efs refresh` in EuroScope → local FP dump, plus sync WS `{type:"reassertAssumed"}` to peers. Each peer re-writes CLR/CFL/CTL/GS/HS/DepC/EFSGA/SID/HDG/DCT into ES for traffic **they** track so VATSIM rebroadcasts to the joiner. Requires sync enabled + CID + open WS room. Needs sync host with the WS inbound handler (standalone `vatefs-sync` or updated VatIRIS).
+
 ## Checks
 
 - Two controllers, same airport + realm (live/sweatbox)
+- Late joiner `.efs refresh` → peer logs `[reassertAssumed]` and joiner ES picks up peer CLR/CTL
+- TWR cycles SEP/DLV/DEP GAP → peers update within ~1s (WS `meta`); late joiner GETs `/meta` on sync connect
 - Paper note create-on-receive
 - Flight strip must exist on both sides from ES before placement/scribbles sync
 - Drag BCS… on TWR → same section on GND

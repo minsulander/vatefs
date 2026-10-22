@@ -236,6 +236,11 @@
         >
           {{ dclConnected ? 'DCL' : 'DCL: Voice' }}
         </v-btn>
+        <span
+          v-if="dclAirportTaken"
+          class="dcl-other-status text-green"
+          :title="dclOtherTooltip"
+        >OTHER</span>
         <v-menu v-if="dclConnected" location="bottom" offset="4">
           <template v-slot:activator="{ props }">
             <v-btn
@@ -1247,11 +1252,24 @@ const hasCdRole = computed(() => {
 
 const dclConnected = computed(() => efs.dclStatus === 'connected')
 
+/** Another Hoppie station already online as ESSA/ESGG while we are on voice */
+const dclAirportTaken = computed(
+  () => !dclConnected.value && !!efs.dclAirportStationOnline,
+)
+
 /** DCL chrome only for the CD / DEL controller */
 const showDclControls = computed(() => hasCdRole.value)
 
+const dclOtherTooltip = computed(() => {
+  const apt = efs.dclAirport || 'airport'
+  return `${apt} is already online on Hoppie — another controller likely has DCL`
+})
+
 const dclTooltip = computed(() => {
   if (!hasCdRole.value) return ''
+  if (dclAirportTaken.value) {
+    return `${dclOtherTooltip.value}. Click to connect anyway.`
+  }
   switch (efs.dclStatus) {
     case 'available': return 'Voice clearance - click to connect DCL'
     case 'connected': return 'DCL connected - click to disconnect'
@@ -1688,6 +1706,15 @@ span.essa-status-btn.esgg-roles-readonly {
 .efs-top-bar :deep(.dcl-btn.v-btn) {
   font-size: calc(16px * var(--tb)) !important;
   font-weight: 600;
+}
+
+.dcl-other-status {
+  font-size: calc(16px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  margin-left: calc(2px * var(--efs-chrome-scale, var(--efs-scale, 1)));
+  user-select: none;
 }
 
 .dcl-mode-btn {

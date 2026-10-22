@@ -1521,7 +1521,7 @@
         </div>
       </div>
 
-      <!-- Bottom: [▼ TSAC? RMK FPL][ASSR ADEP | remarks under CFL→][TMA] -->
+      <!-- Bottom: [▼ TSAC? RMK FPL][ASSR | ADES | remarks under CFL→][TMA] -->
       <div v-if="bottomExpanded && !isCompactBay" class="strip-expander strip-expander-bottom" @click.stop>
         <div class="exp-bottom-left">
           <button
@@ -1535,40 +1535,38 @@
           <button type="button" class="exp-chip" @click.stop="onFplClick">FPL</button>
         </div>
         <div class="exp-bottom-main" :class="isArrLayout ? 'exp-bottom-main-arr' : 'exp-bottom-main-dep'">
-          <div class="exp-pre-rmk">
-            <span
-              v-if="showBottomExpAssr"
-              class="exp-assr"
-              :class="{
-                ghost: !displayAssr,
-                'squawk-empty': !displayAssr && (ssrCoordActive || strip.canResetSquawk),
-                'squawk-resettable': !!displayAssr && (ssrCoordActive || strip.canResetSquawk),
-              }"
-              :title="assrTitle"
-              @click.stop="onAssrClick"
-              @dblclick.stop="onAssrDblClick"
-            >
-              <input
-                v-if="assrEditing"
-                ref="assrEditInput"
-                v-model="assrEditText"
-                class="assr-edit-input"
-                type="text"
-                inputmode="numeric"
-                maxlength="4"
-                @click.stop
-                @blur="onAssrEditBlur"
-                @keydown.enter="onAssrEditBlur"
-                @keydown.escape="onAssrEditCancel"
-              />
-              <template v-else>{{ displayAssr || '----' }}</template>
-            </span>
-            <span
-              class="exp-ades"
-              :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
-              :title="strip.adesName ? `${strip.ades} - ${strip.adesName}` : 'ADES'"
-            >{{ strip.ades && strip.ades !== '????' ? strip.ades : '----' }}</span>
-          </div>
+          <span
+            v-if="showBottomExpAssr"
+            class="exp-assr"
+            :class="{
+              ghost: !displayAssr,
+              'squawk-empty': !displayAssr && (ssrCoordActive || strip.canResetSquawk),
+              'squawk-resettable': !!displayAssr && (ssrCoordActive || strip.canResetSquawk),
+            }"
+            :title="assrTitle"
+            @click.stop="onAssrClick"
+            @dblclick.stop="onAssrDblClick"
+          >
+            <input
+              v-if="assrEditing"
+              ref="assrEditInput"
+              v-model="assrEditText"
+              class="assr-edit-input"
+              type="text"
+              inputmode="numeric"
+              maxlength="4"
+              @click.stop
+              @blur="onAssrEditBlur"
+              @keydown.enter="onAssrEditBlur"
+              @keydown.escape="onAssrEditCancel"
+            />
+            <template v-else>{{ displayAssr || '----' }}</template>
+          </span>
+          <span
+            class="exp-ades"
+            :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
+            :title="strip.adesName ? `${strip.ades} - ${strip.adesName}` : 'ADES'"
+          >{{ strip.ades && strip.ades !== '????' ? strip.ades : '----' }}</span>
           <div class="exp-rmk" :class="{ ghost: !strip.remarks?.trim() }" @click.stop="onRemarksClick">
             <input
               v-if="remarksEditing"
@@ -7655,13 +7653,18 @@ function onGroundStateClick(action: string) {
   opacity: 0.45;
   cursor: default;
 }
-/* Bottom: [▼ RMK FPL | …][ASSR ADEP | remarks under CFL→][TMA] */
+/* Bottom: [▼ RMK FPL | …][ASSR | ADES | remarks under CFL→][TMA] */
 .strip-expander-bottom {
   display: grid;
   grid-template-columns: auto 1fr var(--actions-w);
   align-items: center;
   gap: 0;
+  /* Lock to chip/arrow row — native <input> must not grow strip height */
+  height: calc(var(--ctrl-arrow-h) + 6px * var(--strip-scale));
+  min-height: calc(var(--ctrl-arrow-h) + 6px * var(--strip-scale));
+  max-height: calc(var(--ctrl-arrow-h) + 6px * var(--strip-scale));
   padding: calc(2px * var(--strip-scale)) calc(3px * var(--strip-scale)) calc(4px * var(--strip-scale)) 1px;
+  box-sizing: border-box;
 }
 .exp-bottom-left {
   display: flex;
@@ -7697,18 +7700,28 @@ function onGroundStateClick(action: string) {
 .exp-bottom-main-arr {
   grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
 }
-/* Under STD+CTO (cols 1–2): FPL · ASSR · ADEP — RMK sits to the right of ADEP */
-.exp-pre-rmk {
-  grid-column: 1 / 3;
+/* Under STD (col1) / CTO (col2): ASSR · ADES — own tracks so 4-letter ICAO fits.
+   RMK starts under CFL (col3) through end of main (up to TMA exit column). */
+.exp-assr {
+  grid-column: 1;
   display: flex;
   align-items: center;
-  gap: calc(4px * var(--strip-scale));
   min-width: 0;
-  overflow: hidden;
   padding: 0 calc(2px * var(--strip-scale));
   box-sizing: border-box;
 }
-/* CFL is 3rd column — span through end of main (up to TMA exit column) */
+.exp-ades {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  /* Wide glyphs (W) — keep full ICAO visible in the CTO track */
+  overflow: visible;
+  padding: 0 calc(2px * var(--strip-scale));
+  box-sizing: border-box;
+  margin-left: 0;
+}
 .exp-rmk {
   grid-column: 3 / -1;
   display: flex;
@@ -7738,9 +7751,21 @@ function onGroundStateClick(action: string) {
 }
 .exp-rmk .remarks-input {
   width: 100%;
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-sizing: border-box;
   font-size: var(--fs-time);
   font-weight: 500;
+  font-family: inherit;
+  color: #000;
+  letter-spacing: 0;
+  line-height: 1.1;
   text-transform: uppercase;
+  outline: none;
 }
 /* Match left 3-row column text (times / FRUL·ATYP·WTC) */
 .exp-assr,
@@ -7758,9 +7783,6 @@ function onGroundStateClick(action: string) {
 .exp-assr.squawk-empty {
   cursor: pointer;
   text-decoration: underline;
-}
-.exp-ades {
-  margin-left: calc(10px * var(--strip-scale));
 }
 /* Same width as .strip-actions; text centered in the box */
 .exp-tma-exit {
@@ -7865,10 +7887,18 @@ function onGroundStateClick(action: string) {
 .remarks-input {
   flex: 1;
   min-width: 0;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
   border: none;
   background: transparent;
-  font-size: 10px;
-  color: #2244aa;
+  box-sizing: border-box;
+  font-size: var(--fs-time);
+  font-weight: 500;
+  font-family: inherit;
+  color: #000;
+  letter-spacing: 0;
+  line-height: 1.1;
   text-transform: uppercase;
   outline: none;
 }

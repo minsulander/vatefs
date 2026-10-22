@@ -149,6 +149,14 @@ export interface DclStatusMessage {
     status: 'available' | 'connected' | 'error' | 'unavailable'
     error?: string
     dclMode?: DclMode
+    /**
+     * True when the DCL airport callsign (ESSA/ESGG) is already online on Hoppie
+     * while we are not connected — another controller likely holds DCL.
+     * Omitted / false when connected or unknown.
+     */
+    airportStationOnline?: boolean
+    /** DCL airport ICAO when known (for tooltips). */
+    dclAirport?: string
 }
 
 export interface HoppieMessage {

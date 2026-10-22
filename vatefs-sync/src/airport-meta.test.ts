@@ -30,6 +30,15 @@ assert(okCfg.ok, "valid essaConfig")
 if (!okCfg.ok) throw new Error("unreachable")
 assert(okCfg.meta.essaConfig === "9A", "essaConfig kept")
 
+const okOv = validateAirportMeta({
+  essaSep: { sep: "2.5", dlv: "3.5", depGap: "6" },
+  essaSepOverrides: { sep: "3 nm" },
+})
+assert(okOv.ok, "valid with essaSepOverrides")
+if (!okOv.ok) throw new Error("unreachable")
+assert(okOv.meta.essaSepOverrides?.sep === "3 nm", "overrides sep kept")
+assert(okOv.meta.essaSepOverrides?.dlv === undefined, "overrides dlv absent")
+
 const badCfg = validateAirportMeta({
   essaSep: { sep: "2.5", dlv: "3.5", depGap: "6" },
   essaConfig: "99",

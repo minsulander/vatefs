@@ -1151,7 +1151,14 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         return true;
     } else if (subcommand == "refresh") {
         Refresh();
-        DisplayMessage("Refreshed all flight plans, clearance/CDM, and radar targets");
+        // Ask peer EFS backends (via VatIRIS sync) to re-write CLR/CFL/CTL/etc for
+        // traffic they track — late joiners need those network writes in their ES.
+        {
+            nlohmann::json req = nlohmann::json::object();
+            req["type"] = "efsRefreshRequest";
+            PostJson(req, "OnCompileCommand");
+        }
+        DisplayMessage("Refreshed local ES data; asked peer EFS users to reassert assumed flags");
         return true;
     } else if (subcommand == "start") {
         backendAutoRestartUsed = false;
@@ -3221,7 +3228,12 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         // Honor desired when present — bare toggle flips even when already correct
                         if (message.contains("desired") && !message["desired"].is_null()) {
                             bool desired = message["desired"].get<bool>();
-                            dummyRadarScreens[0]->SetClearanceFlag(callsign.c_str(), desired);
+                            bool force = message.contains("force") && !message["force"].is_null() &&
+                                         message["force"].get<bool>();
+                            if (force)
+                                dummyRadarScreens[0]->ForceClearanceFlag(callsign.c_str(), desired);
+                            else
+                                dummyRadarScreens[0]->SetClearanceFlag(callsign.c_str(), desired);
                         } else {
                             dummyRadarScreens[0]->ToggleClearanceFlag(callsign.c_str());
                         }
@@ -5706,6 +5718,24 @@ void DummyRadarScreen::SetClearanceFlag(const char *inCallsign, bool desired)
     // ES has no absolute set — only toggle. Skip when already at desired.
     if ((bool)fp.GetClearenceFlag() == desired)
         return;
+    ToggleClearanceFlag(callsign.c_str());
+}
+
+void DummyRadarScreen::ForceClearanceFlag(const char *inCallsign, bool desired)
+{
+    std::string callsign = inCallsign;
+    for (auto &c : callsign)
+        c = (char)std::toupper((unsigned char)c);
+    auto fp = GetPlugIn()->FlightPlanSelect(callsign.c_str());
+    if (!fp.IsValid())
+        return;
+    // ES has no absolute set — only toggle. When already correct, flip-flop so the
+    // network rebroadcasts CLR to late-joining controllers (.efs refresh peer reassert).
+    if ((bool)fp.GetClearenceFlag() != desired) {
+        ToggleClearanceFlag(callsign.c_str());
+        return;
+    }
+    ToggleClearanceFlag(callsign.c_str());
     ToggleClearanceFlag(callsign.c_str());
 }
 

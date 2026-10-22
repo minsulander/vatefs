@@ -46,10 +46,22 @@ export interface EssaSepMeta {
   depGap: string
 }
 
+/** TWR click-cycle overrides (EFS display strings e.g. "2.5 nm"); absent key = auto. */
+export type EssaSepOverridesMeta = {
+  sep?: string
+  dlv?: string
+  depGap?: string
+}
+
 export interface AirportMetaPayload {
   essaSep?: EssaSepMeta
   /** ESSA bankonfig id (QuickRef / Strip TV), e.g. "9A". */
   essaConfig?: string
+  /**
+   * Optional TWR overrides so peers match auto vs manual.
+   * Absent / `{}` = all auto. Present keys win over local auto compute.
+   */
+  essaSepOverrides?: EssaSepOverridesMeta
   /** Locked contract SEP (also mirrored into essaSep for legacy readers). */
   sep?: string
   dlv?: string
@@ -289,13 +301,35 @@ export function findForbiddenSyncStripKeys(strip: unknown): string[] {
   )
 }
 
+function parseEssaSepOverridesMeta(
+  raw: unknown,
+): { ok: true; overrides: EssaSepOverridesMeta } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "essaSepOverrides must be an object" }
+  }
+  const src = raw as Record<string, unknown>
+  const out: EssaSepOverridesMeta = {}
+  for (const key of ["sep", "dlv", "depGap"] as const) {
+    if (!(key in src)) continue
+    const v = src[key]
+    if (typeof v !== "string") {
+      return { ok: false, error: `essaSepOverrides.${key} must be a string` }
+    }
+    if (v.length > 32) {
+      return { ok: false, error: `essaSepOverrides.${key} too long` }
+    }
+    out[key] = v
+  }
+  return { ok: true, overrides: out }
+}
+
 export function validateAirportMeta(
   raw: unknown,
 ): { ok: true; meta: AirportMetaPayload } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "meta must be an object" }
   }
-  const body = raw as { essaSep?: unknown; essaConfig?: unknown }
+  const body = raw as { essaSep?: unknown; essaConfig?: unknown; essaSepOverrides?: unknown }
   const out: AirportMetaPayload = {}
   if (body.essaSep !== undefined) {
     if (!body.essaSep || typeof body.essaSep !== "object" || Array.isArray(body.essaSep)) {
@@ -315,6 +349,11 @@ export function validateAirportMeta(
       return { ok: false, error: "essaConfig must be a known bankonfig id" }
     }
     out.essaConfig = body.essaConfig.trim()
+  }
+  if (body.essaSepOverrides !== undefined) {
+    const ov = parseEssaSepOverridesMeta(body.essaSepOverrides)
+    if (!ov.ok) return ov
+    out.essaSepOverrides = ov.overrides
   }
   if (!out.essaSep) {
     return { ok: false, error: "essaSep required" }

@@ -567,6 +567,65 @@ check("TAXI order matches EFS top to bottom", () => {
     assert.equal(taxi[taxi.length - 1]?.position, taxi.length - 1)
 })
 
+check("LINEUP/DEPA invert so EFS top sits closest to Stripview DEPA end", () => {
+    // Stripview SECTION_ORDER = TAXI → LINEUP → DEPA (takeoff toward column bottom).
+    // EFS RWY: first L/U on top (pos 0). Publish inverted so first L/U has higher
+    // IRIS position within LINEUP (= closer to DEPA). Same for CFTO in DEPA.
+    const order = buildEssaIrisOrder(
+        [
+            strip({
+                callsign: "RYR27G",
+                sectionId: "runway_01L_19R",
+                groundstate: "LINEUP",
+                runway: "01L",
+                position: 0,
+            }),
+            strip({
+                callsign: "SAS1042",
+                sectionId: "runway_01L_19R",
+                groundstate: "LINEUP",
+                runway: "01L",
+                position: 1,
+            }),
+            strip({
+                callsign: "CFTO1",
+                sectionId: "runway_01L_19R",
+                groundstate: "DEPA",
+                clearedForTakeoff: true,
+                runway: "01L",
+                position: 0,
+            }),
+            strip({
+                callsign: "CFTO2",
+                sectionId: "runway_01L_19R",
+                groundstate: "DEPA",
+                clearedForTakeoff: true,
+                runway: "01L",
+                position: 1,
+            }),
+        ],
+        5,
+    )
+    const lineup = order.entries.filter((e) => e.sectionId === "LINEUP")
+    assert.deepEqual(
+        lineup.map((e) => e.stripKey),
+        ["SAS1042", "RYR27G"],
+    )
+    assert.deepEqual(
+        lineup.map((e) => e.position),
+        [0, 1],
+    )
+    const depa = order.entries.filter((e) => e.sectionId === "DEPA")
+    assert.deepEqual(
+        depa.map((e) => e.stripKey),
+        ["CFTO2", "CFTO1"],
+    )
+    assert.deepEqual(
+        depa.map((e) => e.position),
+        [0, 1],
+    )
+})
+
 check("cfto and atd on order entries and strip bodies", () => {
     const cfto = strip({
         callsign: "CFTO",

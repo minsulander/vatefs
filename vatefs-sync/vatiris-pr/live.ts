@@ -22,6 +22,12 @@ export type LiveUpdate =
       updatedAt: string
       updatedByCid: number | null
     }
+  | {
+      /** Late-joiner `.efs refresh` — peers re-write assumed CLR/CFL/CTL into ES */
+      type: "reassertAssumed"
+      updatedAt: string
+      updatedByCid: number | null
+    }
 
 type SseClient = { kind: "sse"; res: Response; cid: number }
 type WsClient = { kind: "ws"; ws: WebSocket; cid: number }
@@ -100,6 +106,24 @@ export function subscribeRoomWs(
     remove()
   }
 
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(String(raw)) as { type?: string }
+      if (msg?.type !== "reassertAssumed") return
+      publishRoom(
+        realm,
+        airport,
+        {
+          type: "reassertAssumed",
+          updatedAt: new Date().toISOString(),
+          updatedByCid: cid,
+        },
+        cid,
+      )
+    } catch {
+      // ignore malformed client messages
+    }
+  })
   ws.on("close", cleanup)
   ws.on("error", cleanup)
   return cleanup
@@ -115,7 +139,8 @@ export function publishRoom(
   const set = rooms.get(roomKey(realm, airport))
   if (!set || set.size === 0) return
   const payload = JSON.stringify(update)
-  const eventName = update.type === "meta" ? "meta" : "scribble"
+  const eventName =
+    update.type === "meta" || update.type === "reassertAssumed" ? update.type : "scribble"
   for (const c of set) {
     if (exceptCid != null && c.cid === exceptCid) continue
     try {
