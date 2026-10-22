@@ -4579,6 +4579,7 @@ const depArrowCtot = computed(() => {
  * - ESSA IFR DEP + TT (PUSH&START+): SRM / SLC only (never ASSR)
  * - Compact DEP: CTOT/SCL in that slot when present
  * - ARR / other airports: ASSR (squawk)
+ * CTOT regulation reason (mostPenalisingRegulation) is menu-only — not shown here.
  */
 const secondaryTimeKind = computed((): SecondaryTimeKind => {
   if (isArrLayout.value) return 'assr'

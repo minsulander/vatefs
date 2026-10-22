@@ -9121,7 +9121,9 @@ function applyViffPoll(result: ViffPollResult) {
             const stsUpper = newSts?.trim().toUpperCase()
             const isSlc = stsUpper === "SLC" || stsUpper === "SCL"
             const CTOT_SLC_GRACE_MS = 180_000
-            // Local spoof / ES CDM pin: keep CTOT + cdmSts (poll was wiping SRM/CTOT spoofs)
+            // Local spoof / ES CDM pin: protect TOBT/TSAT/TTOT and avoid wiping spoofed
+            // CTOT/cdmSts. Still take network CTOT upgrades + regulation reason (CDM_data
+            // often has only "flowRestriction", which we strip — vIFF has EDDH etc.).
             if (!localFresh) {
                 // CTOT cancelled (network SLC): latch so strip shows SCL in the CTOT slot
                 if (newCtot) {
@@ -9169,12 +9171,19 @@ function applyViffPoll(result: ViffPollResult) {
                     flight.cdmSts = newSts
                     changed = true
                 }
-            } else if (newCtot && flight.ctot !== newCtot) {
-                // Network has a live CTOT — still allow upgrade while pin holds TOBT/TSAT
-                flight.ctot = newCtot
-                flight.ctotCancelled = undefined
-                flight.ctotClearedAt = undefined
-                changed = true
+            } else {
+                if (newCtot && flight.ctot !== newCtot) {
+                    // Network has a live CTOT — still allow upgrade while pin holds TOBT/TSAT
+                    flight.ctot = newCtot
+                    flight.ctotCancelled = undefined
+                    flight.ctotClearedAt = undefined
+                    changed = true
+                }
+                // Restricted feed is authoritative for mostPenalisingRegulation
+                if (ctotEntry && flight.ctotReason !== newReason) {
+                    flight.ctotReason = newReason
+                    changed = true
+                }
             }
             // Do not clear TOBT/TSAT/TTOT when HTTP omits the flight
             if (newTobt !== undefined && flight.tobt !== newTobt) {
