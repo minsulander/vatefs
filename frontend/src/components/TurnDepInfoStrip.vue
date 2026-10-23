@@ -1,6 +1,11 @@
 <template>
   <InfoStrip v-if="visible && variant" :strip-id="kind" tone="green" @close="dismiss">
     <div class="turn-dep" :class="turnClass">
+      <span
+        v-if="variant.turn === 'LEFT'"
+        class="turn-dep-cfg"
+        :title="`RWY config ${variant.configId}`"
+      >{{ variant.configId }}</span>
       <div v-if="variant.turn === 'BOTH'" class="turn-dep-arrows" aria-hidden="true">
         <DepTurnArrow class="turn-dep-arrow" turn="LEFT" />
         <DepTurnArrow class="turn-dep-arrow" turn="RIGHT" />
@@ -29,6 +34,7 @@ const turnClass = computed(() => {
 
 <style scoped>
 .turn-dep {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -38,6 +44,20 @@ const turnClass = computed(() => {
   gap: calc(12px * var(--strip-scale, 1));
   padding: calc(1px * var(--strip-scale, 1)) 0 calc(1px * var(--strip-scale, 1)) calc(6px * var(--strip-scale, 1));
   box-sizing: border-box;
+}
+
+.turn-dep-cfg {
+  position: absolute;
+  left: calc(3px * var(--strip-scale, 1));
+  bottom: calc(1px * var(--strip-scale, 1));
+  z-index: 2;
+  font-size: calc(10px * var(--strip-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
 }
 
 .turn-dep-arrows {

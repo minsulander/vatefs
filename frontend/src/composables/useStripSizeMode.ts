@@ -1,7 +1,7 @@
 import { computed, reactive, type Ref, unref, type WritableComputedRef } from 'vue'
 
-/** Bay strip size: normal (full SAAB body) or compact (half-height). Zoom is separate. */
-export type StripSizeMode = 'normal' | 'compact'
+/** Bay strip size: normal, compact (half-height), or expanded (normal + expanders). Zoom is separate. */
+export type StripSizeMode = 'normal' | 'compact' | 'expanded'
 
 /** Ceiling size before auto-fit reduced a strip (survives autofit-module HMR with size). */
 export interface StripFitBaseline {
@@ -24,6 +24,9 @@ export function getStripSizeMode(stripId: string): StripSizeMode {
 
 export function setStripSizeMode(stripId: string, mode: StripSizeMode): void {
   if (mode === 'normal') {
+    delete sizeById[stripId]
+  } else if (mode === 'expanded') {
+    // Expanded renders as normal height; expanders are opened by the caller.
     delete sizeById[stripId]
   } else {
     sizeById[stripId] = mode

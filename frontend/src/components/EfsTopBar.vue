@@ -1,7 +1,7 @@
 <template>
   <div class="efs-top-bar text-body-2 text-grey">
-      <!-- Main menu: Handover Assistant (+ ESSA RWY / roles when applicable) -->
-      <v-menu v-model="mainMenuOpen" location="bottom" offset="4">
+      <!-- Left arrow: trash (ESSA flexible workspace) or legacy menu -->
+      <v-menu v-if="!efs.essaRolesMode" v-model="mainMenuOpen" location="bottom" offset="4">
         <template #activator="{ props: menuProps }">
           <button
             type="button"
@@ -20,32 +20,24 @@
               class="efs-popup-item"
               @click="onMainMenuHandoverAssistant"
             >Handover Assistant</button>
-            <template v-if="efs.essaRolesMode">
-              <div class="efs-popup-section">ESSA</div>
-              <button
-                type="button"
-                class="efs-popup-item efs-popup-item--stack"
-                :class="{ 'is-manual': efs.essaRwyConfigManual }"
-                @click="onMainMenuEssaRwy"
-                @mouseenter="onEssaRwyHoverEnter"
-                @mouseleave="onEssaRwyHoverLeave"
-              >
-                <span class="efs-popup-item-title">RWY config</span>
-                <span class="efs-popup-item-sub">{{ essaRwyLabel || '-' }}{{ efs.essaRwyConfigManual ? ' · MANUAL' : '' }}</span>
-              </button>
-              <button
-                type="button"
-                class="efs-popup-item efs-popup-item--stack"
-                :class="{ 'is-manual': efs.essaRolesManual }"
-                @click="onMainMenuEssaRoles"
-              >
-                <span class="efs-popup-item-title">Roles</span>
-                <span class="efs-popup-item-sub">{{ essaRolesLabel }}{{ efs.essaRolesManual ? ' · MANUAL' : '' }}</span>
-              </button>
-            </template>
           </div>
         </div>
       </v-menu>
+      <button
+        v-else
+        type="button"
+        class="top-menu-btn top-trash-btn efs-trash-drop"
+        :class="{ 'drag-over': trashDragOver }"
+        title="Trash — open recover · drop strip to delete"
+        @click="trashOpen = true"
+        @dragover.prevent="onTrashDragOver"
+        @dragenter.prevent="onTrashDragEnter"
+        @dragleave="onTrashDragLeave"
+        @drop.prevent="onTrashDrop"
+      >
+        <span class="top-menu-tri" aria-hidden="true" />
+      </button>
+      <TrashDialog v-if="efs.essaRolesMode" v-model="trashOpen" />
       <v-btn
         variant="text"
         icon="mdi-cog"
@@ -84,7 +76,7 @@
           class="essa-status-btn"
           :class="{ 'is-manual': efs.essaRolesManual }"
           :title="essaRolesStatusTitle"
-          @click="essaRolesDialog = true"
+          @click="openEssaRolesDialog"
         >
           Roles: {{ essaRolesLabel }}
         </button>
@@ -548,8 +540,178 @@
           </div>
         </Teleport>
 
+        <!-- ESSA: right arrow catalog (HA / Layouts / Breakout·MAP·DEP·SID / Sections). Else fullscreen. -->
+        <v-menu
+          v-if="efs.essaRolesMode"
+          v-model="rightMenuOpen"
+          location="bottom end"
+          offset="4"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              type="button"
+              class="top-menu-btn top-fs-btn"
+              :class="{ 'is-open': rightMenuOpen }"
+              title="Catalog"
+              v-bind="menuProps"
+            >
+              <span class="top-menu-tri top-menu-tri--right" aria-hidden="true" />
+            </button>
+          </template>
+          <div
+            class="efs-popup-menu efs-popup-menu--wide efs-popup-menu--bay-fill"
+            :style="catalogMaxHStyle"
+            @click.stop
+          >
+            <div class="efs-popup-list">
+              <button type="button" class="efs-popup-item" @click="onRightHandover">
+                Handover Assistant
+              </button>
+              <button
+                type="button"
+                class="efs-popup-item efs-popup-item--start"
+                @click="onRightLayouts"
+              >
+                <span>Layouts</span>
+                <span
+                  class="column-count-ctrl"
+                  title="Number of bays"
+                  @click.stop
+                  @pointerdown.stop
+                >
+                  <button
+                    type="button"
+                    class="column-count-btn"
+                    :disabled="ws.columnCount.value <= 1"
+                    title="Fewer bays"
+                    @click="ws.adjustColumnCount(-1, efs.layout)"
+                  >−</button>
+                  <span
+                    class="column-count-label"
+                    :title="`${ws.columnCount.value} bays`"
+                  >{{ ws.columnCount.value }}</span>
+                  <button
+                    type="button"
+                    class="column-count-btn"
+                    :disabled="ws.columnCount.value >= 6"
+                    title="More bays"
+                    @click="ws.adjustColumnCount(1, efs.layout)"
+                  >+</button>
+                </span>
+              </button>
+              <template v-for="folder in infoCatalogFolders" :key="folder.id">
+                <button
+                  type="button"
+                  class="efs-popup-section efs-popup-folder"
+                  :aria-expanded="!!catalogInfoFolderOpen[folder.id]"
+                  @click.stop="toggleInfoFolder(folder.id)"
+                >
+                  <span>{{ folder.label }}</span>
+                  <span
+                    class="efs-popup-folder-chevron"
+                    :class="{ 'is-open': catalogInfoFolderOpen[folder.id] }"
+                    aria-hidden="true"
+                  />
+                </button>
+                <template v-if="catalogInfoFolderOpen[folder.id]">
+                  <button
+                    v-for="entry in folder.items"
+                    :key="`${entry.kind}:${entry.forceKey}`"
+                    type="button"
+                    class="efs-popup-item"
+                    :class="{ 'is-disabled': entry.shown || !entry.available }"
+                    :disabled="entry.shown || !entry.available"
+                    @click="onShowInfoStrip(entry)"
+                  >{{ entry.label }}</button>
+                </template>
+              </template>
+              <template v-if="showRwyFlagTable">
+                <button
+                  type="button"
+                  class="efs-popup-section efs-popup-folder"
+                  :aria-expanded="!!catalogInfoFolderOpen.rwyClosed"
+                  @click.stop="toggleInfoFolder('rwyClosed')"
+                >
+                  <span>Runway closed</span>
+                  <span
+                    class="efs-popup-folder-chevron"
+                    :class="{ 'is-open': catalogInfoFolderOpen.rwyClosed }"
+                    aria-hidden="true"
+                  />
+                </button>
+                <template v-if="catalogInfoFolderOpen.rwyClosed">
+                  <button
+                    v-for="row in rwyFlagRows"
+                    :key="'clsd-' + row.sectionId"
+                    type="button"
+                    class="efs-popup-item"
+                    :class="{ 'is-disabled': row.closed }"
+                    :disabled="row.closed"
+                    @click="onShowRwyFlag(row.sectionId, 'rwyClosed')"
+                  >{{ row.label }}</button>
+                </template>
+                <button
+                  type="button"
+                  class="efs-popup-section efs-popup-folder"
+                  :aria-expanded="!!catalogInfoFolderOpen.rwyVehicle"
+                  @click.stop="toggleInfoFolder('rwyVehicle')"
+                >
+                  <span>Runway vehicle</span>
+                  <span
+                    class="efs-popup-folder-chevron"
+                    :class="{ 'is-open': catalogInfoFolderOpen.rwyVehicle }"
+                    aria-hidden="true"
+                  />
+                </button>
+                <template v-if="catalogInfoFolderOpen.rwyVehicle">
+                  <button
+                    v-for="row in rwyFlagRows"
+                    :key="'occ-' + row.sectionId"
+                    type="button"
+                    class="efs-popup-item"
+                    :class="{ 'is-disabled': row.occupied }"
+                    :disabled="row.occupied"
+                    @click="onShowRwyFlag(row.sectionId, 'rwyOccupied')"
+                  >{{ row.label }}</button>
+                </template>
+              </template>
+              <button
+                type="button"
+                class="efs-popup-section efs-popup-folder"
+                :aria-expanded="catalogSectionsOpen"
+                @click.stop="catalogSectionsOpen = !catalogSectionsOpen"
+              >
+                <span>Sections</span>
+                <span
+                  class="efs-popup-folder-chevron"
+                  :class="{ 'is-open': catalogSectionsOpen }"
+                  aria-hidden="true"
+                />
+              </button>
+              <template v-if="catalogSectionsOpen">
+                <button
+                  type="button"
+                  class="efs-popup-item"
+                  @click="onAddEmptyHeader"
+                >Empty divider</button>
+                <button
+                  v-for="sec in sectionCatalog"
+                  :key="sec.sectionId"
+                  type="button"
+                  class="efs-popup-item"
+                  :class="[
+                    catalogSectionTintClass(sec),
+                    { 'is-disabled': sec.present },
+                  ]"
+                  :disabled="sec.present"
+                  @click="onAddSection(sec)"
+                >{{ sec.title }}</button>
+              </template>
+            </div>
+          </div>
+        </v-menu>
         <button
-          v-if="!isStandalone"
+          v-else-if="!isStandalone"
           type="button"
           class="top-menu-btn top-fs-btn"
           :class="{ 'is-fullscreen': fullscreen }"
@@ -565,7 +727,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue"
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue"
 import { useEfsStore } from "../store/efs"
 import { useEfsChromeScaleValue } from "@/composables/useEfsUiScale"
 import type { ConfigInfo, DclMode } from "@vatefs/common"
@@ -577,9 +739,134 @@ import {
   resolveEssaRwyConfigId,
   essaRwyQuickrefImageUrl,
 } from "@vatefs/common"
+import { getWorkspace } from "@/workspace"
+import { useInfoStripMenu } from "@/composables/useInfoStrips"
+import {
+  useRwyFlagMenu,
+  setRwyFlagActive,
+  type RwyFlagKind,
+} from "@/composables/useRunwayFlagStrips"
+import TrashDialog from "./TrashDialog.vue"
+
 const efs = useEfsStore()
+const ws = getWorkspace()
 const chromeScale = useEfsChromeScaleValue()
 const fsIconSize = computed(() => Math.max(16, Math.round(20 * chromeScale.value)))
+const trashOpen = ref(false)
+const trashDragOver = ref(false)
+const rightMenuOpen = ref(false)
+/** Info strip / RWY / Sections folders — closed each time the catalog opens. */
+const catalogSectionsOpen = ref(false)
+const catalogInfoFolderOpen = ref<Record<string, boolean>>({})
+/** Max height for top-right catalog = bay body height; scrollbar only if content overflows. */
+const catalogMaxHPx = ref(0)
+const catalogMaxHStyle = computed(() =>
+  catalogMaxHPx.value > 0
+    ? { '--efs-popup-bay-fill-max-h': `${catalogMaxHPx.value}px` }
+    : undefined,
+)
+const infoMenu = useInfoStripMenu()
+const infoCatalogFolders = computed(() => infoMenu.folders.value)
+const {
+  showTable: showRwyFlagTable,
+  rows: rwyFlagRows,
+} = useRwyFlagMenu()
+const sectionCatalog = computed(() => ws.catalogSections(efs.layout, efs.essaRoles))
+
+function toggleInfoFolder(id: string) {
+  catalogInfoFolderOpen.value = {
+    ...catalogInfoFolderOpen.value,
+    [id]: !catalogInfoFolderOpen.value[id],
+  }
+}
+
+function onShowRwyFlag(sectionId: string, kind: RwyFlagKind) {
+  setRwyFlagActive(kind, sectionId, true)
+  rightMenuOpen.value = false
+}
+
+function refreshCatalogMaxHeight() {
+  const bay = document.querySelector('.efs-bay-content') as HTMLElement | null
+  const h = bay?.getBoundingClientRect().height
+  catalogMaxHPx.value = h && h > 80 ? Math.floor(h) : Math.max(200, window.innerHeight - 96)
+}
+
+watch(rightMenuOpen, async (open) => {
+  if (!open) return
+  catalogSectionsOpen.value = false
+  catalogInfoFolderOpen.value = {}
+  await nextTick()
+  refreshCatalogMaxHeight()
+})
+
+function onTrashDragOver() {
+  trashDragOver.value = true
+}
+function onTrashDragEnter() {
+  trashDragOver.value = true
+}
+function onTrashDragLeave(e: DragEvent) {
+  const related = e.relatedTarget as Node | null
+  const btn = e.currentTarget as HTMLElement
+  if (related && btn.contains(related)) return
+  trashDragOver.value = false
+}
+function onTrashDrop(e: DragEvent) {
+  trashDragOver.value = false
+  const raw = e.dataTransfer?.getData('application/json')
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw) as { stripId?: string }
+    if (data.stripId) efs.deleteStrip(data.stripId)
+  } catch {
+    /* ignore */
+  }
+}
+function onRightHandover() {
+  rightMenuOpen.value = false
+  efs.openHandoverAssistant()
+}
+function onRightLayouts() {
+  rightMenuOpen.value = false
+  ws.openLayoutMenu()
+}
+function onShowInfoStrip(entry: Parameters<typeof infoMenu.showEntry>[0]) {
+  if (!entry.available || entry.shown) return
+  infoMenu.showEntry(entry)
+  rightMenuOpen.value = false
+}
+function onAddEmptyHeader() {
+  ws.addEmptyHeader(Math.max(0, ws.columnCount.value - 1))
+  rightMenuOpen.value = false
+}
+function onAddSection(sec: { sectionId: string; title: string; present?: boolean }) {
+  if (sec.present) return
+  ws.addSectionFromCatalog(sec.sectionId, sec.title, 0, efs.layout)
+  rightMenuOpen.value = false
+}
+
+/** Match ESSA section-header tints (runway red / inbound turquoise). */
+function catalogSectionTintClass(sec: { sectionId: string; title: string }): string | undefined {
+  const id = sec.sectionId.toLowerCase()
+  const title = (sec.title || '').toUpperCase()
+  if (
+    id.includes('runway') ||
+    title === 'RUNWAY' ||
+    title.startsWith('RUNWAY ')
+  ) {
+    return 'efs-popup-item--essa-runway'
+  }
+  if (
+    id === 'inbound' ||
+    id.startsWith('inbound_') ||
+    id.endsWith('_inbound') ||
+    title === 'INBOUND' ||
+    title.startsWith('INBOUND ')
+  ) {
+    return 'efs-popup-item--essa-inbound'
+  }
+  return undefined
+}
 const connIconSize = computed(() => Math.max(16, Math.round(18 * chromeScale.value)))
 /** OK only when backend WS + EuroScope plugin are both live */
 const connOk = computed(() => efs.connected && efs.pluginConnected)
@@ -773,7 +1060,7 @@ function onMainMenuEssaRwy() {
 
 function onMainMenuEssaRoles() {
   mainMenuOpen.value = false
-  essaRolesDialog.value = true
+  openEssaRolesDialog()
 }
 
 function sortEssaRolesDisplay(roles: string[]): string[] {
@@ -958,12 +1245,21 @@ watch(essaRwyDialog, (open) => {
   }
 })
 
+function openEssaRolesDialog() {
+  // Force-close layout picker without confirming — role change should re-prompt
+  ws.layoutDialogOpen.value = false
+  essaRolesDialog.value = true
+}
+
 function onEssaRolesOk() {
+  // Allow layout picker to open even if the role key matches a prior confirmation
+  ws.invalidateLayoutPrompt()
   efs.setEssaRoles([...draftEssaRoles.value], true)
   essaRolesDialog.value = false
 }
 
 function onEssaRolesAuto() {
+  ws.invalidateLayoutPrompt()
   efs.setEssaRoles([], false)
   essaRolesDialog.value = false
 }
@@ -1249,7 +1545,7 @@ function onConfigClick(file: string) {
   if (file !== efs.activeConfig) {
     efs.switchConfig(file)
   }
-  // Stay open on RTC / ESGG so column ± buttons remain usable
+  // Stay open on RTC / ESGG so column ± buttons remain usable (ESSA bays ± lives next to Layouts)
   if (!isRtcConfig(config) && !isEsggPaperConfig(config)) {
     configMenuOpen.value = false
   }
@@ -1442,6 +1738,11 @@ onUnmounted(() => {
   /* Point down when open */
   border-width: calc(7px * var(--tb)) calc(5px * var(--tb)) 0 calc(5px * var(--tb));
   border-color: currentColor transparent transparent transparent;
+}
+
+.top-trash-btn.drag-over {
+  color: #f44336;
+  outline: 1px solid #f44336;
 }
 
 /* Same chrome as menu arrow — fullscreen icon */

@@ -39,6 +39,7 @@ type CommonRuleConditions = {
     groundstates?: string[]
     controller?: ControllerCondition
     clearance?: boolean
+    vchRequests?: Array<'C' | 'P' | 'S' | 'T' | 'D'>
     clearedToLand?: boolean
     approachClearance?: boolean
     airborne?: boolean
@@ -426,6 +427,13 @@ function evaluateCommonConditions(
                 ? !!(flight.clearance || flight.clearanceReadback)
                 : !!(flight.clearance ?? false)
         if (hasClearance !== rule.clearance) {
+            return false
+        }
+    }
+
+    if (rule.vchRequests !== undefined) {
+        const req = flight.vchRequest
+        if (!req || !rule.vchRequests.includes(req)) {
             return false
         }
     }

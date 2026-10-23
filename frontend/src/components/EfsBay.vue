@@ -5,8 +5,13 @@
     :class="{
       'efs-bay--empty': store.multiAirport && isEmpty,
       'efs-bay--paper': store.isPaperLook,
+      'efs-bay--workspace': workspaceMode,
+      'efs-bay--ws-section-drag': workspaceMode && !!ws.draggingSectionId.value,
     }"
     :data-bay-id="bay.id"
+    :data-ws-column="columnIndex"
+    @dragover="onWorkspaceBayDragOver"
+    @drop="onWorkspaceBayDrop"
   >
     <!-- ESGG paper board: dark edge panels + one pipe each side (same layer, under strips) -->
     <template v-if="store.isPaperLook">
@@ -132,13 +137,34 @@
         <span class="efs-bay-empty-hint">Select airport</span>
       </button>
       <template v-else>
+        <!-- Continuous flow: empty top / empty column = extension of previous bay -->
+        <div
+          v-if="workspaceMode && (columnTopGap > 0 || bay.sections.length === 0)"
+          class="ws-overflow-gap"
+          :class="{ 'ws-overflow-gap--fill': bay.sections.length === 0 }"
+          :style="overflowGapStyle"
+          :title="'Overflow from previous bay'"
+          @dragover="onWorkspaceBayDragOver"
+          @drop="onWorkspaceBayDrop"
+        >
+          <WsOverflowHost
+            v-if="overflowHost"
+            :strip-ids="overflowHost.stripIds"
+            :source-section-id="overflowHost.sourceSectionId"
+            :source-bay-id="overflowHost.sourceBayId"
+            :allow-scroll="overflowHost.allowScroll"
+          />
+        </div>
         <EfsSection
           v-for="(section, index) in bay.sections"
-          :key="section.id"
+          :key="workspaceInstanceId(section.id) || section.id"
           :section="section"
           :bay-id="bay.id"
           :is-first-section="index === 0"
           :is-last-section="index === bay.sections.length - 1"
+          :workspace-mode="workspaceMode"
+          :workspace-instance-id="workspaceInstanceId(section.id)"
+          :workspace-column-index="columnIndex ?? 0"
         />
       </template>
     </div>
@@ -150,12 +176,65 @@ import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import type { Bay } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { buildRtcAirportList } from '@/composables/rtcAirportList'
+import { getWorkspace } from '@/workspace'
 import EfsSection from './EfsSection.vue'
+import WsOverflowHost from './WsOverflowHost.vue'
 
 const props = defineProps<{
   bay: Bay
   columnIndex?: number
+  workspaceMode?: boolean
 }>()
+
+const ws = getWorkspace()
+
+const columnTopGap = computed(() => {
+  if (!props.workspaceMode || props.columnIndex == null) return 0
+  // Depend on layout + body height so empty columns get full overflow capacity
+  void ws.activeLayout.value
+  void ws.overflowPack.value
+  return ws.getColumnTopGap(props.columnIndex)
+})
+
+const overflowHost = computed(() => {
+  if (!props.workspaceMode || props.columnIndex == null) return undefined
+  void ws.overflowPack.value
+  return ws.getColumnOverflowHost(props.columnIndex)
+})
+
+const overflowGapStyle = computed(() => {
+  if (props.bay.sections.length === 0) {
+    // Empty column: flex-fill the body (height already = body via getColumnTopGap)
+    return { flex: '1 1 auto', minHeight: 0 }
+  }
+  return { height: columnTopGap.value + 'px' }
+})
+
+function workspaceInstanceId(sectionId: string): string | undefined {
+  if (!props.workspaceMode) return undefined
+  const hit = ws.sections.value.find(
+    (s) => s.instanceId === sectionId || s.sectionId === sectionId,
+  )
+  return hit?.instanceId
+}
+
+function onWorkspaceBayDragOver(e: DragEvent) {
+  if (!props.workspaceMode) return
+  if (!e.dataTransfer?.types.includes('application/x-efs-section')) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+function onWorkspaceBayDrop(e: DragEvent) {
+  if (!props.workspaceMode) return
+  const dragged = e.dataTransfer?.getData('application/x-efs-section')
+  if (!dragged) return
+  e.preventDefault()
+  e.stopPropagation()
+  ws.moveSectionByClientY(dragged, props.columnIndex ?? 0, e.clientY)
+  ws.endSectionDrag()
+}
 
 const BAY_REF_WIDTH_PX = 400
 const BAY_SCALE_MIN = 0.55
@@ -165,6 +244,7 @@ const store = useEfsStore()
 const bayEl = ref<HTMLElement | null>(null)
 const bayHeader = ref<HTMLElement | null>(null)
 let bayResizeObs: ResizeObserver | null = null
+let bayBodyResizeObs: ResizeObserver | null = null
 let bayScaleRaf = 0
 
 function updateBayScale() {
@@ -176,11 +256,19 @@ function updateBayScale() {
   el.style.setProperty('--bay-scale', String(s))
 }
 
+function reportBayBodyHeight() {
+  if (!props.workspaceMode || props.columnIndex == null) return
+  const body = bayEl.value?.querySelector('.bay-body') as HTMLElement | null
+  if (!body) return
+  ws.setColumnBodyHeight(props.columnIndex, body.clientHeight)
+}
+
 function scheduleBayScale() {
   if (bayScaleRaf) cancelAnimationFrame(bayScaleRaf)
   bayScaleRaf = requestAnimationFrame(() => {
     bayScaleRaf = 0
     updateBayScale()
+    reportBayBodyHeight()
   })
 }
 const pickerOpen = ref(false)
@@ -399,6 +487,8 @@ onBeforeUnmount(() => {
   unbindPickerListeners()
   bayResizeObs?.disconnect()
   bayResizeObs = null
+  bayBodyResizeObs?.disconnect()
+  bayBodyResizeObs = null
   if (bayScaleRaf) cancelAnimationFrame(bayScaleRaf)
   clearHeaderQnhHold()
 })
@@ -411,19 +501,36 @@ onMounted(() => {
     bayResizeObs = new ResizeObserver(() => scheduleBayScale())
     bayResizeObs.observe(bayEl.value)
   }
+  const body = bayEl.value?.querySelector('.bay-body') as HTMLElement | null
+  if (body && props.workspaceMode && typeof ResizeObserver !== 'undefined') {
+    bayBodyResizeObs = new ResizeObserver(() => reportBayBodyHeight())
+    bayBodyResizeObs.observe(body)
+    reportBayBodyHeight()
+  }
 
   nextTick(() => {
     if (!bayEl.value) return
+    // Workspace: snapshot header Ys from the equal-flex first paint so later
+    // removes keep positions (top gap = overflow from previous bay).
+    if (props.workspaceMode && props.columnIndex != null) {
+      const already = ws.sectionsInColumn(props.columnIndex).some((s) => s.y != null)
+      if (!already) {
+        ws.syncColumnYsFromDom(props.columnIndex)
+        ws.persistHeights()
+      }
+      reportBayBodyHeight()
+      ws.scheduleOverflowRepack()
+      return
+    }
     const sections = props.bay.sections
     const sectionEls = bayEl.value.querySelectorAll('.efs-section')
     for (let i = 0; i < sections.length - 1; i++) {
       const section = sections[i]
-      const el = sectionEls[i]
+      const el = sectionEls[i] as HTMLElement | undefined
       // Headerless zones size to content — do not lock pixel height
-      if (section && !section.height && !section.hideHeader && el) {
-        const height = el.getBoundingClientRect().height
-        store.setSectionHeight(props.bay.id, section.id, height, false)
-      }
+      if (!section || section.height || section.hideHeader || !el) continue
+      const height = el.getBoundingClientRect().height
+      store.setSectionHeight(props.bay.id, section.id, height, false)
     }
   })
 })
@@ -438,6 +545,20 @@ onMounted(() => {
   background: var(--efs-bay-bg, #3b3c41);
 }
 
+/*
+ * ESSA workspace: column side borders live on the bay so empty columns (no headers)
+ * still show the same frame as populated ones. Sections drop their own L/R borders.
+ */
+.efs-bay--workspace {
+  border-left: 1px solid #2b2d31;
+  border-right: 1px solid #2b2d31;
+  box-sizing: border-box;
+}
+.efs-bay--workspace :deep(.efs-section) {
+  border-left: none;
+  border-right: none;
+}
+
 .bay-body {
   flex: 1;
   display: flex;
@@ -445,6 +566,7 @@ onMounted(() => {
   min-height: 0;
   min-width: 0;
 }
+
 
 .efs-bay--empty {
   opacity: 0.55;
@@ -845,5 +967,41 @@ onMounted(() => {
   color: inherit;
   font-size: calc(11px * var(--efs-scale, 1));
   font-weight: 800;
+}
+
+/* Header DnD: never show strip drop markers (teal insert line / header / bottom slot) */
+/* Gap above first header / empty column — paints continuation strips from previous bay */
+.ws-overflow-gap {
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  pointer-events: auto;
+}
+.ws-overflow-gap--fill {
+  flex: 1 1 auto;
+}
+
+.efs-bay--ws-section-drag :deep(.drop-placement-line) {
+  display: none !important;
+}
+.efs-bay--ws-section-drag :deep(.section-header.header-drop-active) {
+  box-shadow: none !important;
+}
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone.drop-active),
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone--stick-top.drop-active) {
+  background: transparent !important;
+  box-shadow: none !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+  border-top-width: 1px !important;
+  border-bottom-width: 1px !important;
+}
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone.drop-active::before),
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone.drop-active::after),
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone--stick-top.drop-active::before),
+.efs-bay--ws-section-drag :deep(.bottom-drop-zone--stick-top.drop-active::after) {
+  display: none !important;
 }
 </style>

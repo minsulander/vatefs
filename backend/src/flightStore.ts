@@ -791,6 +791,16 @@ function parseDofFromRemarks(remarks: string | undefined): string | undefined {
     return m?.[1]
 }
 
+/** VCH pending request from FPL remarks `/VCH/REQ/P…/REQ/VCH/`. */
+function parseVchRequestFromRemarks(
+    remarks: string | undefined,
+): Flight['vchRequest'] | undefined {
+    if (!remarks) return undefined
+    const m = remarks.match(/\/VCH\/REQ\/([CPSTD])/i)
+    if (!m?.[1]) return undefined
+    return m[1].toUpperCase() as Flight['vchRequest']
+}
+
 /** Second alternate from item 18 RALT/ or ALTN/ when different from primary. */
 export function parseAltn2FromRemarks(remarks: string | undefined, altn1?: string): string | undefined {
     if (!remarks) return undefined
@@ -1063,6 +1073,9 @@ class FlightStore {
      * pair is not already covered by the active ARR/DEP config adds that header
      * (e.g. DEP 08 while config is 01L). Runways already present (01L while
      * config is 01L/01L) do not open a second bay.
+     *
+     * DEP uses ES depRwy or forced `/rwy` on the first route term — not the
+     * active-config fallback (that would never open an "extra" header).
      */
     getEssaAssignedRunways(): { arr: string[]; dep: string[] } {
         const activePairs = new Set<string>()
@@ -1082,6 +1095,16 @@ class FlightStore {
             if (!pair || activePairs.has(pair.id)) return
             into.add(rwy.toUpperCase())
         }
+        /** Forced/selected DEP only — never invent from active ES config. */
+        const forcedDepRwy = (flight: Flight): string | undefined => {
+            if (flight.depRwy) return flight.depRwy
+            if (!flight.route) return undefined
+            const firstTerm = flight.route.split(/\s+/)[0]!
+            const slashIdx = firstTerm.indexOf('/')
+            if (slashIdx < 0) return undefined
+            const rwy = firstTerm.substring(slashIdx + 1).toUpperCase()
+            return /^\d{1,2}[LRC]?$/.test(rwy) ? rwy : undefined
+        }
 
         for (const flight of this.flights.values()) {
             if (flight.deleted || flight.manuallyDeleted) continue
@@ -1089,7 +1112,7 @@ class FlightStore {
             const originIsEssa = flight.origin === 'ESSA'
             const destIsEssa = flight.destination === 'ESSA'
             if (destIsEssa) consider(flight.arrRwy, arr)
-            if (originIsEssa) consider(flight.depRwy, dep)
+            if (originIsEssa) consider(forcedDepRwy(flight), dep)
         }
         return {
             arr: [...arr].sort(),
@@ -1126,6 +1149,8 @@ class FlightStore {
             flight.clearedForTakeoff ? '1' : '0',
             flight.missedApproach ? '1' : '0',
             flight.efsGoAround ? '1' : '0',
+            // VCH pending P/S must release sticky CD ALL / TSAT → REQ PUSH
+            flight.vchRequest ?? '',
         ].join('|')
     }
 
@@ -3097,6 +3122,12 @@ class FlightStore {
             flight.fplRemarks = message.fplRemarks || undefined
             const dof = parseDofFromRemarks(flight.fplRemarks)
             if (dof) flight.eobd = dof
+            // VCH 0.8 remarks sync form — pick up P/S even if plugin omitted vchRequest
+            const vchFromRmk = parseVchRequestFromRemarks(flight.fplRemarks)
+            if (vchFromRmk && vchFromRmk !== flight.vchRequest) {
+                console.log(`[VCH REQ] ${callsign}: ${flight.vchRequest ?? '-'} -> ${vchFromRmk} (FPL remarks)`)
+                flight.vchRequest = vchFromRmk
+            }
         }
         if (message.arrRwy !== undefined) flight.arrRwy = message.arrRwy
         if (message.star !== undefined) flight.star = message.star
@@ -3536,6 +3567,17 @@ class FlightStore {
             if (nextHs !== flight.hs) {
                 console.log(`[HS] ${callsign}: ${flight.hs ?? '-'} -> ${nextHs ?? '-'} (VCH)`)
                 flight.hs = nextHs
+            }
+        }
+        if (message.vchRequest !== undefined) {
+            const raw = (message.vchRequest || '').trim().toUpperCase()
+            const nextReq =
+                raw === 'C' || raw === 'P' || raw === 'S' || raw === 'T' || raw === 'D'
+                    ? (raw as Flight['vchRequest'])
+                    : undefined
+            if (nextReq !== flight.vchRequest) {
+                console.log(`[VCH REQ] ${callsign}: ${flight.vchRequest ?? '-'} -> ${nextReq ?? '-'}`)
+                flight.vchRequest = nextReq
             }
         }
         // Departure Coordination — strip annotation 6 ("DepC" / empty; legacy "EST")
@@ -5467,6 +5509,7 @@ class FlightStore {
             remarks: flight.remarks || undefined,
             hp: flight.hp || undefined,
             hs: flight.hs || undefined,
+            vchRequest: flight.vchRequest || undefined,
             coo: flight.coo || undefined,
             exitCoordPending: flight.exitCoordPending || undefined,
             exitCoordOutbound: flight.exitCoordOutbound || undefined,

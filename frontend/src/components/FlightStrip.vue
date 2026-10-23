@@ -1121,25 +1121,9 @@
             :title="primaryTimeLabelTitle"
             @click.stop="onPrimaryTimeClick"
           >
-            <template v-if="timeEditing">
-              <input
-                ref="timeEditInput"
-                v-model="timeEditText"
-                class="eobt-edit-input"
-                type="text"
-                inputmode="numeric"
-                maxlength="4"
-                @click.stop
-                @blur="onTimeEditBlur"
-                @keydown.enter="onTimeEditBlur"
-                @keydown.escape="onTimeEditCancel"
-              />
-            </template>
-            <template v-else>
-              <!-- REA is indicated only by the REA chip in the top expander — never in the TB field -->
-              <span v-if="primaryTimeLabel" class="strip-time-lbl">{{ primaryTimeLabel }}</span>
-              <span class="strip-time-val">{{ primaryTimeValue || '----' }}</span>
-            </template>
+            <!-- REA is indicated only by the REA chip in the top expander — never in the TB field -->
+            <span v-if="primaryTimeLabel" class="strip-time-lbl">{{ primaryTimeLabel }}</span>
+            <span class="strip-time-val">{{ primaryTimeValue || '----' }}</span>
           </div>
 
           <template v-if="!isCompactBay">
@@ -1744,12 +1728,13 @@ const {
 } = useStripScribbles(stripIdRef)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripIdRef)
 const { isCompact } = useStripSizeMode(stripIdRef)
-// IFR DEP spawn: both expanders open (once per strip id)
+// IFR DEP spawn: both expanders open (once per strip id) — skipped in CD/TSAT/PUSH
 applySpawnExpanderDefaults(props.strip.id, {
   ifrDeparture:
     (props.strip.stripType === 'departure' || props.strip.stripType === 'local') &&
     props.strip.flightRules !== 'V' &&
     props.strip.flightRules !== 'Z',
+  sectionId: props.sectionId,
 })
 
 /** SAAB flight strips that support half-height compact mode. */
@@ -4445,19 +4430,18 @@ function parseCdmSts(sts: string | undefined): {
 }
 
 /** Tooltip text for FLS / FLS-subtype */
-function flsTooltip(raw: string, flsType?: string): string {
+function flsTooltip(_raw: string, flsType?: string): string {
   const subtypeHelp: Record<string, string> = {
-    CDM: 'CDM (TOBT/TSAT related suspension)',
-    NRA: 'No Regulation Available / not ready',
-    MR: 'Mandatory Route non-compliance',
-    GS: 'Ground Stop',
+    NRA: 'Flight Suspended - Not Reported As Airborne.',
+    CDM: 'Flight Suspended - Triggered by CDM.',
+    MR: 'Flight Suspended - Mandatory Route.',
+    GS: 'Flight Suspended - Ground Stop.',
+    P: 'Flight Suspended - Prohibit.',
   }
   if (flsType) {
-    const help = subtypeHelp[flsType] || flsType
-    return `FLS - ${help} (${raw})`
+    return subtypeHelp[flsType] || `Flight Suspended - ${flsType}.`
   }
-  if (raw === 'SUSP') return 'FLS - Suspended (SUSP)'
-  return 'FLS - Flight Suspended'
+  return 'Flight Suspended.'
 }
 
 const cdmStatus = computed(() =>
@@ -4726,7 +4710,7 @@ const secondaryTimeTitle = computed(() => {
     return 'SRM — Slot Revision Message (CTOT revised)'
   }
   if (secondaryTimeKind.value === 'slc') {
-    return 'SLC — Slot Cancellation'
+    return 'SLC — Slot Cancellation Message. (CTOT not applicable anymore)'
   }
   if (secondaryTimeKind.value === 'assr') return assrTitle.value
   if (secondaryTimeKind.value === 'ctot' || secondaryTimeKind.value === 'scl') return ctocTooltip.value
@@ -4833,17 +4817,15 @@ function onSecondaryTimeDblClick() {
 const canEditPrimaryTime = computed(
   () =>
     canEditAssignedData.value &&
-    (isFls.value ||
-      primaryTimeKind.value === 'tobt' ||
+    (primaryTimeKind.value === 'tobt' ||
       (primaryTimeKind.value === 'eobt' && !store.isPaperLook)),
 )
 
-/** ESSA CDM TOBT entry / Ready TOBT click menu */
+/** ESSA CDM TOBT entry / Ready TOBT click menu (incl. FLS / suspended) */
 const canOpenReadyTobt = computed(
   () =>
     canEditAssignedData.value &&
     showCdm.value &&
-    !isFls.value &&
     primaryTimeKind.value === 'tobt',
 )
 
@@ -4852,7 +4834,6 @@ const canOpenEobtMenu = computed(
   () =>
     canEditAssignedData.value &&
     !store.isPaperLook &&
-    !isFls.value &&
     !isLocalOnlyStrip.value &&
     primaryTimeKind.value === 'eobt' &&
     showPrimaryTime.value,
@@ -5327,20 +5308,8 @@ const tsatColorClass = computed(() => {
   return {}
 })
 
-const timeEditing = ref(false)
-const timeEditMode = ref<'eobt' | 'tobt' | 'tsac'>('eobt')
-const timeEditText = ref('')
-const timeEditInput = ref<HTMLInputElement | null>(null)
-
 function onPrimaryTimeClick(event?: MouseEvent) {
   if (!canEditPrimaryTime.value) return
-  if (isFls.value) {
-    timeEditMode.value = 'eobt'
-    timeEditText.value = props.strip.eobt || ''
-    timeEditing.value = true
-    nextTick(() => timeEditInput.value?.focus())
-    return
-  }
   if (primaryTimeKind.value === 'tobt') {
     openTobtMenu(event)
     return
@@ -5353,31 +5322,7 @@ function onPrimaryTimeClick(event?: MouseEvent) {
 /** Quick Ready TOBT = now (kept for programmatic callers). */
 function onReadyTobtClick() {
   if (!canOpenReadyTobt.value) return
-  timeEditing.value = false
   store.viffReadyTobt(props.strip.id)
-}
-
-function onTimeEditCancel() {
-  timeEditing.value = false
-}
-
-function onTimeEditBlur() {
-  if (!timeEditing.value) return
-  const value = timeEditText.value.trim()
-  const mode = timeEditMode.value
-  timeEditing.value = false
-  if (!/^\d{4}$/.test(value)) return
-  if (mode === 'tobt') {
-    if (value !== (props.strip.tobt || props.strip.eobt || '')) {
-      store.viffUpdateTobt(props.strip.id, value)
-    }
-  } else if (mode === 'tsac') {
-    if (value !== normalizeHhmmDisplay(props.strip.tsac)) {
-      store.setTsac(props.strip.id, value)
-    }
-  } else if (value !== props.strip.eobt) {
-    store.viffUpdateEobt(props.strip.id, value)
-  }
 }
 
 function onCtotClick(event: MouseEvent) {
@@ -5567,7 +5512,6 @@ function onDragAreaTouchStart(event: TouchEvent) {
     target.closest('.pg-cto-check') ||
     target.closest('.pg-atis-qnh') ||
     target.closest('.remarks-input') ||
-    target.closest('.eobt-edit-input') ||
     target.closest('.assr-edit-input') ||
     target.closest('.hp-edit-input') ||
     target.closest('.hs-edit-input') ||
@@ -9050,12 +8994,6 @@ function onGroundStateClick(action: string) {
   background: transparent;
   color: #000;
   margin: 0;
-}
-.eobt-edit-input {
-  width: 100%;
-  border: 1px solid #666;
-  font-size: var(--fs-base);
-  padding: 0 calc(2px * var(--strip-scale));
 }
 .assr-edit-input {
   display: block;

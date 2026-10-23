@@ -29,6 +29,8 @@ import {
     activeOnlineGndRoles,
     remapStripsForEssaGndOnly,
     remapBayIdsToLayout,
+    familiesFromRoles,
+    type EssaPositionRole,
 } from "./essa-roles.js"
 import {
     essaAorLayoutKey,
@@ -685,26 +687,33 @@ class EfsStore {
                 : []
             const activeTwr = activeOnlineTwrRoles(onlineCallsigns)
             const activeGnd = activeOnlineGndRoles(onlineCallsigns)
+            const essaRoles = (staticConfig.essaRoles ?? []) as EssaPositionRole[]
             withHeights = filterEssaLayout(
                 withHeights,
-                staticConfig.essaRoles ?? [],
+                essaRoles,
                 staticConfig.sectionVisibleFor,
                 activeTwr,
                 activeGnd
             )
-            const placements = filterEssaRunwayPlacementsForMyAor(
-                collectEssaRunwayPairs(
-                    staticConfig.activeRunways,
-                    staticConfig.myAirports,
-                    staticConfig.essaAssignedRunways
+            // RUNWAY headers are TWR-only (covering AOR). GND/CD must not get them.
+            if (familiesFromRoles(essaRoles).has("TWR")) {
+                const placements = filterEssaRunwayPlacementsForMyAor(
+                    collectEssaRunwayPairs(
+                        staticConfig.activeRunways,
+                        staticConfig.myAirports,
+                        staticConfig.essaAssignedRunways
+                    )
                 )
-            )
-            const { layout: rwyLayout, sectionToBay: rwySectionToBay } =
-                applyEssaRunwayPairLayout(withHeights, placements)
-            withHeights = rwyLayout
-            syncEssaRunwaySectionToBay(staticConfig.sectionToBay, rwySectionToBay)
-            staticConfig.essaRunwayLayoutFingerprint =
-                `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
+                const { layout: rwyLayout, sectionToBay: rwySectionToBay } =
+                    applyEssaRunwayPairLayout(withHeights, placements)
+                withHeights = rwyLayout
+                syncEssaRunwaySectionToBay(staticConfig.sectionToBay, rwySectionToBay)
+                staticConfig.essaRunwayLayoutFingerprint =
+                    `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
+            } else {
+                syncEssaRunwaySectionToBay(staticConfig.sectionToBay, new Map())
+                staticConfig.essaRunwayLayoutFingerprint = `none#${essaAorLayoutKey()}`
+            }
         }
 
         if (isEsggRolesConfig(staticConfig)) {

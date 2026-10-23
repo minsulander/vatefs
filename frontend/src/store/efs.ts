@@ -75,8 +75,8 @@ export const useEfsStore = defineStore("efs", () => {
     const stripsVersion = ref(0)
     /** Sections where the user manually reordered; time-sort resumes when E/TOBT or TSAT changes */
     const manualOrderSections = ref<Set<string>>(new Set())
-    /** Explicit TOBT/TSAT vs MAN mode for CD ALL / TSAT (and multi-airport variants) */
-    type SectionSortMode = 'time' | 'man'
+    /** Explicit TOBT/TSAT/VCH vs MAN mode for CD ALL / TSAT / REQ PUSH */
+    type SectionSortMode = 'time' | 'man' | 'vch'
     const sectionSortModes = ref<Map<string, SectionSortMode>>(new Map())
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
     /** Soft-deleted strips for trash recovery (also mirrored to localStorage for WS reconnect). */
@@ -114,21 +114,34 @@ export const useEfsStore = defineStore("efs", () => {
     const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
     const SECTION_SORT_MODE_PREFIX = 'efs/sectionSortMode/'
 
-    /** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
+    /** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep — not ctr_dep */
     function isTimeSortSectionId(sectionId: string): boolean {
         if (TIME_SORT_SECTION_IDS.has(sectionId)) return true
-        if (sectionId.endsWith('_pending_dep') || sectionId.endsWith('_cleared')) return true
+        if (
+            sectionId === 'cleared_tsat' ||
+            sectionId === 'cleared_eobt' ||
+            sectionId.endsWith('_pending_dep') ||
+            sectionId.endsWith('_cleared')
+        ) {
+            return true
+        }
         return /^(bay\d+|idle)_dep$/.test(sectionId)
     }
 
-    /** CD ALL / TSAT — sections that show TOBT|MAN or TSAT|MAN controls */
+    /** CD ALL / TSAT (/EOBT) — sections that show time|MAN controls (not REQ PUSH) */
     function isModeToggleSectionId(sectionId: string): boolean {
         return (
             sectionId === 'pending_dep' ||
             sectionId === 'cleared' ||
+            sectionId === 'cleared_tsat' ||
+            sectionId === 'cleared_eobt' ||
             sectionId.endsWith('_pending_dep') ||
             sectionId.endsWith('_cleared')
         )
+    }
+
+    function isReqPushSectionId(sectionId: string): boolean {
+        return sectionId === 'req_push' || sectionId.endsWith('_req_push')
     }
 
     function sectionTitleFromLayout(sectionId: string): string | undefined {
@@ -161,7 +174,7 @@ export const useEfsStore = defineStore("efs", () => {
     function loadSectionSortMode(key: string): SectionSortMode | undefined {
         try {
             const stored = sessionStorage.getItem(SECTION_SORT_MODE_PREFIX + key)
-            if (stored === 'time' || stored === 'man') return stored
+            if (stored === 'time' || stored === 'man' || stored === 'vch') return stored
         } catch {
             /* ignore */
         }
@@ -178,7 +191,8 @@ export const useEfsStore = defineStore("efs", () => {
 
     function getSectionSortMode(bayId: string, sectionId: string): SectionSortMode {
         const key = sectionOrderKey(bayId, sectionId)
-        return sectionSortModes.value.get(key) ?? loadSectionSortMode(key) ?? 'time'
+        const fallback: SectionSortMode = isReqPushSectionId(sectionId) ? 'vch' : 'time'
+        return sectionSortModes.value.get(key) ?? loadSectionSortMode(key) ?? fallback
     }
 
     function setSectionSortMode(bayId: string, sectionId: string, mode: SectionSortMode) {
@@ -1412,12 +1426,25 @@ export const useEfsStore = defineStore("efs", () => {
         )
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
-        essaRolesMode.value = message.essaRolesMode ?? false
-        essaRoles.value = message.essaRoles ?? []
-        essaRolesManual.value = message.essaRolesManual ?? false
-        esggRolesMode.value = message.esggRolesMode ?? false
-        esggRoles.value = message.esggRoles ?? []
-        esggRolesManual.value = message.esggRolesManual ?? false
+        // Only update when present — `?? false` was clearing mode on partial status frames
+        if (typeof message.essaRolesMode === 'boolean') {
+            essaRolesMode.value = message.essaRolesMode
+        }
+        if (message.essaRoles) {
+            essaRoles.value = message.essaRoles
+        }
+        if (typeof message.essaRolesManual === 'boolean') {
+            essaRolesManual.value = message.essaRolesManual
+        }
+        if (typeof message.esggRolesMode === 'boolean') {
+            esggRolesMode.value = message.esggRolesMode
+        }
+        if (message.esggRoles) {
+            esggRoles.value = message.esggRoles
+        }
+        if (typeof message.esggRolesManual === 'boolean') {
+            esggRolesManual.value = message.esggRolesManual
+        }
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
         if (stripLook.value !== 'paper') {
@@ -1693,6 +1720,63 @@ export const useEfsStore = defineStore("efs", () => {
             }
         })
         stripsVersion.value++
+    }
+
+    /**
+     * Reverse the given visual order (top→bottom ids) and sync positions.
+     * Used by workspace sort-flow toggle so existing strips flip, not only new inserts.
+     * Groups by bayId+sectionId for backend reorderStrips; single-group (usual) gets
+     * a clean 0..n reindex. Marks manual order so time-sort does not immediately undo.
+     */
+    function reverseSectionStripOrder(visualTopToBottomIds: string[]) {
+        if (visualTopToBottomIds.length < 2) return
+        const reversed = [...visualTopToBottomIds].reverse()
+        const groups = new Map<string, { bayId: string; sectionId: string; ids: string[] }>()
+        for (const id of reversed) {
+            const strip = strips.value.get(id)
+            if (!strip) continue
+            const key = `${strip.bayId}\0${strip.sectionId}`
+            let g = groups.get(key)
+            if (!g) {
+                g = { bayId: strip.bayId, sectionId: strip.sectionId, ids: [] }
+                groups.set(key, g)
+            }
+            g.ids.push(id)
+        }
+        if (groups.size === 0) return
+
+        if (groups.size === 1) {
+            const g = [...groups.values()][0]!
+            g.ids.forEach((id, index) => {
+                const strip = strips.value.get(id)
+                if (strip) strip.position = index
+            })
+            stripsVersion.value++
+            sendMessage({
+                type: 'reorderStrips',
+                bayId: g.bayId,
+                sectionId: g.sectionId,
+                stripIds: g.ids,
+            })
+            markManualOrder(g.bayId, g.sectionId)
+            return
+        }
+
+        // Multi-section header: global positions keep the flipped visual order in the UI.
+        reversed.forEach((id, index) => {
+            const strip = strips.value.get(id)
+            if (strip) strip.position = index
+        })
+        stripsVersion.value++
+        for (const g of groups.values()) {
+            sendMessage({
+                type: 'reorderStrips',
+                bayId: g.bayId,
+                sectionId: g.sectionId,
+                stripIds: g.ids,
+            })
+            markManualOrder(g.bayId, g.sectionId)
+        }
     }
 
     /**
@@ -2033,7 +2117,12 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     function isClearedSectionId(sectionId: string): boolean {
-        return sectionId === 'cleared' || sectionId.endsWith('_cleared')
+        return (
+            sectionId === 'cleared' ||
+            sectionId === 'cleared_tsat' ||
+            sectionId === 'cleared_eobt' ||
+            sectionId.endsWith('_cleared')
+        )
     }
 
     // Batch send section heights (called at end of resize)
@@ -3236,6 +3325,7 @@ export const useEfsStore = defineStore("efs", () => {
         isModeToggleSectionId,
         isCtrDepSectionId,
         reindexTopStripsByIds,
+        reverseSectionStripOrder,
         syncTimeSortSectionFromDom,
         bumpStripsVersion,
         gaps,

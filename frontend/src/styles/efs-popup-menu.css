@@ -57,6 +57,60 @@
   background: #c0c0c0;
 }
 
+/* Clickable catalog folder headers (Breakout / Map / Sections / …) */
+button.efs-popup-folder {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(6px * var(--s));
+  width: 100%;
+  margin: 0;
+  padding: calc(3px * var(--s)) calc(8px * var(--s));
+  border: none;
+  border-top: 1px solid #888;
+  border-bottom: 1px solid #888;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #c8c8c8;
+  color: #000;
+  font: inherit;
+  font-size: calc(11px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-height: max(22px, calc(22px * var(--s)));
+}
+
+button.efs-popup-folder:hover {
+  filter: brightness(1.06);
+}
+
+button.efs-popup-folder--nested {
+  background: #b8b8b8;
+}
+
+.efs-popup-folder-chevron {
+  display: inline-block;
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* Point right when closed */
+  border-width: calc(3.5px * var(--s)) 0 calc(3.5px * var(--s)) calc(5px * var(--s));
+  border-color: transparent transparent transparent #000;
+  transition: transform 0.12s ease;
+}
+
+.efs-popup-folder-chevron.is-open {
+  /* Point down when open */
+  transform: rotate(90deg);
+}
+
 .efs-popup-list {
   display: flex;
   flex-direction: column;
@@ -64,6 +118,15 @@
   max-height: min(50vh, calc(320px * var(--s)));
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/**
+ * Top-right layout/strip catalog: grow up to full bay body height;
+ * scrollbar only when the list actually overflows.
+ */
+.efs-popup-menu--bay-fill .efs-popup-list {
+  max-height: var(--efs-popup-bay-fill-max-h, calc(100dvh - 96px));
+  overflow-y: auto;
 }
 
 .efs-popup-item {
@@ -166,6 +229,44 @@
 .efs-popup-item.is-disabled:hover {
   background: #d8d8d8;
   color: #000;
+  box-shadow: none;
+}
+
+/* ESSA catalog: same tints as section headers (after base/hover so they win) */
+.efs-popup-item.efs-popup-item--essa-runway {
+  background: #4e0910;
+  color: #e8d0d0;
+}
+.efs-popup-item.efs-popup-item--essa-runway:hover:not(:disabled):not(.is-disabled) {
+  background: #5c0e16;
+  color: #f0e0e0;
+  box-shadow: none;
+}
+.efs-popup-item.efs-popup-item--essa-runway:disabled,
+.efs-popup-item.efs-popup-item--essa-runway.is-disabled,
+.efs-popup-item.efs-popup-item--essa-runway:disabled:hover,
+.efs-popup-item.efs-popup-item--essa-runway.is-disabled:hover {
+  background: #4e0910;
+  color: #e8d0d0;
+  opacity: 0.45;
+  box-shadow: none;
+}
+.efs-popup-item.efs-popup-item--essa-inbound {
+  background: #97aba9;
+  color: #ebebeb;
+}
+.efs-popup-item.efs-popup-item--essa-inbound:hover:not(:disabled):not(.is-disabled) {
+  background: #a5b8b6;
+  color: #fff;
+  box-shadow: none;
+}
+.efs-popup-item.efs-popup-item--essa-inbound:disabled,
+.efs-popup-item.efs-popup-item--essa-inbound.is-disabled,
+.efs-popup-item.efs-popup-item--essa-inbound:disabled:hover,
+.efs-popup-item.efs-popup-item--essa-inbound.is-disabled:hover {
+  background: #97aba9;
+  color: #ebebeb;
+  opacity: 0.45;
   box-shadow: none;
 }
 

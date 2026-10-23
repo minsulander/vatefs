@@ -16,6 +16,7 @@
           'bay-row--multi': store.multiAirport,
           'bay-row--choosing': store.pendingIdleSwap != null,
           'bay-row--paper': store.isPaperLook,
+          'bay-row--workspace': store.essaRolesMode && !!ws.activeLayout.value,
           'bay-row--table-scroll': tableScroll,
         }"
         :style="tableScroll ? { '--efs-bay-col-width': colWidthPx } : undefined"
@@ -30,6 +31,7 @@
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
             'bay-column--paper': store.isPaperLook,
+            'bay-column--workspace': store.essaRolesMode && !!ws.activeLayout.value,
             'bay-column--table-fixed': tableScroll,
             'bay-column--klack-raised': store.isPaperLook && bayHasKlack(bay.id),
           }"
@@ -43,7 +45,11 @@
             <span class="swap-overlay-label">{{ store.pendingIdleSwap }}</span>
             <span class="swap-overlay-hint">click to place</span>
           </div>
-          <EfsBay :bay="bay" :column-index="index" />
+          <EfsBay
+            :bay="bay"
+            :column-index="index"
+            :workspace-mode="store.essaRolesMode && !!ws.activeLayout.value"
+          />
         </div>
       </div>
     </div>
@@ -52,6 +58,11 @@
       :model-value="store.handoverAssistantOpen"
       :preferred-frequency="store.handoverAssistantPreferredFreq"
       @update:model-value="onHandoverAssistantOpen"
+    />
+    <WorkspaceLayoutDialog v-if="store.essaRolesMode" />
+    <WorkspaceSearchDialog
+      v-if="store.essaRolesMode"
+      v-model="searchDialogOpen"
     />
     <div
       v-if="store.notifyVisible"
@@ -64,15 +75,30 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useEfsStore } from '@/store/efs'
 import { paperKlackPullBayIds } from '@/composables/paperKlack'
+import { getWorkspace, watchEssaRolesForWorkspace } from '@/workspace'
 import EfsBay from './EfsBay.vue'
 import EfsTopBar from './EfsTopBar.vue'
 import EfsBottomBar from './EfsBottomBar.vue'
 import HandoverAssistantDialog from './HandoverAssistantDialog.vue'
+import WorkspaceLayoutDialog from './WorkspaceLayoutDialog.vue'
+import WorkspaceSearchDialog from './WorkspaceSearchDialog.vue'
 
 const store = useEfsStore()
-const bays = computed(() => store.getBays)
+const ws = getWorkspace()
+const { essaRoles, layout, essaRolesMode } = storeToRefs(store)
+watchEssaRolesForWorkspace(essaRoles, layout, essaRolesMode)
+
+const searchDialogOpen = ws.searchDialogOpen
+
+const bays = computed(() => {
+  if (store.essaRolesMode && ws.activeLayout.value) {
+    return ws.buildDisplayBays(store.layout)
+  }
+  return store.getBays
+})
 const scrollEl = ref<HTMLElement | null>(null)
 const colWidthPx = ref('25%')
 
@@ -314,6 +340,11 @@ function onContainerClick() {
 
 .bay-column--empty {
   background: color-mix(in srgb, var(--efs-bay-bg, #3b3c41) 65%, black);
+}
+
+/* ESSA workspace empty columns still need a visible bay frame */
+.bay-column--workspace {
+  background: var(--efs-bay-bg, #3b3c41);
 }
 
 .bay-row--choosing .bay-column--swap-target {

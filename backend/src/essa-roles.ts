@@ -487,6 +487,12 @@ export interface EssaRunwaySectionPlacement {
     pair: EssaPhysicalRwyPair
     /** Prefer CTR DEP column vs CTR ARR column */
     preferDepColumn: boolean
+    /**
+     * True when this header exists only because traffic has a forced/selected runway
+     * on this pair (not part of active ES RWY config). Such headers bypass TWR AOR
+     * filtering so the strip still has a bay.
+     */
+    fromAssigned?: boolean
 }
 
 /**
@@ -556,18 +562,28 @@ export function collectEssaRunwayPairs(
         if (acc.inActiveDep) preferDepColumn = true
         else if (acc.inActiveArr) preferDepColumn = false
         else preferDepColumn = acc.fromAssignedDep
+        const fromAssigned =
+            !acc.inActiveDep &&
+            !acc.inActiveArr &&
+            (acc.fromAssignedDep || acc.fromAssignedArr)
         ordered.push({
             sectionId: essaRunwaySectionId(pair),
             title: formatEssaRunwaySectionTitle(pair),
             pair,
             preferDepColumn,
+            fromAssigned,
         })
     }
     return ordered
 }
 
 export function essaRunwayPairsFingerprint(placements: EssaRunwaySectionPlacement[]): string {
-    return placements.map(p => `${p.sectionId}:${p.preferDepColumn ? 'D' : 'A'}`).join('|')
+    return placements
+        .map(
+            (p) =>
+                `${p.sectionId}:${p.preferDepColumn ? 'D' : 'A'}${p.fromAssigned ? ':F' : ''}`,
+        )
+        .join('|')
 }
 
 /**

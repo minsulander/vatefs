@@ -74,14 +74,17 @@ layout:
           title: PUSH BACK / START-UP
           addFromTop: true
           visibleFor: [GND]
+        # REQ PUSH / START is not in any default profile — add via workspace
+        # catalog only. Section rule `req_push_start` still assigns VCH P/S
+        # strips to req_push when that header is present.
 
     bay4:
       sections:
         cleared:
-          # Cleared IFR, waiting for push/startup (CD and GND).
-          # TSAT order: earliest (first in sequence) at bottom — same as INBOUND APP ETA;
-          # auto-fit preferTop:false when size-fit is enabled for this bay.
-          title: TSAT
+          # Cleared deps waiting for push/startup (CD and GND).
+          # Split → TSAT / EOBT only. TSAT order: earliest at bottom
+          # (same as INBOUND APP ETA); auto-fit preferTop:false when size-fit on.
+          title: TSAT / EOBT
           addFromTop: true
           visibleFor: [CD, GND]
 
@@ -93,6 +96,14 @@ layout:
           visibleFor: [CD]
 
 sectionRules:
+  # VCH pending pushback / startup request (annotation 2)
+  req_push_start:
+    sectionId: req_push
+    direction: either
+    airborne: false
+    vchRequests: [P, S]
+    priority: 88
+
   # Override common-rules taxi → split taxi_dep / taxi_arr
   taxi_dep:
     sectionId: taxi_dep

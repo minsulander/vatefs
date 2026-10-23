@@ -77,6 +77,12 @@ export interface SectionRule {
     clearance?: boolean
 
     /**
+     * VCH pending request type must be one of these (annotation 2: C/P/S/T/D).
+     * Used for REQ PUSH / START sections.
+     */
+    vchRequests?: Array<'C' | 'P' | 'S' | 'T' | 'D'>
+
+    /**
      * Cleared to land flag must match this value
      */
     clearedToLand?: boolean

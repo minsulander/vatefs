@@ -1,5 +1,9 @@
-import { computed, ref } from 'vue'
+import { computed, ref, toValue, type MaybeRefOrGetter } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import {
+  ESSA_RWY_COMBINATIONS,
+  formatEssaRwyPdfName,
+} from '@vatefs/common'
 import {
   essaMapDefaultSectionId,
   getEssaMapInfo,
@@ -19,6 +23,10 @@ import {
 
 const DISMISS_KEY = 'efs/infoStrips/dismissed'
 const PLACEMENT_KEY = 'efs/infoStrips/placement'
+/** Kinds the user forced on via the catalog (survive when auto rules do not apply). */
+const MANUAL_KEY = 'efs/infoStrips/manual'
+/** Per-kind forced catalog key (config id, SID mode, turn, …). */
+const FORCED_KEY = 'efs/infoStrips/forced'
 
 /** Stable kind for breakout (placement); dismiss may still be per-runway. */
 export const BREAKOUT_INFO_KIND = 'breakout'
@@ -59,6 +67,12 @@ export type InfoStripPlacement = {
 /** Persistent set of dismissed info-strip ids (e.g. breakout:01R). */
 const dismissed = ref<Set<string>>(loadDismissed())
 const placements = ref<Record<string, InfoStripPlacement>>(loadPlacements())
+const manualKinds = ref<Set<string>>(loadManualKinds())
+/**
+ * kind → force keys currently pinned from the catalog (ESSA config ids, SID modes, …).
+ * Multiple keys allowed for MAP / DEP / Breakout so several configs can show at once.
+ */
+const forcedKeysByKind = ref<Record<string, string[]>>(loadForcedKeysByKind())
 
 function loadDismissed(): Set<string> {
   try {
@@ -84,6 +98,37 @@ function loadPlacements(): Record<string, InfoStripPlacement> {
   }
 }
 
+function loadManualKinds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(MANUAL_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return new Set()
+    return new Set(arr.filter((x): x is string => typeof x === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+function loadForcedKeysByKind(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(FORCED_KEY)
+    if (!raw) return {}
+    const obj = JSON.parse(raw) as unknown
+    if (!obj || typeof obj !== 'object') return {}
+    const out: Record<string, string[]> = {}
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (typeof v === 'string' && v) out[k] = [v]
+      else if (Array.isArray(v)) {
+        out[k] = v.filter((x): x is string => typeof x === 'string' && !!x)
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 function persistDismissed() {
   try {
     localStorage.setItem(DISMISS_KEY, JSON.stringify([...dismissed.value]))
@@ -98,6 +143,100 @@ function persistPlacements() {
   } catch {
     /* ignore */
   }
+}
+
+function persistManualKinds() {
+  try {
+    localStorage.setItem(MANUAL_KEY, JSON.stringify([...manualKinds.value]))
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isInfoStripManual(kind: string): boolean {
+  return manualKinds.value.has(kind)
+}
+
+export function setInfoStripManual(kind: string, on: boolean) {
+  if (on === manualKinds.value.has(kind)) return
+  const next = new Set(manualKinds.value)
+  if (on) next.add(kind)
+  else next.delete(kind)
+  manualKinds.value = next
+  persistManualKinds()
+}
+
+function persistForcedKeysByKind() {
+  try {
+    localStorage.setItem(FORCED_KEY, JSON.stringify(forcedKeysByKind.value))
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getInfoStripForcedKeys(kind: string): string[] {
+  return forcedKeysByKind.value[kind] ?? []
+}
+
+/** @deprecated single-key API — returns first forced key if any */
+export function getInfoStripForced(kind: string): string | undefined {
+  return getInfoStripForcedKeys(kind)[0]
+}
+
+export function addInfoStripForced(kind: string, key: string) {
+  if (!key) return
+  const cur = getInfoStripForcedKeys(kind)
+  if (cur.includes(key)) return
+  forcedKeysByKind.value = { ...forcedKeysByKind.value, [kind]: [...cur, key] }
+  persistForcedKeysByKind()
+}
+
+export function removeInfoStripForced(kind: string, key: string) {
+  const cur = getInfoStripForcedKeys(kind)
+  if (!cur.includes(key)) return
+  const nextKeys = cur.filter((k) => k !== key)
+  const next = { ...forcedKeysByKind.value }
+  if (nextKeys.length) next[kind] = nextKeys
+  else delete next[kind]
+  forcedKeysByKind.value = next
+  persistForcedKeysByKind()
+}
+
+export function setInfoStripForced(kind: string, key: string | null) {
+  if (key == null || key === '') {
+    if (!(kind in forcedKeysByKind.value)) return
+    const next = { ...forcedKeysByKind.value }
+    delete next[kind]
+    forcedKeysByKind.value = next
+    persistForcedKeysByKind()
+    return
+  }
+  forcedKeysByKind.value = { ...forcedKeysByKind.value, [kind]: [key] }
+  persistForcedKeysByKind()
+}
+
+function clearInfoStripForce(kind: string) {
+  setInfoStripForced(kind, null)
+  setInfoStripManual(kind, false)
+}
+
+/** Placement / drag id for a multi-instance strip (e.g. map:5). */
+export function infoStripInstanceKey(kind: string, forceKey: string): string {
+  return `${kind}:${forceKey}`
+}
+
+export function parseInfoStripPlacementKey(raw: string): { kind: string; forceKey?: string } | null {
+  if ((INFO_STRIP_KINDS as readonly string[]).includes(raw as (typeof INFO_STRIP_KINDS)[number])) {
+    return { kind: raw }
+  }
+  const idx = raw.indexOf(':')
+  if (idx <= 0) return null
+  const kind = raw.slice(0, idx)
+  const forceKey = raw.slice(idx + 1)
+  if (!(INFO_STRIP_KINDS as readonly string[]).includes(kind as (typeof INFO_STRIP_KINDS)[number])) {
+    return null
+  }
+  return { kind, forceKey }
 }
 
 export function dismissInfoStrip(id: string) {
@@ -137,18 +276,37 @@ export function clearInfoStripPlacement(kind: string) {
   persistPlacements()
 }
 
-/** Catalog of info strips for the bottom-bar restore menu. */
+/** Catalog of info strips for the restore / add menu. */
 export type InfoStripMenuEntry = {
   kind: string
   /** Dismiss / restore id (e.g. breakout:01R) */
   id: string
   label: string
-  /** False when not applicable to current config / mode */
+  /** Force key: ESSA config id, SID mode, or turn */
+  forceKey: string
+  /**
+   * True when the strip can be shown (always for ESSA catalog — auto or manual).
+   * False only when the strip kind cannot exist in this mode (e.g. non-ESSA).
+   */
   available: boolean
   dismissed: boolean
+  /** Auto rules currently match (RWY / config / AUP / AOR) */
+  auto: boolean
+  /** User forced this kind on while auto rules do not apply */
+  manual: boolean
+  /** Currently painted on a bay (grey out in add menu) */
+  shown: boolean
   hasCustomPlacement: boolean
-  /** Shown when !available (defaults to "Not available") */
+  /** Hint when auto rules do not apply */
   unavailableReason?: string
+}
+
+export type InfoCatalogFolderId = 'breakout' | 'map' | 'dep' | 'sid'
+
+export type InfoCatalogFolder = {
+  id: InfoCatalogFolderId
+  label: string
+  items: InfoStripMenuEntry[]
 }
 
 export type BreakoutVariant = {
@@ -170,55 +328,107 @@ function essaCoversInfoRunway(store: ReturnType<typeof useEfsStore>, runway: str
   return covered.some((x) => x.toUpperCase() === r)
 }
 
-/** Breakout strip data for ESSA config 1 (01R) / 2 (19L). */
-export function useBreakoutInfoStrip() {
+function breakoutVariantForConfig(cfg: string | null | undefined): BreakoutVariant | null {
+  if (cfg === '1') {
+    return {
+      id: 'breakout:01R',
+      runway: '01R',
+      turn: 'RIGHT',
+      heading: '040',
+      climbFt: 'XXXX',
+      mirror: false,
+    }
+  }
+  if (cfg === '2') {
+    return {
+      id: 'breakout:19L',
+      runway: '19L',
+      turn: 'LEFT',
+      heading: '220',
+      climbFt: 'XXXX',
+      mirror: true,
+    }
+  }
+  return null
+}
+
+function breakoutForceKey(v: BreakoutVariant): string {
+  return v.runway === '19L' ? '2' : '1'
+}
+
+/** Active breakout variants (auto + each manually added config). */
+export function getActiveBreakoutVariants(): BreakoutVariant[] {
+  const store = useEfsStore()
+  if (!store.essaRolesMode) return []
+  const out: BreakoutVariant[] = []
+  const seen = new Set<string>()
+  const add = (v: BreakoutVariant | null) => {
+    if (!v || seen.has(v.id) || dismissed.value.has(v.id)) return
+    seen.add(v.id)
+    out.push(v)
+  }
+  const auto = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
+  if (auto && essaCoversInfoRunway(store, auto.runway)) add(auto)
+  for (const key of getInfoStripForcedKeys(BREAKOUT_INFO_KIND)) {
+    add(breakoutVariantForConfig(key))
+  }
+  return out
+}
+
+/** Breakout strip — pass `configId` (`1`/`2`) for multi-instance. */
+export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | undefined>) {
   const store = useEfsStore()
 
-  const variant = computed<BreakoutVariant | null>(() => {
+  const autoVariant = computed<BreakoutVariant | null>(() => {
     if (!store.essaRolesMode) return null
-    const cfg = store.essaRwyConfigIdResolved
-    let v: BreakoutVariant | null = null
-    if (cfg === '1') {
-      v = {
-        id: 'breakout:01R',
-        runway: '01R',
-        turn: 'RIGHT',
-        heading: '040',
-        climbFt: 'XXXX',
-        mirror: false,
-      }
-    } else if (cfg === '2') {
-      v = {
-        id: 'breakout:19L',
-        runway: '19L',
-        turn: 'LEFT',
-        heading: '220',
-        climbFt: 'XXXX',
-        mirror: true,
-      }
-    }
+    const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
     if (v && !essaCoversInfoRunway(store, v.runway)) return null
     return v
   })
 
-  const placement = computed(() => getInfoStripPlacement(BREAKOUT_INFO_KIND))
-
-  const visible = computed(() => {
-    const v = variant.value
-    if (!v) return false
-    return !dismissed.value.has(v.id)
+  const variant = computed<BreakoutVariant | null>(() => {
+    const cfg = toValue(configIdSource)
+    if (cfg) {
+      return getActiveBreakoutVariants().find((v) => breakoutForceKey(v) === cfg) ?? null
+    }
+    return getActiveBreakoutVariants()[0] ?? null
   })
+
+  const instanceKey = computed(() => {
+    const v = variant.value
+    if (!v) return BREAKOUT_INFO_KIND
+    return infoStripInstanceKey(BREAKOUT_INFO_KIND, breakoutForceKey(v))
+  })
+
+  const placement = computed(
+    () =>
+      getInfoStripPlacement(instanceKey.value) ??
+      getInfoStripPlacement(BREAKOUT_INFO_KIND),
+  )
+
+  const visible = computed(() => !!variant.value)
 
   function dismiss() {
     const v = variant.value
-    if (v) dismissInfoStrip(v.id)
+    if (!v) return
+    dismissInfoStrip(v.id)
+    removeInfoStripForced(BREAKOUT_INFO_KIND, breakoutForceKey(v))
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
-    setInfoStripPlacement(BREAKOUT_INFO_KIND, { bayId, sectionId, bottom, index })
+    setInfoStripPlacement(instanceKey.value, { bayId, sectionId, bottom, index })
   }
 
-  return { variant, visible, placement, dismiss, moveTo, kind: BREAKOUT_INFO_KIND }
+  return {
+    variant,
+    autoVariant,
+    visible,
+    placement,
+    instanceKey,
+    dismiss,
+    moveTo,
+    kind: BREAKOUT_INFO_KIND,
+  }
 }
 
 export type MapInfoVariant = EssaMapInfo & {
@@ -227,31 +437,68 @@ export type MapInfoVariant = EssaMapInfo & {
   configId: string
 }
 
-/** G/A / MAP strip for current ESSA runway config. */
-export function useMapInfoStrip() {
+function mapVariantForConfig(cfg: string): MapInfoVariant | null {
+  const info = getEssaMapInfo(cfg)
+  if (!info) return null
+  // Per-config dismiss / catalog greying (max one strip per config)
+  return { ...info, id: `map:${cfg}`, configId: cfg }
+}
+
+/** Active MAP variants (auto config + each manually added config). */
+export function getActiveMapVariants(): MapInfoVariant[] {
+  const store = useEfsStore()
+  if (!store.essaRolesMode) return []
+  const out: MapInfoVariant[] = []
+  const seen = new Set<string>()
+  const add = (v: MapInfoVariant | null) => {
+    if (!v || seen.has(v.configId) || dismissed.value.has(v.id)) return
+    seen.add(v.configId)
+    out.push(v)
+  }
+  const cfg = store.essaRwyConfigIdResolved
+  if (cfg) {
+    const v = mapVariantForConfig(cfg)
+    if (v && essaCoversInfoRunway(store, v.runway)) add(v)
+  }
+  for (const key of getInfoStripForcedKeys(MAP_INFO_KIND)) {
+    add(mapVariantForConfig(key))
+  }
+  return out
+}
+
+/** G/A / MAP strip — pass `configId` for multi-instance. */
+export function useMapInfoStrip(configIdSource?: MaybeRefOrGetter<string | undefined>) {
   const store = useEfsStore()
 
-  const variant = computed<MapInfoVariant | null>(() => {
+  const autoVariant = computed<MapInfoVariant | null>(() => {
     if (!store.essaRolesMode) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
-    const info = getEssaMapInfo(cfg)
-    if (!info) return null
-    if (!essaCoversInfoRunway(store, info.runway)) return null
-    return {
-      ...info,
-      id: `map:${info.runway}`,
-      configId: cfg,
+    const v = mapVariantForConfig(cfg)
+    if (v && !essaCoversInfoRunway(store, v.runway)) return null
+    return v
+  })
+
+  const variant = computed<MapInfoVariant | null>(() => {
+    const cfg = toValue(configIdSource)
+    if (cfg) {
+      return getActiveMapVariants().find((v) => v.configId === cfg) ?? null
     }
+    return getActiveMapVariants()[0] ?? null
   })
 
-  const placement = computed(() => getInfoStripPlacement(MAP_INFO_KIND))
-
-  const visible = computed(() => {
+  const instanceKey = computed(() => {
     const v = variant.value
-    if (!v) return false
-    return !dismissed.value.has(v.id)
+    if (!v) return MAP_INFO_KIND
+    return infoStripInstanceKey(MAP_INFO_KIND, v.configId)
   })
+
+  const placement = computed(
+    () =>
+      getInfoStripPlacement(instanceKey.value) ?? getInfoStripPlacement(MAP_INFO_KIND),
+  )
+
+  const visible = computed(() => !!variant.value)
 
   const defaultSectionId = computed(() => {
     const v = variant.value
@@ -261,17 +508,21 @@ export function useMapInfoStrip() {
 
   function dismiss() {
     const v = variant.value
-    if (v) dismissInfoStrip(v.id)
+    if (!v) return
+    dismissInfoStrip(v.id)
+    removeInfoStripForced(MAP_INFO_KIND, v.configId)
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
-    setInfoStripPlacement(MAP_INFO_KIND, { bayId, sectionId, bottom, index })
+    setInfoStripPlacement(instanceKey.value, { bayId, sectionId, bottom, index })
   }
 
   return {
     variant,
+    autoVariant,
     visible,
     placement,
+    instanceKey,
     defaultSectionId,
     dismiss,
     moveTo,
@@ -292,38 +543,78 @@ export type DepInfoVariant = {
   rows: EssaDepInfo['rows']
 }
 
-/** DEP RWY info strip for current ESSA runway config. */
-export function useDepInfoStrip() {
+function depVariantForConfig(cfg: string): DepInfoVariant | null {
+  const runway = essaDepRunwayForConfig(cfg)
+  if (!runway) return null
+  return {
+    id: `dep:${cfg}`,
+    configId: cfg,
+    runway,
+    primarySector: 'DEP-W',
+    primaryDefaultFreq: '124.105',
+    holdLines: [
+      'HOLD POSITION, CANCEL TAKE-OFF, I SAY AGAIN HOLD',
+      'STOP IMMEDIATELY + CS: STOP IMMEDIATELY',
+    ],
+    rows: [],
+  }
+}
+
+/** Active DEP variants (auto config + each manually added config). */
+export function getActiveDepVariants(): DepInfoVariant[] {
+  const store = useEfsStore()
+  if (!store.essaRolesMode) return []
+  const out: DepInfoVariant[] = []
+  const seen = new Set<string>()
+  const add = (v: DepInfoVariant | null) => {
+    if (!v || seen.has(v.configId) || dismissed.value.has(v.id)) return
+    seen.add(v.configId)
+    out.push(v)
+  }
+  const cfg = store.essaRwyConfigIdResolved
+  if (cfg) {
+    const v = depVariantForConfig(cfg)
+    if (v && essaCoversInfoRunway(store, v.runway)) add(v)
+  }
+  for (const key of getInfoStripForcedKeys(DEP_INFO_KIND)) {
+    add(depVariantForConfig(key))
+  }
+  return out
+}
+
+/** DEP RWY strip — pass `configId` for multi-instance. */
+export function useDepInfoStrip(configIdSource?: MaybeRefOrGetter<string | undefined>) {
   const store = useEfsStore()
 
-  const variant = computed<DepInfoVariant | null>(() => {
+  const autoVariant = computed<DepInfoVariant | null>(() => {
     if (!store.essaRolesMode) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
-    const runway = essaDepRunwayForConfig(cfg)
-    if (!runway) return null
-    if (!essaCoversInfoRunway(store, runway)) return null
-    return {
-      id: `dep:${runway}`,
-      configId: cfg,
-      runway,
-      primarySector: 'DEP-W',
-      primaryDefaultFreq: '124.105',
-      holdLines: [
-        'HOLD POSITION, CANCEL TAKE-OFF, I SAY AGAIN HOLD',
-        'STOP IMMEDIATELY + CS: STOP IMMEDIATELY',
-      ],
-      rows: [],
+    const v = depVariantForConfig(cfg)
+    if (v && !essaCoversInfoRunway(store, v.runway)) return null
+    return v
+  })
+
+  const variant = computed<DepInfoVariant | null>(() => {
+    const cfg = toValue(configIdSource)
+    if (cfg) {
+      return getActiveDepVariants().find((v) => v.configId === cfg) ?? null
     }
+    return getActiveDepVariants()[0] ?? null
   })
 
-  const placement = computed(() => getInfoStripPlacement(DEP_INFO_KIND))
-
-  const visible = computed(() => {
+  const instanceKey = computed(() => {
     const v = variant.value
-    if (!v) return false
-    return !dismissed.value.has(v.id)
+    if (!v) return DEP_INFO_KIND
+    return infoStripInstanceKey(DEP_INFO_KIND, v.configId)
   })
+
+  const placement = computed(
+    () =>
+      getInfoStripPlacement(instanceKey.value) ?? getInfoStripPlacement(DEP_INFO_KIND),
+  )
+
+  const visible = computed(() => !!variant.value)
 
   const defaultSectionId = computed(() => {
     const v = variant.value
@@ -333,17 +624,21 @@ export function useDepInfoStrip() {
 
   function dismiss() {
     const v = variant.value
-    if (v) dismissInfoStrip(v.id)
+    if (!v) return
+    dismissInfoStrip(v.id)
+    removeInfoStripForced(DEP_INFO_KIND, v.configId)
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
-    setInfoStripPlacement(DEP_INFO_KIND, { bayId, sectionId, bottom, index })
+    setInfoStripPlacement(instanceKey.value, { bayId, sectionId, bottom, index })
   }
 
   return {
     variant,
+    autoVariant,
     visible,
     placement,
+    instanceKey,
     defaultSectionId,
     dismiss,
     moveTo,
@@ -360,22 +655,49 @@ export type TurnDepInfoVariant = {
   configIds: string[]
 }
 
-/** Green 08 LT/RT “LEFT/RIGHT TURN DEPARTURE” briefing strip. */
+function turnDepVariantForConfig(cfg: string): TurnDepInfoVariant | null {
+  const briefing = getEssaTurnDepBriefing(cfg)
+  if (!briefing) return null
+  return {
+    id: `turnDep:${briefing.runway}:${briefing.turn}`,
+    configId: cfg,
+    ...briefing,
+  }
+}
+
+function turnDepVariantForTurn(turn: string): TurnDepInfoVariant | null {
+  if (turn !== 'LEFT' && turn !== 'RIGHT' && turn !== 'BOTH') return null
+  const cfg = ESSA_RWY_COMBINATIONS.find((c) => getEssaTurnDepBriefing(c.id)?.turn === turn)
+  return cfg ? turnDepVariantForConfig(cfg.id) : null
+}
+
+/** Green 08 LT/RT “LEFT/RIGHT TURN DEPARTURE” briefing strip; manual fallback → 08-LT. */
 export function useTurnDepInfoStrip() {
   const store = useEfsStore()
 
-  const variant = computed<TurnDepInfoVariant | null>(() => {
+  const autoVariant = computed<TurnDepInfoVariant | null>(() => {
     if (!store.essaRolesMode) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
-    const briefing = getEssaTurnDepBriefing(cfg)
-    if (!briefing) return null
-    if (!essaCoversInfoRunway(store, briefing.runway)) return null
-    return {
-      id: `turnDep:${briefing.runway}:${briefing.turn}`,
-      configId: cfg,
-      ...briefing,
+    const v = turnDepVariantForConfig(cfg)
+    if (v && !essaCoversInfoRunway(store, v.runway)) return null
+    return v
+  })
+
+  const variant = computed<TurnDepInfoVariant | null>(() => {
+    if (!store.essaRolesMode) return null
+    const forced = getInfoStripForced(TURN_DEP_INFO_KIND)
+    if (forced) {
+      // force key is turn (LEFT/RIGHT/BOTH) or a config id
+      const byTurn = turnDepVariantForTurn(forced as TurnDepInfoVariant['turn'])
+      if (byTurn) return byTurn
+      const byCfg = turnDepVariantForConfig(forced)
+      if (byCfg) return byCfg
     }
+    if (autoVariant.value) return autoVariant.value
+    if (!manualKinds.value.has(TURN_DEP_INFO_KIND)) return null
+    const cfg = store.essaRwyConfigIdResolved
+    return (cfg && turnDepVariantForConfig(cfg)) || turnDepVariantForConfig('4')
   })
 
   const placement = computed(() => getInfoStripPlacement(TURN_DEP_INFO_KIND))
@@ -395,6 +717,7 @@ export function useTurnDepInfoStrip() {
   function dismiss() {
     const v = variant.value
     if (v) dismissInfoStrip(v.id)
+    clearInfoStripForce(TURN_DEP_INFO_KIND)
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
@@ -403,6 +726,7 @@ export function useTurnDepInfoStrip() {
 
   return {
     variant,
+    autoVariant,
     visible,
     placement,
     defaultSectionId,
@@ -421,22 +745,48 @@ export type Sid19LInfoVariant = {
   configIds: string[]
 }
 
-/** Green 19L Q / E / MIX OF SIDs briefing strip. */
+function sid19lVariantForConfig(cfg: string): Sid19LInfoVariant | null {
+  const briefing = getEssa19LSidBriefing(cfg)
+  if (!briefing) return null
+  return {
+    id: `sid19l:${briefing.mode}`,
+    configId: cfg,
+    ...briefing,
+  }
+}
+
+function sid19lVariantForMode(mode: string): Sid19LInfoVariant | null {
+  if (mode !== 'Q' && mode !== 'E' && mode !== 'MIX') return null
+  const cfg = ESSA_RWY_COMBINATIONS.find((c) => getEssa19LSidBriefing(c.id)?.mode === mode)
+  return cfg ? sid19lVariantForConfig(cfg.id) : null
+}
+
+/** Green 19L Q / E / MIX OF SIDs briefing strip; manual fallback → 19L-Q. */
 export function useSid19LInfoStrip() {
   const store = useEfsStore()
 
-  const variant = computed<Sid19LInfoVariant | null>(() => {
+  const autoVariant = computed<Sid19LInfoVariant | null>(() => {
     if (!store.essaRolesMode) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
-    const briefing = getEssa19LSidBriefing(cfg)
-    if (!briefing) return null
-    if (!essaCoversInfoRunway(store, briefing.runway)) return null
-    return {
-      id: `sid19l:${briefing.mode}`,
-      configId: cfg,
-      ...briefing,
+    const v = sid19lVariantForConfig(cfg)
+    if (v && !essaCoversInfoRunway(store, v.runway)) return null
+    return v
+  })
+
+  const variant = computed<Sid19LInfoVariant | null>(() => {
+    if (!store.essaRolesMode) return null
+    const forced = getInfoStripForced(SID19L_INFO_KIND)
+    if (forced) {
+      const byMode = sid19lVariantForMode(forced)
+      if (byMode) return byMode
+      const byCfg = sid19lVariantForConfig(forced)
+      if (byCfg) return byCfg
     }
+    if (autoVariant.value) return autoVariant.value
+    if (!manualKinds.value.has(SID19L_INFO_KIND)) return null
+    const cfg = store.essaRwyConfigIdResolved
+    return (cfg && sid19lVariantForConfig(cfg)) || sid19lVariantForConfig('9A')
   })
 
   const placement = computed(() => getInfoStripPlacement(SID19L_INFO_KIND))
@@ -456,6 +806,7 @@ export function useSid19LInfoStrip() {
   function dismiss() {
     const v = variant.value
     if (v) dismissInfoStrip(v.id)
+    clearInfoStripForce(SID19L_INFO_KIND)
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
@@ -464,6 +815,7 @@ export function useSid19LInfoStrip() {
 
   return {
     variant,
+    autoVariant,
     visible,
     placement,
     defaultSectionId,
@@ -482,11 +834,11 @@ export type R16InfoVariant = {
   suggestConfigId: '9C' | '15C' | null
 }
 
-/** Yellow "R16 utökad ↑" strip — auto-shown while AUP says R16 active with upper limit > 1600 ft. */
+/** Yellow "R16 utökad ↑" strip — auto when AUP >1600 ft; manual always allowed on ESSA. */
 export function useR16InfoStrip() {
   const store = useEfsStore()
 
-  const variant = computed<R16InfoVariant | null>(() => {
+  const autoVariant = computed<R16InfoVariant | null>(() => {
     if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) return null
     const r = store.aupR16
     if (!r || !r.active || r.topAltitudeFt == null || r.topAltitudeFt <= 1600) return null
@@ -496,6 +848,20 @@ export function useR16InfoStrip() {
       from: r.from,
       to: r.to,
       suggestConfigId: r.suggestConfigId,
+    }
+  })
+
+  const variant = computed<R16InfoVariant | null>(() => {
+    if (autoVariant.value) return autoVariant.value
+    if (!manualKinds.value.has(R16_INFO_KIND)) return null
+    if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) return null
+    const r = store.aupR16
+    return {
+      id: 'r16:manual',
+      topAltitudeFt: r?.topAltitudeFt && r.topAltitudeFt > 0 ? r.topAltitudeFt : 3500,
+      from: r?.from ?? null,
+      to: r?.to ?? null,
+      suggestConfigId: r?.suggestConfigId ?? null,
     }
   })
 
@@ -514,6 +880,7 @@ export function useR16InfoStrip() {
   function dismiss() {
     const v = variant.value
     if (v) dismissInfoStrip(v.id)
+    clearInfoStripForce(R16_INFO_KIND)
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
@@ -522,6 +889,7 @@ export function useR16InfoStrip() {
 
   return {
     variant,
+    autoVariant,
     visible,
     placement,
     defaultBayId,
@@ -532,26 +900,48 @@ export function useR16InfoStrip() {
   }
 }
 
-function menuEntry(
-  kind: string,
-  id: string,
-  label: string,
-  available: boolean,
-  dismissedFlag: boolean,
-  unavailableReason?: string,
-): InfoStripMenuEntry {
+function menuEntry(opts: {
+  kind: string
+  id: string
+  label: string
+  forceKey: string
+  available: boolean
+  auto: boolean
+  shown: boolean
+  unavailableReason?: string
+}): InfoStripMenuEntry {
+  const manual = isInfoStripManual(opts.kind) && !opts.auto
+  const multi =
+    opts.kind === MAP_INFO_KIND ||
+    opts.kind === DEP_INFO_KIND ||
+    opts.kind === BREAKOUT_INFO_KIND
+  const placementKey = multi
+    ? infoStripInstanceKey(opts.kind, opts.forceKey)
+    : opts.kind
   return {
-    kind,
-    id,
-    label,
-    available,
-    dismissed: dismissedFlag,
-    hasCustomPlacement: !!getInfoStripPlacement(kind),
-    unavailableReason,
+    kind: opts.kind,
+    id: opts.id,
+    label: opts.label,
+    forceKey: opts.forceKey,
+    available: opts.available,
+    dismissed: !opts.shown && opts.available,
+    auto: opts.auto,
+    manual,
+    shown: opts.shown,
+    hasCustomPlacement:
+      !!getInfoStripPlacement(placementKey) ||
+      (!!multi && !!getInfoStripPlacement(opts.kind)),
+    unavailableReason: opts.unavailableReason,
   }
 }
 
-/** Bottom-bar menu: restore dismissed info strips / reset placement. */
+function configMenuLabel(configId: string): string {
+  const combo = ESSA_RWY_COMBINATIONS.find((c) => c.id === configId)
+  if (!combo) return configId
+  return `${configId} · ${formatEssaRwyPdfName(combo)}`
+}
+
+/** Catalog / bottom-bar: auto strips + per-config manual add folders. */
 export function useInfoStripMenu() {
   const store = useEfsStore()
   const breakout = useBreakoutInfoStrip()
@@ -561,86 +951,175 @@ export function useInfoStripMenu() {
   const sid19l = useSid19LInfoStrip()
   const r16 = useR16InfoStrip()
 
-  const entries = computed<InfoStripMenuEntry[]>(() => {
-    const out: InfoStripMenuEntry[] = []
+  const folders = computed<InfoCatalogFolder[]>(() => {
+    const essa = store.essaRolesMode
+    if (!essa) return []
 
-    const bv = breakout.variant.value
-    out.push(
-      bv
-        ? menuEntry(BREAKOUT_INFO_KIND, bv.id, `Breakout (${bv.runway})`, true, dismissed.value.has(bv.id))
-        : menuEntry(BREAKOUT_INFO_KIND, 'breakout', 'Breakout', false, false),
-    )
+    const activeBreakoutIds = new Set(getActiveBreakoutVariants().map((v) => v.id))
+    const activeMapIds = new Set(getActiveMapVariants().map((v) => v.configId))
+    const activeDepIds = new Set(getActiveDepVariants().map((v) => v.configId))
 
-    const mv = map.variant.value
-    out.push(
-      mv
-        ? menuEntry(MAP_INFO_KIND, mv.id, `G/A · MAP (${mv.runway})`, true, dismissed.value.has(mv.id))
-        : menuEntry(MAP_INFO_KIND, 'map', 'G/A · MAP', false, false),
-    )
+    const breakoutItems: InfoStripMenuEntry[] = (['1', '2'] as const).map((cfg) => {
+      const v = breakoutVariantForConfig(cfg)!
+      return menuEntry({
+        kind: BREAKOUT_INFO_KIND,
+        id: v.id,
+        label: `Breakout ${v.runway}`,
+        forceKey: cfg,
+        available: true,
+        auto: breakout.autoVariant.value?.id === v.id,
+        shown: activeBreakoutIds.has(v.id),
+      })
+    })
 
-    const dv = dep.variant.value
-    out.push(
-      dv
-        ? menuEntry(DEP_INFO_KIND, dv.id, `DEP RWY (${dv.runway})`, true, dismissed.value.has(dv.id))
-        : menuEntry(DEP_INFO_KIND, 'dep', 'DEP RWY', false, false),
-    )
-
-    const tv = turnDep.variant.value
-    out.push(
-      tv
-        ? menuEntry(
-            TURN_DEP_INFO_KIND,
-            tv.id,
-            `Turn DEP (${tv.turn === 'LEFT' ? 'LT' : tv.turn === 'RIGHT' ? 'RT' : 'MIXED'})`,
-            true,
-            dismissed.value.has(tv.id),
-          )
-        : menuEntry(TURN_DEP_INFO_KIND, 'turnDep', 'Turn DEP (08 LT/RT/MIXED)', false, false),
-    )
-
-    const sv = sid19l.variant.value
-    out.push(
-      sv
-        ? menuEntry(SID19L_INFO_KIND, sv.id, `19L SIDs (${sv.mode})`, true, dismissed.value.has(sv.id))
-        : menuEntry(SID19L_INFO_KIND, 'sid19l', '19L SIDs (Q/E/MIX)', false, false),
-    )
-
-    const rv = r16.variant.value
-    if (rv) {
-      out.push(menuEntry(R16_INFO_KIND, rv.id, 'R16 utökad', true, dismissed.value.has(rv.id)))
-    } else {
-      const aup = store.aupR16
-      let reason = 'Not available'
-      if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) {
-        reason = 'ESSA only'
-      } else if (aup?.fetchStatus === 'error') {
-        reason = 'AUP fetch failed'
-      } else if (aup?.fetchStatus === 'pending' || aup == null) {
-        reason = 'AUP loading…'
-      } else if (!aup.active) {
-        // Live plan often has ESR16 @ 1600 ft — that is NOT utökad
-        reason = 'Not extended (≤1600 ft or outside window)'
-      }
-      out.push(menuEntry(R16_INFO_KIND, 'r16', 'R16 utökad', false, false, reason))
+    const mapItems: InfoStripMenuEntry[] = []
+    for (const combo of ESSA_RWY_COMBINATIONS) {
+      const v = mapVariantForConfig(combo.id)
+      if (!v) continue
+      mapItems.push(
+        menuEntry({
+          kind: MAP_INFO_KIND,
+          id: v.id,
+          label: configMenuLabel(combo.id),
+          forceKey: combo.id,
+          available: true,
+          auto: map.autoVariant.value?.configId === combo.id,
+          shown: activeMapIds.has(combo.id),
+        }),
+      )
     }
 
+    const depItems: InfoStripMenuEntry[] = []
+    for (const combo of ESSA_RWY_COMBINATIONS) {
+      const v = depVariantForConfig(combo.id)
+      if (!v) continue
+      depItems.push(
+        menuEntry({
+          kind: DEP_INFO_KIND,
+          id: v.id,
+          label: configMenuLabel(combo.id),
+          forceKey: combo.id,
+          available: true,
+          auto: dep.autoVariant.value?.configId === combo.id,
+          shown: activeDepIds.has(combo.id),
+        }),
+      )
+    }
+    for (const turn of ['LEFT', 'RIGHT', 'BOTH'] as const) {
+      const v = turnDepVariantForTurn(turn)
+      if (!v) continue
+      const tag = turn === 'LEFT' ? 'LT' : turn === 'RIGHT' ? 'RT' : 'MIXED'
+      const shown =
+        turnDep.visible.value && turnDep.variant.value?.turn === turn
+      depItems.push(
+        menuEntry({
+          kind: TURN_DEP_INFO_KIND,
+          id: v.id,
+          label: `Turn DEP ${tag}`,
+          forceKey: turn,
+          available: true,
+          auto: turnDep.autoVariant.value?.turn === turn,
+          shown,
+        }),
+      )
+    }
+
+    const sidItems: InfoStripMenuEntry[] = []
+    for (const mode of ['Q', 'E', 'MIX'] as const) {
+      const v = sid19lVariantForMode(mode)
+      if (!v) continue
+      const shown =
+        sid19l.visible.value && sid19l.variant.value?.mode === mode
+      sidItems.push(
+        menuEntry({
+          kind: SID19L_INFO_KIND,
+          id: v.id,
+          label: mode === 'MIX' ? 'MIX Q/E SIDs' : `${mode} SIDs`,
+          forceKey: mode,
+          available: true,
+          auto: sid19l.autoVariant.value?.mode === mode,
+          shown,
+        }),
+      )
+    }
+    {
+      const essaAirport = store.myAirports.some((a) => a.toUpperCase() === 'ESSA')
+      const rv = r16.variant.value
+      const auto = r16.autoVariant.value
+      sidItems.push(
+        menuEntry({
+          kind: R16_INFO_KIND,
+          id: rv?.id ?? auto?.id ?? 'r16:manual',
+          label: 'R16 utökad',
+          forceKey: 'manual',
+          available: essaAirport,
+          auto: !!auto,
+          shown: r16.visible.value,
+          unavailableReason: essaAirport ? undefined : 'ESSA only',
+        }),
+      )
+    }
+
+    return [
+      { id: 'breakout', label: 'Breakout', items: breakoutItems },
+      { id: 'map', label: 'Missed APP', items: mapItems },
+      { id: 'dep', label: 'Dep', items: depItems },
+      { id: 'sid', label: 'SID', items: sidItems },
+    ]
+  })
+
+  /** Flat list for bottom-bar compatibility. */
+  const entries = computed<InfoStripMenuEntry[]>(() => {
+    const out: InfoStripMenuEntry[] = []
+    for (const folder of folders.value) out.push(...folder.items)
     return out
   })
+
+  const r16Entry = computed(() =>
+    entries.value.find((e) => e.kind === R16_INFO_KIND) ?? null,
+  )
 
   const hasDismissedAvailable = computed(() =>
     entries.value.some((e) => e.available && e.dismissed),
   )
 
   function showEntry(entry: InfoStripMenuEntry) {
-    if (!entry.available) return
+    if (!entry.available || entry.shown) return
+    // MAP / DEP / Breakout: add alongside existing (one per config). Others: replace.
+    const multi =
+      entry.kind === MAP_INFO_KIND ||
+      entry.kind === DEP_INFO_KIND ||
+      entry.kind === BREAKOUT_INFO_KIND
+    if (multi) addInfoStripForced(entry.kind, entry.forceKey)
+    else setInfoStripForced(entry.kind, entry.forceKey)
+    setInfoStripManual(entry.kind, true)
+    // Only clear shared placement for single-instance kinds
+    if (!multi) clearInfoStripPlacement(entry.kind)
     restoreInfoStrip(entry.id)
-    // Fresh show → default host section
-    clearInfoStripPlacement(entry.kind)
+    if (entry.kind === BREAKOUT_INFO_KIND) {
+      restoreInfoStrip('breakout:01R')
+      restoreInfoStrip('breakout:19L')
+    }
+    if (entry.kind === R16_INFO_KIND) restoreInfoStrip('r16:manual')
   }
 
   function resetPlacement(entry: InfoStripMenuEntry) {
+    const multi =
+      entry.kind === MAP_INFO_KIND ||
+      entry.kind === DEP_INFO_KIND ||
+      entry.kind === BREAKOUT_INFO_KIND
+    if (multi && entry.forceKey) {
+      clearInfoStripPlacement(infoStripInstanceKey(entry.kind, entry.forceKey))
+    }
     clearInfoStripPlacement(entry.kind)
   }
 
-  return { entries, hasDismissedAvailable, showEntry, resetPlacement }
+  return {
+    entries,
+    folders,
+    r16Entry,
+    hasDismissedAvailable,
+    showEntry,
+    resetPlacement,
+  }
 }

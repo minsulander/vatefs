@@ -335,6 +335,31 @@
                     When auto resize is not off, increase size again when space frees up
                     (not larger than before the auto reduction). On by default.
                 </p>
+
+                <div v-if="efs.essaRolesMode" class="scribble-mode-option mb-4 mt-4">
+                    <div class="ui-scale-label">Default sort / flow</div>
+                    <v-btn-toggle
+                        :model-value="defaultSortFlow"
+                        mandatory
+                        density="comfortable"
+                        color="amber-darken-2"
+                        class="scribble-mode-toggle sort-flow-toggle"
+                        @update:model-value="onDefaultSortFlow"
+                    >
+                        <v-btn value="newestBottom" class="text-none" size="small">
+                            <SortFlowIcon class="sort-flow-btn-icon" sort-flow="newestBottom" />
+                            New at bottom
+                        </v-btn>
+                        <v-btn value="newestTop" class="text-none" size="small">
+                            <SortFlowIcon class="sort-flow-btn-icon" sort-flow="newestTop" />
+                            New at top
+                        </v-btn>
+                    </v-btn-toggle>
+                    <p class="text-caption text-grey mt-1">
+                        ESSA flexible workspace. Default sequence direction for new section headers
+                        (triangle on each header can still override).
+                    </p>
+                </div>
             </template>
 
             <h2 class="settings-section-title">VatEFS sync</h2>
@@ -448,6 +473,8 @@ import {
     type StripScribbleMode,
 } from "@/composables/useStripScribbleMode"
 import { isStripPrintSound } from "@/composables/useStripPrintSound"
+import { getDefaultSortFlow, setDefaultSortFlow, type SortFlow } from "@/workspace"
+import SortFlowIcon from "@/components/SortFlowIcon.vue"
 
 function isStripPrintMode(value: unknown): value is "auto" | "manual" {
     return value === "auto" || value === "manual"
@@ -456,6 +483,13 @@ function isStripPrintMode(value: unknown): value is "auto" | "manual" {
 const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
 const scribbleMode = useStripScribbleMode()
+const defaultSortFlow = ref<SortFlow>(getDefaultSortFlow())
+
+function onDefaultSortFlow(value: unknown) {
+    if (value !== "newestTop" && value !== "newestBottom") return
+    defaultSortFlow.value = value
+    setDefaultSortFlow(value)
+}
 
 const hoppieDraft = ref("")
 const hoppieVisible = ref(false)
@@ -689,6 +723,15 @@ function onScribbleSyncRealm(value: unknown) {
 
 .scribble-mode-toggle {
     margin-top: 0.25rem;
+}
+
+.sort-flow-toggle :deep(.v-btn) {
+    gap: 0.4rem;
+}
+
+.sort-flow-btn-icon {
+    width: 0.65rem;
+    flex-shrink: 0;
 }
 
 .settings-section-title {

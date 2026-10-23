@@ -11,6 +11,17 @@
   <div class="efs-bottom-bar">
     <div class="bottom-bar-side bottom-bar-left">
       <button
+        v-if="store.essaRolesMode"
+        type="button"
+        class="bar-icon-btn search-btn"
+        title="Search strips"
+        @click="ws.openSearchDialog()"
+      >
+        <v-icon :size="barIconSize">mdi-magnify</v-icon>
+      </button>
+
+      <button
+        v-if="!store.essaRolesMode"
         type="button"
         class="bar-icon-btn trash-btn efs-trash-drop"
         :class="{ 'drag-over': trashDragOver }"
@@ -24,9 +35,9 @@
         <v-icon :size="barIconSize">mdi-trash-can-outline</v-icon>
       </button>
 
-      <!-- Info strips + RWY flags: ESSA (SAAB) only — not RTC for now -->
+      <!-- Info strips + RWY flags: SAAB non-ESSA workspace — ESSA uses top-right catalog -->
       <v-menu
-        v-if="!store.multiAirport"
+        v-if="!store.multiAirport && !store.essaRolesMode"
         v-model="infoMenuOpen"
         location="top"
         :offset="8"
@@ -61,20 +72,15 @@
               :class="{ 'efs-popup-muted is-disabled': !entry.available }"
             >
               <span class="efs-popup-item-title">{{ entry.label }}</span>
-              <span class="efs-popup-item-sub">
-                <template v-if="!entry.available">{{ entry.unavailableReason || 'Not available' }}</template>
-                <template v-else-if="entry.dismissed">Hidden</template>
-                <template v-else>Shown</template>
-              </span>
-              <div v-if="entry.available" class="info-strips-row-actions">
+              <div v-if="entry.available && !entry.shown" class="info-strips-row-actions">
                 <button
-                  v-if="entry.dismissed"
                   type="button"
                   class="efs-popup-chip active"
                   @click="onShowInfoStrip(entry)"
                 >Show</button>
+              </div>
+              <div v-else-if="entry.available && entry.hasCustomPlacement" class="info-strips-row-actions">
                 <button
-                  v-else-if="entry.hasCustomPlacement"
                   type="button"
                   class="efs-popup-chip"
                   @click="onResetInfoPlacement(entry)"
@@ -291,10 +297,12 @@ import Clock from './Clock.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import TrashDialog from './TrashDialog.vue'
 import PrintDialog from './PrintDialog.vue'
+import { getWorkspace } from '@/workspace'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
 
 const store = useEfsStore()
+const ws = getWorkspace()
 const chromeScale = useEfsChromeScaleValue()
 const barIconSize = computed(() => Math.max(14, Math.round(18 * chromeScale.value)))
 const bayBgIconSize = computed(() => Math.max(16, Math.round(22 * chromeScale.value)))

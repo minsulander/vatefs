@@ -736,6 +736,7 @@ void VatEFSPlugin::OnFlightPlanDisconnect(EuroScopePlugIn::CFlightPlan FlightPla
         lastOwnershipSnapshot.erase(cs);
         lastHoldShortSnapshot.erase(cs);
         lastCtlSnapshot.erase(cs);
+        lastVchRequestSnapshot.erase(cs);
         lastEfsGaSnapshot.erase(cs);
         lastGrpStandSnapshot.erase(cs);
         fplPushedCallsigns.erase(cs);
@@ -2574,27 +2575,31 @@ void VatEFSPlugin::Refresh()
                 lastXflSnapshot[cs] = MakeXflSnapshot(FlightPlan);
         }
         SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
-        // VCH HS (ann 4) + CTL (ann 3) + EFS soft G/A (ann 5) + DepC (ann 6)
+        // VCH HS (ann 4) + CTL (ann 3) + REQ (ann 2) + EFS soft G/A (ann 5) + DepC (ann 6)
         {
             const char *cs = FlightPlan.GetCallsign();
             std::string hs;
             bool ctl = false;
             bool efsGa = false;
             bool est = false;
+            std::string vchReq;
             if (cs && cs[0] != '\0') {
                 hs = GetHoldShort(cs);
                 ctl = GetVchCtl(cs);
                 efsGa = GetEfsGoAround(cs);
                 est = GetEstCoo(cs);
+                vchReq = GetVchRequest(cs);
                 lastHoldShortSnapshot[cs] = hs;
                 lastCtlSnapshot[cs] = ctl ? "1" : "0";
                 lastEfsGaSnapshot[cs] = efsGa ? "1" : "0";
                 lastEstCooSnapshot[cs] = est ? "1" : "0";
+                lastVchRequestSnapshot[cs] = vchReq;
             }
             message["hs"] = hs;
             message["clearedToLand"] = ctl;
             message["efsGoAround"] = efsGa;
             message["coo"] = est;
+            message["vchRequest"] = vchReq;
         }
         SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
         message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
@@ -4476,6 +4481,71 @@ bool VatEFSPlugin::GetVchCtl(const std::string &callsign)
     }
 }
 
+/** True if c is a VCH pending-request type letter (clearance/push/startup/taxi/dep). */
+static bool IsVchRequestType(char c)
+{
+    char t = (char)std::toupper((unsigned char)c);
+    return t == 'C' || t == 'P' || t == 'S' || t == 'T' || t == 'D';
+}
+
+/**
+ * Extract VCH request type from a raw string.
+ * Accepts "P", "P1234567" (type+time), and tag-style "R1P" / "P1" (letter anywhere).
+ */
+static std::string ParseVchRequestType(const char *raw)
+{
+    if (!raw || raw[0] == '\0') return "";
+    // Prefer first char when it is already a type (common ES annotation form)
+    if (IsVchRequestType(raw[0])) {
+        return std::string(1, (char)std::toupper((unsigned char)raw[0]));
+    }
+    for (const char *p = raw; *p; ++p) {
+        if (IsVchRequestType(*p)) {
+            return std::string(1, (char)std::toupper((unsigned char)*p));
+        }
+    }
+    return "";
+}
+
+/**
+ * VCH pending request (C/P/S/T/D).
+ * Sources (first hit wins):
+ *  1) Strip annotation 2 — legacy VCH / forks that still write TAG_STRIP_ANNO_REQ
+ *  2) FPL remarks `/VCH/REQ/P…/REQ/VCH/` — VCH 0.8 sync-via-remarks form
+ *
+ * Upstream VCH currently keeps requests in-process only (ann/remarks writes
+ * commented out), so REQ PUSH stays empty until a VCH build exports the request.
+ */
+std::string VatEFSPlugin::GetVchRequest(const std::string &callsign)
+{
+    try {
+        auto fp = FlightPlanSelect(callsign.c_str());
+        if (!fp.IsValid()) return "";
+
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(2);
+        std::string fromAnn = ParseVchRequestType(ann);
+        if (!fromAnn.empty()) return fromAnn;
+
+        const char *rmk = fp.GetFlightPlanData().GetRemarks();
+        if (rmk && rmk[0] != '\0') {
+            std::string buf = rmk;
+            const std::string open = "/VCH/REQ/";
+            const std::string close = "/REQ/VCH/";
+            size_t a = buf.find(open);
+            size_t b = buf.find(close);
+            if (a != std::string::npos && b != std::string::npos && b > a) {
+                size_t start = a + open.size();
+                std::string body = buf.substr(start, b - start);
+                std::string fromRmk = ParseVchRequestType(body.c_str());
+                if (!fromRmk.empty()) return fromRmk;
+            }
+        }
+        return "";
+    } catch (...) {
+        return "";
+    }
+}
+
 bool VatEFSPlugin::SetVchCtl(const std::string &callsign, bool clearedToLand)
 {
     try {
@@ -4554,6 +4624,7 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         std::string efsGaSnap = efsGa ? "1" : "0";
         bool est = GetEstCoo(cs);
         std::string estSnap = est ? "1" : "0";
+        std::string vchReq = GetVchRequest(cs);
 
         bool hsChanged = true;
         auto hsIt = lastHoldShortSnapshot.find(cs);
@@ -4571,7 +4642,11 @@ void VatEFSPlugin::PollVchAnnotationChanges()
         auto estIt = lastEstCooSnapshot.find(cs);
         if (estIt != lastEstCooSnapshot.end() && estIt->second == estSnap) estChanged = false;
 
-        if (!hsChanged && !ctlChanged && !efsGaChanged && !estChanged) continue;
+        bool vchReqChanged = true;
+        auto vchReqIt = lastVchRequestSnapshot.find(cs);
+        if (vchReqIt != lastVchRequestSnapshot.end() && vchReqIt->second == vchReq) vchReqChanged = false;
+
+        if (!hsChanged && !ctlChanged && !efsGaChanged && !estChanged && !vchReqChanged) continue;
 
         EnsureFlightPlanPushed(fp);
 
@@ -4606,6 +4681,13 @@ void VatEFSPlugin::PollVchAnnotationChanges()
                          " -> " + estSnap + " (ann 6)");
             lastEstCooSnapshot[cs] = estSnap;
             message["coo"] = est;
+        }
+        if (vchReqChanged) {
+            DebugMessage(std::string("VCH REQ change ") + cs + ": " +
+                         (vchReqIt != lastVchRequestSnapshot.end() ? vchReqIt->second : "(none)") +
+                         " -> " + (vchReq.empty() ? "(clear)" : vchReq));
+            lastVchRequestSnapshot[cs] = vchReq;
+            message["vchRequest"] = vchReq;
         }
         PostJson(message, "PollVchAnnotationChanges");
     }

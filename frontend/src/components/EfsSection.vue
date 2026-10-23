@@ -11,8 +11,11 @@
     :class="{
       'efs-section--no-header': !!section.hideHeader,
       'efs-section--stick-bottom': stickBottomZone,
+      'efs-section--ws-dragging': workspaceMode && ws.draggingSectionId.value === workspaceInstanceId,
+      'efs-section--workspace-blocker': isEmptyWorkspaceHeader,
     }"
     :data-section-id="section.id"
+    :data-ws-instance="workspaceInstanceId || undefined"
     :style="sectionStyle"
   >
     <div
@@ -25,23 +28,47 @@
         { 'section-header--rtc': store.multiAirport && !store.isPaperLook },
         { 'section-header--rtc-rwy': !!rtcHeaderRwy },
         { 'header-drop-active': headerDropActive },
+        { 'section-header--workspace-draggable': workspaceMode },
+        { 'section-header--empty-blocker': isEmptyWorkspaceHeader },
       ]"
       :title="
-        store.isPaperLook && !isFirstSection
-          ? 'Drag to adjust height · double-click to reset'
-          : undefined
+        workspaceMode
+          ? 'Drag header to reposition in bay or move to another bay'
+          : store.isPaperLook && !isFirstSection
+            ? 'Drag to adjust height · double-click to reset'
+            : undefined
       "
-      @mousedown="store.isPaperLook ? onResizeStart($event) : undefined"
-      @touchstart="store.isPaperLook ? onResizeStart($event) : undefined"
-      @dblclick="store.isPaperLook ? onResizeReset($event) : undefined"
-      @dragover.prevent="onHeaderDragOver"
-      @dragenter.prevent="onHeaderDragEnter"
+      :draggable="false"
+      @pointerdown="onWorkspaceHeaderPointerDown"
+      @mousedown="onHeaderMouseDown"
+      @touchstart="onHeaderTouchStart"
+      @dblclick.prevent.stop="onHeaderDblClick"
+      @dragover.prevent="onSectionHeaderDragOver($event)"
+      @dragenter.prevent="onSectionHeaderDragEnter($event)"
       @dragleave="onHeaderDragLeave"
-      @drop.prevent="onHeaderDrop"
+      @drop.prevent="onSectionHeaderDrop($event)"
     >
       <template v-if="!store.isPaperLook">
         <div class="section-header-left">
           <button
+            v-if="workspaceMode && !isEmptyWorkspaceHeader"
+            type="button"
+            class="section-hdr-btn section-hdr-size"
+            :title="`Strip size: ${workspaceStripSizeLabel}`"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceCycleSize"
+          >
+            <span
+              class="section-hdr-size-icon"
+              :class="`is-${workspaceStripSize}`"
+              aria-hidden="true"
+            >
+              <span /><span />
+            </span>
+          </button>
+          <button
+            v-else-if="!workspaceMode"
             type="button"
             class="section-hdr-btn section-hdr-drag"
             :class="{ 'is-inactive': isFirstSection }"
@@ -54,10 +81,24 @@
             <span class="section-hdr-drag-icon" aria-hidden="true" />
           </button>
           <button
+            v-if="workspaceMode && !isEmptyWorkspaceHeader"
+            type="button"
+            class="section-hdr-btn section-hdr-flow"
+            :title="workspaceSortFlow === 'newestTop' ? 'Sort flow: new on top, first at bottom' : 'Sort flow: new at bottom, first on top'"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceToggleFlow"
+          >
+            <SortFlowIcon class="section-hdr-flow-tri" :sort-flow="workspaceSortFlow" />
+          </button>
+          <button
+            v-if="workspaceMode && !isEmptyWorkspaceHeader"
             type="button"
             class="section-hdr-btn section-hdr-search"
-            disabled
             title="Search"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceSearch"
           >
             <svg class="section-hdr-search-icon" viewBox="0 0 16 16" aria-hidden="true">
               <circle cx="6.5" cy="6.5" r="4.25" fill="none" stroke="currentColor" stroke-width="1.75" />
@@ -65,7 +106,7 @@
             </svg>
           </button>
           <button
-            v-if="showSortModeControls"
+            v-if="showSortModeControls && !isEmptyWorkspaceHeader"
             type="button"
             class="section-hdr-btn section-sort-btn"
             :title="sortModeTitle"
@@ -112,10 +153,50 @@
             :title="rtcHeaderRwyTitle"
           >{{ rtcHeaderRwy }}</span>
           <button
+            v-if="workspaceMode && workspaceCanSplit"
+            type="button"
+            class="section-hdr-btn section-hdr-split"
+            title="Split section"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceSplit"
+          >
+            <svg class="section-hdr-split-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <!-- Stem + fork ending at tips; chevrons share each branch axis -->
+              <path
+                d="M8 1.5 L8 7.5 M8 7.5 L3.55 13.15 M8 7.5 L12.45 13.15"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="square"
+                stroke-linejoin="miter"
+              />
+              <path
+                d="M6.25 12.7 L3.55 13.15 L3.55 10.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="square"
+                stroke-linejoin="miter"
+              />
+              <path
+                d="M9.75 12.7 L12.45 13.15 L12.45 10.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="square"
+                stroke-linejoin="miter"
+              />
+            </svg>
+          </button>
+          <button
             type="button"
             class="section-hdr-btn section-hdr-close"
-            disabled
+            :disabled="!workspaceMode"
             title="Close"
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceClose"
           >
             <svg class="section-hdr-close-icon" viewBox="0 0 12 12" aria-hidden="true">
               <path d="M1 1 L11 11 M11 1 L1 11" />
@@ -135,6 +216,7 @@
       <div
         ref="topContainer"
         class="top-strips-container"
+        :class="{ 'top-strips-container--ws-overflow': hidePrimaryOverflowScroll }"
         @dragover.prevent="onTopDragOver"
         @dragenter="onTopDragEnter"
         @dragleave="onTopDragLeave"
@@ -160,9 +242,21 @@
         />
         <template v-for="(strip, index) in topStrips" :key="strip.id">
           <!-- Info strips first so the insert line can sit between them and the flight strip -->
-          <BreakoutInfoStrip v-if="showBreakoutBeforeTopIndex(index)" />
-          <MapInfoStrip v-if="showMapBeforeTopIndex(index)" />
-          <DepInfoStrip v-if="showDepBeforeTopIndex(index)" />
+          <BreakoutInfoStrip
+            v-for="v in breakoutsInSlot('beforeTop', index)"
+            :key="'bo-t-'+v.id"
+            :config-id="v.runway === '19L' ? '2' : '1'"
+          />
+          <MapInfoStrip
+            v-for="v in mapsInSlot('beforeTop', index)"
+            :key="'map-t-'+v.configId"
+            :config-id="v.configId"
+          />
+          <DepInfoStrip
+            v-for="v in depsInSlot('beforeTop', index)"
+            :key="'dep-t-'+v.configId"
+            :config-id="v.configId"
+          />
           <TurnDepInfoStrip v-if="showTurnBeforeTopIndex(index)" />
           <Sid19LInfoStrip v-if="showSid19lBeforeTopIndex(index)" />
           <R16InfoStrip v-if="showR16BeforeTopIndex(index)" />
@@ -181,13 +275,25 @@
           ></div>
           <FlightStrip
             :strip="strip"
-            :section-id="section.id"
-            :bay-id="bayId"
+            :section-id="effectiveSectionId"
+            :bay-id="effectiveBayId"
           />
         </template>
-        <BreakoutInfoStrip v-if="showBreakoutAtEndOfTop" />
-        <MapInfoStrip v-if="showMapAtEndOfTop" />
-        <DepInfoStrip v-if="showDepAtEndOfTop" />
+        <BreakoutInfoStrip
+          v-for="v in breakoutsInSlot('endTop')"
+          :key="'bo-et-'+v.id"
+          :config-id="v.runway === '19L' ? '2' : '1'"
+        />
+        <MapInfoStrip
+          v-for="v in mapsInSlot('endTop')"
+          :key="'map-et-'+v.configId"
+          :config-id="v.configId"
+        />
+        <DepInfoStrip
+          v-for="v in depsInSlot('endTop')"
+          :key="'dep-et-'+v.configId"
+          :config-id="v.configId"
+        />
         <TurnDepInfoStrip v-if="showTurnAtEndOfTop" />
         <Sid19LInfoStrip v-if="showSid19lAtEndOfTop" />
         <R16InfoStrip v-if="showR16AtEndOfTop" />
@@ -223,22 +329,46 @@
         @drop="onBottomStripsDrop"
       >
         <template v-for="(strip, index) in bottomStrips" :key="strip.id">
-          <BreakoutInfoStrip v-if="showBreakoutBeforeBottomIndex(index)" />
-          <MapInfoStrip v-if="showMapBeforeBottomIndex(index)" />
-          <DepInfoStrip v-if="showDepBeforeBottomIndex(index)" />
+          <BreakoutInfoStrip
+            v-for="v in breakoutsInSlot('beforeBottom', index)"
+            :key="'bo-b-'+v.id"
+            :config-id="v.runway === '19L' ? '2' : '1'"
+          />
+          <MapInfoStrip
+            v-for="v in mapsInSlot('beforeBottom', index)"
+            :key="'map-b-'+v.configId"
+            :config-id="v.configId"
+          />
+          <DepInfoStrip
+            v-for="v in depsInSlot('beforeBottom', index)"
+            :key="'dep-b-'+v.configId"
+            :config-id="v.configId"
+          />
           <TurnDepInfoStrip v-if="showTurnBeforeBottomIndex(index)" />
           <Sid19LInfoStrip v-if="showSid19lBeforeBottomIndex(index)" />
           <R16InfoStrip v-if="showR16BeforeBottomIndex(index)" />
           <FlightStrip
             :strip="strip"
-            :section-id="section.id"
-            :bay-id="bayId"
+            :section-id="effectiveSectionId"
+            :bay-id="effectiveBayId"
           />
         </template>
         <!-- Default: bottom of bay above RUNWAY; also end of bottom list -->
-        <BreakoutInfoStrip v-if="showBreakoutAtEndOfBottom" />
-        <MapInfoStrip v-if="showMapAtEndOfBottom" />
-        <DepInfoStrip v-if="showDepAtEndOfBottom" />
+        <BreakoutInfoStrip
+          v-for="v in breakoutsInSlot('endBottom')"
+          :key="'bo-eb-'+v.id"
+          :config-id="v.runway === '19L' ? '2' : '1'"
+        />
+        <MapInfoStrip
+          v-for="v in mapsInSlot('endBottom')"
+          :key="'map-eb-'+v.configId"
+          :config-id="v.configId"
+        />
+        <DepInfoStrip
+          v-for="v in depsInSlot('endBottom')"
+          :key="'dep-eb-'+v.configId"
+          :config-id="v.configId"
+        />
         <TurnDepInfoStrip v-if="showTurnAtEndOfBottom" />
         <Sid19LInfoStrip v-if="showSid19lAtEndOfBottom" />
         <R16InfoStrip v-if="showR16AtEndOfBottom" />
@@ -255,20 +385,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, type ComputedRef, type Ref } from 'vue'
+import { ref, computed, watch, watchEffect, nextTick, onMounted, onBeforeUnmount, type ComputedRef, type Ref } from 'vue'
 import type { FlightStrip as FlightStripData, Section } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { useSectionResize } from '@/composables/useSectionResize'
 import { useStripOrderFlip } from '@/composables/useStripOrderFlip'
 import {
+  adoptManualStripFitBaseline,
   autoFitApplying,
   autoFitLayoutEpoch,
   clearAutoFitState,
   isAutoFitExemptSection,
   runAutoFitStripSize,
 } from '@/composables/useAutoFitStripSize'
-import { isCdAllOrTsatSection } from '@/composables/useStripExpanders'
+import {
+  collapseStripExpanders,
+  isCdAllOrTsatSection,
+  setStripExpanderState,
+} from '@/composables/useStripExpanders'
+import { setStripSizeMode } from '@/composables/useStripSizeMode'
+import {
+  getWorkspace,
+  canSplitSection,
+  stripSectionIdsForWorkspace,
+  serverBayIdForSection,
+  workspaceMemberAcceptsStrip,
+  yamlSectionIdForWorkspace,
+  type SortFlow,
+} from '@/workspace'
 import { useUiScalePercent } from '@/composables/useEfsUiScale'
+import SortFlowIcon from './SortFlowIcon.vue'
 import FlightStrip from './FlightStrip.vue'
 import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
 import MapInfoStrip from './MapInfoStrip.vue'
@@ -279,16 +425,29 @@ import R16InfoStrip from './R16InfoStrip.vue'
 import RwyFlagStrip from './RwyFlagStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import {
-  INFO_STRIP_KINDS,
+  BREAKOUT_INFO_KIND,
+  MAP_INFO_KIND,
+  DEP_INFO_KIND,
+  TURN_DEP_INFO_KIND,
+  SID19L_INFO_KIND,
+  R16_INFO_KIND,
   setInfoStripPlacement,
-  useBreakoutInfoStrip,
-  useMapInfoStrip,
-  useDepInfoStrip,
+  getInfoStripPlacement,
+  getActiveBreakoutVariants,
+  getActiveMapVariants,
+  getActiveDepVariants,
+  infoStripInstanceKey,
+  parseInfoStripPlacementKey,
   useTurnDepInfoStrip,
   useSid19LInfoStrip,
   useR16InfoStrip,
   type InfoStripPlacement,
+  type BreakoutVariant,
+  type MapInfoVariant,
+  type DepInfoVariant,
 } from '@/composables/useInfoStrips'
+import { essaMapDefaultSectionId } from '@/data/essa-map-info'
+import { essaDepDefaultSectionId } from '@/data/essa-dep-info'
 import {
   RWY_CLOSED_FLAG_KIND,
   RWY_OCCUPIED_FLAG_KIND,
@@ -317,10 +476,17 @@ type TimeSortDir = 'asc' | 'desc'
 
 const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared', 'dep'])
 
-/** E/TOBT–TSAT sort: pending/cleared, or RTC bay*_dep — not ctr_dep */
+/** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep — not ctr_dep */
 function isTimeSortSectionId(sectionId: string): boolean {
   if (TIME_SORT_SECTIONS.has(sectionId)) return true
-  if (sectionId.endsWith('_pending_dep') || sectionId.endsWith('_cleared')) return true
+  if (
+    sectionId === 'cleared_tsat' ||
+    sectionId === 'cleared_eobt' ||
+    sectionId.endsWith('_pending_dep') ||
+    sectionId.endsWith('_cleared')
+  ) {
+    return true
+  }
   return /^(bay\d+|idle)_dep$/.test(sectionId)
 }
 
@@ -359,7 +525,12 @@ function isRtcDepSectionId(sectionId: string): boolean {
 }
 
 function isClearedSectionId(sectionId: string): boolean {
-  return sectionId === 'cleared' || sectionId.endsWith('_cleared')
+  return (
+    sectionId === 'cleared' ||
+    sectionId === 'cleared_tsat' ||
+    sectionId === 'cleared_eobt' ||
+    sectionId.endsWith('_cleared')
+  )
 }
 
 function isPendingDepSectionId(sectionId: string): boolean {
@@ -371,9 +542,14 @@ const props = withDefaults(defineProps<{
   bayId: string
   isFirstSection?: boolean
   isLastSection?: boolean
+  workspaceMode?: boolean
+  workspaceInstanceId?: string
+  workspaceColumnIndex?: number
 }>(), {
   isFirstSection: false,
-  isLastSection: false
+  isLastSection: false,
+  workspaceMode: false,
+  workspaceColumnIndex: 0,
 })
 
 const createDialogOpen = ref(false)
@@ -388,6 +564,271 @@ const pendingCreateGapSize = ref<number>(0)
 
 const store = useEfsStore()
 const { startResize } = useSectionResize()
+const ws = getWorkspace()
+
+const isEmptyWorkspaceHeader = computed(
+  () =>
+    props.workspaceMode &&
+    (!props.section.title || props.section.title.trim() === '') &&
+    !!props.workspaceInstanceId &&
+    !ws.getWorkspaceSection(props.workspaceInstanceId)?.sectionId,
+)
+
+const workspaceSection = computed(() =>
+  props.workspaceInstanceId ? ws.getWorkspaceSection(props.workspaceInstanceId) : undefined,
+)
+
+const workspaceStripSize = computed(() => workspaceSection.value?.stripSize ?? 'normal')
+const workspaceStripSizeLabel = computed(() => workspaceStripSize.value)
+const workspaceSortFlow = computed(() => workspaceSection.value?.sortFlow ?? 'newestBottom')
+const workspaceCanSplit = computed(() => {
+  const s = workspaceSection.value
+  if (!s) return false
+  // Use live bay title (INBOUND APP vs INBOUND TWR-…) — not a stale workspace copy
+  return canSplitSection({ ...s, title: props.section.title || s.title })
+})
+
+/** Real server bay for strip moves when rendering a synthetic workspace column. */
+const effectiveBayId = computed(() => {
+  if (!props.workspaceMode) return props.bayId
+  const ids = sectionIdsForStripMatch()
+  for (const sid of ids) {
+    const bayId = serverBayIdForSection(store.layout, sid)
+    if (bayId) return bayId
+  }
+  // Fallback: first bay that contains any matching section on the server layout
+  for (const bay of store.layout.bays) {
+    if (bay.sections.some((s) => ids.includes(s.id))) return bay.id
+  }
+  return store.layout.bays[0]?.id ?? props.bayId
+})
+
+/** Logical section id to use for strip membership on the server. */
+const effectiveSectionId = computed(() => {
+  if (!props.workspaceMode) return props.section.id
+  const ids = sectionIdsForStripMatch()
+  return ids[0] ?? props.section.id
+})
+
+function onWorkspaceCycleSize() {
+  if (!props.workspaceInstanceId) return
+  ws.cycleStripSize(props.workspaceInstanceId)
+  applyWorkspaceStripSizeToStrips()
+  // Strip heights change → re-pack overflow into following columns
+  requestAnimationFrame(() => ws.scheduleOverflowRepack())
+}
+
+function onWorkspaceSearch() {
+  if (!props.workspaceMode || isEmptyWorkspaceHeader.value) return
+  ws.openSearchDialog()
+}
+
+function onWorkspaceSplit() {
+  if (!props.workspaceInstanceId) return
+  // Pass live header title so INBOUND APP is never treated as INBOUND TWR
+  ws.splitSection(props.workspaceInstanceId, props.section.title)
+}
+
+function onWorkspaceClose() {
+  if (!props.workspaceMode || !props.workspaceInstanceId) return
+  ws.closeSection(props.workspaceInstanceId)
+}
+
+/** Every strip currently shown under this divider (top + bottom). */
+function collectSectionStrips(): FlightStripData[] {
+  const list: FlightStripData[] = []
+  store.strips.forEach((strip) => {
+    if (stripMatchesThisSection(strip)) list.push(strip)
+  })
+  return list
+}
+
+/** Apply section strip-size mode to all strips here (same as per-strip size menu). */
+function applyWorkspaceStripSizeToStrips() {
+  const size = workspaceStripSize.value
+  for (const strip of collectSectionStrips()) {
+    if (size === 'compact') {
+      collapseStripExpanders(strip.id)
+      setStripSizeMode(strip.id, 'compact')
+    } else if (size === 'expanded') {
+      setStripSizeMode(strip.id, 'normal')
+      setStripExpanderState(strip.id, { top: true, bottom: true })
+    } else {
+      // normal
+      collapseStripExpanders(strip.id)
+      setStripSizeMode(strip.id, 'normal')
+    }
+    adoptManualStripFitBaseline(strip.id)
+  }
+}
+
+function isWorkspaceSectionDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer?.types.includes('application/x-efs-section')
+}
+
+function onHeaderMouseDown(e: MouseEvent) {
+  if (props.workspaceMode) return // pointerdown handles workspace
+  if (store.isPaperLook) onResizeStart(e)
+}
+
+function onHeaderTouchStart(e: TouchEvent) {
+  if (props.workspaceMode) return
+  if (store.isPaperLook) onResizeStart(e)
+}
+
+function onHeaderDblClick(e: MouseEvent) {
+  // Workspace: free Y placement — never half-split / center on double-click
+  if (props.workspaceMode) {
+    e.preventDefault()
+    e.stopPropagation()
+    return
+  }
+  if (store.isPaperLook) onResizeReset(e)
+}
+
+/** Unified header drag: same gesture repositions Y in-bay or moves across bays. */
+let wsHeaderDragging = false
+let wsHeaderPointerId: number | null = null
+
+function onWorkspaceHeaderPointerDown(e: PointerEvent) {
+  if (!props.workspaceMode || !props.workspaceInstanceId) return
+  const t = e.target as HTMLElement | null
+  if (t?.closest('.section-hdr-btn')) return
+  if (e.button !== 0) return
+  // Ignore 2nd click of a double-click (would re-place / feel like a snap-to-center)
+  if (e.detail > 1) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  const fromCol = props.workspaceColumnIndex ?? 0
+  ws.syncColumnYsFromDom(fromCol)
+  ws.beginSectionDrag(props.workspaceInstanceId)
+  clearDragHighlights()
+  wsHeaderDragging = true
+  wsHeaderPointerId = e.pointerId
+  try {
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  } catch {
+    /* ignore */
+  }
+
+  const onMove = (ev: PointerEvent) => {
+    if (!wsHeaderDragging || !props.workspaceInstanceId) return
+    if (wsHeaderPointerId != null && ev.pointerId !== wsHeaderPointerId) return
+    const curCol =
+      ws.getWorkspaceSection(props.workspaceInstanceId)?.anchorColumn ?? fromCol
+    const col = ws.columnAtClientX(ev.clientX, curCol) ?? curCol
+    ws.placeSection(props.workspaceInstanceId, col, ev.clientY, {
+      persist: false,
+      syncDom: false,
+    })
+  }
+
+  const onUp = (ev: PointerEvent) => {
+    if (wsHeaderPointerId != null && ev.pointerId !== wsHeaderPointerId) return
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+    document.removeEventListener('pointercancel', onUp)
+    wsHeaderDragging = false
+    wsHeaderPointerId = null
+    if (props.workspaceInstanceId) {
+      const curCol =
+        ws.getWorkspaceSection(props.workspaceInstanceId)?.anchorColumn ?? fromCol
+      const col = ws.columnAtClientX(ev.clientX, curCol) ?? curCol
+      // Prefer merge when released on/near a combinable sibling header
+      const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const underInst = under?.closest?.('[data-ws-instance]')?.getAttribute('data-ws-instance')
+      const body = document.querySelector(
+        `.efs-bay[data-ws-column="${col}"] .bay-body`,
+      ) as HTMLElement | null
+      const yInCol = body
+        ? Math.max(0, ev.clientY - body.getBoundingClientRect().top)
+        : ev.clientY
+      const mergeTarget =
+        (underInst && underInst !== props.workspaceInstanceId ? underInst : null) ||
+        ws.findMergeableAtY(props.workspaceInstanceId, col, yInCol)
+      if (mergeTarget && ws.tryMergeDrop(props.workspaceInstanceId, mergeTarget)) {
+        ws.endSectionDrag()
+        clearDragHighlights()
+        return
+      }
+      ws.placeSection(props.workspaceInstanceId, col, ev.clientY, {
+        persist: true,
+        syncDom: false,
+      })
+    }
+    ws.endSectionDrag()
+    clearDragHighlights()
+  }
+
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+  document.addEventListener('pointercancel', onUp)
+}
+
+function onSectionHeaderDragOver(e: DragEvent) {
+  if (props.workspaceMode && isWorkspaceSectionDrag(e)) {
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    // No strip insert-line / green markers while moving headers
+    clearDragHighlights()
+    return
+  }
+  onHeaderDragOver(e)
+}
+
+function onSectionHeaderDragEnter(e: DragEvent) {
+  if (props.workspaceMode && isWorkspaceSectionDrag(e)) {
+    e.preventDefault()
+    clearDragHighlights()
+    return
+  }
+  onHeaderDragEnter(e)
+}
+
+function onSectionHeaderDrop(e: DragEvent) {
+  if (props.workspaceMode && isWorkspaceSectionDrag(e)) {
+    e.preventDefault()
+    e.stopPropagation()
+    const dragged = e.dataTransfer?.getData('application/x-efs-section')
+    if (!dragged) {
+      ws.endSectionDrag()
+      return
+    }
+    // Merge only when dropping a split sibling onto its pair
+    if (
+      props.workspaceInstanceId &&
+      dragged !== props.workspaceInstanceId &&
+      ws.tryMergeDrop(dragged, props.workspaceInstanceId)
+    ) {
+      ws.endSectionDrag()
+      return
+    }
+    // Drop on a header → insert before that header (same-bay Y reorder, like before)
+    if (props.workspaceInstanceId && dragged !== props.workspaceInstanceId) {
+      ws.moveSection(dragged, props.workspaceColumnIndex ?? 0, props.workspaceInstanceId)
+    }
+    ws.endSectionDrag()
+    return
+  }
+  onHeaderDrop(e)
+}
+
+/** Dropping a workspace header onto strip/body area: place by Y in this column. */
+function tryWorkspaceSectionBodyDrop(e: DragEvent): boolean {
+  if (!props.workspaceMode || !isWorkspaceSectionDrag(e)) return false
+  e.preventDefault()
+  e.stopPropagation()
+  const dragged = e.dataTransfer?.getData('application/x-efs-section')
+  if (!dragged) {
+    ws.endSectionDrag()
+    return true
+  }
+  ws.moveSectionByClientY(dragged, props.workspaceColumnIndex ?? 0, e.clientY)
+  ws.endSectionDrag()
+  return true
+}
 
 /** Paper ESGG UTFLYGNING header: TW/TE APP frequencies flanking the title */
 const showUtflygningFreqs = computed(
@@ -570,17 +1011,6 @@ const closedFlagActive = computed(
     isRwyFlagActive(RWY_CLOSED_FLAG_KIND, props.section.id),
 )
 
-const { visible: breakoutVisible, placement: breakoutPlacement } = useBreakoutInfoStrip()
-const {
-  visible: mapVisible,
-  placement: mapPlacement,
-  defaultSectionId: mapDefaultSectionId,
-} = useMapInfoStrip()
-const {
-  visible: depVisible,
-  placement: depPlacement,
-  defaultSectionId: depDefaultSectionId,
-} = useDepInfoStrip()
 const {
   visible: turnVisible,
   placement: turnPlacement,
@@ -597,6 +1027,11 @@ const {
   defaultBayId: r16DefaultBayId,
   defaultSectionId: r16DefaultSectionId,
 } = useR16InfoStrip()
+
+/** Multi-config MAP / DEP / Breakout — recompute when catalog force / dismiss / RWY change. */
+const activeBreakouts = computed(() => getActiveBreakoutVariants())
+const activeMaps = computed(() => getActiveMapVariants())
+const activeDeps = computed(() => getActiveDepVariants())
 
 /**
  * Host for turn / Q·E briefing strips: default at the TOP of the DEP RWY bay itself.
@@ -620,14 +1055,32 @@ function createRwyBayTopHost(
     if (!visible.value) return false
     const def = defaultSectionId.value
     if (!def) return false
-    if (options?.defaultBayId && options.defaultBayId.value !== props.bayId) return false
+    if (options?.defaultBayId) {
+      const wantBay = options.defaultBayId.value
+      if (wantBay && wantBay !== props.bayId) {
+        // Workspace paints synthetic column ids; first server bay → ws-col-0
+        const serverFirst = store.layout.bays[0]?.id
+        const okWs =
+          props.workspaceMode &&
+          props.bayId === 'ws-col-0' &&
+          !!serverFirst &&
+          wantBay === serverFirst
+        if (!okWs) return false
+      }
+    }
     return props.section.id === def
   })
   const showHere = computed(() => {
     if (!visible.value) return false
     const p = placement.value
     if (!p) return isDefaultHost.value
-    return p.bayId === props.bayId && p.sectionId === props.section.id
+    // Stale placements may still use server bay ids from pre-workspace
+    if (p.sectionId !== props.section.id) return false
+    if (p.bayId === props.bayId) return true
+    // Workspace: section can move between columns — follow sectionId
+    if (props.workspaceMode) return true
+    if (p.bayId === effectiveBayId.value) return true
+    return false
   })
   /** Default: top of bay. Custom placement may pin to bottom. */
   const atBottom = computed(() => {
@@ -667,171 +1120,133 @@ function createRwyBayTopHost(
   return { showHere, atBottom, beforeTop, endTop, beforeBottom, endBottom }
 }
 
-/** Default host: section immediately above RUNWAY 01R/19L. */
-const isDefaultBreakoutHost = computed(() => {
-  if (!store.essaRolesMode) return false
-  const bay = store.layout.bays.find((b) => b.id === props.bayId)
-  if (!bay) return false
-  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
-  if (idx < 0 || idx >= bay.sections.length - 1) return false
-  const nextId = bay.sections[idx + 1]?.id ?? ''
-  return nextId === 'runway_01R_19L' || /runway_01R_19L/i.test(nextId)
-})
-
 /**
- * Default host: section immediately above the physical RWY bay for the MAP ARR runway
- * (same pattern as breakout above 01R/19L).
+ * Sections in the bay this header is painted in.
+ * Workspace columns use synthetic ids (`ws-col-N`) — must not look up store.layout.bays by that id.
  */
-const isDefaultMapHost = computed(() => {
-  if (!store.essaRolesMode || !mapVisible.value) return false
-  const def = mapDefaultSectionId.value
-  if (!def) return false
-  const bay = store.layout.bays.find((b) => b.id === props.bayId)
-  if (!bay) return false
-  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
-  if (idx < 0 || idx >= bay.sections.length - 1) return false
-  return bay.sections[idx + 1]?.id === def
-})
-
-/** Default host: section immediately above the physical DEP RWY bay. */
-const isDefaultDepHost = computed(() => {
-  if (!store.essaRolesMode || !depVisible.value) return false
-  const def = depDefaultSectionId.value
-  if (!def) return false
-  const bay = store.layout.bays.find((b) => b.id === props.bayId)
-  if (!bay) return false
-  const idx = bay.sections.findIndex((s) => s.id === props.section.id)
-  if (idx < 0 || idx >= bay.sections.length - 1) return false
-  return bay.sections[idx + 1]?.id === def
-})
-
-const showBreakoutHere = computed(() => {
-  if (!breakoutVisible.value) return false
-  const p = breakoutPlacement.value
-  if (!p) return isDefaultBreakoutHost.value
-  return p.bayId === props.bayId && p.sectionId === props.section.id
-})
-
-const showMapHere = computed(() => {
-  if (!mapVisible.value) return false
-  const p = mapPlacement.value
-  if (!p) return isDefaultMapHost.value
-  return p.bayId === props.bayId && p.sectionId === props.section.id
-})
-
-const showDepHere = computed(() => {
-  if (!depVisible.value) return false
-  const p = depPlacement.value
-  if (!p) return isDefaultDepHost.value
-  return p.bayId === props.bayId && p.sectionId === props.section.id
-})
-
-const showBreakoutAtBottom = computed(() => {
-  if (!showBreakoutHere.value) return false
-  const p = breakoutPlacement.value
-  return !p || p.bottom
-})
-
-const showMapAtBottom = computed(() => {
-  if (!showMapHere.value) return false
-  const p = mapPlacement.value
-  return !p || p.bottom
-})
-
-const showDepAtBottom = computed(() => {
-  if (!showDepHere.value) return false
-  const p = depPlacement.value
-  return !p || p.bottom
-})
-
-const showBreakoutInTop = computed(() => showBreakoutHere.value && !!breakoutPlacement.value && !breakoutPlacement.value.bottom)
-/** Default MAP: bottom of the section above the RWY bay (sits just above the header). */
-const showMapInTop = computed(() => {
-  if (!showMapHere.value) return false
-  const p = mapPlacement.value
-  return !!p && !p.bottom
-})
-
-const showDepInTop = computed(() => {
-  if (!showDepHere.value) return false
-  const p = depPlacement.value
-  return !!p && !p.bottom
-})
-
-function showBreakoutBeforeTopIndex(index: number): boolean {
-  if (!showBreakoutInTop.value || !breakoutPlacement.value) return false
-  return breakoutPlacement.value.index === index
+function hostBaySections(): { id: string }[] | undefined {
+  if (props.workspaceMode) {
+    void ws.activeLayout.value
+    return ws.buildDisplayBays(store.layout).find((b) => b.id === props.bayId)?.sections
+  }
+  return store.layout.bays.find((b) => b.id === props.bayId)?.sections
 }
 
-function showMapBeforeTopIndex(index: number): boolean {
-  if (!showMapInTop.value || !mapPlacement.value) return false
-  return mapPlacement.value.index === index
+function placementMatchesThisSection(p: InfoStripPlacement): boolean {
+  if (p.sectionId !== props.section.id) return false
+  if (p.bayId === props.bayId) return true
+  // Workspace: divider can move to another column; bayId in placement goes stale
+  if (props.workspaceMode) return true
+  if (p.bayId === effectiveBayId.value) return true
+  return false
 }
 
-function showDepBeforeTopIndex(index: number): boolean {
-  if (!showDepInTop.value || !depPlacement.value) return false
-  return depPlacement.value.index === index
+/** True when this section sits immediately above `rwySectionId`. */
+function isSectionAboveRunway(rwySectionId: string | null | undefined): boolean {
+  if (!store.essaRolesMode || !rwySectionId) return false
+  const sections = hostBaySections()
+  if (!sections) return false
+  const idx = sections.findIndex((s) => s.id === props.section.id)
+  if (idx < 0 || idx >= sections.length - 1) return false
+  return sections[idx + 1]?.id === rwySectionId
 }
 
-const showBreakoutAtEndOfTop = computed(() => {
-  if (!showBreakoutInTop.value || !breakoutPlacement.value) return false
-  return breakoutPlacement.value.index >= topStrips.value.length
-})
+type InfoSlot = 'beforeTop' | 'endTop' | 'beforeBottom' | 'endBottom'
 
-const showMapAtEndOfTop = computed(() => {
-  if (!showMapInTop.value || !mapPlacement.value) return false
-  return mapPlacement.value.index >= topStrips.value.length
-})
-
-const showDepAtEndOfTop = computed(() => {
-  if (!showDepInTop.value || !depPlacement.value) return false
-  return depPlacement.value.index >= topStrips.value.length
-})
-
-function showBreakoutBeforeBottomIndex(index: number): boolean {
-  if (!showBreakoutAtBottom.value) return false
-  const p = breakoutPlacement.value
-  if (!p) return false // default → end of bottom list
-  return p.index === index
+function multiInfoSlot(
+  kind: string,
+  forceKey: string,
+  defaultAboveRwy: string | null,
+  /** Breakout defaults above 01R/19L only */
+  defaultHostOverride?: boolean,
+): { slot: InfoSlot; index: number } | null {
+  const key = infoStripInstanceKey(kind, forceKey)
+  const p =
+    getInfoStripPlacement(key) ?? getInfoStripPlacement(kind)
+  if (p) {
+    if (!placementMatchesThisSection(p)) return null
+    if (p.bottom) {
+      if (p.index >= bottomStrips.value.length) return { slot: 'endBottom', index: p.index }
+      return { slot: 'beforeBottom', index: p.index }
+    }
+    if (p.index >= topStrips.value.length) return { slot: 'endTop', index: p.index }
+    if (topStrips.value.length === 0 && p.index === 0) return { slot: 'endTop', index: 0 }
+    return { slot: 'beforeTop', index: p.index }
+  }
+  // Default host
+  const okDefault =
+    defaultHostOverride !== undefined
+      ? defaultHostOverride
+      : isSectionAboveRunway(defaultAboveRwy)
+  if (!okDefault) return null
+  return { slot: 'endBottom', index: 0 }
 }
 
-function showMapBeforeBottomIndex(index: number): boolean {
-  if (!showMapAtBottom.value) return false
-  const p = mapPlacement.value
-  if (!p) return false // default → end of bottom (just above next RWY header)
-  return p.index === index
+function breakoutForceKey(v: BreakoutVariant): string {
+  return v.runway === '19L' ? '2' : '1'
 }
 
-function showDepBeforeBottomIndex(index: number): boolean {
-  if (!showDepAtBottom.value) return false
-  const p = depPlacement.value
-  if (!p) return false
-  return p.index === index
+function breakoutsInSlot(slot: InfoSlot, index?: number): BreakoutVariant[] {
+  void activeBreakouts.value
+  void ws.activeLayout.value
+  return activeBreakouts.value.filter((v) => {
+    const above01R =
+      isSectionAboveRunway('runway_01R_19L') ||
+      (() => {
+        const sections = hostBaySections()
+        if (!sections) return false
+        const idx = sections.findIndex((s) => s.id === props.section.id)
+        if (idx < 0 || idx >= sections.length - 1) return false
+        return /runway_01R_19L/i.test(sections[idx + 1]?.id ?? '')
+      })()
+    const loc = multiInfoSlot(
+      BREAKOUT_INFO_KIND,
+      breakoutForceKey(v),
+      null,
+      above01R,
+    )
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
 }
 
-const showBreakoutAtEndOfBottom = computed(() => {
-  if (!showBreakoutAtBottom.value) return false
-  const p = breakoutPlacement.value
-  if (!p) return true // default placement
-  return p.index >= bottomStrips.value.length
-})
+function mapsInSlot(slot: InfoSlot, index?: number): MapInfoVariant[] {
+  void activeMaps.value
+  void ws.activeLayout.value
+  return activeMaps.value.filter((v) => {
+    const loc = multiInfoSlot(
+      MAP_INFO_KIND,
+      v.configId,
+      essaMapDefaultSectionId(v.runway),
+    )
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
+}
 
-const showMapAtEndOfBottom = computed(() => {
-  if (!showMapAtBottom.value) return false
-  const p = mapPlacement.value
-  if (!p) return true // default: end of section above RWY bay
-  return p.index >= bottomStrips.value.length
-})
+function depsInSlot(slot: InfoSlot, index?: number): DepInfoVariant[] {
+  void activeDeps.value
+  void ws.activeLayout.value
+  return activeDeps.value.filter((v) => {
+    const loc = multiInfoSlot(
+      DEP_INFO_KIND,
+      v.configId,
+      essaDepDefaultSectionId(v.runway),
+    )
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
+}
 
-const showDepAtEndOfBottom = computed(() => {
-  if (!showDepAtBottom.value) return false
-  const p = depPlacement.value
-  if (!p) return true
-  return p.index >= bottomStrips.value.length
-})
-
-function placeInfoStrip(kind: string, bottom: boolean, index: number) {
-  setInfoStripPlacement(kind, {
+function placeInfoStrip(kindOrInstanceKey: string, bottom: boolean, index: number) {
+  const parsed = parseInfoStripPlacementKey(kindOrInstanceKey)
+  const key = parsed?.forceKey
+    ? infoStripInstanceKey(parsed.kind, parsed.forceKey)
+    : kindOrInstanceKey
+  setInfoStripPlacement(key, {
     bayId: props.bayId,
     sectionId: props.section.id,
     bottom,
@@ -866,7 +1281,7 @@ function tryHandleInfoStripDrop(event: DragEvent, bottom: boolean): boolean {
         return ''
       }
     })()
-  if (!kind || !(INFO_STRIP_KINDS as readonly string[]).includes(kind)) return false
+  if (!kind || !parseInfoStripPlacementKey(kind)) return false
   const sectionContent = (event.currentTarget as HTMLElement)?.closest('.section-content')
   const container = bottom
     ? (sectionContent?.querySelector('.bottom-strips-container') as HTMLElement | null)
@@ -932,7 +1347,17 @@ const rtcHeaderRwyTitle = computed(() => {
  */
 const dropInsertIndex = ref<number | null>(null)
 
+/** True while a workspace section header is being dragged (no strip green markers). */
+function isWorkspaceHeaderDragActive(e?: DragEvent): boolean {
+  if (ws.draggingSectionId.value) return true
+  return !!e && isWorkspaceSectionDrag(e)
+}
+
 function updateDropPlacementLine(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    clearDragHighlights()
+    return
+  }
   const container = topContainer.value
   if (!container) {
     dropInsertIndex.value = null
@@ -958,7 +1383,7 @@ const touchDropPlacement = useTouchDropPlacement()
 let touchOwnedHighlight = false
 
 const myDropOwnerKey = computed(() =>
-  dropHighlightOwnerKey(props.bayId, props.section.id),
+  dropHighlightOwnerKey(effectiveBayId.value, effectiveSectionId.value),
 )
 const html5DropOwner = useDropHighlightOwner()
 
@@ -972,8 +1397,17 @@ function clearDragHighlights() {
 }
 
 function claimHtml5DropHighlight() {
+  if (isWorkspaceHeaderDragActive()) return
   claimDropHighlight(myDropOwnerKey.value)
 }
+
+// Header drag started elsewhere — drop any strip green markers immediately
+watch(
+  () => ws.draggingSectionId.value,
+  (id) => {
+    if (id) clearDragHighlights()
+  },
+)
 
 // Another section claimed the HTML5 marker → drop ours (dragleave often never fires).
 watch(html5DropOwner, (owner) => {
@@ -985,6 +1419,10 @@ watch(html5DropOwner, (owner) => {
 })
 
 watch(touchDropPlacement, (p) => {
+  if (isWorkspaceHeaderDragActive()) {
+    clearDragHighlights()
+    return
+  }
   const mine = !!p && p.bayId === props.bayId && p.sectionId === props.section.id
   if (!mine) {
     if (touchOwnedHighlight) {
@@ -1027,13 +1465,13 @@ const atdSortEnabled = computed(() => isCtrDepSection.value)
 /** RUNWAY: CFTO above L/U; sticky appearance within each tier (addFromTop:false). */
 const runwayLuSortEnabled = computed(() => isRunwayOrderSectionId(props.section.id))
 
-/** CD ALL / TSAT: one toggle (TOBT↔MAN or TSAT↔MAN) right of search */
+/** CD ALL / TSAT / EOBT: one toggle (TOBT↔MAN or TSAT↔MAN) — not REQ PUSH */
 const showSortModeControls = computed(
   () => store.isModeToggleSectionId(props.section.id) && !store.multiAirport,
 )
 
 const sectionSortMode = computed(() =>
-  store.getSectionSortMode(props.bayId, props.section.id),
+  store.getSectionSortMode(effectiveBayId.value, effectiveSectionId.value),
 )
 
 /**
@@ -1041,21 +1479,38 @@ const sectionSortMode = computed(() =>
  */
 const useCdmSortLabels = computed(() => store.essaRolesMode)
 
+const isReqPushSection = computed(
+  () =>
+    props.section.id === 'req_push' ||
+    props.section.id.endsWith('_req_push') ||
+    (props.section.title || '').toUpperCase().includes('REQ PUSH'),
+)
+
 const timeModeName = computed(() => {
+  if (isReqPushSection.value) return 'VCH'
   if (!useCdmSortLabels.value) return 'EOBT'
+  if (props.section.id === 'cleared_eobt') return 'EOBT'
   return isClearedSectionId(props.section.id) ? 'TSAT' : 'TOBT'
 })
 
 /** Button label = active mode */
-const sortModeLabel = computed(() =>
-  sectionSortMode.value === 'man' ? 'MAN' : timeModeName.value,
-)
+const sortModeLabel = computed(() => {
+  if (sectionSortMode.value === 'man') return 'MAN'
+  if (sectionSortMode.value === 'vch' || isReqPushSection.value) return 'VCH'
+  return timeModeName.value
+})
 
 const sortModeTitle = computed(() => {
   if (sectionSortMode.value === 'man') {
     return `Manual order - click for ${timeModeName.value}`
   }
+  if (isReqPushSection.value || sectionSortMode.value === 'vch') {
+    return 'Sort by VCH Request Order - click for MAN'
+  }
   if (!useCdmSortLabels.value) {
+    return 'Sort by EOBT - click for MAN'
+  }
+  if (props.section.id === 'cleared_eobt') {
     return 'Sort by EOBT - click for MAN'
   }
   return isClearedSectionId(props.section.id)
@@ -1071,16 +1526,50 @@ const sortModeTitle = computed(() => {
  */
 function activeTimeSortField(): TimeSortField {
   if (!useCdmSortLabels.value) return 'etobt'
+  // EOBT slice: sort by EOBT only (no TSAT on these strips)
+  if (props.section.id === 'cleared_eobt') return 'etobt'
   if (isClearedSectionId(props.section.id)) return 'tsat'
   if (isPendingDepSectionId(props.section.id)) return 'etobt'
   return 'etobt'
 }
 
-function activeTimeSortDir(): TimeSortDir {
+function baseTimeSortDir(): TimeSortDir {
   // ESSA/SAAB TSAT: earliest (first in sequence) at bottom — same as INBOUND APP ETA.
   // CD ALL / classic EOBT remain earliest-at-top (asc).
   if (useCdmSortLabels.value && isClearedSectionId(props.section.id)) return 'desc'
   return 'asc'
+}
+
+/**
+ * YAML / server addFromTop for this section — natural workspace sort-flow.
+ * Synthetic split ids (cleared_tsat, push_back, inbound_twr_e, …) are not on
+ * the server layout; resolve to the parent YAML id so sort-flow matches the
+ * button after split (otherwise TSAT inherited newestTop while “natural”
+ * fell back to newestBottom and reversed time order).
+ */
+function sectionNaturalSortFlow(): SortFlow {
+  const id = props.section.id
+  const lookupIds = [...new Set([yamlSectionIdForWorkspace(id), id])]
+  for (const bay of store.layout.bays) {
+    for (const lookupId of lookupIds) {
+      const sec = bay.sections.find((s) => s.id === lookupId)
+      if (!sec) continue
+      if (sec.addFromTop === false) return 'newestBottom'
+      if (sec.addFromTop === true) return 'newestTop'
+      // Found section but no explicit flag — stop searching
+      return baseTimeSortDir() === 'desc' ? 'newestBottom' : 'newestTop'
+    }
+  }
+  // No server section: match built-in time dir (desc → earliest at bottom)
+  return baseTimeSortDir() === 'desc' ? 'newestBottom' : 'newestTop'
+}
+
+function activeTimeSortDir(): TimeSortDir {
+  const base = baseTimeSortDir()
+  if (!props.workspaceMode) return base
+  // Sort-flow toggles reverse the time order without switching TOBT/TSAT → MAN
+  if (workspaceSortFlow.value === sectionNaturalSortFlow()) return base
+  return base === 'asc' ? 'desc' : 'asc'
 }
 
 /**
@@ -1093,7 +1582,7 @@ const preferManualOrder = computed(() => {
   if (etaSortEnabled.value || atdSortEnabled.value) return false
   // Paper above-KLARERING is a time-sort section (EOBT); drag → sticky MAN
   if (!timeSortEnabled.value && !paperPendingKlarering.value) return false
-  return store.hasManualOrder(props.bayId, props.section.id)
+  return store.hasManualOrder(effectiveBayId.value, effectiveSectionId.value)
 })
 
 /** Current UTC minutes since midnight */
@@ -1143,6 +1632,10 @@ function preferredDepTime(strip: FlightStripData, field: TimeSortField): string 
   if (field === 'tsat') {
     return strip.tsat || strip.eobt || undefined
   }
+  // EOBT slice: sort by EOBT (no-TSAT cleared traffic)
+  if (props.section.id === 'cleared_eobt') {
+    return strip.eobt || undefined
+  }
   return strip.tobt || strip.eobt || undefined
 }
 
@@ -1154,10 +1647,48 @@ function depTimeSortKey(
   return hhmmSortKey(preferredDepTime(strip, field), nowMin)
 }
 
+function sectionIdsForStripMatch(): string[] {
+  if (props.workspaceMode) {
+    // Empty dividers use instanceId as Section.id (buildDisplayBays) — that
+    // synthetic id is also the strip.sectionId for manually parked strips.
+    // Rules never target it (WorkspaceSection.sectionId stays null).
+    const wsSec = workspaceSection.value
+    return stripSectionIdsForWorkspace(props.section.id, {
+      member: wsSec?.member,
+      groupId: wsSec?.groupId,
+    })
+  }
+  return [props.section.id]
+}
+
+function stripMatchesThisSection(strip: FlightStripData): boolean {
+  const ids = sectionIdsForStripMatch()
+  if (!ids.includes(strip.sectionId)) return false
+  if (props.workspaceMode) {
+    const wsSec = workspaceSection.value
+    // Synthetic split member headers share a parent server sectionId — refine
+    // by strip fields. Bandboxed/unsplit parents (no member) accept all strips.
+    if (
+      !workspaceMemberAcceptsStrip(
+        {
+          groupId: wsSec?.groupId,
+          member: wsSec?.member,
+          sectionId: props.section.id,
+        },
+        strip,
+      )
+    ) {
+      return false
+    }
+    return true
+  }
+  return strip.bayId === props.bayId
+}
+
 function collectTopStrips(): FlightStripData[] {
   const list: FlightStripData[] = []
   store.strips.forEach((strip) => {
-    if (strip.bayId === props.bayId && strip.sectionId === props.section.id && !strip.bottom) {
+    if (stripMatchesThisSection(strip) && !strip.bottom) {
       list.push(strip)
     }
   })
@@ -1360,8 +1891,15 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
     return sortByEobtEarliestBottom(list)
   }
 
-  // INBOUND APP: always ETA (drag reorder does not stick)
+  // INBOUND APP: always ETA (drag reorder does not stick).
+  // Workspace sort-flow flips direction: newestBottom = earliest at bottom (default);
+  // newestTop = earliest at top. Position reverse alone is undone by ETA re-sort.
   if (etaSortEnabled.value) {
+    if (props.workspaceMode) {
+      return workspaceSortFlow.value === 'newestTop'
+        ? sortByEtaEarliestTop(list)
+        : sortByEta(list)
+    }
     // Paper stick-bottom: earliest at top of bottom-justified stack
     return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
   }
@@ -1393,12 +1931,48 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
   return list.sort((a, b) => a.position - b.position)
 }
 
-const topStrips = computed(() => {
+/** Full visual order for this section (before overflow packing). */
+const allTopStrips = computed(() => {
   void store.stripsVersion
   // Re-read mode when user toggles TOBT/MAN
   void sectionSortMode.value
+  // INBOUND APP ETA direction follows workspace sort-flow
+  void workspaceSortFlow.value
   return orderTopStrips(collectTopStrips())
 })
+
+const sectionOverflowPlan = computed(() => {
+  if (!props.workspaceMode) return undefined
+  void ws.overflowPack.value
+  return ws.getSectionOverflow(props.workspaceInstanceId)
+})
+
+const hidePrimaryOverflowScroll = computed(
+  () => !!sectionOverflowPlan.value?.hidePrimaryScroll,
+)
+
+/** Displayed top strips — overflow continuation is painted in following columns. */
+const topStrips = computed(() => {
+  const all = allTopStrips.value
+  const plan = sectionOverflowPlan.value
+  if (plan?.hasOverflowPath && plan.hidePrimaryScroll) {
+    return all.slice(0, Math.max(0, plan.primaryCount))
+  }
+  return all
+})
+
+// Feed ordered ids to the continuous overflow packer (pinned/bottom stay primary-only)
+watch(
+  () =>
+    props.workspaceMode && props.workspaceInstanceId
+      ? allTopStrips.value.map((s) => s.id)
+      : null,
+  (ids) => {
+    if (!props.workspaceInstanceId || !ids) return
+    ws.setSectionTopOrder(props.workspaceInstanceId, ids)
+  },
+  { immediate: true },
+)
 
 /**
  * Sections whose display sort ignores a raw drop index (ETA / ATD / runway tier / taxi tier).
@@ -1439,7 +2013,7 @@ function forcedInsertIndex(strip: FlightStripData | undefined): number | null {
  * Return value is a v-for index in the current topStrips (length = end).
  */
 function predictVisualLine(insertAmongVisible: number, dragged: FlightStripData): number {
-  const others = store.getTopStrips(props.bayId, props.section.id).filter((s) => s.id !== dragged.id)
+  const others = store.getTopStrips(effectiveBayId.value, effectiveSectionId.value).filter((s) => s.id !== dragged.id)
   const at = Math.max(0, Math.min(insertAmongVisible, others.length))
   const placed: FlightStripData[] = []
   let pos = 0
@@ -1467,6 +2041,10 @@ function predictVisualLine(insertAmongVisible: number, dragged: FlightStripData)
 
 /** Draw the placement line at the row the drop will actually occupy. */
 function showInsertLine(insertAmongVisible: number) {
+  if (isWorkspaceHeaderDragActive()) {
+    dropInsertIndex.value = null
+    return
+  }
   const id = draggingStripId()
   const dragged = id ? store.strips.get(id) : undefined
   const forced = forcedInsertIndex(dragged)
@@ -1487,13 +2065,14 @@ function showInsertLine(insertAmongVisible: number) {
 
 function toggleSortMode() {
   if (sectionSortMode.value === 'man') {
-    // MAN → TOBT/TSAT: resume time-sort (re-sort OK)
-    store.setSectionSortMode(props.bayId, props.section.id, 'time')
+    // MAN → time/VCH
+    const next = isReqPushSection.value ? 'vch' : 'time'
+    store.setSectionSortMode(effectiveBayId.value, effectiveSectionId.value, next)
     return
   }
-  // TOBT/TSAT → MAN: freeze current visual (time-sorted) order; do not reshuffle
+  // time/VCH → MAN: freeze current visual order
   const orderedIds = topStrips.value.map((s) => s.id)
-  store.enterManualSortMode(props.bayId, props.section.id, orderedIds)
+  store.enterManualSortMode(effectiveBayId.value, effectiveSectionId.value, orderedIds)
 }
 
 /** Last preferred HHMM per strip — RTC dep sticky-manual clears when times change */
@@ -1519,26 +2098,49 @@ watch(
     }
     lastSortTimes.value = nextTimes
     if (timeChanged) {
-      store.clearManualOrder(props.bayId, props.section.id)
+      store.clearManualOrder(effectiveBayId.value, effectiveSectionId.value)
     }
   },
 )
 
 const bottomStrips = computed(() => {
   void store.stripsVersion
-  return store.getBottomStrips(props.bayId, props.section.id)
+  if (props.workspaceMode) {
+    const list: FlightStripData[] = []
+    store.strips.forEach((strip) => {
+      if (stripMatchesThisSection(strip) && strip.bottom) list.push(strip)
+    })
+    return list.sort((a, b) => a.position - b.position)
+  }
+  return store.getBottomStrips(effectiveBayId.value, effectiveSectionId.value)
 })
+
+/** Sort-flow toggle: flip addFromTop and reverse every strip currently under this header. */
+function onWorkspaceToggleFlow() {
+  if (!props.workspaceInstanceId) return
+  // Capture visual order before the flow flip (ETA/time sections re-sort from the new dir)
+  const topIds = allTopStrips.value.map((s) => s.id)
+  const bottomIds = bottomStrips.value.map((s) => s.id)
+  // Snapshot before toggle — preferManualOrder would still be true after if we reversed
+  const keepTimeSort = timeSortEnabled.value && !preferManualOrder.value
+  ws.toggleSortFlow(props.workspaceInstanceId)
+  // INBOUND APP / TOBT / TSAT / EOBT auto-sort: direction follows sortFlow — never enter MAN
+  if (etaSortEnabled.value || keepTimeSort) return
+  store.reverseSectionStripOrder(topIds)
+  store.reverseSectionStripOrder(bottomIds)
+}
+
 const hasPinnedZoneContent = computed(
   () =>
     bottomStrips.value.length > 0 ||
-    showBreakoutAtBottom.value ||
-    showMapAtBottom.value ||
-    showDepAtBottom.value ||
+    breakoutsInSlot('endBottom').length > 0 ||
+    mapsInSlot('endBottom').length > 0 ||
+    depsInSlot('endBottom').length > 0 ||
     showTurnAtBottom.value ||
     showSid19lAtBottom.value ||
     showR16AtBottom.value,
 )
-const sectionGaps = computed(() => store.getGapsForSection(props.bayId, props.section.id))
+const sectionGaps = computed(() => store.getGapsForSection(effectiveBayId.value, effectiveSectionId.value))
 
 /** Ordered ids for FLIP when sort/add shifts neighbors (matches auto-move timing). */
 const topStripIds = computed(() => topStrips.value.map((s) => s.id))
@@ -1574,7 +2176,7 @@ function freezeSectionHeightForAutoMove() {
   if (!el) return
   const h = el.getBoundingClientRect().height
   if (h < 1) return
-  store.setSectionHeight(props.bayId, props.section.id, h, false)
+  store.setSectionHeight(effectiveBayId.value, effectiveSectionId.value, h, false)
 }
 
 /** Stick-bottom zones: keep main strips visible against the header when overflowing. */
@@ -1829,18 +2431,68 @@ const {
   requireRolesMode: false,
 })
 
+/**
+ * Workspace: pin default-hosted info strips to this section so they follow when
+ * the divider is dragged to another column (placement bayId would otherwise go stale,
+ * and geometric "above runway" hosting would fail after the move).
+ */
+function stickInfoPlacement(kind: string, forceKey: string | null, bottom: boolean, index: number) {
+  if (!props.workspaceMode) return
+  const key = forceKey ? infoStripInstanceKey(kind, forceKey) : kind
+  if (getInfoStripPlacement(key)) return
+  setInfoStripPlacement(key, {
+    bayId: props.bayId,
+    sectionId: props.section.id,
+    bottom,
+    index,
+  })
+}
+
+watchEffect(() => {
+  if (!props.workspaceMode) return
+  void ws.activeLayout.value
+
+  for (const v of activeBreakouts.value) {
+    if (!breakoutsInSlot('endBottom').includes(v)) continue
+    stickInfoPlacement(BREAKOUT_INFO_KIND, breakoutForceKey(v), true, 0)
+  }
+  for (const v of activeMaps.value) {
+    if (!mapsInSlot('endBottom').includes(v)) continue
+    stickInfoPlacement(MAP_INFO_KIND, v.configId, true, 0)
+  }
+  for (const v of activeDeps.value) {
+    if (!depsInSlot('endBottom').includes(v)) continue
+    stickInfoPlacement(DEP_INFO_KIND, v.configId, true, 0)
+  }
+  if (showTurnHere.value && !turnPlacement.value) {
+    stickInfoPlacement(TURN_DEP_INFO_KIND, null, showTurnAtBottom.value, 0)
+  }
+  if (showSid19lHere.value && !sid19lPlacement.value) {
+    stickInfoPlacement(SID19L_INFO_KIND, null, showSid19lAtBottom.value, 0)
+  }
+  if (showR16Here.value && !r16Placement.value) {
+    stickInfoPlacement(R16_INFO_KIND, null, showR16AtBottom.value, 0)
+  }
+})
+
 const sectionStyle = computed(() => {
   const noHeader = !!props.section.hideHeader
+
   // Last section always flexes to fill remaining space
   if (props.isLastSection) {
-    return { flex: '1 1 auto', minHeight: noHeader ? '0px' : '80px' }
+    return {
+      flex: '1 1 auto',
+      minHeight: props.workspaceMode ? '0px' : noHeader ? '0px' : '80px',
+    }
   }
   // Other sections: apply stored height, don't grow or shrink
   // Using flex: 0 0 auto prevents other sections from "bumping" during resize
-  if (props.section.height) {
+  if (props.section.height != null) {
     return {
       height: `${props.section.height}px`,
-      flex: '0 0 auto'  // don't grow, don't shrink
+      flex: '0 0 auto',
+      // Workspace free-Y: allow heights below the classic 80px floor
+      minHeight: props.workspaceMode ? '0px' : undefined,
     }
   }
   // Headerless strip zones (e.g. pending above KLARERING) size to content
@@ -1857,6 +2509,8 @@ function findResizePair(eventTarget: EventTarget | null): {
   sectionEl: Element
   aboveHeight: number
   belowHeight: number
+  aboveWsInstance: string | null
+  belowWsInstance: string | null
 } | null {
   if (props.isFirstSection) return null
   const sectionEl = (eventTarget as HTMLElement | null)?.closest?.('.efs-section')
@@ -1875,12 +2529,36 @@ function findResizePair(eventTarget: EventTarget | null): {
     sectionEl,
     aboveHeight: sectionAbove.getBoundingClientRect().height,
     belowHeight: sectionEl.getBoundingClientRect().height,
+    aboveWsInstance: sectionAbove.getAttribute('data-ws-instance'),
+    belowWsInstance: sectionEl.getAttribute('data-ws-instance'),
   }
 }
 
 function onResizeStart(event: MouseEvent | TouchEvent) {
   const pair = findResizePair(event.currentTarget)
   if (!pair) return
+
+  if (props.workspaceMode && pair.aboveWsInstance && pair.belowWsInstance) {
+    // Heights live on the workspace layout (synthetic ws-col bays are not in store.layout)
+    ws.setSectionHeight(pair.aboveWsInstance, pair.aboveHeight, false)
+    if (!props.isLastSection) {
+      ws.setSectionHeight(pair.belowWsInstance, pair.belowHeight, false)
+    }
+    startResize(
+      event,
+      props.bayId,
+      pair.aboveWsInstance,
+      pair.aboveHeight,
+      pair.belowWsInstance,
+      pair.belowHeight,
+      props.isLastSection,
+      {
+        setHeight: (id, h) => ws.setSectionHeight(id, h, false),
+        onEnd: () => ws.persistHeights(),
+      },
+    )
+    return
+  }
 
   // Only fix height on the section above (the one we're resizing)
   // Don't touch other sections to avoid unintended layout shifts
@@ -1889,7 +2567,7 @@ function onResizeStart(event: MouseEvent | TouchEvent) {
   // For the current section, only fix height if it's NOT the last section
   // Last section always flexes to fill remaining space
   if (!props.isLastSection) {
-    store.setSectionHeight(props.bayId, props.section.id, pair.belowHeight)
+    store.setSectionHeight(effectiveBayId.value, effectiveSectionId.value, pair.belowHeight)
   }
 
   // Start resize: section above grows/shrinks, current section does the inverse
@@ -1906,6 +2584,7 @@ function onResizeStart(event: MouseEvent | TouchEvent) {
 
 /** Double-click the header resize key → put the divider halfway between the pair. */
 function onResizeReset(event: MouseEvent) {
+  if (props.workspaceMode) return
   event.preventDefault()
   event.stopPropagation()
   const pair = findResizePair(event.currentTarget)
@@ -1914,13 +2593,13 @@ function onResizeReset(event: MouseEvent) {
   const half = Math.max(80, (pair.aboveHeight + pair.belowHeight) / 2)
   store.setSectionHeight(props.bayId, pair.sectionAboveId, half)
   if (!props.isLastSection) {
-    store.setSectionHeight(props.bayId, props.section.id, half)
+    store.setSectionHeight(effectiveBayId.value, effectiveSectionId.value, half)
   }
 }
 
 // Gap click handler - remove the gap
 function onGapClick(index: number) {
-  store.removeGapAtIndex(props.bayId, props.section.id, index)
+  store.removeGapAtIndex(effectiveBayId.value, effectiveSectionId.value, index)
 }
 
 // Approximate half-height of a flight strip (for estimating "strip top" from cursor Y)
@@ -2014,9 +2693,9 @@ function applyCreate(
   gapIndex?: number,
   gapSize?: number
 ) {
-  store.createStrip(type, callsign, aircraftType, airport, props.bayId, props.section.id, position, isBottom)
+  store.createStrip(type, callsign, aircraftType, airport, effectiveBayId.value, effectiveSectionId.value, position, isBottom)
   if (gapIndex !== undefined && gapSize && gapSize >= store.GAP_BUFFER) {
-    store.setGapAtIndex(props.bayId, props.section.id, gapIndex, gapSize)
+    store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, gapIndex, gapSize)
   }
 }
 
@@ -2066,6 +2745,11 @@ function headerDropInsertIndex(stripId?: string): number {
 
 // Header drop → top by default; RTC TWY/RWY use arr-top / dep-bottom
 function onHeaderDragOver(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   event.preventDefault()
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
@@ -2078,6 +2762,11 @@ function onHeaderDragOver(event: DragEvent) {
 }
 
 function onHeaderDragEnter(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   event.preventDefault()
   claimHtml5DropHighlight()
   headerDropActive.value = true
@@ -2121,9 +2810,9 @@ function onHeaderDrop(event: DragEvent) {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data?.type === 'infoStrip') return
     if (!data?.stripId) return
-    store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
+    store.syncTimeSortSectionFromDom(effectiveBayId.value, effectiveSectionId.value, topContainer.value)
     const pos = headerDropInsertIndex(data.stripId)
-    store.moveStripToSection(data.stripId, props.bayId, props.section.id, pos)
+    store.moveStripToSection(data.stripId, effectiveBayId.value, effectiveSectionId.value, pos)
   } catch (error) {
     console.error('Error handling header drop:', error)
   }
@@ -2131,6 +2820,11 @@ function onHeaderDrop(event: DragEvent) {
 
 // Top strips drag handling
 function onTopDragOver(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   event.preventDefault()
   if (event.dataTransfer) {
     // Set appropriate dropEffect based on drag source
@@ -2144,6 +2838,10 @@ function onTopDragOver(event: DragEvent) {
 }
 
 function onTopDragEnter(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    clearDragHighlights()
+    return
+  }
   claimHtml5DropHighlight()
   headerDropActive.value = false
   isBottomDragOver.value = false
@@ -2159,6 +2857,8 @@ function onTopDragLeave(event: DragEvent) {
 }
 
 function onTopDrop(event: DragEvent) {
+  if (tryWorkspaceSectionBodyDrop(event)) return
+
   event.preventDefault()
   clearDropPlacementLine()
   headerDropActive.value = false
@@ -2246,7 +2946,7 @@ function onTopDrop(event: DragEvent) {
       }
 
       // Remove the gap before moving (so adjustGapsForMove doesn't affect it)
-      store.removeGapAtIndex(props.bayId, props.section.id, gapIndex)
+      store.removeGapAtIndex(effectiveBayId.value, effectiveSectionId.value, gapIndex)
 
       // Determine insert position based on which half of the gap was hit
       // Gap at index N means it's before the strip at position N
@@ -2269,17 +2969,17 @@ function onTopDrop(event: DragEvent) {
         }
       }
 
-      store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
-      store.moveStripToSection(stripId, props.bayId, props.section.id, insertPosition)
+      store.syncTimeSortSectionFromDom(effectiveBayId.value, effectiveSectionId.value, topContainer.value)
+      store.moveStripToSection(stripId, effectiveBayId.value, effectiveSectionId.value, insertPosition)
 
       // Re-add the gap at the correct position with the new size
       if (newGapSize >= store.GAP_BUFFER) {
         if (dropOnTopHalf) {
           // Gap goes after the inserted strip (before the strip that was originally below the gap)
-          store.setGapAtIndex(props.bayId, props.section.id, insertPosition + 1, newGapSize)
+          store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, insertPosition + 1, newGapSize)
         } else {
           // Gap stays before the inserted strip
-          store.setGapAtIndex(props.bayId, props.section.id, insertPosition, newGapSize)
+          store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, insertPosition, newGapSize)
         }
       }
 
@@ -2326,7 +3026,7 @@ function onTopDrop(event: DragEvent) {
 
     // Handle same-section gap adjustments
     if (isSameSection && draggedIndex !== -1) {
-      const currentGap = store.getGapAtIndex(props.bayId, props.section.id, draggedIndex)
+      const currentGap = store.getGapAtIndex(effectiveBayId.value, effectiveSectionId.value, draggedIndex)
 
       // Check if position is effectively unchanged (dropped at same index)
       if (position === draggedIndex || (position === draggedIndex + 1 && draggedIndex === stripElements.length)) {
@@ -2347,14 +3047,14 @@ function onTopDrop(event: DragEvent) {
           if (stripTopY > measureFromY + store.GAP_BUFFER && draggedIndex == stripElements.length) {
             // Gap = distance from strip above + strip height (accounts for placeholder)
             const newGap = (stripTopY - measureFromY)// + draggedStripHeight
-            store.setGapAtIndex(props.bayId, props.section.id, draggedIndex, newGap)
+            store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, draggedIndex, newGap)
             return
           }
 
           // Dragging up (strip top above original top) = decrease gap
           if (stripTopY < originalTop && currentGap > 0) {
             const delta = originalTop - stripTopY
-            store.setGapAtIndex(props.bayId, props.section.id, draggedIndex, Math.max(0, currentGap - delta))
+            store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, draggedIndex, Math.max(0, currentGap - delta))
             return
           }
         }
@@ -2364,8 +3064,8 @@ function onTopDrop(event: DragEvent) {
       }
     }
 
-    store.syncTimeSortSectionFromDom(props.bayId, props.section.id, topContainer.value)
-    store.moveStripToSection(stripId, props.bayId, props.section.id, position)
+    store.syncTimeSortSectionFromDom(effectiveBayId.value, effectiveSectionId.value, topContainer.value)
+    store.moveStripToSection(stripId, effectiveBayId.value, effectiveSectionId.value, position)
 
     // Create gap if dropped below last strip with enough distance
     if (droppedBelowLastStrip && distanceBelowLastStrip >= store.GAP_BUFFER) {
@@ -2375,13 +3075,13 @@ function onTopDrop(event: DragEvent) {
       const gapSize = isSameSection
         ? distanceBelowLastStrip + draggedStripHeight
         : distanceBelowLastStrip
-      store.setGapAtIndex(props.bayId, props.section.id, position, gapSize)
+      store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, position, gapSize)
     }
 
     // Create gap if dropped into empty section below the buffer distance
     if (droppedIntoEmptySection) {
       // Strip is at position 0, create gap before it
-      store.setGapAtIndex(props.bayId, props.section.id, 0, distanceFromTop)
+      store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, 0, distanceFromTop)
     }
   } catch (error) {
     console.error('Error handling drop:', error)
@@ -2390,6 +3090,11 @@ function onTopDrop(event: DragEvent) {
 
 // Bottom drop zone handling
 function onBottomDragOver(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   event.preventDefault()
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
@@ -2400,7 +3105,11 @@ function onBottomDragOver(event: DragEvent) {
   clearDropPlacementLine()
 }
 
-function onBottomDragEnter() {
+function onBottomDragEnter(event?: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    clearDragHighlights()
+    return
+  }
   claimHtml5DropHighlight()
   isBottomDragOver.value = true
   clearDropPlacementLine()
@@ -2415,6 +3124,8 @@ function onBottomDragLeave(event: DragEvent) {
 }
 
 function onBottomDrop(event: DragEvent) {
+  if (tryWorkspaceSectionBodyDrop(event)) return
+
   event.preventDefault()
   isBottomDragOver.value = false
 
@@ -2436,7 +3147,7 @@ function onBottomDrop(event: DragEvent) {
     const { stripId } = data
 
     // Move to bottom strips at the beginning
-    store.moveStripToBottom(stripId, props.bayId, props.section.id, 0)
+    store.moveStripToBottom(stripId, effectiveBayId.value, effectiveSectionId.value, 0)
   } catch (error) {
     console.error('Error handling bottom drop:', error)
   }
@@ -2444,6 +3155,11 @@ function onBottomDrop(event: DragEvent) {
 
 // Bottom strips container drop handling
 function onBottomStripsDragOver(event: DragEvent) {
+  if (isWorkspaceHeaderDragActive(event)) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   event.preventDefault()
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
@@ -2455,6 +3171,8 @@ function onBottomStripsDragOver(event: DragEvent) {
 }
 
 function onBottomStripsDrop(event: DragEvent) {
+  if (tryWorkspaceSectionBodyDrop(event)) return
+
   event.preventDefault()
   isBottomDragOver.value = false
 
@@ -2479,7 +3197,7 @@ function onBottomStripsDrop(event: DragEvent) {
     // Find position within bottom strips (past last flight / over info → end)
     const position = computeBottomStripsDrop(event)
 
-    store.moveStripToBottom(stripId, props.bayId, props.section.id, position)
+    store.moveStripToBottom(stripId, effectiveBayId.value, effectiveSectionId.value, position)
   } catch (error) {
     console.error('Error handling bottom strips drop:', error)
   }
@@ -2501,7 +3219,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data?.type === 'infoStrip') return
-    store.moveStripToBottom(data.stripId, props.bayId, props.section.id, bottomStrips.value.length)
+    store.moveStripToBottom(data.stripId, effectiveBayId.value, effectiveSectionId.value, bottomStrips.value.length)
   } catch (error) {
     console.error('Error handling bottom end drop:', error)
   }
@@ -2517,6 +3235,16 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   border-bottom: 1px solid #2b2d31;
   border-right: 1px solid #2b2d31;
   border-left: 1px solid #2b2d31;
+}
+
+/* Empty divider chrome (blank title); still a normal strip host when drops land */
+.efs-section--workspace-blocker {
+  min-height: 0;
+}
+
+/* Free header Y — do not force the classic 80px section floor */
+.efs-section[data-ws-instance] {
+  min-height: 0;
 }
 
 .efs-section--no-header {
@@ -2564,8 +3292,11 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   align-items: center;
   justify-content: center;
   user-select: none;
-  /* Floor with --efs-scale so large UI % stays readable on narrow bays */
-  min-height: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
+  /* Same as strips: lock chrome to bay width (--bay-scale), not global UI % */
+  height: calc(18px * var(--bay-scale, 1));
+  min-height: calc(18px * var(--bay-scale, 1));
+  max-height: calc(18px * var(--bay-scale, 1));
+  box-sizing: border-box;
 }
 
 /* RTC: warm grey section bars (less blue than default chrome) */
@@ -2723,7 +3454,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 0;
-  max-width: calc(100% - 88px);
+  max-width: calc(100% - 88px * var(--bay-scale, 1));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2731,7 +3462,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 }
 
 .section-title {
-  font-size: max(calc(14px * var(--bay-scale, 1)), calc(15px * var(--efs-scale, 1)));
+  font-size: calc(14px * var(--bay-scale, 1));
   font-weight: 700;
   letter-spacing: calc(0.8px * var(--bay-scale, 1));
   line-height: 1;
@@ -2755,10 +3486,10 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 max(calc(5px * var(--bay-scale, 1)), calc(6px * var(--efs-scale, 1)));
+  padding: 0 calc(5px * var(--bay-scale, 1));
   margin-right: 1px;
   color: #e8e4dc;
-  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
+  font-size: calc(11px * var(--bay-scale, 1));
   font-weight: 800;
   letter-spacing: 0.06em;
   line-height: 1;
@@ -2767,13 +3498,13 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   pointer-events: none;
 }
 
-/* Same look as strip .action-button keys */
+/* Same look as strip .action-button keys — width tracks bay like strip keys */
 .section-hdr-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: max(calc(18px * var(--bay-scale, 1)), calc(20px * var(--efs-scale, 1)));
+  width: calc(18px * var(--bay-scale, 1));
   height: 100%;
   margin: 0;
   padding: 0;
@@ -2806,12 +3537,60 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   cursor: ns-resize;
 }
 
+.section-hdr-size {
+  cursor: pointer;
+}
+
+/* Two bars — fixed midpoints; only thickness changes per strip size */
+.section-hdr-size-icon {
+  position: relative;
+  box-sizing: border-box;
+  width: 58%;
+  height: 58%;
+  /* Sit a bit below mid, not flush to the bottom */
+  margin-top: 18%;
+}
+
+.section-hdr-size-icon > span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  background: currentColor;
+}
+
+.section-hdr-size-icon > span:first-child {
+  top: 16%;
+}
+.section-hdr-size-icon > span:last-child {
+  top: 84%;
+}
+
+.section-hdr-size-icon.is-compact > span {
+  height: calc(1.5px * var(--bay-scale, 1));
+}
+.section-hdr-size-icon.is-normal > span {
+  height: calc(3.5px * var(--bay-scale, 1));
+}
+.section-hdr-size-icon.is-expanded > span {
+  height: calc(5px * var(--bay-scale, 1));
+}
+
+/* Sort/flow: half width of other header keys */
+.section-hdr-flow {
+  width: calc(9px * var(--bay-scale, 1));
+}
+
+.section-hdr-flow-tri {
+  width: 62%;
+}
+
 .section-hdr-drag-icon {
   display: block;
   width: 58%;
-  height: 2px;
+  height: calc(2px * var(--bay-scale, 1));
   background: currentColor;
-  box-shadow: 0 4px 0 currentColor;
+  box-shadow: 0 calc(4px * var(--bay-scale, 1)) 0 currentColor;
 }
 
 .section-hdr-search-icon {
@@ -2835,12 +3614,31 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   stroke-linejoin: miter;
 }
 
+.section-hdr-split-icon {
+  display: block;
+  width: 70%;
+  height: 70%;
+  overflow: visible;
+}
+
+.section-header--workspace-draggable {
+  cursor: grab;
+  touch-action: none;
+}
+.section-header--workspace-draggable:active {
+  cursor: grabbing;
+}
+
+.section-header--empty-blocker .section-title {
+  visibility: hidden;
+}
+
 /* Text key — same chrome as drag/search; wider for TOBT/TSAT/MAN label */
 .section-sort-btn {
   width: auto;
-  min-width: max(calc(28px * var(--bay-scale, 1)), calc(30px * var(--efs-scale, 1)));
+  min-width: calc(28px * var(--bay-scale, 1));
   padding: 0 calc(3px * var(--bay-scale, 1));
-  font-size: max(calc(9px * var(--bay-scale, 1)), calc(10px * var(--efs-scale, 1)));
+  font-size: calc(9px * var(--bay-scale, 1));
   font-weight: 700;
   letter-spacing: 0.3px;
   text-transform: uppercase;
@@ -2879,6 +3677,16 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   /* Firefox scrollbar styling */
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+/* Continuous overflow path active: primary only shows packed strips (no scrollbar) */
+.top-strips-container--ws-overflow {
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.top-strips-container--ws-overflow::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* Webkit (Chrome, Safari, Edge) scrollbar styling - overlay style */

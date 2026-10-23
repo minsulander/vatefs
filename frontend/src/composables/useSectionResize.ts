@@ -10,6 +10,14 @@ export interface ResizeState {
   aboveSectionId: string // The section ABOVE (grows when dragging down)
   belowSectionId: string // The section BELOW (shrinks when dragging down)
   belowIsLast: boolean   // If true, below section flexes and doesn't need height set
+  /** Optional override (e.g. ESSA workspace local heights) */
+  setHeight?: (sectionKey: string, height: number) => void
+  onEnd?: () => void
+}
+
+export type StartResizeOptions = {
+  setHeight?: (sectionKey: string, height: number) => void
+  onEnd?: () => void
 }
 
 export function useSectionResize() {
@@ -39,6 +47,15 @@ export function useSectionResize() {
     return Math.round(h)
   }
 
+  function applyHeight(bayId: string, sectionKey: string, height: number) {
+    const custom = resizeState.value?.setHeight
+    if (custom) {
+      custom(sectionKey, height)
+      return
+    }
+    store.setSectionHeight(bayId, sectionKey, height)
+  }
+
   function startResize(
     event: MouseEvent | TouchEvent,
     bayId: string,
@@ -46,7 +63,8 @@ export function useSectionResize() {
     aboveHeight: number,
     belowSectionId: string,
     belowHeight: number,
-    belowIsLast: boolean = false
+    belowIsLast: boolean = false,
+    options?: StartResizeOptions,
   ) {
     event.preventDefault()
     event.stopPropagation()
@@ -62,7 +80,9 @@ export function useSectionResize() {
       bayId,
       aboveSectionId,
       belowSectionId,
-      belowIsLast
+      belowIsLast,
+      setHeight: options?.setHeight,
+      onEnd: options?.onEnd,
     }
 
     document.body.classList.add('section-resizing')
@@ -96,23 +116,24 @@ export function useSectionResize() {
     aboveNewHeight = snapHeight(aboveNewHeight, pairTotal)
     const belowNewHeight = pairTotal - aboveNewHeight
 
-    store.setSectionHeight(
+    applyHeight(
       resizeState.value.bayId,
       resizeState.value.aboveSectionId,
-      aboveNewHeight
+      aboveNewHeight,
     )
     // Only set height on below section if it's not the last one
     // Last section always flexes to fill remaining space
     if (!resizeState.value.belowIsLast) {
-      store.setSectionHeight(
+      applyHeight(
         resizeState.value.bayId,
         resizeState.value.belowSectionId,
-        belowNewHeight
+        belowNewHeight,
       )
     }
   }
 
   function onEnd() {
+    const endCb = resizeState.value?.onEnd
     isResizing.value = false
     resizeState.value = null
 
@@ -123,6 +144,8 @@ export function useSectionResize() {
     document.removeEventListener('touchmove', onMove)
     document.removeEventListener('touchend', onEnd)
     document.removeEventListener('touchcancel', onEnd)
+
+    endCb?.()
   }
 
   // Cleanup on unmount

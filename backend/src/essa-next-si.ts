@@ -330,7 +330,11 @@ export function essaAorLayoutKey(): string {
     return [...cols].sort().join("+")
 }
 
-/** Drop RUNWAY pair headers not covered by our TWR AOR columns. */
+/**
+ * Drop RUNWAY pair headers not covered by our TWR AOR columns.
+ * Includes traffic-forced (non-standard) pairs — only the TWR covering that
+ * strip sees the header; GND/CD never get RWY headers via role filter.
+ */
 export function filterEssaRunwayPlacementsForMyAor<
     T extends { pair: { id: string } },
 >(placements: T[]): T[] {

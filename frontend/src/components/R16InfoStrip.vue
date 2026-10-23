@@ -1,6 +1,10 @@
 <template>
   <InfoStrip v-if="visible && variant" :strip-id="kind" tone="yellow" @close="dismiss">
     <div class="r16" :title="tooltip">
+      <div class="r16-cfg" title="RWY configs 9C / 15C" aria-hidden="true">
+        <span>9C</span>
+        <span>15C</span>
+      </div>
       <span class="r16-text">R16 utökad ↑</span>
     </div>
   </InfoStrip>
@@ -24,14 +28,15 @@ function hhmmZ(iso: string | null): string {
 const tooltip = computed(() => {
   const v = variant.value
   if (!v) return undefined
-  let t = `R16 up to ${v.topAltitudeFt} ft, ${hhmmZ(v.from)}-${hhmmZ(v.to)}`
-  if (v.suggestConfigId) t += ` · RWY ${v.suggestConfigId}`
+  let t = `R16 up to ${v.topAltitudeFt} ft, ${hhmmZ(v.from)}-${hhmmZ(v.to)} · 9C / 15C`
+  if (v.suggestConfigId) t += ` · suggest ${v.suggestConfigId}`
   return t
 })
 </script>
 
 <style scoped>
 .r16 {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -41,6 +46,25 @@ const tooltip = computed(() => {
   height: 100%;
   padding: 0 calc(8px * var(--strip-scale, 1));
   box-sizing: border-box;
+}
+
+.r16-cfg {
+  position: absolute;
+  top: calc(1px * var(--strip-scale, 1));
+  left: calc(3px * var(--strip-scale, 1));
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(1px * var(--strip-scale, 1));
+  font-size: calc(10px * var(--strip-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.55), 0 1px 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  user-select: none;
 }
 
 .r16-text {

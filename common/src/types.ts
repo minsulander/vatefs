@@ -97,6 +97,11 @@ export interface FlightStrip {
     hp?: string
     /** Hold short — VCH strip annotation 4 (H/S), max 5 chars */
     hs?: string
+    /**
+     * VCH pending request type — strip annotation 2.
+     * C=clearance, P=pushback, S=startup, T=taxi, D=departure.
+     */
+    vchRequest?: 'C' | 'P' | 'S' | 'T' | 'D'
     /** Departure Coordination — strip annotation 6 ("DepC" / empty; legacy "EST") */
     coo?: boolean
     /**

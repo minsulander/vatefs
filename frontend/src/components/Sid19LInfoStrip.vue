@@ -1,6 +1,7 @@
 <template>
   <InfoStrip v-if="visible && variant" :strip-id="kind" tone="green" @close="dismiss">
     <div class="sid19l">
+      <span class="sid19l-cfg" :title="`RWY config ${variant.configId}`">{{ variant.configId }}</span>
       <div class="sid19l-title">{{ variant.title }}</div>
       <div class="sid19l-mode" :class="variant.mode.toLowerCase()">{{ modeLabel }}</div>
     </div>
@@ -24,6 +25,7 @@ const modeLabel = computed(() => {
 
 <style scoped>
 .sid19l {
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -33,6 +35,20 @@ const modeLabel = computed(() => {
   gap: calc(10px * var(--strip-scale, 1));
   padding: 0 calc(8px * var(--strip-scale, 1));
   box-sizing: border-box;
+}
+
+.sid19l-cfg {
+  position: absolute;
+  top: calc(1px * var(--strip-scale, 1));
+  left: calc(3px * var(--strip-scale, 1));
+  z-index: 2;
+  font-size: calc(10px * var(--strip-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
 }
 
 .sid19l-title {

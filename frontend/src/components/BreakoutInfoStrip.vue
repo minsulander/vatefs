@@ -1,5 +1,5 @@
 <template>
-  <InfoStrip v-if="visible && variant" :strip-id="kind" @close="dismiss">
+  <InfoStrip v-if="visible && variant" :strip-id="instanceKey" @close="dismiss">
     <div class="breakout">
       <div class="breakout-icon" aria-hidden="true">
         <div class="breakout-planes" :class="{ mirrored: variant.mirror }">
@@ -24,7 +24,8 @@
 import InfoStrip from './InfoStrip.vue'
 import { useBreakoutInfoStrip } from '@/composables/useInfoStrips'
 
-const { variant, visible, dismiss, kind } = useBreakoutInfoStrip()
+const props = defineProps<{ configId?: string }>()
+const { variant, visible, dismiss, instanceKey } = useBreakoutInfoStrip(() => props.configId)
 </script>
 
 <style scoped>

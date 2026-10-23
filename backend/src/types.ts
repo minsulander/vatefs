@@ -180,6 +180,8 @@ export interface Flight {
     hp?: string
     /** Hold short — VCH strip annotation 4 (TAG_STRIP_ANNO_HOS), max 5 chars */
     hs?: string
+    /** VCH pending request — annotation 2 (C/P/S/T/D) */
+    vchRequest?: 'C' | 'P' | 'S' | 'T' | 'D'
     /** Departure Coordination done — strip annotation 6 ("DepC"; legacy "EST") */
     coo?: boolean
     /** ACC coordination proposal pending (REQUESTED_BY_OTHER on exit or entry) */
@@ -406,6 +408,8 @@ export interface ControllerAssignedDataUpdateMessage {
     arrivalStand?: string
     /** VCH hold short — strip annotation 4 (empty string clears) */
     hs?: string
+    /** VCH pending request — annotation 2 (C/P/S/T/D or empty) */
+    vchRequest?: string
     /** Departure Coordination — strip annotation 6 ("DepC") */
     coo?: boolean
     stand?: string

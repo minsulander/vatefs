@@ -1,7 +1,8 @@
 <template>
-  <InfoStrip v-if="visible && variant" :strip-id="kind" @close="dismiss">
+  <InfoStrip v-if="visible && variant" :strip-id="instanceKey" @close="dismiss">
     <div class="map-strip">
       <div class="map-rwy" aria-hidden="true">
+        <span class="map-cfg" :title="`RWY config ${variant.configId}`">{{ variant.configId }}</span>
         <span class="map-rwy-text">{{ variant.runway }}</span>
       </div>
       <div class="map-main">
@@ -43,8 +44,10 @@ import InfoStrip from './InfoStrip.vue'
 import { useMapInfoStrip } from '@/composables/useInfoStrips'
 import { useEfsStore } from '@/store/efs'
 
+const props = defineProps<{ configId?: string }>()
+
 const store = useEfsStore()
-const { variant, visible, dismiss, kind } = useMapInfoStrip()
+const { variant, visible, dismiss, instanceKey } = useMapInfoStrip(() => props.configId)
 
 const headingLabel = computed(() => {
   const h = variant.value?.heading
@@ -138,6 +141,7 @@ onUnmounted(() => {
 }
 
 .map-rwy {
+  position: relative;
   flex: 0 0 calc(96px * var(--strip-scale, 1));
   width: calc(96px * var(--strip-scale, 1));
   min-width: calc(96px * var(--strip-scale, 1));
@@ -148,6 +152,20 @@ onUnmounted(() => {
   background: #e06a38;
   color: #fff;
   overflow: hidden;
+}
+
+.map-cfg {
+  position: absolute;
+  top: calc(1px * var(--strip-scale, 1));
+  left: calc(3px * var(--strip-scale, 1));
+  z-index: 2;
+  font-size: calc(10px * var(--strip-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
 }
 
 .map-rwy-text {

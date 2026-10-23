@@ -195,6 +195,12 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     /** VCH CTL flag — strip annotation 3 ("CTL" or empty) */
     bool GetVchCtl(const std::string &callsign);
     bool SetVchCtl(const std::string &callsign, bool clearedToLand);
+    /**
+     * VCH pending request — strip annotation 2.
+     * Format: type char C/P/S/T/D + optional unix time (e.g. "P1712345678").
+     * Returns type letter only, or empty if none.
+     */
+    std::string GetVchRequest(const std::string &callsign);
     /** EFS soft go-around — strip annotation 5 ("EFSGA" or empty); not TopSky MISAP_ */
     bool GetEfsGoAround(const std::string &callsign);
     bool SetEfsGoAround(const std::string &callsign, bool goAround);
@@ -268,6 +274,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     std::map<std::string, std::string> lastHoldShortSnapshot;
     // Last sent VCH CTL (annotation 3) per callsign — "1" / "0"
     std::map<std::string, std::string> lastCtlSnapshot;
+    // Last sent VCH pending request type (annotation 2) — "" / "C" / "P" / "S" / "T" / "D"
+    std::map<std::string, std::string> lastVchRequestSnapshot;
     // Last sent EFS soft G/A (annotation 5) per callsign — "1" / "0"
     std::map<std::string, std::string> lastEfsGaSnapshot;
     // Last sent DepC / Departure Coordination (annotation 6) per callsign — "1" / "0"

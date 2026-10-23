@@ -20,19 +20,38 @@ function ensure(stripId: string): StripExpanderState {
 
 /**
  * Apply spawn defaults once per strip id.
- * IFR DEP: both expanders open. ARR / VFR / note / vehicle: closed.
+ * IFR DEP: both expanders open — except in CD / TSAT / PUSH where the section
+ * size control owns expanded vs normal (auto-open fought that selector).
+ * ARR / VFR / note / vehicle: closed.
  */
 export function applySpawnExpanderDefaults(
   stripId: string,
-  opts: { ifrDeparture: boolean },
+  opts: { ifrDeparture: boolean; sectionId?: string | null },
 ): void {
   if (initializedIds.has(stripId)) return
   initializedIds.add(stripId)
   const state = ensure(stripId)
-  if (opts.ifrDeparture) {
-    state.top = true
-    state.bottom = true
+  if (!opts.ifrDeparture) return
+  if (sectionSkipsSpawnExpanderOpen(opts.sectionId)) return
+  state.top = true
+  state.bottom = true
+}
+
+/** CD / TSAT / PUSH — strip-size button manages expanders; no IFR-DEP auto-open. */
+function sectionSkipsSpawnExpanderOpen(sectionId: string | null | undefined): boolean {
+  if (!sectionId) return false
+  if (isCdAllOrTsatSection(sectionId)) return true
+  if (
+    sectionId === 'cleared_tsat' ||
+    sectionId === 'cleared_eobt' ||
+    sectionId === 'push_start' ||
+    sectionId.endsWith('_push_start') ||
+    sectionId === 'push_back' ||
+    sectionId === 'start_up'
+  ) {
+    return true
   }
+  return false
 }
 
 /** Collapse both expanders (e.g. on transfer / XFER). */

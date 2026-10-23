@@ -1,7 +1,12 @@
 <template>
-  <InfoStrip v-if="visible && variant" :strip-id="kind" @close="dismiss">
+  <InfoStrip v-if="visible && variant" :strip-id="instanceKey" @close="dismiss">
     <div class="dep-strip">
       <div class="dep-rwy" aria-hidden="true">
+        <span
+          class="dep-cfg"
+          :class="{ 'dep-cfg--bl': variant.turn === 'LEFT' }"
+          :title="`RWY config ${variant.configId}`"
+        >{{ variant.configId }}</span>
         <!-- LT: arrow left of designator; RT: arrow right -->
         <svg
           v-if="variant.turn === 'LEFT'"
@@ -55,8 +60,15 @@ import { useDepInfoStrip } from '@/composables/useInfoStrips'
 import { useEfsStore } from '@/store/efs'
 import type { DepInfoRow, EssaDepInfo } from '@/data/essa-dep-info'
 
+const props = defineProps<{ configId?: string }>()
+
 const store = useEfsStore()
-const { variant: baseVariant, visible, dismiss, kind } = useDepInfoStrip()
+const {
+  variant: baseVariant,
+  visible,
+  dismiss,
+  instanceKey,
+} = useDepInfoStrip(() => props.configId)
 
 /** Live payload from backend (freqs + exit rows). Falls back to base runway shell. */
 const live = ref<EssaDepInfo | null>(null)
@@ -248,6 +260,26 @@ onUnmounted(() => {
   overflow: hidden;
   align-self: stretch;
   box-sizing: border-box;
+}
+
+.dep-cfg {
+  position: absolute;
+  top: calc(1px * var(--strip-scale, 1));
+  left: calc(3px * var(--strip-scale, 1));
+  z-index: 2;
+  font-size: calc(10px * var(--strip-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 08 LT arrow sits top-left — keep config clear of the arrow */
+.dep-cfg--bl {
+  top: auto;
+  bottom: calc(1px * var(--strip-scale, 1));
 }
 
 .dep-rwy-text {
