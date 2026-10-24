@@ -51,6 +51,8 @@ function resolveRtcAssrSimulation(saved: UserSettings): boolean {
 
 export interface UserSettings {
     activeConfig?: string
+    /** Last-used OTHER bay profile id (e.g. 1rwy4) */
+    saabLayoutId?: string
     dclMode?: DclMode
     activeAirports?: string[]
     columnAirports?: (string | null)[]
@@ -94,7 +96,7 @@ export interface UserSettings {
     hoppieLogonCode?: string
     /** @deprecated Prefer autoFitStripSizeMode; true→standard, false→off */
     autoFitStripSize?: boolean
-    /** SAAB: off | standard | all */
+    /** off | standard (except Expanded preference) | all */
     autoFitStripSizeMode?: AutoFitStripSizeMode
     /** SAAB: grow strips back when space frees */
     autoFitStripSizeGrowBack?: boolean

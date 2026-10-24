@@ -557,8 +557,14 @@ export interface EfsStaticConfig {
      */
     myRolesByAirport?: Map<string, ControllerRole[]>
 
-    /** Layout mode — multiAirport expands bayTemplate; essaRoles filters sections by ESSA positions */
-    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
+    /** Layout mode — multiAirport expands bayTemplate; essaRoles filters sections by ESSA positions; saabLayouts = OTHER bay profiles */
+    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles' | 'saabLayouts'
+
+    /** Active OTHER bay profile id (e.g. 1rwy4) when layoutMode is saabLayouts */
+    saabLayoutId?: string
+
+    /** Built-in OTHER profiles for the Layout picker */
+    saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
 
     /** Strip chrome: saab (default) or paper (ESGG FPS). Controls print sound / manual print. */
     look?: 'saab' | 'paper'

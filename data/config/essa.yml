@@ -19,7 +19,7 @@ include:
 layout:
   bays:
     # Left → right: arrivals L→R, departure stages R←L (CD/TSAT on the right).
-    # Max 4 columns: if CD+GND+TWR would show 5, CD ALL stacks above TSAT in one bay.
+    # Max 4 columns: if CD+GND+TWR would show 5, CD stacks above TSAT in one bay.
     bay1:
       sections:
         inbound:
@@ -74,9 +74,12 @@ layout:
           title: PUSH BACK / START-UP
           addFromTop: true
           visibleFor: [GND]
-        # REQ PUSH / START is not in any default profile — add via workspace
-        # catalog only. Section rule `req_push_start` still assigns VCH P/S
-        # strips to req_push when that header is present.
+        # Declared for sectionRules / strip assignment. Workspace built-in
+        # defaults omit this header — add via catalog when needed.
+        req_push:
+          title: REQ PUSH / START
+          addFromTop: true
+          visibleFor: [CD, GND]
 
     bay4:
       sections:
@@ -91,7 +94,9 @@ layout:
     bay5:
       sections:
         pending_dep:
-          title: CD ALL
+          # CD (uncleared) — TOBT order: earliest at bottom (same as TSAT / INBOUND APP).
+          # Title becomes "CD ALL" only when merged with TSAT / EOBT.
+          title: CD
           addFromTop: true
           visibleFor: [CD]
 

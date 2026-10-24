@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict"
 import {
+    groundstateForEssaPushDrop,
     remapPushActionForStand,
     standRequiresStartupInsteadOfPush,
 } from "./essa-push-stands.js"
@@ -95,6 +96,16 @@ check("missing stand → PUSH; leaves non-PUSH actions alone", () => {
 check("normalizes stand spacing", () => {
     assert.equal(standRequiresStartupInsteadOfPush("F 40", "A320", "J"), false)
     assert.equal(standRequiresStartupInsteadOfPush("G 149", "A320", "J"), true)
+})
+
+check("drop PUSH BACK / START UP / merged sets GS", () => {
+    assert.equal(groundstateForEssaPushDrop("push_back", "S4", "A320", "J"), "PUSH")
+    assert.equal(groundstateForEssaPushDrop("start_up", "31", "A320", "J"), "STUP")
+    // Merged: same as action-key stand logic
+    assert.equal(groundstateForEssaPushDrop("push_start", "31", "A320", "J"), "PUSH")
+    assert.equal(groundstateForEssaPushDrop("push_start", "S4", "A320", "J"), "STUP")
+    assert.equal(groundstateForEssaPushDrop("push_start", "R9C", "A320", "J"), "STUP")
+    assert.equal(groundstateForEssaPushDrop("cleared", "31", "A320", "J"), undefined)
 })
 
 console.log(`\n${passed} passed`)

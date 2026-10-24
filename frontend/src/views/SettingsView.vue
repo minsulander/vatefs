@@ -310,14 +310,16 @@
                         @update:model-value="onAutoFitStripSizeMode"
                     >
                         <v-btn value="off" class="text-none" size="small">Off</v-btn>
-                        <v-btn value="standard" class="text-none" size="small">Standard</v-btn>
-                        <v-btn value="all" class="text-none" size="small">All bays</v-btn>
+                        <v-btn value="standard" class="text-none" size="small">Except expanded</v-btn>
+                        <v-btn value="all" class="text-none" size="small">All sections</v-btn>
                     </v-btn-toggle>
                     <p class="text-caption text-grey mt-1">
-                        SAAB only. When a bay cannot fit all strips, reduce size
+                        When a section cannot fit all strips, reduce size
                         (Expanded → Normal → Compact), last-in-sequence first.
-                        Standard: skips CD ALL / TSAT / DEP / PENDING DEP.
-                        All bays: includes those sections. Default: Standard.
+                        Flexible workspace: skipped when strips can overflow into the
+                        next bay — overflow packing is used instead.
+                        Except expanded: skips dividers whose strip-size preference is Expanded.
+                        All sections: includes those dividers.
                     </p>
                 </div>
 

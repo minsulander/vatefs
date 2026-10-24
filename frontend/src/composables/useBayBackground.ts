@@ -45,10 +45,23 @@ export function bayBgColorFromBrightness(percent: number, warmRtc = false): stri
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 }
 
+/**
+ * SAAB inter-bay gutter: binary, not a grade.
+ * Brighter than default → near strip grey; default/darker → near menu-bar black.
+ */
+export function bayGutterColorFromBrightness(percent: number): string {
+  if (clampPercent(percent) > BAY_BG_BRIGHTNESS_DEFAULT) return '#ebebeb'
+  return '#232428'
+}
+
 function applyBayBg(): void {
   if (typeof document === 'undefined') return
   const color = bayBgColorFromBrightness(brightness.value, rtcPalette.value)
   document.documentElement.style.setProperty('--efs-bay-bg', color)
+  document.documentElement.style.setProperty(
+    '--efs-bay-gutter-color',
+    bayGutterColorFromBrightness(brightness.value),
+  )
 }
 
 export function setBayBgBrightness(percent: number): void {

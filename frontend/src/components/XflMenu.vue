@@ -99,7 +99,10 @@ watch(
       scrollToSelected()
       requestAnimationFrame(() => {
         scrollToSelected()
-        manualInput.value?.focus()
+        const el = manualInput.value
+        if (!el) return
+        el.focus()
+        el.select()
       })
     } else {
       manualText.value = ''

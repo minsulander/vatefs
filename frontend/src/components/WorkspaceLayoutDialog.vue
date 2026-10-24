@@ -9,100 +9,111 @@
         class="efs-popup-menu efs-popup-menu--wide workspace-layout-dialog"
         role="dialog"
         aria-modal="true"
-        :aria-label="reason === 'role-change' ? 'Choose layout for roles' : 'Layouts'"
+        :aria-label="reason === 'role-change' ? 'Choose layout' : 'Layout'"
         @pointerdown.stop
       >
         <div class="efs-popup-header">
-          {{ reason === 'role-change' ? 'Choose layout for roles' : 'Layouts' }}
+          {{ reason === 'role-change' ? 'Choose layout' : 'Layout' }}
         </div>
         <div v-if="currentRolesLabel" class="efs-popup-section">
           Current: {{ currentRolesLabel }}
         </div>
 
-        <div class="workspace-layout-body">
-          <div class="efs-popup-list">
-            <template v-for="folder in roleFolders" :key="folder.roleKey">
+        <!-- Only the folder list scrolls; Save/Rename chips + Cancel/OK stay pinned -->
+        <div class="efs-popup-list workspace-layout-list">
+          <template v-for="folder in roleFolders" :key="folder.roleKey">
+            <button
+              type="button"
+              class="efs-popup-section efs-popup-folder"
+              :aria-expanded="!!folderOpen[folder.roleKey]"
+              @pointerdown.prevent.stop="toggleFolder(folder.roleKey)"
+            >
+              <span>{{ folder.label }}</span>
+              <span
+                class="efs-popup-folder-chevron"
+                :class="{ 'is-open': folderOpen[folder.roleKey] }"
+                aria-hidden="true"
+              />
+            </button>
+            <template v-if="folderOpen[folder.roleKey]">
               <button
                 type="button"
-                class="efs-popup-section efs-popup-folder"
-                :aria-expanded="!!folderOpen[folder.roleKey]"
-                @pointerdown.prevent.stop="toggleFolder(folder.roleKey)"
+                class="efs-popup-item efs-popup-item--start layout-pick-item"
+                :class="{ selected: selectedId === folder.builtinId }"
+                @pointerdown.prevent="selectLayout(folder.builtinId)"
               >
-                <span>{{ folder.label }}</span>
-                <span
-                  class="efs-popup-folder-chevron"
-                  :class="{ 'is-open': folderOpen[folder.roleKey] }"
-                  aria-hidden="true"
-                />
+                <span class="layout-pick-name">DEFAULT</span>
+                <span class="layout-pick-meta">
+                  <span class="layout-cols-tag">{{ formatColCount(folder.builtinColumnCount) }}</span>
+                </span>
               </button>
-              <template v-if="folderOpen[folder.roleKey]">
-                <button
-                  type="button"
-                  class="efs-popup-item"
-                  :class="{ selected: selectedId === folder.builtinId }"
-                  @pointerdown.prevent="selectedId = folder.builtinId"
-                >DEFAULT</button>
-                <button
-                  v-for="entry in folder.layouts"
-                  :key="entry.id"
-                  type="button"
-                  class="efs-popup-item"
-                  :class="{
-                    selected: selectedId === entry.id,
-                    'is-user-default': entry.id === folder.defaultId,
-                  }"
-                  @pointerdown.prevent="selectedId = entry.id"
-                >
-                  {{ entry.name }}
+              <button
+                v-for="entry in folder.layouts"
+                :key="entry.id"
+                type="button"
+                class="efs-popup-item efs-popup-item--start layout-pick-item"
+                :class="{
+                  selected: selectedId === entry.id,
+                  'is-user-default': entry.id === folder.defaultId,
+                }"
+                @pointerdown.prevent="selectLayout(entry.id)"
+              >
+                <span class="layout-pick-name">{{ entry.name }}</span>
+                <span class="layout-pick-meta">
                   <span v-if="entry.id === folder.defaultId" class="layout-default-tag">AUTO</span>
-                </button>
-              </template>
+                  <span class="layout-cols-tag">{{ formatColCount(entry.layout.columnCount) }}</span>
+                </span>
+              </button>
             </template>
-          </div>
-
-          <div v-if="reason === 'menu'" class="layout-actions-row">
-            <button type="button" class="efs-popup-chip" @pointerdown.prevent="onSaveCurrent">Save current</button>
-            <button
-              type="button"
-              class="efs-popup-chip"
-              :disabled="!selectedSaved"
-              @pointerdown.prevent="onDelete"
-            >Delete</button>
-            <button
-              type="button"
-              class="efs-popup-chip"
-              :disabled="!selectedSaved"
-              @pointerdown.prevent="onRename"
-            >Rename</button>
-            <button
-              type="button"
-              class="efs-popup-chip"
-              :disabled="!selectedSaved || selectedId === selectedFolderDefaultId"
-              @pointerdown.prevent="onMakeDefault"
-            >Make default</button>
-            <button type="button" class="efs-popup-chip" @pointerdown.prevent="fileInput?.click()">Import</button>
-            <button
-              type="button"
-              class="efs-popup-chip"
-              :disabled="!selectedSaved"
-              title="Export the selected saved layout"
-              @pointerdown.prevent="onExport"
-            >Export</button>
-            <input
-              ref="fileInput"
-              type="file"
-              accept="application/json,.json"
-              class="layout-file-input"
-              @change="onImportFile"
-            />
-          </div>
+          </template>
         </div>
 
-        <div class="workspace-layout-actions" :class="{ 'is-role-change': reason === 'role-change' }">
+        <div class="layout-actions-row">
+          <button type="button" class="efs-popup-chip" @pointerdown.prevent="onSaveCurrent">Save current</button>
           <button
-            v-if="reason === 'menu'"
+            type="button"
+            class="efs-popup-chip"
+            :disabled="!canMutateSelected"
+            :title="builtinGuardTitle"
+            @pointerdown.prevent="onDelete"
+          >Delete</button>
+          <button
+            type="button"
+            class="efs-popup-chip"
+            :disabled="!canMutateSelected"
+            :title="builtinGuardTitle"
+            @pointerdown.prevent="onRename"
+          >Rename</button>
+          <button
+            type="button"
+            class="efs-popup-chip"
+            :disabled="!canMakeDefault"
+            :title="makeDefaultTitle"
+            @pointerdown.prevent="onMakeDefault"
+          >Make default</button>
+          <button type="button" class="efs-popup-chip" @pointerdown.prevent="fileInput?.click()">Import</button>
+          <button
+            type="button"
+            class="efs-popup-chip"
+            :disabled="!canMutateSelected"
+            :title="canMutateSelected ? 'Export the selected saved layout' : builtinGuardTitle"
+            @pointerdown.prevent="onExport"
+          >Export</button>
+          <input
+            ref="fileInput"
+            type="file"
+            accept="application/json,.json"
+            class="layout-file-input"
+            @change="onImportFile"
+          />
+        </div>
+
+        <div class="workspace-layout-actions">
+          <button
             type="button"
             class="efs-popup-footer workspace-layout-action"
+            :disabled="mustConfirm"
+            :title="mustConfirm ? 'Must choose a layout (OK or Enter)' : undefined"
             @pointerdown.prevent.stop="closeOnly"
           >Cancel</button>
           <button
@@ -120,26 +131,30 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEfsStore } from '@/store/efs'
 import { getWorkspace } from '@/workspace'
+import { buildDefaultWorkspaceLayout } from '@/workspace/defaultLayout'
 import {
   buildExportPayload,
   deleteSavedLayout,
   downloadJson,
+  getDefaultSortFlow,
   getUserDefaultLayoutId,
   listSavedLayouts,
   mergeImportedLayouts,
   parseImportPayload,
   renameSavedLayout,
+  sanitizeWorkspaceLayout,
   saveNamedLayout,
   setUserDefaultLayout,
 } from '@/workspace/storage'
 import {
   builtinLayoutSelectionId,
+  compareEssaRoleFolderOrder,
   essaFamilyRoleCombinations,
   essaRoleKey,
   formatEssaRolesLabel,
   parseBuiltinLayoutSelectionId,
 } from '@/workspace/roleLabel'
-import type { SavedWorkspaceLayout } from '@/workspace/types'
+import type { SavedWorkspaceLayout, WorkspaceLayout } from '@/workspace/types'
 
 /** No v-model — open state lives only on the workspace singleton. */
 const store = useEfsStore()
@@ -151,6 +166,10 @@ const selectedId = ref<string>(builtinLayoutSelectionId('none'))
 const fileInput = ref<HTMLInputElement | null>(null)
 /** roleKey → expanded; current role opens by default */
 const folderOpen = ref<Record<string, boolean>>({})
+/** Snapshot when dialog opens — menu Cancel restores this after live preview */
+const layoutBeforeOpen = ref<WorkspaceLayout | null>(null)
+
+const mustConfirm = computed(() => reason.value === 'role-change')
 
 const currentRolesLabel = computed(() => formatEssaRolesLabel(store.essaRoles))
 const roleKey = computed(() => essaRoleKey(store.essaRoles))
@@ -167,8 +186,16 @@ type RoleFolder = {
   label: string
   roles: string[]
   builtinId: string
+  builtinColumnCount: number
   defaultId: string | undefined
   layouts: SavedWorkspaceLayout[]
+}
+
+function builtinColumnCountFor(roles: string[]): number {
+  if (!store.layout.bays.length) return 4
+  return buildDefaultWorkspaceLayout(store.layout, roles, {
+    defaultSortFlow: getDefaultSortFlow(),
+  }).columnCount
 }
 
 /**
@@ -186,6 +213,7 @@ const roleFolders = computed((): RoleFolder[] => {
         label,
         roles: [...roles],
         builtinId: builtinLayoutSelectionId(key),
+        builtinColumnCount: builtinColumnCountFor(roles),
         defaultId: getUserDefaultLayoutId(key),
         layouts: [],
       }
@@ -212,16 +240,17 @@ const roleFolders = computed((): RoleFolder[] => {
   }
 
   const folders = [...byKey.values()]
-  folders.sort((a, b) => {
-    if (a.roleKey === roleKey.value) return -1
-    if (b.roleKey === roleKey.value) return 1
-    return a.label.localeCompare(b.label) || a.roleKey.localeCompare(b.roleKey)
-  })
+  folders.sort((a, b) => compareEssaRoleFolderOrder(a.roles, a.roleKey, b.roles, b.roleKey))
   return folders
 })
 
 const selectedSaved = computed(() =>
   allSaved.value.find((l) => l.id === selectedId.value),
+)
+
+/** Built-in DEFAULT profile for a role folder — not a user-saved layout. */
+const selectedIsBuiltin = computed(
+  () => parseBuiltinLayoutSelectionId(selectedId.value) != null,
 )
 
 const selectedFolderDefaultId = computed(() => {
@@ -231,47 +260,138 @@ const selectedFolderDefaultId = computed(() => {
   return getUserDefaultLayoutId(key)
 })
 
+/** Effective default for the folder of the current selection (saved or builtin). */
+const selectionIsAlreadyDefault = computed(() => {
+  if (selectedIsBuiltin.value) {
+    const key = parseBuiltinLayoutSelectionId(selectedId.value) ?? ''
+    // Builtin DEFAULT is the effective default when no user AUTO layout is set
+    return !getUserDefaultLayoutId(key)
+  }
+  return !!selectedSaved.value && selectedId.value === selectedFolderDefaultId.value
+})
+
+/** User-saved only — delivered DEFAULT profiles cannot be deleted/renamed/exported. */
+const canMutateSelected = computed(() => !!selectedSaved.value && !selectedIsBuiltin.value)
+
+/** Saved layout → set AUTO; builtin DEFAULT → clear AUTO (restore delivered default). */
+const canMakeDefault = computed(() => {
+  if (selectionIsAlreadyDefault.value) return false
+  if (selectedIsBuiltin.value) return true // clears user default for that role
+  return canMutateSelected.value
+})
+
+const builtinGuardTitle = computed(() =>
+  selectedIsBuiltin.value ? 'Delivered DEFAULT profiles cannot be changed' : undefined,
+)
+
+const makeDefaultTitle = computed(() => {
+  if (selectionIsAlreadyDefault.value) return 'Already the default for this role'
+  if (selectedIsBuiltin.value) return 'Restore delivered DEFAULT as the automatic layout'
+  if (!selectedSaved.value) return undefined
+  return 'Use this layout automatically for this role'
+})
+
 function toggleFolder(key: string) {
   folderOpen.value = { ...folderOpen.value, [key]: !folderOpen.value[key] }
 }
 
+function formatColCount(n: number): string {
+  const cols = Math.max(1, Math.round(n) || 1)
+  return `${cols} BAYS`
+}
+
+/** Live-preview the selected layout on the board behind the dialog. */
+function previewSelectedOnBoard() {
+  const roles = [...store.essaRoles]
+  const key = essaRoleKey(roles)
+  try {
+    const builtinKey = parseBuiltinLayoutSelectionId(selectedId.value)
+    if (builtinKey != null) {
+      const folder = roleFolders.value.find((f) => f.roleKey === builtinKey)
+      const structureRoles = folder?.roles?.length ? folder.roles : roles
+      ws.previewBuiltInDefault(store.layout, structureRoles, roles)
+      return
+    }
+    const entry = allSaved.value.find((l) => l.id === selectedId.value)
+    if (entry) {
+      ws.previewLayout({
+        ...entry.layout,
+        roleKey: key,
+        roles,
+        rolesLabel: currentRolesLabel.value,
+      })
+    } else {
+      ws.previewBuiltInDefault(store.layout, roles, roles)
+    }
+  } catch (e) {
+    console.error('Workspace layout preview failed:', e)
+  }
+}
+
+function selectLayout(id: string) {
+  selectedId.value = id
+  previewSelectedOnBoard()
+}
+
+function snapshotLayoutBeforeOpen() {
+  const active = ws.activeLayout.value
+  layoutBeforeOpen.value = active ? sanitizeWorkspaceLayout(active) : null
+}
+
+/** Select default for current roles and expand that folder (close the others). */
+function syncSelectionAndFolders() {
+  savedTick.value++
+  const def = userDefaultId.value
+  selectedId.value =
+    def && allSaved.value.some((l) => l.id === def)
+      ? def
+      : builtinLayoutSelectionId(roleKey.value)
+  const openMap: Record<string, boolean> = {}
+  for (const f of roleFolders.value) {
+    openMap[f.roleKey] = f.roleKey === roleKey.value
+  }
+  folderOpen.value = openMap
+  previewSelectedOnBoard()
+}
+
+// immediate: dialog often mounts with open already true (Ctrl+F5 / role prompt)
 watch(
   open,
   (isOpen) => {
     if (!isOpen) return
-    savedTick.value++
-    const def = userDefaultId.value
-    selectedId.value =
-      def && allSaved.value.some((l) => l.id === def)
-        ? def
-        : builtinLayoutSelectionId(roleKey.value)
-    const openMap: Record<string, boolean> = {}
-    for (const f of roleFolders.value) {
-      openMap[f.roleKey] = f.roleKey === roleKey.value
-    }
-    folderOpen.value = openMap
+    snapshotLayoutBeforeOpen()
+    syncSelectionAndFolders()
   },
+  { immediate: true },
 )
 
-/** Menu Cancel — close without applying / without confirming role prompt. */
+// Roles can arrive after the dialog is already open — keep present-roles folder expanded
+watch(roleKey, () => {
+  if (!open.value) return
+  syncSelectionAndFolders()
+})
+
+/** Menu Cancel — restore board layout snapshot and close. Disabled when must confirm. */
 function closeOnly() {
+  if (mustConfirm.value) return
+  if (layoutBeforeOpen.value) {
+    ws.previewLayout(layoutBeforeOpen.value)
+  }
+  layoutBeforeOpen.value = null
   open.value = false
 }
 
+/** Must-confirm: scrim does nothing. Menu: same as Cancel. */
 function onScrim() {
-  if (reason.value === 'role-change') {
-    onApply()
-    return
-  }
+  if (mustConfirm.value) return
   closeOnly()
 }
 
 function onApply() {
-  // Confirm+close FIRST so any follow-on role/layout watch cannot reopen this frame
   const roles = [...store.essaRoles]
   const key = essaRoleKey(roles)
-  ws.confirmLayoutPrompt(key)
-
+  layoutBeforeOpen.value = null
+  // Board already shows the selection from live preview; re-apply confirms + closes
   try {
     const builtinKey = parseBuiltinLayoutSelectionId(selectedId.value)
     if (builtinKey != null) {
@@ -294,15 +414,24 @@ function onApply() {
     }
   } catch (e) {
     console.error('Workspace layout apply failed:', e)
+    ws.confirmLayoutPrompt(key)
   }
 }
 
 function onKeydown(e: KeyboardEvent) {
   if (!open.value) return
-  if (e.key === 'Escape' || e.key === 'Enter') {
+  if (e.key === 'Enter') {
     e.preventDefault()
     e.stopPropagation()
     onApply()
+    return
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    // Must-confirm (Choose layout): only OK / Enter — ignore Escape
+    if (mustConfirm.value) return
+    closeOnly()
   }
 }
 
@@ -326,6 +455,14 @@ function onSaveCurrent() {
 }
 
 function onMakeDefault() {
+  if (!canMakeDefault.value) return
+  const builtinKey = parseBuiltinLayoutSelectionId(selectedId.value)
+  if (builtinKey != null) {
+    // Reset role AUTO → delivered DEFAULT
+    setUserDefaultLayout(builtinKey, null)
+    savedTick.value++
+    return
+  }
   const entry = selectedSaved.value
   if (!entry) return
   const key = entry.layout.roleKey || essaRoleKey(entry.layout.roles || [])
@@ -334,6 +471,7 @@ function onMakeDefault() {
 }
 
 function onRename() {
+  if (!canMutateSelected.value) return
   const entry = selectedSaved.value
   if (!entry) return
   const name = window.prompt('Rename layout', entry.name)
@@ -345,16 +483,18 @@ function onRename() {
 }
 
 function onDelete() {
+  if (!canMutateSelected.value) return
   const entry = selectedSaved.value
   if (!entry) return
   if (!window.confirm(`Delete layout “${entry.name}”?`)) return
   const key = entry.layout.roleKey || essaRoleKey(entry.layout.roles || [])
   deleteSavedLayout(entry.id)
-  selectedId.value = builtinLayoutSelectionId(key)
+  selectLayout(builtinLayoutSelectionId(key))
   savedTick.value++
 }
 
 function onExport() {
+  if (!canMutateSelected.value) return
   const entry = selectedSaved.value
   if (!entry) return
   const payload = buildExportPayload([entry.id])
@@ -387,6 +527,7 @@ async function onImportFile(ev: Event) {
 </script>
 
 <style scoped>
+/* Keep the board readable — selection live-previews behind */
 .workspace-layout-overlay {
   position: fixed;
   inset: 0;
@@ -395,13 +536,43 @@ async function onImportFile(ev: Event) {
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.28);
   pointer-events: auto;
+}
+
+.layout-pick-item {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.layout-pick-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-pick-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.layout-cols-tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
 }
 
 .workspace-layout-dialog {
   width: min(480px, 100%);
-  max-height: min(70vh, 560px);
+  /* Grow with content; only cap at nearly full viewport (overlay padding 16px×2) */
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -410,12 +581,14 @@ async function onImportFile(ev: Event) {
   z-index: 1;
 }
 
-.workspace-layout-body {
+/* Single scrollbar: list only (overrides global .efs-popup-list 50vh/320px cap) */
+.workspace-layout-list {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  position: relative;
-  z-index: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .workspace-layout-actions {
@@ -425,10 +598,6 @@ async function onImportFile(ev: Event) {
   border-top: 3px solid #333;
   position: relative;
   z-index: 2;
-}
-
-.workspace-layout-actions.is-role-change {
-  grid-template-columns: 1fr;
 }
 
 .workspace-layout-action {
@@ -444,6 +613,13 @@ async function onImportFile(ev: Event) {
   border-right: none;
 }
 
+.workspace-layout-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+  color: #666;
+}
+
 .layout-default-tag {
   margin-left: 6px;
   font-size: 10px;
@@ -457,6 +633,8 @@ async function onImportFile(ev: Event) {
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 10px;
+  flex-shrink: 0;
+  border-top: 2px solid #555;
 }
 .layout-file-input {
   display: none;

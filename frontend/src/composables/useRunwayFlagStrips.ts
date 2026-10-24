@@ -105,18 +105,44 @@ export type RwyFlagMenuRow = {
   closed: boolean
 }
 
-/** Bottom-bar info menu: table of all three ESSA RWYs × occupied / closed. */
+/** Bottom-bar / catalog: RWY occupied / closed rows. */
 export function useRwyFlagMenu() {
   const store = useEfsStore()
 
-  /** Always the three ESSA pairs; visible when ESSA is in myAirports (or essa roles). */
+  /** ESSA pairs, or OTHER runway headers currently on the board. */
   const showTable = computed(() => {
     if (store.essaRolesMode) return true
+    if (store.saabLayoutsMode) return true
     return store.myAirports.some((a) => a.toUpperCase() === 'ESSA')
   })
 
   const rows = computed<RwyFlagMenuRow[]>(() => {
     void store.activeRwyFlagsVersion
+    void store.stripsVersion
+    if (store.saabLayoutsMode && !store.essaRolesMode) {
+      const out: RwyFlagMenuRow[] = []
+      const seen = new Set<string>()
+      for (const bay of store.layout.bays) {
+        for (const sec of bay.sections) {
+          const id = sec.id
+          const isRwy =
+            id === 'runway' ||
+            id === 'arr_runway' ||
+            id === 'dep_runway' ||
+            (id.startsWith('runway_') && id !== 'arr_runway' && id !== 'dep_runway')
+          if (!isRwy || seen.has(id)) continue
+          seen.add(id)
+          const label = (sec.title || id).replace(/^.*RUNWAY\s+/i, '') || id
+          out.push({
+            sectionId: id,
+            label,
+            occupied: store.isRwyFlagActive(rwyFlagId(RWY_OCCUPIED_FLAG_KIND, id)),
+            closed: store.isRwyFlagActive(rwyFlagId(RWY_CLOSED_FLAG_KIND, id)),
+          })
+        }
+      }
+      return out
+    }
     return ESSA_PHYSICAL_RWY_PAIRS.map((pair) => {
       const sectionId = essaRunwaySectionId(pair)
       return {

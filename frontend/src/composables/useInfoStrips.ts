@@ -86,13 +86,63 @@ function loadDismissed(): Set<string> {
   }
 }
 
+function isTaxiArrSectionId(sectionId: string): boolean {
+  return sectionId === 'taxi_arr' || sectionId.endsWith('_taxi_arr')
+}
+
+function placementKind(key: string): string | null {
+  if ((INFO_STRIP_KINDS as readonly string[]).includes(key as (typeof INFO_STRIP_KINDS)[number])) {
+    return key
+  }
+  const idx = key.indexOf(':')
+  if (idx <= 0) return null
+  const kind = key.slice(0, idx)
+  return (INFO_STRIP_KINDS as readonly string[]).includes(kind as (typeof INFO_STRIP_KINDS)[number])
+    ? kind
+    : null
+}
+
+/**
+ * Breakout / MAP used to stick above ARR RWY (often landing on TAXIWAY ARR).
+ * Migrate those pins to CTR ARR bottom.
+ */
+function migrateBreakoutMapPlacements(
+  raw: Record<string, InfoStripPlacement>,
+): { placements: Record<string, InfoStripPlacement>; changed: boolean } {
+  let changed = false
+  const out: Record<string, InfoStripPlacement> = {}
+  for (const [key, p] of Object.entries(raw)) {
+    const kind = placementKind(key)
+    if (
+      (kind === BREAKOUT_INFO_KIND || kind === MAP_INFO_KIND) &&
+      isTaxiArrSectionId(p.sectionId)
+    ) {
+      out[key] = { ...p, sectionId: 'ctr_arr', bottom: true }
+      changed = true
+    } else {
+      out[key] = p
+    }
+  }
+  return { placements: out, changed }
+}
+
 function loadPlacements(): Record<string, InfoStripPlacement> {
   try {
     const raw = localStorage.getItem(PLACEMENT_KEY)
     if (!raw) return {}
     const obj = JSON.parse(raw) as unknown
     if (!obj || typeof obj !== 'object') return {}
-    return obj as Record<string, InfoStripPlacement>
+    const { placements: migrated, changed } = migrateBreakoutMapPlacements(
+      obj as Record<string, InfoStripPlacement>,
+    )
+    if (changed) {
+      try {
+        localStorage.setItem(PLACEMENT_KEY, JSON.stringify(migrated))
+      } catch {
+        /* ignore */
+      }
+    }
+    return migrated
   } catch {
     return {}
   }

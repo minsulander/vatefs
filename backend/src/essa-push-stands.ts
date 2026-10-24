@@ -335,3 +335,23 @@ export function remapPushActionForStand<T extends string>(
     if (standRequiresStartupInsteadOfPush(stand, aircraftType, engineType)) return "STUP" as T
     return action
 }
+
+/**
+ * Ground state when dropping onto a PUSH BACK / START UP workspace header (ESSA).
+ * - PUSH BACK → PUSH
+ * - START UP → STUP
+ * - Merged PUSH BACK / START UP → same as action-key (stand + type)
+ */
+export function groundstateForEssaPushDrop(
+    dropSectionId: string,
+    stand: string | undefined | null,
+    aircraftType?: string | null,
+    engineType?: string | null,
+): "PUSH" | "STUP" | undefined {
+    if (dropSectionId === "push_back") return "PUSH"
+    if (dropSectionId === "start_up") return "STUP"
+    if (dropSectionId === "push_start" || dropSectionId.endsWith("_push_start")) {
+        return standRequiresStartupInsteadOfPush(stand, aircraftType, engineType) ? "STUP" : "PUSH"
+    }
+    return undefined
+}

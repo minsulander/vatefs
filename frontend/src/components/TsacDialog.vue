@@ -48,9 +48,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { FlightStrip } from '@vatefs/common'
 import { useEfsStore } from '@/store/efs'
+import { focusPopupInput } from '@/composables/focusPopupInput'
 
 const props = defineProps<{
   modelValue: boolean
@@ -105,23 +106,12 @@ function seedText() {
   tsacEdit.value = formatHhmmColon(raw.length === 4 ? raw : '')
 }
 
-function focusInput() {
-  nextTick(() => {
-    requestAnimationFrame(() => {
-      const el = tsacInputEl.value
-      if (!el) return
-      el.focus()
-      el.select()
-    })
-  })
-}
-
 watch(
   () => props.modelValue,
   (open) => {
     if (!open) return
     seedText()
-    focusInput()
+    focusPopupInput(() => tsacInputEl.value)
   },
 )
 

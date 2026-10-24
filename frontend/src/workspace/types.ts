@@ -3,7 +3,7 @@
 export type SortFlow = 'newestBottom' | 'newestTop'
 export type SectionStripSize = 'compact' | 'normal' | 'expanded'
 
-/** Split/merge family ids */
+/** Split/merge family ids (ESSA + OTHER; RTC will reuse OTHER groups) */
 export type SplitGroupId =
   | 'inbound_twr'
   | 'inbound_gnd'
@@ -11,6 +11,16 @@ export type SplitGroupId =
   | 'cd_cleared'
   | 'push_start'
   | 'taxiway'
+  /** OTHER: TMA / CTR → TMA + CTR */
+  | 'saab_ctr_tma'
+  /** OTHER: CTR → CTR ARR + CTR DEP (child of saab_ctr_tma) */
+  | 'saab_ctr'
+  /** OTHER / classic: RUNWAY ↔ RUNWAY ARR / DEP */
+  | 'saab_runway'
+  /** OTHER / classic: TAXIWAY ↔ TAXIWAY ARR / DEP */
+  | 'saab_taxi'
+  /** OTHER / classic: PENDING CLR ↔ CLEARED */
+  | 'saab_clearance'
 
 export interface WorkspaceSection {
   /** Stable UI id (uuid for empty blockers; usually sectionId for real sections) */
@@ -42,10 +52,31 @@ export interface WorkspaceSection {
    * When unset, column uses classic equal-flex until positions are synced.
    */
   y?: number
+  /**
+   * Fraction of column body height (0–1). When set, effective Y is
+   * `round(bodyH * yRatio)` (e.g. CD default EOBT at 0.75 = bottom quarter).
+   * Wins over a stale absolute `y` when body height is known.
+   */
+  yRatio?: number
   /** Pixel height for non-last sections (derived from y when present; last always flexes) */
   height?: number
   stripSize: SectionStripSize
   sortFlow: SortFlow
+}
+
+/** Resolve header top Y (px) from yRatio and/or absolute y. */
+export function effectiveSectionY(
+  section: Pick<WorkspaceSection, 'y' | 'yRatio'>,
+  bodyHeightPx: number,
+): number | undefined {
+  if (
+    section.yRatio != null &&
+    Number.isFinite(section.yRatio) &&
+    bodyHeightPx > 0
+  ) {
+    return Math.max(0, Math.round(bodyHeightPx * section.yRatio))
+  }
+  return section.y
 }
 
 /** Minimum section block height between headers */

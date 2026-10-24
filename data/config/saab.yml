@@ -1,0 +1,120 @@
+# VatEFS OTHER — flexible classic layout (digital SAAB strip look).
+# Profiles (Layout menu): 1RWY 3/4 BAYS, 2RWY 4 BAYS.
+# Shared rules: common-rules.yml + saab-rules.yml (filtered to the active profile).
+# Airports from EuroScope rwyconfig or --airport CLI.
+# File stays saab.yml; "SAAB" here means strip chrome (look), not the config name.
+
+name: OTHER
+look: saab
+layoutMode: saabLayouts
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 20
+defaultLayout: 1rwy4
+
+include:
+  - common-rules.yml
+  - saab-rules.yml
+
+layouts:
+  # 1RWY · 3 BAYS — L→R: INBOUND | TMA/CTR + RUNWAY | DEP + TAXIWAY
+  1rwy3:
+    name: 1RWY
+    layout:
+      bays:
+        bay1:
+          sections:
+            inbound:
+              title: INBOUND
+        bay2:
+          sections:
+            # Workspace collapses these to one "TMA / CTR" header
+            tma:
+              title: TMA / CTR
+            ctr_arr:
+              title: TMA / CTR
+            ctr_dep:
+              title: TMA / CTR
+            runway:
+              title: RUNWAY
+              addFromTop: false
+        bay3:
+          sections:
+            pending_dep:
+              title: DEP
+            cleared:
+              title: DEP
+            taxi:
+              title: TAXIWAY
+              addFromTop: false
+
+  # 1RWY · 4 BAYS — L→R: INBOUND+CTR ARR | CTR DEP+RUNWAY | TAXI+PUSH | PENDING+CLEARED
+  1rwy4:
+    name: 1RWY
+    layout:
+      bays:
+        bay1:
+          sections:
+            inbound:
+              title: INBOUND
+            ctr_arr:
+              title: CTR ARR
+        bay2:
+          sections:
+            ctr_dep:
+              title: CTR DEP
+              addFromTop: false
+            runway:
+              title: RUNWAY
+              addFromTop: false
+        bay3:
+          sections:
+            taxi:
+              title: TAXIWAY
+              addFromTop: false
+            push_start:
+              title: PUSH&START
+              addFromTop: true
+        bay4:
+          sections:
+            pending_dep:
+              title: PENDING CLR
+            cleared:
+              title: CLEARED
+
+  # 2RWY · 4 BAYS — L→R: INBOUND+CTR ARR+RWY ARR | CTR DEP+RWY DEP | TAXI+PUSH | PENDING+CLEARED
+  2rwy4:
+    name: 2RWY
+    layout:
+      bays:
+        bay1:
+          sections:
+            inbound:
+              title: INBOUND
+            ctr_arr:
+              title: CTR ARR
+            arr_runway:
+              title: RUNWAY ARR
+              addFromTop: false
+        bay2:
+          sections:
+            ctr_dep:
+              title: CTR DEP
+              addFromTop: false
+            dep_runway:
+              title: RUNWAY DEP
+              addFromTop: false
+        bay3:
+          sections:
+            taxi:
+              title: TAXIWAY
+              addFromTop: false
+            push_start:
+              title: PUSH&START
+              addFromTop: true
+        bay4:
+          sections:
+            pending_dep:
+              title: PENDING CLR
+            cleared:
+              title: CLEARED

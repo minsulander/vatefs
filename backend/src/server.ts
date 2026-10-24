@@ -113,15 +113,26 @@ import {
     remapStripsForEssaGndOnly,
     collectEssaRunwayPairs,
     essaRunwayPairsFingerprint,
+    familiesFromRoles,
 } from "./essa-roles.js"
 import { normalizeEsggRoles } from "./esgg-roles.js"
 import type { MyselfUpdateMessage, ControllerPositionUpdateMessage, ControllerDisconnectMessage, Flight } from "./types.js"
 import { loadAirports, getAirportCount, getAirportByIcao, listAirportIcaos } from "./airport-data.js"
 import { loadRunways, getRunwayCount, getRunwaysByAirport } from "./runway-data.js"
 import { isOnRunway } from "./runway-detection.js"
-import { loadConfig, getDefaultConfigPath, scanConfigDirectory } from "./config-loader.js"
-import { configFileForLoginCallsign } from "./config-autoselect.js"
+import {
+    loadConfig,
+    getDefaultConfigPath,
+    scanConfigDirectory,
+    resolveConfigPath,
+    isSaabLayoutsConfig,
+    SAAB_CONFIG_FILE,
+    DEFAULT_SAAB_LAYOUT_ID,
+    LEGACY_CONFIG_TO_SAAB_LAYOUT,
+} from "./config-loader.js"
+import { configForLoginCallsign } from "./config-autoselect.js"
 import type { ConfigFileInfo } from "./config-loader.js"
+import { buildSaabRunwayCatalog, ensureSaabSectionInLayout } from "./saab-runways.js"
 import {
     isMultiAirportConfig,
     normalizeColumnAirports,
@@ -136,7 +147,14 @@ import {
     pickEseSidForRouteExit,
 } from "./sid-data.js"
 import { isSlowAircraft, isPropellerEngine } from "./slow-aircraft.js"
-import { standRequiresStartupInsteadOfPush } from "./essa-push-stands.js"
+import {
+    groundstateForEssaPushDrop,
+    standRequiresStartupInsteadOfPush,
+} from "./essa-push-stands.js"
+import {
+    canonicalPushStartSectionId,
+    isPushStartFamilySectionId,
+} from "@vatefs/common"
 import {
     hasForcedSidInRoute,
     hasSlowRemark,
@@ -255,7 +273,12 @@ const cliArgs = parseArgs()
 // Configuration management
 const configDir = path.join(dataDir, "config")
 let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
-let activeConfigFile = path.basename(cliArgs.config ?? getDefaultConfigPath(dataDir))
+const initialResolved = resolveConfigPath(
+    dataDir,
+    cliArgs.config ?? getDefaultConfigPath(dataDir),
+)
+let activeConfigFile = initialResolved.file
+let activeSaabLayoutId: string | undefined = initialResolved.saabLayoutId
 
 /**
  * Callsign→config pick on first primed myselfUpdate and whenever the login callsign changes.
@@ -277,10 +300,14 @@ function isPrimedFrequency(frequency: number | undefined | null): boolean {
 }
 
 // Load initial configuration from YAML file
-const initialConfigPath = cliArgs.config ?? getDefaultConfigPath(dataDir)
 try {
-    const config = loadConfig(initialConfigPath)
+    const config = loadConfig(initialResolved.fullPath, {
+        saabLayoutId: activeSaabLayoutId,
+    })
     applyConfig(config)
+    if (isSaabLayoutsConfig(staticConfig)) {
+        activeSaabLayoutId = staticConfig.saabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID
+    }
 } catch (err) {
     console.error(`Failed to load config: ${err instanceof Error ? err.message : err}`)
     process.exit(1)
@@ -438,21 +465,57 @@ if (EUROSCOPE_DIR) {
     const savedSettings = loadUserSettings()
     // Explicit `--config` wins over last-used layout (dev / forced RTC etc.)
     if (savedSettings.activeConfig && !cliArgs.config) {
-        const configInfo = availableConfigs.find(c => c.file === savedSettings.activeConfig)
+        const legacyLayout = LEGACY_CONFIG_TO_SAAB_LAYOUT[savedSettings.activeConfig]
+        const restoreFile = legacyLayout ? SAAB_CONFIG_FILE : savedSettings.activeConfig
+        const restoreSaabLayout =
+            legacyLayout ??
+            (restoreFile === SAAB_CONFIG_FILE
+                ? (savedSettings.saabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID)
+                : undefined)
+        const configInfo = availableConfigs.find(c => c.file === restoreFile)
         if (configInfo) {
-            console.log(`Restoring saved config: ${configInfo.name} (${savedSettings.activeConfig})`)
+            console.log(
+                `Restoring saved config: ${configInfo.name} (${restoreFile}` +
+                    (restoreSaabLayout ? ` / ${restoreSaabLayout}` : '') +
+                    `)`,
+            )
             try {
-                const config = loadConfig(configInfo.fullPath)
+                const config = loadConfig(configInfo.fullPath, {
+                    saabLayoutId: restoreSaabLayout,
+                })
                 applyConfig(config)
-                activeConfigFile = savedSettings.activeConfig
-                // Saved layout restored; first primed myselfUpdate may switch
-                // from the login callsign. Manual switch sticks until callsign changes.
+                activeConfigFile = restoreFile
+                activeSaabLayoutId = isSaabLayoutsConfig(staticConfig)
+                    ? (staticConfig.saabLayoutId ?? restoreSaabLayout)
+                    : undefined
+                if (legacyLayout || restoreFile === SAAB_CONFIG_FILE) {
+                    saveUserSettings({
+                        activeConfig: SAAB_CONFIG_FILE,
+                        saabLayoutId: activeSaabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID,
+                    })
+                }
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
             }
         }
     } else if (cliArgs.config) {
         console.log(`Keeping CLI config (${activeConfigFile}); skipping saved-config restore`)
+    } else if (isSaabLayoutsConfig(staticConfig) && savedSettings.saabLayoutId) {
+        // Default saab.yml already loaded — apply last-used profile if different
+        if (savedSettings.saabLayoutId !== activeSaabLayoutId) {
+            try {
+                const configInfo = availableConfigs.find(c => c.file === SAAB_CONFIG_FILE)
+                if (configInfo) {
+                    const config = loadConfig(configInfo.fullPath, {
+                        saabLayoutId: savedSettings.saabLayoutId,
+                    })
+                    applyConfig(config)
+                    activeSaabLayoutId = staticConfig.saabLayoutId
+                }
+            } catch (err) {
+                console.warn(`Failed to restore OTHER layout: ${err instanceof Error ? err.message : err}`)
+            }
+        }
     }
     if (savedSettings.dclMode) {
         console.log(`Restoring saved DCL mode: ${savedSettings.dclMode}`)
@@ -602,13 +665,21 @@ function formatEuroscopeCommand(command: EuroscopeCommand): string {
 /**
  * Execute a move rule command: send UDP to EuroScope and apply state locally.
  * Caller should reevaluateAndBroadcast after applying all commands in a move.
+ * @param forceGroundstate — skip ESSA PUSH→STUP stand remap (explicit PUSH BACK drop)
  */
-function executeMoveCommand(command: EuroscopeCommand, callsign: string, flight: Flight) {
+function executeMoveCommand(
+    command: EuroscopeCommand,
+    callsign: string,
+    flight: Flight,
+    opts?: { forceGroundstate?: boolean },
+) {
     switch (command.type) {
         case "setGroundstate": {
             let state = command.value
-            // ESSA stand + type: drag-to-push_start should set STUP when no push-back
+            // ESSA stand + type: drag-to-merged push_start → STUP when no push-back
+            // (skipped when drop was on the PUSH BACK header — force PUSH)
             if (
+                !opts?.forceGroundstate &&
                 state === "PUSH" &&
                 isEssaRolesConfig(staticConfig) &&
                 standRequiresStartupInsteadOfPush(flight.stand, flight.aircraftType, flight.engineType)
@@ -1248,6 +1319,7 @@ setInterval(checkPluginStale, 2000)
 function buildStatusMessage(): StatusMessage {
     const essaMode = isEssaRolesConfig(staticConfig)
     const esggMode = isEsggRolesConfig(staticConfig)
+    const saabMode = isSaabLayoutsConfig(staticConfig)
     const feeds = buildFeedsStatus()
     lastStatusFeedsFp = JSON.stringify({
         feeds,
@@ -1273,14 +1345,21 @@ function buildStatusMessage(): StatusMessage {
             : (staticConfig.myAirports.length ? [...staticConfig.myAirports] : undefined),
         columnAirports: staticConfig.columnAirports,
         columnCount: staticConfig.columnCount,
-        essaRolesMode: essaMode || undefined,
+        // Always send explicit booleans so clients clear stale mode flags on switch
+        essaRolesMode: essaMode,
         essaRoles: essaMode ? (staticConfig.essaRoles ?? []) : undefined,
         essaRolesManual: essaMode ? !!staticConfig.essaRolesManual : undefined,
-        esggRolesMode: esggMode || undefined,
+        esggRolesMode: esggMode,
         esggRoles: esggMode ? (staticConfig.esggRoles ?? []) : undefined,
         esggRolesManual: esggMode ? !!staticConfig.esggRolesManual : undefined,
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
         look: staticConfig.look === 'paper' ? 'paper' : 'saab',
+        saabLayoutsMode: saabMode,
+        saabLayoutId: saabMode ? (staticConfig.saabLayoutId ?? activeSaabLayoutId) : null,
+        saabLayouts: saabMode ? (staticConfig.saabLayouts ?? []) : undefined,
+        saabRunwayCatalog: saabMode
+            ? buildSaabRunwayCatalog(staticConfig.myAirports ?? [])
+            : undefined,
     }
 }
 
@@ -1545,24 +1624,27 @@ function applyRemoteEssaAirportMeta(meta: {
     broadcastEssaSepIndicators({ skipRemotePush: true })
 }
 
-// Send config list to a single client
-function sendConfigList(socket: WebSocket) {
-    const message: ConfigListMessage = {
+function buildConfigListMessage(): ConfigListMessage {
+    const saabMode = isSaabLayoutsConfig(staticConfig)
+    return {
         type: "configList",
         configs: availableConfigs.map(c => ({ file: c.file, name: c.name })),
         activeConfig: activeConfigFile,
+        saabLayoutId: saabMode
+            ? (staticConfig.saabLayoutId ?? activeSaabLayoutId)
+            : undefined,
+        saabLayouts: saabMode ? (staticConfig.saabLayouts ?? []) : undefined,
     }
-    sendMessage(socket, message)
+}
+
+// Send config list to a single client
+function sendConfigList(socket: WebSocket) {
+    sendMessage(socket, buildConfigListMessage())
 }
 
 // Broadcast config list to all clients
 function broadcastConfigList() {
-    const message: ConfigListMessage = {
-        type: "configList",
-        configs: availableConfigs.map(c => ({ file: c.file, name: c.name })),
-        activeConfig: activeConfigFile,
-    }
-    broadcast(message)
+    broadcast(buildConfigListMessage())
 }
 
 // Build sorted controllers list for transfer menu
@@ -1619,7 +1701,10 @@ function broadcastControllers() {
  * Reloads config, clears the store, re-applies section rules to existing flights,
  * and broadcasts the new layout + refreshed strips to all clients.
  */
-function switchConfig(file: string, opts?: { manual?: boolean }) {
+function switchConfig(
+    file: string,
+    opts?: { manual?: boolean; saabLayoutId?: string },
+) {
     const configInfo = availableConfigs.find(c => c.file === file)
     if (!configInfo) {
         console.error(`Config file not found: ${file}`)
@@ -1630,16 +1715,32 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
         configManuallySelected = true
     }
 
-    console.log(`Switching config to: ${configInfo.name} (${file})`)
+    const saved = loadUserSettings()
+    const saabLayoutId =
+        opts?.saabLayoutId ??
+        (file === SAAB_CONFIG_FILE
+            ? (saved.saabLayoutId ?? activeSaabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID)
+            : undefined)
+
+    console.log(
+        `Switching config to: ${configInfo.name} (${file}` +
+            (saabLayoutId ? ` / ${saabLayoutId}` : '') +
+            `)`,
+    )
 
     try {
-        const config = loadConfig(configInfo.fullPath)
+        const config = loadConfig(configInfo.fullPath, { saabLayoutId })
         applyConfig(config)
         activeConfigFile = file
-        saveUserSettings({ activeConfig: file })
+        activeSaabLayoutId = isSaabLayoutsConfig(staticConfig)
+            ? (staticConfig.saabLayoutId ?? saabLayoutId)
+            : undefined
+        saveUserSettings({
+            activeConfig: file,
+            ...(activeSaabLayoutId ? { saabLayoutId: activeSaabLayoutId } : {}),
+        })
 
         if (isEssaRolesConfig(staticConfig)) {
-            const saved = loadUserSettings()
             const roles = normalizeEssaRoles(saved.essaRoles)
             restoreEssaRolesFromSettings(roles, saved.essaRolesManual)
         }
@@ -1648,20 +1749,36 @@ function switchConfig(file: string, opts?: { manual?: boolean }) {
             saveUserSettings({ esggRoles: [], esggRolesManual: false })
         }
 
-        // Sync store layout with (possibly rebuilt) multi-airport layout
         store.reprocessAllFlights()
 
+        // configList first (clients can drop workspace), then refresh so layout
+        // clears before status enables OTHER/ESSA mode (avoids building from stale bays).
         broadcastConfigList()
+        broadcastRefresh(`Config switched to ${configInfo.name}`)
         broadcastStatus()
         broadcastEssaSepIndicators()
-        broadcastRefresh(`Config switched to ${configInfo.name}`)
     } catch (err) {
         console.error(`Failed to switch config: ${err instanceof Error ? err.message : err}`)
     }
 }
 
+/** Switch OTHER bay profile within saab.yml (same file, new layout + filtered rules). */
+function switchSaabLayout(layoutId: string, opts?: { manual?: boolean }) {
+    if (!isSaabLayoutsConfig(staticConfig)) {
+        console.warn(`[CONFIG] switchSaabLayout ignored — not in OTHER mode`)
+        return
+    }
+    const known = staticConfig.saabLayouts?.some((l) => l.id === layoutId)
+    if (!known) {
+        console.error(`[CONFIG] Unknown OTHER layout: ${layoutId}`)
+        return
+    }
+    if (opts?.manual) configManuallySelected = true
+    switchConfig(SAAB_CONFIG_FILE, { saabLayoutId: layoutId, manual: opts?.manual })
+}
+
 /**
- * Primed myselfUpdate → pick ESSA / ESGG / RTC / 1RWY3BAY from the login callsign.
+ * Primed myselfUpdate → pick ESSA / ESGG / RTC / OTHER from the login callsign.
  * Re-runs only when the callsign changes (same callsign must not reload the store).
  * Unmatched positions leave the restored layout alone.
  * Manual switchConfig sticks until the callsign changes; `--config` disables auto-select.
@@ -1688,23 +1805,28 @@ function maybeAutoSelectConfigFromCallsign(
 
     if (configManuallySelected) return
 
-    const file = configFileForLoginCallsign(cs)
-    if (!file) {
+    const pick = configForLoginCallsign(cs)
+    if (!pick) {
         console.log(`[CONFIG] Auto-select skipped — ${key} has no layout mapping`)
         return
     }
-    if (!availableConfigs.some((c) => c.file === file)) {
-        console.warn(`[CONFIG] Auto-select skipped — ${file} not in config directory`)
+    if (!availableConfigs.some((c) => c.file === pick.file)) {
+        console.warn(`[CONFIG] Auto-select skipped — ${pick.file} not in config directory`)
         return
     }
-    if (activeConfigFile === file) {
-        console.log(`[CONFIG] Auto-select OK — already on ${file} for ${key}`)
+    const sameFile = activeConfigFile === pick.file
+    const sameLayout =
+        !pick.saabLayoutId || activeSaabLayoutId === pick.saabLayoutId
+    if (sameFile && sameLayout) {
+        console.log(`[CONFIG] Auto-select OK — already on ${pick.file} for ${key}`)
         return
     }
     console.log(
-        `[CONFIG] Auto-select ${file} for ${key} (primed ${frequency!.toFixed(3)})`,
+        `[CONFIG] Auto-select ${pick.file}` +
+            (pick.saabLayoutId ? `/${pick.saabLayoutId}` : '') +
+            ` for ${key} (primed ${frequency!.toFixed(3)})`,
     )
-    switchConfig(file)
+    switchConfig(pick.file, { saabLayoutId: pick.saabLayoutId })
 }
 
 /** Airports currently ARR/DEP in EuroScope rwyselect (RTC relevance) */
@@ -3352,22 +3474,34 @@ function broadcastLayout() {
 /**
  * ESSA: refresh RWY pair headers from active RWY config + FPL-assigned runways.
  * When the header set changes, rebroadcast layout and reprocess strips.
+ * Fingerprint must match getLayout(): RWY headers are TWR-only; GND/CD use `none#…`.
  */
 function maybeRefreshEssaRunwayHeaders(): boolean {
     if (!isEssaRolesConfig(staticConfig)) return false
     setEssaAssignedRunways(flightStore.getEssaAssignedRunways())
-    const placements = filterEssaRunwayPlacementsForMyAor(
-        collectEssaRunwayPairs(
-            staticConfig.activeRunways,
-            staticConfig.myAirports,
-            staticConfig.essaAssignedRunways
+    const essaRoles = (staticConfig.essaRoles ?? []) as EssaPositionRole[]
+    const hasTwr = familiesFromRoles(essaRoles).has("TWR")
+    const aorKey = essaAorLayoutKey()
+    let fp: string
+    let placementsTitle = "(none)"
+    if (!hasTwr) {
+        // Same as store.getLayout() for non-TWR — must not fingerprint full pairs or every
+        // radar tick will disagree with getLayout()'s `none#` and storm reprocessAllFlights.
+        fp = `none#${aorKey}`
+    } else {
+        const placements = filterEssaRunwayPlacementsForMyAor(
+            collectEssaRunwayPairs(
+                staticConfig.activeRunways,
+                staticConfig.myAirports,
+                staticConfig.essaAssignedRunways
+            )
         )
-    )
-    const fp = `${essaRunwayPairsFingerprint(placements)}#${essaAorLayoutKey()}`
+        fp = `${essaRunwayPairsFingerprint(placements)}#${aorKey}`
+        placementsTitle = placements.map(p => p.title).join(", ") || "(none)"
+    }
     if (fp === staticConfig.essaRunwayLayoutFingerprint) return false
-    console.log(
-        `[ESSA] RWY headers: ${placements.map(p => p.title).join(", ") || "(none)"} (AOR ${essaAorLayoutKey()})`
-    )
+    console.log(`[ESSA] RWY headers: ${placementsTitle} (AOR ${aorKey})`)
+    staticConfig.essaRunwayLayoutFingerprint = fp
     broadcastLayout()
     broadcastStatus()
     store.reprocessAllFlights()
@@ -4024,10 +4158,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const wasIncomingTransfer =
                 staticConfig.look === "paper" && stripBefore?.transferPending === "in"
 
+            // Workspace may send push_back / start_up — store as YAML push_start
+            const dropSectionId = message.targetSectionId
+            const canonicalTargetSectionId = canonicalPushStartSectionId(dropSectionId)
+
             const result = store.moveStrip(
                 message.stripId,
                 message.targetBayId,
-                message.targetSectionId,
+                canonicalTargetSectionId,
                 message.position,
                 message.isBottom,
             )
@@ -4150,16 +4288,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     (arrOrLocalStrip || depOrLocalStrip) &&
                     flightStore.isGndTaxiPinned(result.strip.callsign)
                 const fromAbovePush = fromSectionId === "above_push"
-                const toPushStart =
-                    message.targetSectionId === "push_start" ||
-                    message.targetSectionId.endsWith("_push_start")
+                const toPushStart = isPushStartFamilySectionId(dropSectionId)
                 // CD→GND pin exit: drag to non-pinned (main above_push or START-UP) = ASSUME
                 const leftAbovePushPin =
                     staticConfig.look === "paper" &&
                     depOrLocalStrip &&
                     flightStore.isAbovePushPinned(result.strip.callsign) &&
                     ((fromAbovePush && fromBottom && !message.isBottom) ||
-                        (fromAbovePush && fromSectionId !== message.targetSectionId) ||
+                        (fromAbovePush && fromSectionId !== canonicalTargetSectionId) ||
                         (wasIncomingTransfer && fromAbovePush && toPushStart))
 
                 if (flight && (refuseViaTaxi || refuseViaInbound)) {
@@ -4274,10 +4410,24 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     )
                 }
 
-                // Evaluate move rules if section changed
-                if (fromSectionId && fromSectionId !== message.targetSectionId) {
+                // Evaluate move rules if section changed (canonical YAML ids)
+                const sectionChangedForRules =
+                    !!fromSectionId && fromSectionId !== canonicalTargetSectionId
+                // Split PUSH BACK ↔ START UP: same YAML section, but GS must follow header
+                const essaPushSplitRetarget =
+                    isEssaRolesConfig(staticConfig) &&
+                    !!fromSectionId &&
+                    isPushStartFamilySectionId(fromSectionId) &&
+                    isPushStartFamilySectionId(dropSectionId) &&
+                    (dropSectionId === "push_back" || dropSectionId === "start_up")
+
+                if (sectionChangedForRules || essaPushSplitRetarget) {
                     console.log(
-                        `Strip ${message.stripId} dragged from ${fromSectionId} to ${message.targetSectionId} (bottom: ${message.isBottom})`,
+                        `Strip ${message.stripId} dragged from ${fromSectionId} to ${dropSectionId}` +
+                            (canonicalTargetSectionId !== dropSectionId
+                                ? ` (canonical ${canonicalTargetSectionId})`
+                                : "") +
+                            ` (bottom: ${message.isBottom})`,
                     )
 
                     if (flight) {
@@ -4305,8 +4455,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                         // CD-only (not covering GND): drop on START-UP / above-push → XFER if GND online
                         const toPushOrAbove =
-                            message.targetSectionId === "push_start" ||
-                            message.targetSectionId === "above_push"
+                            isPushStartFamilySectionId(dropSectionId) ||
+                            dropSectionId === "above_push"
                         const willCdXferToGnd =
                             isEsggRolesConfig(staticConfig) &&
                             hasEsggPositionRole("CD") &&
@@ -4327,12 +4477,51 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             targetUtflygning &&
                             arrOrLocalStrip
 
-                        const moveAction = determineMoveAction(flight, fromSectionId, message.targetSectionId, staticConfig)
+                        // ESSA: drop on PUSH BACK / START UP / merged → set GS
+                        // (split = explicit; merged = action-key stand logic)
+                        const essaPushGs =
+                            isEssaRolesConfig(staticConfig) && !willCdXferToGnd
+                                ? groundstateForEssaPushDrop(
+                                      dropSectionId,
+                                      flight.stand,
+                                      flight.aircraftType,
+                                      flight.engineType,
+                                  )
+                                : undefined
+                        let appliedEssaPushGs = false
+                        if (
+                            essaPushGs &&
+                            (flight.groundstate || "").toUpperCase() !== essaPushGs
+                        ) {
+                            executeMoveCommand(
+                                { type: "setGroundstate", value: essaPushGs },
+                                result.strip.callsign,
+                                flight,
+                                // PUSH BACK header must not be remapped to STUP
+                                { forceGroundstate: dropSectionId === "push_back" },
+                            )
+                            appliedEssaPushGs = true
+                            stateChanged = true
+                            console.log(
+                                `[MOVE] ${result.strip.callsign}: ${essaPushGs} (drop ${dropSectionId})`,
+                            )
+                        }
+
+                        const moveAction = determineMoveAction(
+                            flight,
+                            fromSectionId!,
+                            canonicalTargetSectionId,
+                            staticConfig,
+                        )
                         if (moveAction) {
                             let cmds =
                                 willXferDepToGnd || willCdXferToGnd
                                     ? moveAction.commands.filter((c) => c.type !== "setGroundstate")
                                     : moveAction.commands
+                            // Already set via ESSA push-drop logic (avoid double / override)
+                            if (appliedEssaPushGs) {
+                                cmds = cmds.filter((c) => c.type !== "setGroundstate")
+                            }
                             if (skipDepaForSoftGoa) {
                                 cmds = cmds.filter(
                                     (c) =>
@@ -6562,6 +6751,30 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "switchConfig": {
             console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
             switchConfig(message.file, { manual: true })
+            break
+        }
+
+        case "switchSaabLayout": {
+            console.log(`[CONFIG] Client requested OTHER layout: ${message.layoutId}`)
+            switchSaabLayout(message.layoutId, { manual: true })
+            break
+        }
+
+        case "saabEnsureSection": {
+            if (!isSaabLayoutsConfig(staticConfig)) break
+            const changed = ensureSaabSectionInLayout(staticConfig, {
+                sectionId: message.sectionId,
+                title: message.title,
+                bayId: message.bayId,
+                beforeSectionId: message.beforeSectionId,
+            })
+            if (changed) {
+                store.reprocessAllFlights()
+                broadcastLayout()
+                broadcastStatus()
+                // No broadcastRefresh — a full refresh rebuilds the OTHER workspace from
+                // the server map and can drop the just-added catalog divider (TMA, …).
+            }
             break
         }
 

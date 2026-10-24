@@ -251,14 +251,14 @@ export interface FlightStrip {
     airport?: string
 
     /**
-     * Paper (ESGG) sideways offset — "klackat". Synced to other EFS clients.
+     * Sideways offset — paper "klackat" / SAAB "cock". Synced to other EFS clients.
      * `left` / `right` shift the strip in the bay; omit / undefined = flush.
+     * SAAB: toggled via the type-coloured side frame clickspots.
      */
     klack?: 'left' | 'right'
 
     /**
-     * SAAB strip highlight (no physical offset). Synced when `global`.
-     * Badge shows G (global) or L (local-only).
+     * @deprecated Replaced by SAAB cock (`klack`). Kept for older clients/messages.
      */
     highlight?: 'local' | 'global'
 }
@@ -351,10 +351,10 @@ export function isAutoLopSsrMode(value: unknown): value is AutoLopSsrMode {
 }
 
 /**
- * SAAB auto-fit strip size:
+ * Auto-fit strip size:
  * - off — never auto-resize
- * - standard — fit all bays except CD ALL / TSAT / DEP / PENDING DEP
- * - all — fit every bay (including those)
+ * - standard — fit sections except those with Expanded strip-size preference
+ * - all — fit every section (including Expanded)
  */
 export type AutoFitStripSizeMode = 'off' | 'standard' | 'all'
 
@@ -448,12 +448,12 @@ export interface UiSettings {
     /** Network realm for scribble rooms: auto from ES connection, or override */
     scribbleSyncRealm: 'auto' | 'live' | 'sweatbox' | 'playback' | 'local'
     /**
-     * SAAB only: auto-reduce strip size to fit the bay
-     * (Expanded→Normal→Compact), last-in-sequence first. Default: standard.
+     * Auto-reduce strip size to fit the bay (Expanded→Normal→Compact),
+     * last-in-sequence first. Default: standard (except Expanded preference).
      */
     autoFitStripSizeMode: AutoFitStripSizeMode
     /**
-     * SAAB only: when auto-fit mode is not off, grow strips back toward their
+     * When auto-fit mode is not off, grow strips back toward their
      * pre-reduction size when space frees up. On by default.
      */
     autoFitStripSizeGrowBack: boolean
@@ -492,6 +492,10 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     vatsimCid: '',
     scribbleSyncRealm: 'auto',
     hoppieLogonCode: '',
+    /**
+     * Except-expanded by default (`standard`). Size-fit is also skipped when the
+     * section can overflow into the next bay (overflow packing wins).
+     */
     autoFitStripSizeMode: 'standard',
     autoFitStripSizeGrowBack: true,
     handoverAssistantAutoAssume: true,

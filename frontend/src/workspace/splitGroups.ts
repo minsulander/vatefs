@@ -38,14 +38,19 @@ export interface WorkspaceStripFilterFields {
   nextSi?: string
   /** Tracking controller SI — inbound_gnd fallback */
   ownerSi?: string
+  /** Strip type — OTHER taxi / runway ARR vs DEP slices */
+  stripType?: string
+  clearedToLand?: boolean
 }
 
+/** Workspace catalog / split-group flavor — names never cross configs. */
+export type WorkspaceCatalogMode = 'essa' | 'saab'
+
 /**
- * Splittable hierarchies for ESSA flexible sections.
- * Logical sectionIds map onto existing YAML ids where possible; member filters
- * refine strip visibility on the client until backend rules catch up.
+ * ESSA-only split hierarchies (CD ALL, TSAT, INBOUND TWR/GND, …).
+ * Logical sectionIds map onto YAML ids; member filters refine strip visibility.
  */
-export const SPLIT_GROUPS: SplitGroupDef[] = [
+export const ESSA_SPLIT_GROUPS: SplitGroupDef[] = [
   {
     id: 'inbound_twr',
     mergedTitle: 'INBOUND TWR-E, TWR-W',
@@ -152,8 +157,128 @@ export const SPLIT_GROUPS: SplitGroupDef[] = [
   },
 ]
 
+/**
+ * OTHER-only split hierarchies (DEP, TMA/CTR, …). Titles are independent of ESSA.
+ */
+export const OTHER_SPLIT_GROUPS: SplitGroupDef[] = [
+  {
+    // Outer: TMA / CTR → TMA + CTR; CTR further splits via saab_ctr
+    id: 'saab_ctr_tma',
+    mergedTitle: 'TMA / CTR',
+    mergedSectionIds: ['ctr_arr', 'ctr_dep', 'tma'],
+    members: [
+      {
+        member: 'tma',
+        sectionId: 'tma',
+        title: 'TMA',
+        stripSectionIds: ['tma'],
+      },
+      {
+        // Synthetic id — avoids colliding with CTR ARR (ctr_arr) in annotateGroup
+        member: 'ctr',
+        sectionId: 'ctr',
+        title: 'CTR',
+        stripSectionIds: ['ctr_arr', 'ctr_dep'],
+      },
+    ],
+    childGroupId: 'saab_ctr',
+    childOfMember: 'ctr',
+  },
+  {
+    id: 'saab_ctr',
+    mergedTitle: 'CTR',
+    mergedSectionIds: ['ctr_arr', 'ctr_dep'],
+    members: [
+      { member: 'arr', sectionId: 'ctr_arr', title: 'CTR ARR' },
+      { member: 'dep', sectionId: 'ctr_dep', title: 'CTR DEP' },
+    ],
+  },
+  {
+    id: 'saab_runway',
+    mergedTitle: 'RUNWAY',
+    // Legacy dual ARR/DEP ids merge into RUNWAY; split is disabled (physical
+    // runway_* headers cover different airports / designators instead).
+    mergedSectionIds: ['runway', 'arr_runway', 'dep_runway'],
+    members: [
+      {
+        member: 'arr',
+        sectionId: 'arr_runway',
+        title: 'RUNWAY ARR',
+        stripSectionIds: ['arr_runway', 'runway'],
+      },
+      {
+        member: 'dep',
+        sectionId: 'dep_runway',
+        title: 'RUNWAY DEP',
+        stripSectionIds: ['dep_runway', 'runway'],
+      },
+    ],
+  },
+  {
+    // Kept for strip-id mapping of legacy taxi_arr/taxi_dep; split disabled.
+    id: 'saab_taxi',
+    mergedTitle: 'TAXIWAY',
+    mergedSectionIds: ['taxi'],
+    members: [
+      {
+        member: 'arr',
+        sectionId: 'taxi_arr',
+        title: 'TAXIWAY ARR',
+        stripSectionIds: ['taxi', 'taxi_arr'],
+      },
+      {
+        member: 'dep',
+        sectionId: 'taxi_dep',
+        title: 'TAXIWAY DEP',
+        stripSectionIds: ['taxi', 'taxi_dep'],
+      },
+    ],
+  },
+  {
+    // Merged title DEP; split → PENDING CLR + CLEARED
+    id: 'saab_clearance',
+    mergedTitle: 'DEP',
+    mergedSectionIds: ['pending_dep', 'cleared'],
+    members: [
+      { member: 'pending', sectionId: 'pending_dep', title: 'PENDING CLR' },
+      { member: 'cleared', sectionId: 'cleared', title: 'CLEARED' },
+    ],
+  },
+]
+
+/** Union for groupId lookup (ids are unique across flavors). */
+export const SPLIT_GROUPS: SplitGroupDef[] = [...ESSA_SPLIT_GROUPS, ...OTHER_SPLIT_GROUPS]
+
+export function splitGroupsForMode(mode: WorkspaceCatalogMode): SplitGroupDef[] {
+  return mode === 'saab' ? OTHER_SPLIT_GROUPS : ESSA_SPLIT_GROUPS
+}
+
+export function findSplitGroupById(id: string): SplitGroupDef | undefined {
+  return SPLIT_GROUPS.find((g) => g.id === id)
+}
+
 function hasTsat(strip: WorkspaceStripFilterFields): boolean {
   return !!(strip.tsat && String(strip.tsat).replace(/\D/g, '').length >= 3)
+}
+
+/** Arrival / taxi-in side of a shared OTHER runway or taxi section. */
+function saabStripIsArrSide(strip: WorkspaceStripFilterFields): boolean {
+  const t = (strip.stripType || '').toLowerCase()
+  if (t === 'arrival') return true
+  if (t === 'departure') return false
+  const gs = (strip.groundstate || '').toUpperCase()
+  if (gs === 'TXIN' || gs === 'ARR' || gs === 'PARK') return true
+  if (gs === 'LINEUP' || gs === 'DEPA' || gs === 'TAXI' || gs === 'PUSH' || gs === 'STUP') {
+    return false
+  }
+  if (strip.clearedToLand) return true
+  // local / unknown — treat as dep side when not CTL
+  return false
+}
+
+/** Departure / taxi-out side of a shared OTHER runway or taxi section. */
+function saabStripIsDepSide(strip: WorkspaceStripFilterFields): boolean {
+  return !saabStripIsArrSide(strip)
 }
 
 /**
@@ -258,6 +383,30 @@ export function workspaceMemberAcceptsStrip(
     return true
   }
 
+  // OTHER RUNWAY ARR / DEP — shared `runway` parent needs direction filter
+  if (g === 'saab_runway' || sid === 'arr_runway' || sid === 'dep_runway') {
+    const isMemberSlice =
+      member === 'arr' ||
+      member === 'dep' ||
+      sid === 'arr_runway' ||
+      sid === 'dep_runway'
+    if (!isMemberSlice) return true
+    const wantArr = member === 'arr' || sid === 'arr_runway'
+    return wantArr ? saabStripIsArrSide(strip) : saabStripIsDepSide(strip)
+  }
+
+  // OTHER TAXIWAY ARR / DEP — shared `taxi` parent
+  if (g === 'saab_taxi' || sid === 'taxi_arr' || sid === 'taxi_dep') {
+    const isMemberSlice =
+      member === 'arr' ||
+      member === 'dep' ||
+      sid === 'taxi_arr' ||
+      sid === 'taxi_dep'
+    if (!isMemberSlice) return true
+    const wantArr = member === 'arr' || sid === 'taxi_arr'
+    return wantArr ? saabStripIsArrSide(strip) : saabStripIsDepSide(strip)
+  }
+
   // INBOUND TWR-E / TWR-W — arr runway AoR only on split member headers
   if (
     g === 'inbound_twr' ||
@@ -336,40 +485,70 @@ function isInboundTwrMergedHeader(section: WorkspaceSection): boolean {
   return /^INBOUND\s+TWR\b/.test(t)
 }
 
-export function splitGroupForSection(section: WorkspaceSection): SplitGroupDef | undefined {
+/**
+ * Resolve split group for a workspace section.
+ * Prefer `groupId` (unique across configs). Without it, `mode` scopes the
+ * search so ESSA CD ALL and OTHER DEP never steal each other's sectionIds.
+ */
+export function splitGroupForSection(
+  section: WorkspaceSection,
+  mode?: WorkspaceCatalogMode,
+): SplitGroupDef | undefined {
   if (section.groupId) {
-    return SPLIT_GROUPS.find((g) => g.id === section.groupId)
+    return findSplitGroupById(section.groupId)
   }
   if (!section.sectionId) return undefined
-  return SPLIT_GROUPS.find((g) => {
+  const pool = mode ? splitGroupsForMode(mode) : SPLIT_GROUPS
+  return pool.find((g) => {
     const isMember = g.members.some((m) => m.sectionId === section.sectionId)
     const isMerged = g.mergedSectionIds.includes(section.sectionId!)
     if (!isMember && !isMerged) return false
     if (g.id === 'inbound_twr' && isMerged && !section.member) {
       return isInboundTwrMergedHeader(section)
     }
+    // Ambiguous sectionIds (pending_dep / cleared / ctr_*) need groupId or mode
+    if (!mode && (section.sectionId === 'pending_dep' || section.sectionId === 'cleared')) {
+      return false
+    }
     return true
   })
 }
 
 /** Whether this workspace section can show a split button (merged / partial-merge). */
-export function canSplitSection(section: WorkspaceSection): boolean {
+export function canSplitSection(
+  section: WorkspaceSection,
+  mode?: WorkspaceCatalogMode,
+): boolean {
   if (!section.sectionId) return false
   const held = membersOfSection(section)
   // Partial combo (e.g. GND-E/N) — split back into those pieces
   if (held.length >= 2 && section.groupId) return true
   // Nested split: e.g. TSAT member of CD ALL → TSAT / EOBT
   if (section.member && section.groupId && held.length === 1) {
-    const parent = SPLIT_GROUPS.find((g) => g.id === section.groupId)
+    const parent = findSplitGroupById(section.groupId)
     if (parent?.childGroupId && parent.childOfMember === section.member) {
       return true
     }
     return false
   }
-  const g = splitGroupForSection(section)
+  const g = splitGroupForSection(section, mode)
   if (!g) return false
   if (!g.mergedSectionIds.includes(section.sectionId)) return false
   if (g.id === 'inbound_twr' && !isInboundTwrMergedHeader(section)) return false
+  // Member slices merge with siblings; only a fully merged header (no member) splits
+  if (section.member) return false
+  // OTHER: RUNWAY / TAXI / PUSH stay as one header (no ARR/DEP or push/start split)
+  if (g.id === 'saab_runway' || g.id === 'saab_taxi') {
+    return false
+  }
+  // Top-level merged OTHER headers (TMA / CTR, CTR, DEP)
+  if (
+    g.id === 'saab_ctr_tma' ||
+    g.id === 'saab_ctr' ||
+    g.id === 'saab_clearance'
+  ) {
+    return section.groupId === g.id && !section.member
+  }
   return true
 }
 
@@ -406,7 +585,7 @@ function titleForMemberKeys(g: SplitGroupDef, keys: string[]): string {
   // Fallback: join member titles
   return keys
     .map((k) => g.members.find((m) => m.member === k)?.title || k)
-    .join(', ')
+    .join(' / ')
 }
 
 export function splitWorkspaceSection(
@@ -423,9 +602,9 @@ export function splitWorkspaceSection(
   let g = splitGroupForSection(section)
   // Nested child group (CD ALL → TSAT/EOBT member → TSAT + EOBT)
   if (section.member && section.groupId && membersOfSection(section).length === 1) {
-    const parent = SPLIT_GROUPS.find((x) => x.id === section.groupId)
+    const parent = findSplitGroupById(section.groupId)
     if (parent?.childGroupId && parent.childOfMember === section.member) {
-      g = SPLIT_GROUPS.find((x) => x.id === parent.childGroupId)
+      g = findSplitGroupById(parent.childGroupId)
     }
   }
   if (!g) return all
@@ -500,7 +679,7 @@ export function mergeWorkspaceMembers(
   opts?: { placeAtInstanceId?: string },
 ): WorkspaceSection[] {
   if (!a.groupId || a.groupId !== b.groupId) return all
-  const g = SPLIT_GROUPS.find((x) => x.id === a.groupId)
+  const g = a.groupId ? findSplitGroupById(a.groupId) : undefined
   if (!g) return all
 
   const placeAt =
@@ -522,21 +701,43 @@ export function mergeWorkspaceMembers(
   if (combined.length < 2) return all
 
   const isFull = combined.length >= g.members.length
-  const merged: WorkspaceSection = {
-    instanceId: newInstanceId(g.mergedSectionIds[0] || g.id),
-    sectionId: g.mergedSectionIds[0] ?? null,
-    title: titleForMemberKeys(g, combined),
-    groupId: g.id,
-    // Full merge: no member keys (splittable via mergedSectionIds).
-    // Partial (e.g. GND-E/N): keep keys so a third sibling can still drop-merge in.
-    ...(isFull
-      ? {}
-      : { member: combined.join('/'), members: combined }),
-    anchorColumn: placeAt.anchorColumn,
-    stripSize: placeAt.stripSize,
-    sortFlow: placeAt.sortFlow,
-    ...(placeAt.y != null ? { y: placeAt.y } : {}),
-  }
+  // Full merge of a nested child (e.g. CTR ARR+DEP → CTR) re-tags as the
+  // parent member so it can merge with siblings (CTR + TMA → TMA / CTR).
+  const parentOfChild = isFull
+    ? SPLIT_GROUPS.find((p) => p.childGroupId === g.id)
+    : undefined
+  const parentMem =
+    parentOfChild?.childOfMember != null
+      ? parentOfChild.members.find((m) => m.member === parentOfChild.childOfMember)
+      : undefined
+
+  const merged: WorkspaceSection = parentMem && parentOfChild
+    ? {
+        instanceId: newInstanceId(parentMem.sectionId || g.id),
+        sectionId: parentMem.sectionId,
+        title: parentMem.title,
+        groupId: parentOfChild.id,
+        member: parentOfChild.childOfMember,
+        anchorColumn: placeAt.anchorColumn,
+        stripSize: placeAt.stripSize,
+        sortFlow: placeAt.sortFlow,
+        ...(placeAt.y != null ? { y: placeAt.y } : {}),
+      }
+    : {
+        instanceId: newInstanceId(g.mergedSectionIds[0] || g.id),
+        sectionId: g.mergedSectionIds[0] ?? null,
+        title: titleForMemberKeys(g, combined),
+        groupId: g.id,
+        // Full merge: no member keys (splittable via mergedSectionIds).
+        // Partial (e.g. GND-E/N): keep keys so a third sibling can still drop-merge in.
+        ...(isFull
+          ? {}
+          : { member: combined.join('/'), members: combined }),
+        anchorColumn: placeAt.anchorColumn,
+        stripSize: placeAt.stripSize,
+        sortFlow: placeAt.sortFlow,
+        ...(placeAt.y != null ? { y: placeAt.y } : {}),
+      }
 
   // Only absorb the two dropped headers — leave other siblings (e.g. GND-W) alone
   const removeIds = new Set([a.instanceId, b.instanceId])

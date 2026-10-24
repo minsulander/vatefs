@@ -5,8 +5,9 @@ ESAA (Sweden) FIR use only for now.
 
 Work in progress, experimental software, use at your own risk, yadiyada...
 
-Multiple layouts and looks — e.g. **ESGG** paper strips, **ESSA** SAAB-style
-role bays, and **RTC** multi-airport — plus other airport/bay configs.
+Multiple layouts and looks — e.g. **ESGG** paper strips, **ESSA** role bays
+(digital SAAB strip look), **OTHER** (flexible classic bays), and **RTC**
+multi-airport.
 
 ![Example views: ESGG paper, ESSA, and RTC](frontend/public/screenshots/teaser.png)
 

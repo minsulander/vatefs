@@ -220,14 +220,63 @@ function workspaceInstanceId(sectionId: string): string | undefined {
 
 function onWorkspaceBayDragOver(e: DragEvent) {
   if (!props.workspaceMode) return
-  if (!e.dataTransfer?.types.includes('application/x-efs-section')) return
+  const types = e.dataTransfer?.types
+  if (!types) return
+  const ok =
+    types.includes('application/x-efs-section') ||
+    types.includes('application/x-vatefs-catalog-section')
+  if (!ok) return
   e.preventDefault()
   e.stopPropagation()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = types.includes('application/x-vatefs-catalog-section')
+      ? 'copy'
+      : 'move'
+  }
 }
 
 function onWorkspaceBayDrop(e: DragEvent) {
   if (!props.workspaceMode) return
+  const catalogRaw = e.dataTransfer?.getData('application/x-vatefs-catalog-section')
+  if (catalogRaw) {
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      const sec = JSON.parse(catalogRaw) as { sectionId?: string; title?: string }
+      if (sec.sectionId && sec.title) {
+        const col = props.columnIndex ?? 0
+        ws.addSectionFromCatalog(sec.sectionId, sec.title, col, store.layout)
+        if (store.saabLayoutsMode) {
+          const bayId = store.layout.bays[col]?.id ?? props.bay.id
+          if (sec.sectionId === 'ctr' && sec.title === 'CTR') {
+            store.saabEnsureSection('ctr_arr', 'CTR', { bayId })
+            store.saabEnsureSection('ctr_dep', 'CTR', { bayId })
+          } else {
+            store.saabEnsureSection(sec.sectionId, sec.title, { bayId })
+            if (sec.sectionId === 'pending_dep' && sec.title === 'DEP') {
+              store.saabEnsureSection('cleared', 'DEP', { bayId })
+            }
+            if (sec.sectionId === 'ctr_arr' && sec.title === 'TMA / CTR') {
+              store.saabEnsureSection('ctr_dep', 'TMA / CTR', { bayId })
+              store.saabEnsureSection('tma', 'TMA / CTR', { bayId })
+            }
+            if (sec.sectionId === 'tma' && sec.title === 'TMA') {
+              store.saabEnsureSection('tma', 'TMA', { bayId })
+            }
+            if (sec.sectionId === 'pending_dep' && sec.title === 'PENDING CLR') {
+              store.saabEnsureSection('pending_dep', 'PENDING CLR', { bayId })
+            }
+            if (sec.sectionId === 'cleared' && sec.title === 'CLEARED') {
+              store.saabEnsureSection('cleared', 'CLEARED', { bayId })
+            }
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return
+  }
   const dragged = e.dataTransfer?.getData('application/x-efs-section')
   if (!dragged) return
   e.preventDefault()
@@ -512,13 +561,30 @@ onMounted(() => {
     if (!bayEl.value) return
     // Workspace: snapshot header Ys from the equal-flex first paint so later
     // removes keep positions (top gap = overflow from previous bay).
+    // Defer until the bay body has real height — early sync freezes a header stack at y≈0.
     if (props.workspaceMode && props.columnIndex != null) {
-      const already = ws.sectionsInColumn(props.columnIndex).some((s) => s.y != null)
-      if (!already) {
-        ws.syncColumnYsFromDom(props.columnIndex)
-        ws.persistHeights()
-      }
       reportBayBodyHeight()
+      const col = props.columnIndex
+      const tryFreeze = () => {
+        const already = ws.sectionsInColumn(col).some((s) => s.y != null)
+        if (already) return true
+        const body = bayEl.value?.querySelector('.bay-body') as HTMLElement | null
+        if (!body || body.clientHeight < 80) return false
+        if (ws.syncColumnYsFromDom(col)) {
+          ws.persistHeights()
+          return true
+        }
+        return false
+      }
+      if (!tryFreeze()) {
+        requestAnimationFrame(() => {
+          reportBayBodyHeight()
+          if (!tryFreeze()) {
+            // Last resort on next resize (setColumnBodyHeight also heals/syncs)
+            reportBayBodyHeight()
+          }
+        })
+      }
       ws.scheduleOverflowRepack()
       return
     }

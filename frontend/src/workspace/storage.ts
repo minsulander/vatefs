@@ -31,9 +31,53 @@ export function sanitizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayou
     if (s.member != null) out.member = s.member
     if (s.members?.length) out.members = [...s.members]
     if (s.y != null) out.y = s.y
+    if (s.yRatio != null) out.yRatio = s.yRatio
     if (s.height != null) out.height = s.height
     return out
   })
+
+  // ESSA: "CD ALL" only when CD is merged with TSAT / EOBT. Standalone pending → "CD".
+  // Also retag standalone TSAT / EOBT as cd_all.cleared so it can merge with CD.
+  const hasSeparateCleared = sections.some((s) => {
+    if (s.sectionId !== 'cleared' && s.sectionId !== 'cleared_tsat' && s.sectionId !== 'cleared_eobt') {
+      return false
+    }
+    const t = (s.title || '').toUpperCase().trim()
+    return t !== 'CD ALL' && t !== 'CDALL'
+  })
+  for (const s of sections) {
+    if (
+      s.sectionId === 'cleared' &&
+      (s.groupId === 'cd_cleared' || !s.groupId) &&
+      !s.member &&
+      !s.members?.length
+    ) {
+      const t = (s.title || '').toUpperCase().trim()
+      if (t === 'TSAT / EOBT' || t === 'TSAT/EOBT' || t === 'TSAT' || !s.title) {
+        s.groupId = 'cd_all'
+        s.member = 'cleared'
+        if (!s.title || t === 'TSAT') s.title = 'TSAT / EOBT'
+      }
+    }
+    if (s.sectionId !== 'pending_dep' && s.groupId !== 'cd_all') continue
+    const t = (s.title || '').toUpperCase().trim()
+    if (s.member === 'pending') {
+      if (t === 'CD ALL' || t === 'CDALL' || !s.title) s.title = 'CD'
+      continue
+    }
+    // Wrongly tagged as full merge (no member) while TSAT / EOBT is a separate header
+    if (
+      !s.member &&
+      !s.members?.length &&
+      (t === 'CD ALL' || t === 'CDALL') &&
+      hasSeparateCleared
+    ) {
+      s.member = 'pending'
+      s.groupId = 'cd_all'
+      s.title = 'CD'
+    }
+  }
+
   const out: WorkspaceLayout = {
     version: 1,
     columnCount: Math.max(1, Math.round(layout.columnCount) || 1),
@@ -210,9 +254,10 @@ export function mergeImportedLayouts(
       (l) => l.name === item.name && l.layout.roleKey === item.layout.roleKey,
     )
     const cleaned = sanitizeWorkspaceLayout(item.layout)
+    const existing = existingIdx >= 0 ? store.layouts[existingIdx] : undefined
     const normalized: SavedWorkspaceLayout = {
       ...item,
-      id: mode === 'keepBoth' || existingIdx < 0 ? newInstanceId('layout') : store.layouts[existingIdx].id,
+      id: mode === 'keepBoth' || !existing ? newInstanceId('layout') : existing.id,
       savedAt: Date.now(),
       layout: {
         ...cleaned,

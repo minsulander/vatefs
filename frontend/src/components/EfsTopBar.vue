@@ -1,30 +1,7 @@
 <template>
   <div class="efs-top-bar text-body-2 text-grey">
-      <!-- Left arrow: trash (ESSA flexible workspace) or legacy menu -->
-      <v-menu v-if="!efs.essaRolesMode" v-model="mainMenuOpen" location="bottom" offset="4">
-        <template #activator="{ props: menuProps }">
-          <button
-            type="button"
-            class="top-menu-btn"
-            :class="{ 'is-open': mainMenuOpen }"
-            title="Menu"
-            v-bind="menuProps"
-          >
-            <span class="top-menu-tri" aria-hidden="true" />
-          </button>
-        </template>
-        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
-          <div class="efs-popup-list">
-            <button
-              type="button"
-              class="efs-popup-item"
-              @click="onMainMenuHandoverAssistant"
-            >Handover Assistant</button>
-          </div>
-        </div>
-      </v-menu>
+      <!-- Left arrow: trash (recover / drop-to-delete) -->
       <button
-        v-else
         type="button"
         class="top-menu-btn top-trash-btn efs-trash-drop"
         :class="{ 'drag-over': trashDragOver }"
@@ -37,7 +14,7 @@
       >
         <span class="top-menu-tri" aria-hidden="true" />
       </button>
-      <TrashDialog v-if="efs.essaRolesMode" v-model="trashOpen" />
+      <TrashDialog v-model="trashOpen" />
       <v-btn
         variant="text"
         icon="mdi-cog"
@@ -274,7 +251,7 @@
         >{{ esggRwyLabel }}</span>
       </div>
       <v-spacer />
-      <!-- Config selector -->
+      <!-- Config selector (chevron only — name lives in the menu) -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
         v-model="configMenuOpen"
@@ -282,9 +259,15 @@
         :close-on-content-click="false"
       >
         <template v-slot:activator="{ props }">
-          <v-btn variant="text" size="small" class="text-grey" v-bind="props" title="Switch configuration">
-            {{ activeConfigName }}
-            <v-icon end size="x-small">mdi-chevron-down</v-icon>
+          <v-btn
+            variant="text"
+            size="small"
+            class="text-grey top-config-btn"
+            v-bind="props"
+            title="Switch configuration"
+            aria-label="Switch configuration"
+          >
+            <v-icon size="x-small">mdi-chevron-down</v-icon>
           </v-btn>
         </template>
         <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
@@ -540,9 +523,9 @@
           </div>
         </Teleport>
 
-        <!-- ESSA: right arrow catalog (HA / Layouts / Breakout·MAP·DEP·SID / Sections). Else fullscreen. -->
+        <!-- ESSA / OTHER: right arrow catalog. Else fullscreen. -->
         <v-menu
-          v-if="efs.essaRolesMode"
+          v-if="efs.workspaceMode"
           v-model="rightMenuOpen"
           location="bottom end"
           offset="4"
@@ -564,15 +547,21 @@
             @click.stop
           >
             <div class="efs-popup-list">
-              <button type="button" class="efs-popup-item" @click="onRightHandover">
+              <button
+                type="button"
+                class="efs-popup-item"
+                @click="onRightHandover"
+              >
                 Handover Assistant
               </button>
+              <!-- ESSA: saved layouts dialog -->
               <button
+                v-if="efs.essaRolesMode"
                 type="button"
                 class="efs-popup-item efs-popup-item--start"
                 @click="onRightLayouts"
               >
-                <span>Layouts</span>
+                <span>Layout</span>
                 <span
                   class="column-count-ctrl"
                   title="Number of bays"
@@ -599,30 +588,67 @@
                   >+</button>
                 </span>
               </button>
-              <template v-for="folder in infoCatalogFolders" :key="folder.id">
-                <button
-                  type="button"
-                  class="efs-popup-section efs-popup-folder"
-                  :aria-expanded="!!catalogInfoFolderOpen[folder.id]"
-                  @click.stop="toggleInfoFolder(folder.id)"
+              <!-- OTHER: same Layout dialog as ESSA (profiles + saved) -->
+              <button
+                v-if="efs.saabLayoutsMode"
+                type="button"
+                class="efs-popup-item efs-popup-item--start"
+                @click="onRightLayouts"
+              >
+                <span>Layout</span>
+                <span
+                  class="column-count-ctrl"
+                  title="Number of bays"
+                  @click.stop
+                  @pointerdown.stop
                 >
-                  <span>{{ folder.label }}</span>
-                  <span
-                    class="efs-popup-folder-chevron"
-                    :class="{ 'is-open': catalogInfoFolderOpen[folder.id] }"
-                    aria-hidden="true"
-                  />
-                </button>
-                <template v-if="catalogInfoFolderOpen[folder.id]">
                   <button
-                    v-for="entry in folder.items"
-                    :key="`${entry.kind}:${entry.forceKey}`"
                     type="button"
-                    class="efs-popup-item"
-                    :class="{ 'is-disabled': entry.shown || !entry.available }"
-                    :disabled="entry.shown || !entry.available"
-                    @click="onShowInfoStrip(entry)"
-                  >{{ entry.label }}</button>
+                    class="column-count-btn"
+                    :disabled="ws.columnCount.value <= 1"
+                    title="Fewer bays"
+                    @click="ws.adjustColumnCount(-1, efs.layout)"
+                  >−</button>
+                  <span
+                    class="column-count-label"
+                    :title="`${ws.columnCount.value} bays`"
+                  >{{ ws.columnCount.value }}</span>
+                  <button
+                    type="button"
+                    class="column-count-btn"
+                    :disabled="ws.columnCount.value >= 6"
+                    title="More bays"
+                    @click="ws.adjustColumnCount(1, efs.layout)"
+                  >+</button>
+                </span>
+              </button>
+              <!-- ESSA-only info strips -->
+              <template v-if="efs.essaRolesMode">
+                <template v-for="folder in infoCatalogFolders" :key="folder.id">
+                  <button
+                    type="button"
+                    class="efs-popup-section efs-popup-folder"
+                    :aria-expanded="!!catalogInfoFolderOpen[folder.id]"
+                    @click.stop="toggleInfoFolder(folder.id)"
+                  >
+                    <span>{{ folder.label }}</span>
+                    <span
+                      class="efs-popup-folder-chevron"
+                      :class="{ 'is-open': catalogInfoFolderOpen[folder.id] }"
+                      aria-hidden="true"
+                    />
+                  </button>
+                  <template v-if="catalogInfoFolderOpen[folder.id]">
+                    <button
+                      v-for="entry in folder.items"
+                      :key="`${entry.kind}:${entry.forceKey}`"
+                      type="button"
+                      class="efs-popup-item"
+                      :class="{ 'is-disabled': entry.shown || !entry.available }"
+                      :disabled="entry.shown || !entry.available"
+                      @click="onShowInfoStrip(entry)"
+                    >{{ entry.label }}</button>
+                  </template>
                 </template>
               </template>
               <template v-if="showRwyFlagTable">
@@ -696,7 +722,7 @@
                 >Empty divider</button>
                 <button
                   v-for="sec in sectionCatalog"
-                  :key="sec.sectionId"
+                  :key="`${sec.sectionId}::${sec.title}`"
                   type="button"
                   class="efs-popup-item"
                   :class="[
@@ -704,7 +730,9 @@
                     { 'is-disabled': sec.present },
                   ]"
                   :disabled="sec.present"
+                  :draggable="!sec.present"
                   @click="onAddSection(sec)"
+                  @dragstart="onCatalogSectionDragStart($event, sec)"
                 >{{ sec.title }}</button>
               </template>
             </div>
@@ -771,7 +799,11 @@ const {
   showTable: showRwyFlagTable,
   rows: rwyFlagRows,
 } = useRwyFlagMenu()
-const sectionCatalog = computed(() => ws.catalogSections(efs.layout, efs.essaRoles))
+const sectionCatalog = computed(() =>
+  ws.catalogSections(efs.layout, efs.essaRoles, {
+    mode: efs.saabLayoutsMode && !efs.essaRolesMode ? 'saab' : 'essa',
+  }),
+)
 
 function toggleInfoFolder(id: string) {
   catalogInfoFolderOpen.value = {
@@ -824,7 +856,7 @@ function onTrashDrop(e: DragEvent) {
 }
 function onRightHandover() {
   rightMenuOpen.value = false
-  efs.openHandoverAssistant()
+  efs.openHandoverAssistant({ reason: 'menu' })
 }
 function onRightLayouts() {
   rightMenuOpen.value = false
@@ -842,7 +874,48 @@ function onAddEmptyHeader() {
 function onAddSection(sec: { sectionId: string; title: string; present?: boolean }) {
   if (sec.present) return
   ws.addSectionFromCatalog(sec.sectionId, sec.title, 0, efs.layout)
+  if (efs.saabLayoutsMode) {
+    // Synthetic CTR header — ensure strip targets, not a server "ctr" section
+    if (sec.sectionId === 'ctr' && sec.title === 'CTR') {
+      efs.saabEnsureSection('ctr_arr', 'CTR')
+      efs.saabEnsureSection('ctr_dep', 'CTR')
+    } else {
+      efs.saabEnsureSection(sec.sectionId, sec.title)
+      // DEP covers pending_dep + cleared; TMA / CTR covers ctr*
+      if (sec.sectionId === 'pending_dep' && sec.title === 'DEP') {
+        efs.saabEnsureSection('cleared', 'DEP')
+      }
+      if (sec.sectionId === 'ctr_arr' && sec.title === 'TMA / CTR') {
+        efs.saabEnsureSection('ctr_dep', 'TMA / CTR')
+        efs.saabEnsureSection('tma', 'TMA / CTR')
+      }
+      if (sec.sectionId === 'tma' && sec.title === 'TMA') {
+        efs.saabEnsureSection('tma', 'TMA')
+      }
+      if (sec.sectionId === 'pending_dep' && sec.title === 'PENDING CLR') {
+        efs.saabEnsureSection('pending_dep', 'PENDING CLR')
+      }
+      if (sec.sectionId === 'cleared' && sec.title === 'CLEARED') {
+        efs.saabEnsureSection('cleared', 'CLEARED')
+      }
+    }
+  }
   rightMenuOpen.value = false
+}
+
+function onCatalogSectionDragStart(
+  e: DragEvent,
+  sec: { sectionId: string; title: string; present?: boolean },
+) {
+  if (sec.present) {
+    e.preventDefault()
+    return
+  }
+  e.dataTransfer?.setData(
+    'application/x-vatefs-catalog-section',
+    JSON.stringify({ sectionId: sec.sectionId, title: sec.title }),
+  )
+  e.dataTransfer!.effectAllowed = 'copy'
 }
 
 /** Match ESSA section-header tints (runway red / inbound turquoise). */
@@ -942,7 +1015,6 @@ const parsingFeedRows = computed((): FeedRow[] => {
 const fullscreen = ref(window.innerHeight == screen.height)
 const isStandalone = ('standalone' in navigator && (navigator as any).standalone) || window.matchMedia('(display-mode: standalone)').matches
 const configMenuOpen = ref(false)
-const mainMenuOpen = ref(false)
 
 /** Display / picker order: CD → GND-* → TWR-E, TWR-W */
 const ESSA_ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W'] as const
@@ -1047,21 +1119,6 @@ const menuEsRwysLabel = computed(() => {
   })
   return parts.join(' · ')
 })
-
-function onMainMenuHandoverAssistant() {
-  mainMenuOpen.value = false
-  efs.openHandoverAssistant({ reason: 'menu' })
-}
-
-function onMainMenuEssaRwy() {
-  mainMenuOpen.value = false
-  essaRwyDialog.value = true
-}
-
-function onMainMenuEssaRoles() {
-  mainMenuOpen.value = false
-  openEssaRolesDialog()
-}
 
 function sortEssaRolesDisplay(roles: string[]): string[] {
   const order = new Map(ESSA_ROLE_ORDER.map((r, i) => [r, i]))
@@ -1220,10 +1277,6 @@ function onEssaRwyHoverLeave() {
   essaRwyQuickrefVisible.value = false
 }
 
-watch(mainMenuOpen, (open) => {
-  if (!open) onEssaRwyHoverLeave()
-})
-
 watch(essaRolesDialog, (open) => {
   if (open) {
     draftEssaRoles.value = [...efs.essaRoles]
@@ -1376,11 +1429,6 @@ const showRightAtisQnh = computed(() => {
   if (efs.multiAirport) return false
   if (efs.essaRolesMode || efs.isPaperLook) return true
   return classicAirportCount.value <= 1
-})
-
-const activeConfigName = computed(() => {
-  const active = efs.availableConfigs.find(c => c.file === efs.activeConfig)
-  return active?.name ?? efs.activeConfig
 })
 
 /** Primary airport for right-bar ATIS / QNH */
@@ -1740,9 +1788,31 @@ onUnmounted(() => {
   border-color: currentColor transparent transparent transparent;
 }
 
-.top-trash-btn.drag-over {
+.top-menu-tri--right {
+  border-width: calc(5px * var(--tb)) 0 calc(5px * var(--tb)) calc(7px * var(--tb));
+  border-color: transparent transparent transparent currentColor;
+}
+
+.top-trash-btn.drag-over,
+.top-trash-btn.trash-receiving {
   color: #f44336;
   outline: 1px solid #f44336;
+}
+
+.top-trash-btn.trash-receiving {
+  animation: top-trash-receive-pulse 0.45s ease-out;
+}
+
+@keyframes top-trash-receive-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* Same chrome as menu arrow — fullscreen icon */

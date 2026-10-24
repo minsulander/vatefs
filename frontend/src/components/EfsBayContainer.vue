@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="containerEl"
     class="efs-bay-container"
     :class="{ 'efs-bay-container--paper': store.isPaperLook }"
     @click="onContainerClick"
@@ -16,7 +17,7 @@
           'bay-row--multi': store.multiAirport,
           'bay-row--choosing': store.pendingIdleSwap != null,
           'bay-row--paper': store.isPaperLook,
-          'bay-row--workspace': store.essaRolesMode && !!ws.activeLayout.value,
+          'bay-row--workspace': store.workspaceMode && !!ws.activeLayout.value,
           'bay-row--table-scroll': tableScroll,
         }"
         :style="tableScroll ? { '--efs-bay-col-width': colWidthPx } : undefined"
@@ -31,9 +32,9 @@
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
             'bay-column--paper': store.isPaperLook,
-            'bay-column--workspace': store.essaRolesMode && !!ws.activeLayout.value,
+            'bay-column--workspace': store.workspaceMode && !!ws.activeLayout.value,
             'bay-column--table-fixed': tableScroll,
-            'bay-column--klack-raised': store.isPaperLook && bayHasKlack(bay.id),
+            'bay-column--klack-raised': bayHasKlack(bay.id, index),
           }"
           :style="store.multiAirport ? { '--bay-accent': columnAccent(index) } : undefined"
           @click="onColumnClick(index, $event)"
@@ -48,7 +49,7 @@
           <EfsBay
             :bay="bay"
             :column-index="index"
-            :workspace-mode="store.essaRolesMode && !!ws.activeLayout.value"
+            :workspace-mode="store.workspaceMode && !!ws.activeLayout.value"
           />
         </div>
       </div>
@@ -60,8 +61,9 @@
       @update:model-value="onHandoverAssistantOpen"
     />
     <WorkspaceLayoutDialog v-if="store.essaRolesMode" />
+    <SaabLayoutDialog v-if="store.saabLayoutsMode" />
     <WorkspaceSearchDialog
-      v-if="store.essaRolesMode"
+      v-if="store.workspaceMode"
       v-model="searchDialogOpen"
     />
     <div
@@ -79,39 +81,105 @@ import { storeToRefs } from 'pinia'
 import { useEfsStore } from '@/store/efs'
 import { paperKlackPullBayIds } from '@/composables/paperKlack'
 import { getWorkspace, watchEssaRolesForWorkspace } from '@/workspace'
+import { serverBayIdForSection, stripSectionIdsForWorkspace } from '@/workspace/defaultLayout'
+import { workspaceMemberAcceptsStrip } from '@/workspace/splitGroups'
 import EfsBay from './EfsBay.vue'
 import EfsTopBar from './EfsTopBar.vue'
 import EfsBottomBar from './EfsBottomBar.vue'
 import HandoverAssistantDialog from './HandoverAssistantDialog.vue'
 import WorkspaceLayoutDialog from './WorkspaceLayoutDialog.vue'
+import SaabLayoutDialog from './SaabLayoutDialog.vue'
 import WorkspaceSearchDialog from './WorkspaceSearchDialog.vue'
 
 const store = useEfsStore()
 const ws = getWorkspace()
-const { essaRoles, layout, essaRolesMode } = storeToRefs(store)
-watchEssaRolesForWorkspace(essaRoles, layout, essaRolesMode)
+const { essaRoles, layout, essaRolesMode, workspaceMode, saabLayoutId } = storeToRefs(store)
+watchEssaRolesForWorkspace(essaRoles, layout, essaRolesMode, workspaceMode, saabLayoutId)
 
 const searchDialogOpen = ws.searchDialogOpen
 
 const bays = computed(() => {
-  if (store.essaRolesMode && ws.activeLayout.value) {
+  if (store.workspaceMode && ws.activeLayout.value) {
     return ws.buildDisplayBays(store.layout)
   }
   return store.getBays
 })
+const containerEl = ref<HTMLElement | null>(null)
 const scrollEl = ref<HTMLElement | null>(null)
 const colWidthPx = ref('25%')
+
+/** Same ref width / clamps as EfsBay --bay-scale (strips follow column width). */
+const BAY_REF_WIDTH_PX = 400
+const BAY_SCALE_MIN = 0.55
+const BAY_SCALE_MAX = 2.2
+const BAY_GUTTER_AT_SCALE_1_PX = 8
+
+/** SAAB inter-bay gutter tracks strip scale (column width / 400). */
+function updateBayGutterScale() {
+  const root = containerEl.value
+  if (!root || store.isPaperLook) return
+  const col = root.querySelector('.bay-column') as HTMLElement | null
+  const w = col?.clientWidth ?? 0
+  if (w <= 0) return
+  const s = Math.max(BAY_SCALE_MIN, Math.min(BAY_SCALE_MAX, w / BAY_REF_WIDTH_PX))
+  root.style.setProperty('--efs-bay-gutter', `${Math.round(BAY_GUTTER_AT_SCALE_1_PX * s * 10) / 10}px`)
+}
 
 function onHandoverAssistantOpen(open: boolean) {
   if (open) store.openHandoverAssistant()
   else store.closeHandoverAssistant()
 }
 
-/** Any strip in this bay is klacked (or mid-pull) — raise the column above neighbours. */
-function bayHasKlack(bayId: string): boolean {
+/**
+ * Any strip in this column is klacked/cocked (or mid-pull) — raise above neighbours
+ * so the strip can paint over the bay gutter.
+ * Workspace columns use synthetic ids (`ws-col-N`) while strips keep server bayIds,
+ * so match by workspace section membership in that column.
+ */
+function bayHasKlack(bayId: string, columnIndex: number): boolean {
   void store.stripsVersion
   void paperKlackPullBayIds.size
+  void ws.activeLayout.value
   if (paperKlackPullBayIds.has(bayId)) return true
+
+  if (store.workspaceMode && ws.activeLayout.value) {
+    const colSecs = ws.sectionsInColumn(columnIndex)
+    // Mid-pull registers server bayId on paperKlackPullBayIds — map to this column
+    for (const pullId of paperKlackPullBayIds) {
+      if (pullId === bayId) return true
+      for (const sec of colSecs) {
+        const sid = sec.sectionId || sec.instanceId
+        if (sid && serverBayIdForSection(store.layout, sid) === pullId) return true
+      }
+    }
+    for (const strip of store.strips.values()) {
+      if (strip.klack !== 'left' && strip.klack !== 'right') continue
+      for (const sec of colSecs) {
+        const logicalId = sec.sectionId || sec.instanceId
+        const ids = stripSectionIdsForWorkspace(logicalId, {
+          member: sec.member,
+          groupId: sec.groupId,
+        })
+        const inSection =
+          ids.includes(strip.sectionId) || strip.sectionId === sec.instanceId
+        if (!inSection) continue
+        if (
+          workspaceMemberAcceptsStrip(
+            {
+              groupId: sec.groupId,
+              member: sec.member,
+              sectionId: logicalId,
+            },
+            strip,
+          )
+        ) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   for (const strip of store.strips.values()) {
     if (strip.bayId === bayId && (strip.klack === 'left' || strip.klack === 'right')) {
       return true
@@ -179,21 +247,28 @@ function onScroll() {
 
 onMounted(() => {
   applyDefaultScroll()
+  updateBayGutterScale()
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => {
       measureColWidth()
+      updateBayGutterScale()
       // Keep GND pan after resize unless the user already scrolled
       if (!userScrolled && panHideInbound.value) applyDefaultScroll()
     })
     if (scrollEl.value) ro.observe(scrollEl.value)
   }
-  window.addEventListener('resize', measureColWidth)
+  window.addEventListener('resize', onWindowResize)
   scrollEl.value?.addEventListener('scroll', onScroll, { passive: true })
 })
 
+function onWindowResize() {
+  measureColWidth()
+  updateBayGutterScale()
+}
+
 onBeforeUnmount(() => {
   ro?.disconnect()
-  window.removeEventListener('resize', measureColWidth)
+  window.removeEventListener('resize', onWindowResize)
   scrollEl.value?.removeEventListener('scroll', onScroll)
 })
 
@@ -201,8 +276,16 @@ watch(
   [tableScroll, bays, panHideInbound, visibleCols, () => store.esggRoles.join(',')],
   () => {
     userScrolled = false
-    requestAnimationFrame(applyDefaultScroll)
+    requestAnimationFrame(() => {
+      applyDefaultScroll()
+      updateBayGutterScale()
+    })
   },
+)
+
+watch(
+  () => store.isPaperLook,
+  () => requestAnimationFrame(updateBayGutterScale),
 )
 
 function columnAccent(index: number): string {
@@ -228,6 +311,9 @@ function onContainerClick() {
   background: var(--efs-bay-bg, #3b3c41);
   display: flex;
   flex-direction: column;
+  /* SAAB gutter base at bay-scale 1 (400px column); JS sets px from column width.
+   * Colour: --efs-bay-gutter-color on <html> from brightness slider (useBayBackground). */
+  --efs-bay-gutter: 8px;
 }
 
 .efs-bay-container--paper {
@@ -239,6 +325,8 @@ function onContainerClick() {
   --efs-paper-bay-floor: var(--efs-paper-bay-mid);
   --efs-paper-panel: #2c241c;
   background: var(--efs-paper-panel);
+  /* Paper pipes own the column edge — no SAAB gutter */
+  --efs-bay-gutter: 0px;
 }
 
 .efs-bay-content {
@@ -285,6 +373,8 @@ function onContainerClick() {
   flex: 1;
   min-height: 0;
   height: 100%;
+  gap: var(--efs-bay-gutter, 0);
+  background-color: var(--efs-bay-gutter-color, #232428);
 }
 
 .bay-row--table-scroll {
@@ -295,7 +385,7 @@ function onContainerClick() {
 }
 
 .bay-row--multi {
-  gap: 0;
+  /* Keep SAAB gutter (--efs-bay-gutter); paper zeros it via container */
   padding: 0;
   box-sizing: border-box;
 }
@@ -439,20 +529,98 @@ function onContainerClick() {
 
 </style>
 
-<!-- Unscoped: klack raise wins over neighbour columns only (same-column headers stay on top) -->
+<!-- Unscoped: klack/cock raise — strip paints over bay gutter / neighbour -->
 <style>
-.bay-column.bay-column--klack-raised {
-  z-index: 100 !important;
-  position: relative;
-  /* Let horizontal klack leave this column into the neighbour */
-  overflow: visible !important;
+/*
+ * SAAB: don't clip cocked strips at the content edge (paper already visible).
+ * Gutter is bay-row gap; strip must be free to paint into that gap above it.
+ */
+.efs-bay-container:not(.efs-bay-container--paper) .efs-bay-content {
+  overflow: visible;
 }
 .efs-bay-container--paper .efs-bay-content:not(.efs-bay-content--table-scroll) {
   overflow: visible !important;
 }
-.efs-bay-container--paper .bay-row--paper {
+.efs-bay-container--paper .bay-row--paper,
+.efs-bay-container:not(.efs-bay-container--paper) .bay-row {
   overflow: visible;
   isolation: isolate;
+}
+
+.bay-column.bay-column--klack-raised {
+  z-index: 100 !important;
+  position: relative;
+  overflow: visible !important;
+}
+
+/*
+ * SAAB only — widen the strip list into the gutter (paper has its own bleed).
+ * Bleed padding stays transparent so bay-row gutter colour remains visible;
+ * only the cocked strip paints above it. Bay fill stays on section-content
+ * (in-column) — never paint bay-bg into the bleed.
+ */
+.efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised {
+  --saab-cock-bleed: calc(4px + var(--efs-bay-gutter, 8px));
+}
+.efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .efs-bay,
+.efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .bay-body,
+.efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .efs-section,
+.efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .section-content {
+  overflow: visible !important;
+}
+/*
+ * Bleed only the strip list — transparent over the gutter; bay fill stays in-column.
+ * pointer-events:none on the bleed box so a neighbour bay's padding (same z-index
+ * raise) cannot steal clicks from this bay's cocked strip in the shared gutter;
+ * children (strips, gaps, flags) re-enable hits.
+ */
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .top-strips-container,
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .bottom-strips-container {
+  overflow-x: clip !important;
+  overflow-y: auto !important;
+  margin-left: calc(-1 * var(--saab-cock-bleed));
+  margin-right: calc(-1 * var(--saab-cock-bleed));
+  padding-left: var(--saab-cock-bleed);
+  padding-right: var(--saab-cock-bleed);
+  background: transparent !important;
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+}
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .top-strips-container
+  > *,
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .bottom-strips-container
+  > * {
+  pointer-events: auto;
+}
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .section-header {
+  position: relative;
+  z-index: 4;
+}
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .flight-strip.klack-left,
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .flight-strip.klack-right,
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .flight-strip.klack-pulling,
+.efs-bay-container:not(.efs-bay-container--paper)
+  .bay-column.bay-column--klack-raised
+  .strip-host--cocked {
+  position: relative;
+  z-index: 3;
 }
 </style>
 

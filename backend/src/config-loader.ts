@@ -2,6 +2,7 @@
  * Configuration loader - loads EFS configuration from YAML files.
  * Supports `include:` to compose configs from shared rule fragments.
  * Supports `layoutMode: multiAirport` with `bayTemplate` for IRIS-style columns.
+ * Supports `layoutMode: saabLayouts` with named `layouts:` bay profiles.
  */
 
 import fs from "fs"
@@ -24,7 +25,7 @@ import type { EssaFamily } from "./essa-roles.js"
  * Metadata for a discovered config file
  */
 export interface ConfigFileInfo {
-    /** File basename (e.g. "singlerwy4bays.yml") */
+    /** File basename (e.g. "saab.yml") */
     file: string
     /** Display name from the "name" field in YAML */
     name: string
@@ -32,46 +33,76 @@ export interface ConfigFileInfo {
     fullPath: string
 }
 
+/** Built-in OTHER bay profile metadata (from YAML `layouts`). */
+export interface SaabLayoutInfo {
+    id: string
+    name: string
+    bayCount: number
+}
+
+/** Legacy filenames → OTHER profile id (migration / CLI aliases). */
+export const LEGACY_CONFIG_TO_SAAB_LAYOUT: Readonly<Record<string, string>> = {
+    'singlerwy3bays.yml': '1rwy3',
+    'singlerwy4bays.yml': '1rwy4',
+    'dualrwy4bays.yml': '2rwy4',
+}
+
+export const SAAB_CONFIG_FILE = 'saab.yml'
+export const DEFAULT_SAAB_LAYOUT_ID = '1rwy4'
+
+export function isSaabLayoutsConfig(config: { layoutMode?: string }): boolean {
+    return config.layoutMode === 'saabLayouts'
+}
+
 /**
  * Raw YAML config structure (before transformation).
  * `layout` is optional so include-only fragments are valid YAML.
  */
+interface YamlLayoutBlock {
+    bays: Record<string, {
+        sections: Record<string, {
+            title: string
+            addFromTop?: boolean
+            height?: number
+            hideHeader?: boolean
+            visibleFor?: EssaFamily[]
+        }>
+    }>
+}
+
 interface YamlConfig {
     name?: string
     include?: string[]
     radarRange?: number
-    /** Arrivals: strip if within this nm (default 100), OR ETA ≤ arrivalEtaMinutes */
     arrivalRange?: number
-    /** Arrivals: strip if ETE minutes ≤ this (default 20), OR within arrivalRange */
     arrivalEtaMinutes?: number
     groundRange?: number
-    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles'
-    /** saab (default) or paper — paper enables ESGG print sound / manual print */
+    layoutMode?: 'standard' | 'multiAirport' | 'essaRoles' | 'saabLayouts'
     look?: 'saab' | 'paper'
     columnCount?: number
     bayTemplate?: BayTemplate
-    layout?: {
-        bays: Record<string, {
-            sections: Record<string, {
-                title: string
-                addFromTop?: boolean
-                height?: number
-                hideHeader?: boolean
-                visibleFor?: EssaFamily[]
-            }>
-        }>
-    }
+    defaultLayout?: string
+    layouts?: Record<string, {
+        name?: string
+        layout: YamlLayoutBlock
+    }>
+    layout?: YamlLayoutBlock
     sectionRules?: Record<string, Omit<SectionRule, 'id'>>
     actionRules?: Record<string, Omit<ActionRule, 'id'>>
     deleteRules?: Record<string, Omit<DeleteRule, 'id'>>
     moveRules?: Record<string, Omit<MoveRule, 'id'>>
 }
 
+export interface LoadConfigOptions {
+    /** Active OTHER profile id when layoutMode is saabLayouts */
+    saabLayoutId?: string
+}
+
 /**
  * Transform YAML layout (key-based) to internal format (id-based).
  * Also builds sectionToBay lookup map.
  */
-function transformLayout(yamlLayout: NonNullable<YamlConfig['layout']>): {
+function transformLayout(yamlLayout: YamlLayoutBlock): {
     layout: EfsLayout
     sectionToBay: Map<string, string>
     sectionVisibleFor: Map<string, EssaFamily[]>
@@ -169,19 +200,79 @@ function isLogicalSectionId(id: string): boolean {
     return (LOGICAL_SECTIONS as readonly string[]).includes(id)
 }
 
+/** Drop rules that reference sections not present in the active layout. */
+function filterRulesForSectionMap<T extends {
+    sectionId?: string
+    fromSectionId?: string
+    toSectionId?: string
+    fromSectionIdContains?: string
+    toSectionIdContains?: string
+}>(rules: T[], sectionToBay: Map<string, string>): T[] {
+    return rules.filter((rule) => {
+        if (rule.sectionId && !sectionToBay.has(rule.sectionId)) return false
+        if (rule.fromSectionId && !sectionToBay.has(rule.fromSectionId)) return false
+        if (rule.toSectionId && !sectionToBay.has(rule.toSectionId) && !rule.toSectionIdContains) {
+            return false
+        }
+        return true
+    })
+}
+
+export function listSaabLayoutsFromYaml(yamlConfig: YamlConfig): SaabLayoutInfo[] {
+    if (!yamlConfig.layouts) return []
+    return Object.entries(yamlConfig.layouts).map(([id, entry]) => ({
+        id,
+        name: entry.name ?? id,
+        bayCount: Object.keys(entry.layout?.bays ?? {}).length,
+    }))
+}
+
+/** Peek OTHER (saab.yml) layout metadata from a config file without full load. */
+export function peekSaabLayouts(configPath: string): SaabLayoutInfo[] {
+    try {
+        const content = fs.readFileSync(configPath, 'utf8')
+        const raw = yaml.load(content) as YamlConfig
+        return listSaabLayoutsFromYaml(raw)
+    } catch {
+        return []
+    }
+}
+
+export function resolveSaabLayoutId(
+    yamlConfig: YamlConfig,
+    requested?: string | null,
+): string {
+    const layouts = yamlConfig.layouts ?? {}
+    const ids = Object.keys(layouts)
+    if (ids.length === 0) return DEFAULT_SAAB_LAYOUT_ID
+    if (requested && layouts[requested]) return requested
+    if (yamlConfig.defaultLayout && layouts[yamlConfig.defaultLayout]) {
+        return yamlConfig.defaultLayout
+    }
+    if (layouts[DEFAULT_SAAB_LAYOUT_ID]) return DEFAULT_SAAB_LAYOUT_ID
+    return ids[0]!
+}
+
 /**
  * Load configuration from a YAML file
  */
-export function loadConfig(configPath: string): EfsStaticConfig {
+export function loadConfig(configPath: string, options?: LoadConfigOptions): EfsStaticConfig {
     const yamlConfig = loadYamlWithIncludes(configPath)
-    const layoutMode = yamlConfig.layoutMode ?? 'standard'
+    let layoutMode = yamlConfig.layoutMode ?? 'standard'
+    // Implicit saabLayouts when `layouts:` map is present
+    if (yamlConfig.layouts && Object.keys(yamlConfig.layouts).length > 0) {
+        layoutMode = 'saabLayouts'
+    }
     const isMulti = layoutMode === 'multiAirport'
+    const isSaabLayouts = layoutMode === 'saabLayouts'
 
     let layout: EfsLayout
     let sectionToBay: Map<string, string>
     let sectionVisibleFor: Map<string, EssaFamily[]> | undefined
     let bayTemplate: BayTemplate | undefined
     let columnCount: number | undefined
+    let saabLayoutId: string | undefined
+    let saabLayouts: SaabLayoutInfo[] | undefined
 
     if (isMulti) {
         if (!yamlConfig.bayTemplate?.sections) {
@@ -192,9 +283,24 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         columnCount = Math.max(MIN_COLUMN_COUNT, Math.min(MAX_COLUMN_COUNT, rawCount))
         const columnAirports = normalizeColumnAirports([], columnCount)
         const built = buildMultiAirportLayout(bayTemplate, columnCount, columnAirports)
-        // Include idle bay in internal layout so sectionToBay covers idle_* sections
         layout = { bays: [...built.layout.bays, ...built.idleLayout.bays] }
         sectionToBay = built.sectionToBay
+    } else if (isSaabLayouts) {
+        if (!yamlConfig.layouts || Object.keys(yamlConfig.layouts).length === 0) {
+            throw new Error('saabLayouts config must specify layouts')
+        }
+        saabLayouts = listSaabLayoutsFromYaml(yamlConfig)
+        saabLayoutId = resolveSaabLayoutId(yamlConfig, options?.saabLayoutId)
+        const profile = yamlConfig.layouts[saabLayoutId]
+        if (!profile?.layout?.bays) {
+            throw new Error(`OTHER layout "${saabLayoutId}" missing layout.bays`)
+        }
+        const transformed = transformLayout(profile.layout)
+        layout = transformed.layout
+        sectionToBay = transformed.sectionToBay
+        if (transformed.sectionVisibleFor.size > 0) {
+            sectionVisibleFor = transformed.sectionVisibleFor
+        }
     } else {
         if (!yamlConfig.layout?.bays) {
             throw new Error('Configuration must specify layout.bays')
@@ -207,21 +313,26 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         }
     }
 
-    const sectionRules = yamlConfig.sectionRules
+    let sectionRules = yamlConfig.sectionRules
         ? transformRules<SectionRule>(yamlConfig.sectionRules)
         : []
-    const actionRules = yamlConfig.actionRules
+    let actionRules = yamlConfig.actionRules
         ? transformRules<ActionRule>(yamlConfig.actionRules)
         : []
-    const deleteRules = yamlConfig.deleteRules
+    let deleteRules = yamlConfig.deleteRules
         ? transformRules<DeleteRule>(yamlConfig.deleteRules)
         : []
-    const moveRules = yamlConfig.moveRules
+    let moveRules = yamlConfig.moveRules
         ? transformRules<MoveRule>(yamlConfig.moveRules)
         : []
 
+    if (isSaabLayouts) {
+        sectionRules = filterRulesForSectionMap(sectionRules, sectionToBay)
+        actionRules = filterRulesForSectionMap(actionRules, sectionToBay)
+        moveRules = filterRulesForSectionMap(moveRules, sectionToBay)
+    }
+
     if (isMulti) {
-        // Rules use logical section IDs (app/rwy/twy/dep)
         for (const rule of sectionRules) {
             if (!isLogicalSectionId(rule.sectionId)) {
                 throw new Error(`Section rule "${rule.id}" references non-logical section "${rule.sectionId}"`)
@@ -237,7 +348,6 @@ export function loadConfig(configPath: string): EfsStaticConfig {
                 throw new Error(`Move rule "${rule.id}" references non-logical fromSection "${rule.fromSectionId}"`)
             }
             if (!isLogicalSectionId(rule.toSectionId) && !rule.fromSectionIdContains) {
-                // toSectionId must be logical in multi mode
                 if (!isLogicalSectionId(rule.toSectionId)) {
                     throw new Error(`Move rule "${rule.id}" references non-logical toSection "${rule.toSectionId}"`)
                 }
@@ -285,11 +395,14 @@ export function loadConfig(configPath: string): EfsStaticConfig {
         bayTemplate,
         columnCount,
         activeAirports: isMulti ? [] : undefined,
-        columnAirports: isMulti ? normalizeColumnAirports([], columnCount ?? DEFAULT_COLUMN_COUNT) : undefined
+        columnAirports: isMulti ? normalizeColumnAirports([], columnCount ?? DEFAULT_COLUMN_COUNT) : undefined,
+        saabLayoutId,
+        saabLayouts,
     }
 
     console.log(`Loaded config from ${configPath}:`)
     console.log(`  Mode: ${layoutMode}`)
+    if (saabLayoutId) console.log(`  OTHER layout: ${saabLayoutId}`)
     console.log(`  Look: ${config.look}`)
     console.log(
         `  Radar range: ${config.radarRangeNm}nm, arrival: ${config.arrivalRangeNm}nm / ETA≤${config.arrivalEtaMinutes}min, ground: ${config.groundRangeNm}nm`
@@ -305,12 +418,35 @@ export function loadConfig(configPath: string): EfsStaticConfig {
 }
 
 export function getDefaultConfigPath(dataDir: string): string {
-    return `${dataDir}/config/singlerwy4bays.yml`
+    return `${dataDir}/config/${SAAB_CONFIG_FILE}`
+}
+
+/**
+ * Resolve CLI / saved config path. Legacy 1RWY/2RWY files map onto saab.yml.
+ */
+export function resolveConfigPath(dataDir: string, fileOrPath: string): {
+    fullPath: string
+    file: string
+    saabLayoutId?: string
+} {
+    const base = path.basename(fileOrPath)
+    const legacyLayout = LEGACY_CONFIG_TO_SAAB_LAYOUT[base]
+    if (legacyLayout) {
+        return {
+            fullPath: path.join(dataDir, 'config', SAAB_CONFIG_FILE),
+            file: SAAB_CONFIG_FILE,
+            saabLayoutId: legacyLayout,
+        }
+    }
+    const fullPath = path.isAbsolute(fileOrPath)
+        ? fileOrPath
+        : path.join(dataDir, 'config', base)
+    return { fullPath, file: path.basename(fullPath) }
 }
 
 /**
  * Scan a directory for selectable YAML config files and extract their names.
- * Files without a `layout` or `bayTemplate` key are include fragments and are skipped.
+ * Files without a `layout`, `layouts`, or `bayTemplate` key are include fragments and are skipped.
  */
 export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
     if (!fs.existsSync(configDir)) {
@@ -325,8 +461,8 @@ export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
         try {
             const content = fs.readFileSync(fullPath, 'utf8')
             const yamlConfig = yaml.load(content) as YamlConfig
-            // Skip include fragments (no layout and no bayTemplate)
-            if (!yamlConfig?.layout && !yamlConfig?.bayTemplate) continue
+            const hasLayouts = yamlConfig?.layouts && Object.keys(yamlConfig.layouts).length > 0
+            if (!yamlConfig?.layout && !yamlConfig?.bayTemplate && !hasLayouts) continue
             const name = yamlConfig?.name ?? file.replace(/\.(yml|yaml)$/, '')
             configs.push({ file, name, fullPath })
         } catch {

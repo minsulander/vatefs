@@ -821,10 +821,14 @@ class EfsStore {
                 bottom: next.bottom,
             })
         }
-        // Preserve paper klack / SAAB highlight across regenerations unless the update sets them
-        if (existing?.klack && next.klack === undefined) {
+        // Cock/klack only applies in-place — clear on section/bay/zone relocate (automove).
+        // Same-slot regenerations keep the existing offset.
+        if (!sameSlot) {
+            if (next.klack) next = { ...next, klack: undefined }
+        } else if (existing?.klack && next.klack === undefined) {
             next = { ...next, klack: existing.klack }
         }
+        // Preserve SAAB highlight across regenerations unless the update sets it
         if (existing?.highlight && next.highlight === undefined) {
             next = { ...next, highlight: existing.highlight }
         }
@@ -975,6 +979,16 @@ class EfsStore {
         strip.bayId = targetBayId
         strip.sectionId = targetSectionId
         strip.bottom = isBottom
+
+        // Cock/klack only applies in-place — any real relocate resets flush
+        const relocated =
+            oldBayId !== targetBayId ||
+            oldSectionId !== targetSectionId ||
+            oldBottom !== isBottom ||
+            oldPosition !== targetPosition
+        if (relocated && strip.klack) {
+            strip.klack = undefined
+        }
 
         // Insert strip at target position and recompute all positions
         // targetStrips is already sorted and excludes the moving strip

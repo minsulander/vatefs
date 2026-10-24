@@ -67,6 +67,39 @@ export type EssaRoleCombination = {
 }
 
 /**
+ * Layout-folder order (most complete first):
+ * CD, GND, TWR → GND, TWR → CD, GND → TWR → GND → CD
+ * Full families before partial splits that share the same families.
+ */
+export function compareEssaRoleFolderOrder(
+  aRoles: string[],
+  aKey: string,
+  bRoles: string[],
+  bKey: string,
+): number {
+  const score = (roles: string[]) => {
+    const set = new Set(sortEssaRoleList(roles))
+    const cd = set.has('CD') ? 1 : 0
+    const gndN = ALL_GND.filter((r) => set.has(r)).length
+    const twrN = ALL_TWR.filter((r) => set.has(r)).length
+    const gnd = gndN > 0 ? 1 : 0
+    const twr = twrN > 0 ? 1 : 0
+    const familyCount = cd + gnd + twr
+    // Lower = more TWR-weighted (TWR before GND before CD within a tier)
+    const fingerprint = (cd << 2) | (gnd << 1) | twr
+    // Full GND/TWR families score above E/N/W splits
+    const completeness = cd + gndN / ALL_GND.length + twrN / ALL_TWR.length
+    return { familyCount, fingerprint, completeness }
+  }
+  const a = score(aRoles)
+  const b = score(bRoles)
+  if (a.familyCount !== b.familyCount) return b.familyCount - a.familyCount
+  if (a.fingerprint !== b.fingerprint) return a.fingerprint - b.fingerprint
+  if (a.completeness !== b.completeness) return b.completeness - a.completeness
+  return aKey.localeCompare(bKey)
+}
+
+/**
  * Layout-menu folders: every CD / GND / TWR family combo (full families only —
  * no separate E/N/W or E/W split folders). Partial splits from saved layouts are
  * merged in by the dialog.
@@ -91,7 +124,7 @@ export function essaFamilyRoleCombinations(): EssaRoleCombination[] {
       label: formatEssaRolesLabel(roles),
     })
   }
-  out.sort((a, b) => a.label.localeCompare(b.label) || a.roleKey.localeCompare(b.roleKey))
+  out.sort((a, b) => compareEssaRoleFolderOrder(a.roles, a.roleKey, b.roles, b.roleKey))
   return out
 }
 

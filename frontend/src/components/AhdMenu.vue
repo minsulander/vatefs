@@ -97,6 +97,17 @@ const currentHeading = computed(() => (props.strip.assignedHeading || '').trim()
 /** 1–360; "20" / "020" / "5" all valid (padded on submit). */
 const manualValid = computed(() => parseManualHeading(manualText.value) != null)
 
+function focusManualInput() {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const el = manualInput.value
+      if (!el) return
+      el.focus()
+      el.select()
+    })
+  })
+}
+
 watch(
   () => props.modelValue,
   async (open) => {
@@ -105,7 +116,7 @@ watch(
       manualText.value = ''
       nextTick(() => {
         scrollToSelected()
-        manualInput.value?.focus()
+        focusManualInput()
       })
     } else {
       manualText.value = ''

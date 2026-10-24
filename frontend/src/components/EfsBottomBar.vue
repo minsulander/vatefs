@@ -5,127 +5,20 @@
     :initial-airport="dialogInitialAirport"
     @create="onDialogCreate"
   />
-  <TrashDialog v-model="trashOpen" />
   <PrintDialog v-model="printOpen" />
 
   <div class="efs-bottom-bar">
     <div class="bottom-bar-side bottom-bar-left">
-      <button
-        v-if="store.essaRolesMode"
-        type="button"
-        class="bar-icon-btn search-btn"
-        title="Search strips"
-        @click="ws.openSearchDialog()"
-      >
-        <v-icon :size="barIconSize">mdi-magnify</v-icon>
-      </button>
-
-      <button
-        v-if="!store.essaRolesMode"
-        type="button"
-        class="bar-icon-btn trash-btn efs-trash-drop"
-        :class="{ 'drag-over': trashDragOver }"
-        title="Recover deleted strip · drop strip to delete"
-        @click="onTrashClick"
-        @dragover.prevent="onTrashDragOver"
-        @dragenter.prevent="onTrashDragEnter"
-        @dragleave="onTrashDragLeave"
-        @drop.prevent="onTrashDrop"
-      >
-        <v-icon :size="barIconSize">mdi-trash-can-outline</v-icon>
-      </button>
-
-      <!-- Info strips + RWY flags: SAAB non-ESSA workspace — ESSA uses top-right catalog -->
-      <v-menu
-        v-if="!store.multiAirport && !store.essaRolesMode"
-        v-model="infoMenuOpen"
-        location="top"
-        :offset="8"
-        :close-on-content-click="false"
-        :disabled="store.isPaperLook"
-      >
-        <template #activator="{ props: menuProps }">
-          <button
-            type="button"
-            class="bar-icon-btn info-strips-btn"
-            :class="{ 'has-restore': hasMenuRestoreHint && !store.isPaperLook }"
-            :disabled="store.isPaperLook"
-            :title="
-              store.isPaperLook
-                ? 'Info strips — use Print for blank / HINDER / etc. (ESGG)'
-                : 'Info strips'
-            "
-            v-bind="store.isPaperLook ? undefined : menuProps"
-          >
-            <v-icon :size="barIconSize">mdi-information-outline</v-icon>
-            <span v-if="hasMenuRestoreHint && !store.isPaperLook" class="info-dot" aria-hidden="true" />
-          </button>
-        </template>
-
-        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
-          <div class="efs-popup-header">Info strips</div>
-          <div class="efs-popup-list">
-            <div
-              v-for="entry in infoEntries"
-              :key="entry.id"
-              class="efs-popup-item efs-popup-item--stack efs-popup-item--start"
-              :class="{ 'efs-popup-muted is-disabled': !entry.available }"
-            >
-              <span class="efs-popup-item-title">{{ entry.label }}</span>
-              <div v-if="entry.available && !entry.shown" class="info-strips-row-actions">
-                <button
-                  type="button"
-                  class="efs-popup-chip active"
-                  @click="onShowInfoStrip(entry)"
-                >Show</button>
-              </div>
-              <div v-else-if="entry.available && entry.hasCustomPlacement" class="info-strips-row-actions">
-                <button
-                  type="button"
-                  class="efs-popup-chip"
-                  @click="onResetInfoPlacement(entry)"
-                >Reset</button>
-              </div>
-            </div>
-          </div>
-
-          <template v-if="showRwyFlagTable">
-            <div class="efs-popup-section">RWY flags</div>
-            <table class="efs-popup-table">
-              <thead>
-                <tr>
-                  <th scope="col">RWY</th>
-                  <th scope="col" title="Occupied by vehicle">OCC</th>
-                  <th scope="col" title="Closed (AVSTÄNGD)">CLSD</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in rwyFlagRows" :key="row.sectionId">
-                  <th scope="row">{{ row.label }}</th>
-                  <td>
-                    <button
-                      type="button"
-                      class="efs-popup-chip"
-                      :class="{ active: row.occupied }"
-                      :title="row.occupied ? 'Hide occupied flag' : 'Show occupied flag'"
-                      @click="onToggleRwyFlag(row.sectionId, 'rwyOccupied')"
-                    >{{ row.occupied ? 'ON' : 'OFF' }}</button>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      class="efs-popup-chip"
-                      :class="{ active: row.closed }"
-                      :title="row.closed ? 'Hide closed flag' : 'Show closed flag'"
-                      @click="onToggleRwyFlag(row.sectionId, 'rwyClosed')"
-                    >{{ row.closed ? 'ON' : 'OFF' }}</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </template>
-        </div>
-      </v-menu>
+      <div v-if="store.essaRolesMode" class="search-text-wrap">
+        <button
+          type="button"
+          class="search-text-btn"
+          title="Search strips"
+          @click="ws.openSearchDialog()"
+        >
+          Search
+        </button>
+      </div>
 
       <div
         v-if="!store.isPaperLook"
@@ -277,14 +170,6 @@ import { ref, computed } from 'vue'
 import { useEfsStore } from '@/store/efs'
 import { useEfsChromeScaleValue } from '@/composables/useEfsUiScale'
 import {
-  useInfoStripMenu,
-  type InfoStripMenuEntry,
-} from '@/composables/useInfoStrips'
-import {
-  useRwyFlagMenu,
-  type RwyFlagKind,
-} from '@/composables/useRunwayFlagStrips'
-import {
   BAY_BG_BRIGHTNESS_DEFAULT,
   setBayBgBrightness,
   useBayBgBrightness,
@@ -295,7 +180,6 @@ import {
 } from '@/composables/useTouchDrag'
 import Clock from './Clock.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
-import TrashDialog from './TrashDialog.vue'
 import PrintDialog from './PrintDialog.vue'
 import { getWorkspace } from '@/workspace'
 
@@ -322,80 +206,7 @@ function onBayBgReset() {
   setBayBgBrightness(BAY_BG_BRIGHTNESS_DEFAULT)
 }
 
-const {
-  entries: infoEntries,
-  hasDismissedAvailable,
-  showEntry,
-  resetPlacement,
-} = useInfoStripMenu()
-
-const {
-  showTable: showRwyFlagTable,
-  rows: rwyFlagRows,
-  hasInactive: hasInactiveRwyFlags,
-  toggle: toggleRwyFlag,
-} = useRwyFlagMenu()
-
-const hasMenuRestoreHint = computed(
-  () => hasDismissedAvailable.value || hasInactiveRwyFlags.value,
-)
-
-const trashOpen = ref(false)
-const trashDragOver = ref(false)
-const infoMenuOpen = ref(false)
 const dialogOpen = ref(false)
-/** Suppress click-open after a strip was dropped on the trash */
-let suppressTrashClick = false
-
-function onTrashClick() {
-  if (suppressTrashClick) {
-    suppressTrashClick = false
-    return
-  }
-  trashOpen.value = true
-}
-
-function onShowInfoStrip(entry: InfoStripMenuEntry) {
-  showEntry(entry)
-  infoMenuOpen.value = false
-}
-
-function onResetInfoPlacement(entry: InfoStripMenuEntry) {
-  resetPlacement(entry)
-}
-
-function onToggleRwyFlag(sectionId: string, kind: RwyFlagKind) {
-  toggleRwyFlag(sectionId, kind)
-}
-
-function onTrashDragOver(event: DragEvent) {
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-  trashDragOver.value = true
-}
-
-function onTrashDragEnter() {
-  trashDragOver.value = true
-}
-
-function onTrashDragLeave(event: DragEvent) {
-  const related = event.relatedTarget as Node | null
-  const btn = event.currentTarget as HTMLElement
-  if (related && btn.contains(related)) return
-  trashDragOver.value = false
-}
-
-function onTrashDrop(event: DragEvent) {
-  trashDragOver.value = false
-  suppressTrashClick = true
-  const raw = event.dataTransfer?.getData('application/json')
-  if (!raw) return
-  try {
-    const data = JSON.parse(raw) as { stripId?: string }
-    if (data.stripId) store.deleteStrip(data.stripId)
-  } catch {
-    // ignore malformed drag payload
-  }
-}
 const dialogStripType = ref<SpecialStripType>('vfrDep')
 const dialogInitialAirport = ref<string | undefined>(undefined)
 const dialogTargetBayId = ref<string | undefined>(undefined)
@@ -731,6 +542,46 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   -webkit-user-drag: none;
 }
 
+/* ESSA Search — same chrome / hover as top-bar SEP (group + cell).
+   Sized by padding (not bar-height stretch) so vertical pad is visible. */
+.search-text-wrap {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px solid #4a4e54;
+  background: var(--efs-bay-bg, #3b3c41);
+  border-radius: calc(4px * var(--bb));
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.search-text-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: calc(8px * var(--bb)) calc(10px * var(--bb));
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: calc(12px * var(--bb));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.search-text-btn:hover {
+  /* Overlay on bay bg — same as .top-sep-cell.is-editable:hover */
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .bar-icon-btn {
   position: relative;
   display: flex;
@@ -757,30 +608,6 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   opacity: 0.35;
   cursor: not-allowed;
   color: #6b7280;
-}
-
-.trash-btn.drag-over,
-.trash-btn.trash-receiving {
-  color: #fecaca;
-  border-color: #ef4444;
-  background: #5c2a2a;
-  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
-}
-
-.trash-btn.trash-receiving {
-  animation: trash-receive-pulse 0.45s ease-out;
-}
-
-@keyframes trash-receive-pulse {
-  0% {
-    transform: scale(1);
-  }
-  40% {
-    transform: scale(1.12);
-  }
-  100% {
-    transform: scale(1);
-  }
 }
 
 .tiny-print-btn {
@@ -843,22 +670,6 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   50% {
     transform: scale(1.15);
   }
-}
-
-.info-strips-btn.has-restore {
-  color: #93c5fd;
-  border-color: #5b7a9e;
-}
-
-.info-dot {
-  position: absolute;
-  top: calc(4px * var(--bb));
-  right: calc(4px * var(--bb));
-  width: calc(7px * var(--bb));
-  height: calc(7px * var(--bb));
-  border-radius: 50%;
-  background: #60a5fa;
-  box-shadow: 0 0 0 1px #35373c;
 }
 
 .bay-bg-slider {
@@ -1013,8 +824,4 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-.info-strips-row-actions {
-  margin-top: 2px;
-  align-self: flex-start;
-}
 </style>

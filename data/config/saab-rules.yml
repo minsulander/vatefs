@@ -1,0 +1,294 @@
+# Shared OTHER runway / GOA / move rules for 1RWY and 2RWY profiles.
+# Rules whose sectionId is missing from the active profile layout are dropped at load.
+# Dynamic runway_* headers (catalog-added) are remapped at evaluation like ESSA.
+
+sectionRules:
+  # CA/VA alone → stay INBOUND (2RWY / when inbound exists)
+  ctr_arr_approach_clearance_other:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    approachClearance: true
+    priority: 85
+
+  # === 1RWY: single RUNWAY section ===
+  on_runway_geographic:
+    sectionId: runway
+    onRunway: true
+    priority: 200
+
+  runway_lineup_depa:
+    sectionId: runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    priority: 90
+
+  runway_cleared_to_land:
+    sectionId: runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
+
+  # === 2RWY: ARR / DEP runway sections ===
+  on_runway_geographic_dep:
+    sectionId: dep_runway
+    onRunway: true
+    depRunway: true
+    priority: 201
+
+  on_runway_geographic_arr:
+    sectionId: arr_runway
+    onRunway: true
+    arrRunway: true
+    priority: 200
+
+  on_runway_geographic_third_dep:
+    sectionId: dep_runway
+    onRunway: true
+    depRunway: false
+    arrRunway: false
+    direction: departure
+    priority: 191
+
+  on_runway_geographic_third_arr:
+    sectionId: arr_runway
+    onRunway: true
+    depRunway: false
+    arrRunway: false
+    direction: arrival
+    priority: 190
+
+  runway_lineup_depa_dep:
+    sectionId: dep_runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    depRunway: true
+    priority: 91
+
+  runway_lineup_depa_arr:
+    sectionId: arr_runway
+    airborne: false
+    groundstates: [LINEUP, DEPA]
+    depRunway: false
+    priority: 90
+
+  runway_cleared_to_land_dep:
+    sectionId: dep_runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    depRunway: true
+    priority: 96
+
+  runway_cleared_to_land_arr:
+    sectionId: arr_runway
+    direction: either
+    clearedToLand: true
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    priority: 95
+
+actionRules:
+  goa_runway:
+    action: GOA
+    sectionId: runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  goa_arr_runway:
+    action: GOA
+    sectionId: arr_runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  goa_dep_runway:
+    action: GOA
+    sectionId: dep_runway
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+  goa_ctr_arr:
+    action: GOA
+    sectionId: ctr_arr
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
+moveRules:
+  # --- 1RWY ---
+  move_taxi_to_runway:
+    fromSectionId: taxi
+    toSectionId: runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_inbound_to_runway:
+    fromSectionId: inbound
+    toSectionId: runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_ctr_arr_to_runway_dep:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: departure
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_ctr_arr_to_runway_local:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: local
+    myRole: [TWR, APP, CTR]
+    priority: 20
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_ctr_arr_to_runway:
+    fromSectionId: ctr_arr
+    toSectionId: runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    priority: 10
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_runway_to_taxi_dep:
+    fromSectionId: runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_runway_to_taxi_arr:
+    fromSectionId: runway
+    toSectionId: taxi
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN
+
+  # --- 2RWY ---
+  move_taxi_to_dep_runway:
+    fromSectionId: taxi
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_taxi_to_arr_runway:
+    fromSectionId: taxi
+    toSectionId: arr_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: LINEUP
+
+  move_inbound_to_arr_runway:
+    fromSectionId: inbound
+    toSectionId: arr_runway
+    direction: arrival
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_inbound_to_dep_runway:
+    fromSectionId: inbound
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_ctr_arr_to_arr_runway:
+    fromSectionId: ctr_arr
+    toSectionId: arr_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_ctr_arr_to_dep_runway:
+    fromSectionId: ctr_arr
+    toSectionId: dep_runway
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_arr_runway_to_taxi_dep:
+    fromSectionId: arr_runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_arr_runway_to_taxi:
+    fromSectionId: arr_runway
+    toSectionId: taxi
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN
+
+  move_dep_runway_to_taxi_dep:
+    fromSectionId: dep_runway
+    toSectionId: taxi
+    direction: departure
+    priority: 10
+    command:
+      type: setGroundstate
+      value: TAXI
+
+  move_dep_runway_to_taxi:
+    fromSectionId: dep_runway
+    toSectionId: taxi
+    direction: either
+    myRole: [GND, TWR, APP, CTR]
+    command:
+      type: setGroundstate
+      value: TXIN

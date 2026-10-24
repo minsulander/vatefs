@@ -64,7 +64,7 @@ The backend:
 - Sends UDP messages on port 17772 (to EuroScope)
 
 Command-line arguments:
-- `--config FILE` - Load configuration from YAML file (default: `data/config/singlerwy4bays.yml`)
+- `--config FILE` - Load configuration from YAML file (default: `data/config/saab.yml`)
 - `--callsign CALLSIGN` - Override controller callsign (normally comes from EuroScope myselfUpdate)
 - `--record FILE` - Record UDP messages to file for playback
 - `--mock` - Load mock flight data for testing without EuroScope
@@ -155,12 +155,13 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 ### Data Files
 - `data/airports.csv` - Airport database with ICAO codes, coordinates, elevations
 - `data/runways.csv` - Runway database with headings, dimensions, thresholds
-- `data/config/singlerwy4bays.yml` - Default configuration for ESGG (Gothenburg, single runway)
-- `data/config/dualrwy4bays.yml` - Configuration for ESSA (Stockholm, dual runway)
+- `data/config/saab.yml` - OTHER config (display name OTHER; digital SAAB strip look; Layout profiles 1RWY 3/4 BAYS, 2RWY 4 BAYS)
+- `data/config/essa.yml` - ESSA role-based layout
+- `data/config/esgg.yml` - ESGG paper look
 
 ### Configuration Files (YAML)
 
-Configuration is loaded from YAML files in `data/config/`. The default is `singlerwy4bays.yml`.
+Configuration is loaded from YAML files in `data/config/`. The default is `saab.yml`.
 
 ```yaml
 airports:
@@ -257,7 +258,7 @@ Section titles in YAML config can use template variables that resolve at runtime
 - Layout is re-broadcast to all clients when active runways change (rwyconfig update)
 
 ### Dual Runway Support
-The `dualrwy4bays.yml` config demonstrates separate arrival and departure runway sections:
+The OTHER config `2rwy4` layout demonstrates separate arrival and departure runway sections:
 - `arr_runway` — for flights on the arrival runway (default/fallback)
 - `dep_runway` — for flights on the departure runway (exception)
 - Uses `depRunway: true/false` condition to route flights to the correct section

@@ -142,6 +142,14 @@ export interface StatusMessage {
     essaCoveredRunways?: string[]
     /** Strip chrome from active YAML (`look: paper` → paper; default saab) */
     look?: 'saab' | 'paper'
+    /** OTHER bay-profile mode (saab.yml + Layout picker; digital SAAB strip look) */
+    saabLayoutsMode?: boolean
+    /** Active OTHER (saab.yml) profile id (e.g. 1rwy4); null when not in OTHER mode */
+    saabLayoutId?: string | null
+    /** Built-in OTHER profiles for the Layout menu */
+    saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
+    /** Addable RUNWAY headers (active airports / physical strips) for OTHER catalog */
+    saabRunwayCatalog?: Array<{ sectionId: string; title: string }>
 }
 
 export interface DclStatusMessage {
@@ -228,9 +236,9 @@ export interface RwyFlagsMessage {
 }
 
 export interface ConfigInfo {
-    /** Config file basename (e.g. "singlerwy4bays.yml") */
+    /** Config file basename (e.g. "saab.yml") */
     file: string
-    /** Display name from the "name" field in YAML (e.g. "1RWY4BAY") */
+    /** Display name from the "name" field in YAML (e.g. "OTHER", "ESSA") */
     name: string
 }
 
@@ -238,6 +246,9 @@ export interface ConfigListMessage {
     type: 'configList'
     configs: ConfigInfo[]
     activeConfig: string  // file basename of the currently active config
+    /** Active OTHER profile when activeConfig is saab.yml */
+    saabLayoutId?: string
+    saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
 }
 
 export interface ControllerInfo {
@@ -455,7 +466,24 @@ export interface DclSetModeMessage {
 
 export interface SwitchConfigMessage {
     type: 'switchConfig'
-    file: string  // Config file basename (e.g. "dualrwy4bays.yml")
+    file: string  // Config file basename (e.g. "saab.yml")
+}
+
+/** Switch OTHER bay profile within saab.yml (does not change activeConfig file). */
+export interface SwitchSaabLayoutMessage {
+    type: 'switchSaabLayout'
+    layoutId: string
+}
+
+/** Add a section to the live OTHER server layout (catalog drop / click). */
+export interface SaabEnsureSectionMessage {
+    type: 'saabEnsureSection'
+    sectionId: string
+    title: string
+    /** Target bay (default: bay with runway / first bay) */
+    bayId?: string
+    /** Insert before this section id within the bay */
+    beforeSectionId?: string
 }
 
 export interface CreateStripMessage {
@@ -641,7 +669,7 @@ export interface SetQnhGivenMessage {
     atis?: string | null
 }
 
-/** Paper strip sideways offset (klack). Null clears. Synced via EFS strip sync. */
+/** Sideways offset — paper klack / SAAB cock. Null clears. Synced via EFS strip sync. */
 export interface SetKlackMessage {
     type: 'setKlack'
     stripId: string
@@ -649,7 +677,7 @@ export interface SetKlackMessage {
     klack: 'left' | 'right' | null
 }
 
-/** SAAB strip highlight. `global` syncs; `local` is this client only. Null clears. */
+/** @deprecated SAAB highlight replaced by cock (`setKlack`). Kept for older clients. */
 export interface SetHighlightMessage {
     type: 'setHighlight'
     stripId: string
@@ -781,7 +809,7 @@ export interface RequestCidSuggestMessage {
     type: 'requestCidSuggest'
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage
 
 // Type guards for message parsing
 
@@ -805,5 +833,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'switchSaabLayout' || type === 'saabEnsureSection' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'setEssaRoles' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest'
 }

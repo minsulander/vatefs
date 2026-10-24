@@ -24,7 +24,7 @@ import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { parseControllerRole, isParallelTwr } from "./static-config.js"
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
-import { essaRunwaySectionId } from "@vatefs/common"
+import { essaRunwaySectionId, isEssaDynamicRunwaySectionId } from "@vatefs/common"
 import {
     familiesFromRoles,
     isEssaRolesConfig,
@@ -32,6 +32,11 @@ import {
     resolveEssaPairForFlight,
     type EssaFamily,
 } from "./essa-roles.js"
+import {
+    isSaabLayouts,
+    isSaabRunwayFamilySectionId,
+    resolveSaabDynamicRunwaySection,
+} from "./saab-runways.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -698,6 +703,17 @@ export function determineSectionForFlight(
                     }
                 }
             }
+            // OTHER: prefer catalog-added runway_* when present on the board
+            if (isSaabLayouts(config) && isSaabRunwayFamilySectionId(sectionId)) {
+                const dyn = resolveSaabDynamicRunwaySection(flight, config, sectionId)
+                if (dyn && config.sectionToBay.has(dyn)) {
+                    return {
+                        bayId: config.sectionToBay.get(dyn)!,
+                        sectionId: dyn,
+                        ruleId: rule.id,
+                    }
+                }
+            }
             const bayId = config.sectionToBay.get(sectionId)
             if (!bayId) {
                 console.error(`Section "${sectionId}" from rule "${rule.id}" not found in layout`)
@@ -744,10 +760,20 @@ function evaluateActionRule(
             ? logicalSectionId(sectionId)
             : sectionId
         if (rule.sectionId !== effectiveSection) {
-            // ESSA: YAML arr_runway/dep_runway actions also match dynamic runway_* sections
-            const ruleIsRunway = isEssaLegacyRunwaySectionId(rule.sectionId)
-            const sectionIsRunway = isEssaLegacyRunwaySectionId(effectiveSection)
-            if (!(isEssaRolesConfig(config) && ruleIsRunway && sectionIsRunway)) {
+            // ESSA / OTHER: YAML runway family actions also match dynamic runway_* sections
+            const ruleIsRunway =
+                isEssaLegacyRunwaySectionId(rule.sectionId) ||
+                rule.sectionId === 'runway' ||
+                isEssaDynamicRunwaySectionId(rule.sectionId)
+            const sectionIsRunway =
+                isEssaLegacyRunwaySectionId(effectiveSection) ||
+                effectiveSection === 'runway' ||
+                isEssaDynamicRunwaySectionId(effectiveSection)
+            const allowRunwayFamily =
+                (isEssaRolesConfig(config) || isSaabLayouts(config)) &&
+                ruleIsRunway &&
+                sectionIsRunway
+            if (!allowRunwayFamily) {
                 return false
             }
         }

@@ -18,12 +18,14 @@ import {
   WORKSPACE_MAX_COLUMNS,
   WORKSPACE_MIN_COLUMNS,
   WORKSPACE_MIN_SECTION_H,
+  effectiveSectionY,
   newInstanceId,
 } from './types'
-import { ESSA_CATALOG_SECTIONS } from './catalog'
+import { ESSA_CATALOG_SECTIONS, SAAB_CATALOG_SECTIONS } from './catalog'
 import {
   annotateCatalogSection,
   buildDefaultWorkspaceLayout,
+  buildWorkspaceLayoutFromServer,
   serverBayIdForSection,
 } from './defaultLayout'
 import { essaRoleKey, formatEssaRolesLabel } from './roleLabel'
@@ -67,6 +69,8 @@ type WorkspaceModuleState = {
   draggingSectionId: Ref<string | null>
   lastRoleKey: string
   layoutPromptConfirmedFor: string
+  /** After switchSaabLayout, apply this saved workspace once server layout arrives */
+  pendingSaabSavedLayout: Ref<WorkspaceLayout | null>
 }
 
 const g = globalThis as typeof globalThis & { __vatefsWorkspaceState?: WorkspaceModuleState }
@@ -84,10 +88,16 @@ function getState(): WorkspaceModuleState {
       draggingSectionId: ref(null),
       lastRoleKey: '',
       layoutPromptConfirmedFor: '',
+      pendingSaabSavedLayout: ref<WorkspaceLayout | null>(null),
     }
-  } else if (!g.__vatefsWorkspaceState.manuallyAddedRunwayIds) {
+  } else {
     // HMR / older singleton shape
-    g.__vatefsWorkspaceState.manuallyAddedRunwayIds = ref(new Set())
+    if (!g.__vatefsWorkspaceState.manuallyAddedRunwayIds) {
+      g.__vatefsWorkspaceState.manuallyAddedRunwayIds = ref(new Set())
+    }
+    if (!g.__vatefsWorkspaceState.pendingSaabSavedLayout) {
+      g.__vatefsWorkspaceState.pendingSaabSavedLayout = ref(null)
+    }
   }
   return g.__vatefsWorkspaceState
 }
@@ -98,6 +108,7 @@ const layoutDialogOpen = state.layoutDialogOpen
 const layoutDialogReason = state.layoutDialogReason
 const searchDialogOpen = state.searchDialogOpen
 const pendingRoleKey = state.pendingRoleKey
+const pendingSaabSavedLayout = state.pendingSaabSavedLayout
 const closedSectionIds = state.closedSectionIds
 const manuallyAddedRunwayIds = state.manuallyAddedRunwayIds
 const draggingSectionId = state.draggingSectionId
@@ -146,11 +157,42 @@ export function useWorkspace() {
   function ensureFromServer(
     serverLayout: EfsLayout,
     roles: string[],
-    opts?: { forceBuiltIn?: boolean },
+    opts?: { forceBuiltIn?: boolean; saabProfileId?: string },
   ) {
-    const roleKey = essaRoleKey(roles)
     const defaultFlow = getDefaultSortFlow()
+    const store = useEfsStore()
 
+    // OTHER: mirror server bays (not ESSA role templates)
+    if (store.saabLayoutsMode && !store.essaRolesMode) {
+      const profileId = opts?.saabProfileId || store.saabLayoutId || '1rwy4'
+      const roleKey = `saab:${profileId}`
+      if (pendingSaabSavedLayout.value) {
+        const pending = pendingSaabSavedLayout.value
+        pendingSaabSavedLayout.value = null
+        applyLayout({
+          ...pending,
+          roleKey,
+          columnCount: Math.max(pending.columnCount, serverLayout.bays.length),
+        })
+        return
+      }
+      if (
+        opts?.forceBuiltIn ||
+        !activeLayout.value ||
+        activeLayout.value.roleKey !== roleKey
+      ) {
+        activeLayout.value = buildWorkspaceLayoutFromServer(serverLayout, {
+          roleKey,
+          defaultSortFlow: defaultFlow,
+        })
+        closedSectionIds.value = new Set()
+        manuallyAddedRunwayIds.value = new Set()
+        persistActiveLayout(activeLayout.value)
+      }
+      return
+    }
+
+    const roleKey = essaRoleKey(roles)
     if (opts?.forceBuiltIn || !activeLayout.value || activeLayout.value.roleKey !== roleKey) {
       activeLayout.value = buildDefaultWorkspaceLayout(serverLayout, roles, {
         defaultSortFlow: defaultFlow,
@@ -213,7 +255,7 @@ export function useWorkspace() {
     for (const sec of serverRwys) {
       if (present.has(sec.id)) continue
       if (closedSectionIds.value.has(sec.id)) continue
-      const layoutNow = activeLayout.value
+      const layoutNow: WorkspaceLayout | null = activeLayout.value
       if (!layoutNow) break
       const col = preferredRunwayColumn(layoutNow, serverLayout, sec.id)
       const next = insertSectionWithoutOverlap(
@@ -295,27 +337,34 @@ export function useWorkspace() {
     confirmLayoutPrompt(key)
   }
 
-  function applyLayout(layout: WorkspaceLayout) {
+  /**
+   * Put a layout on the board without confirming/closing the picker.
+   * Layout = bay count + section dividers only (info strips are independent).
+   */
+  function previewLayout(layout: WorkspaceLayout, opts?: { resetClosed?: boolean }) {
     const roleKey = layout.roleKey || essaRoleKey(layout.roles)
-    // Close + confirm first so reactive cascades cannot reopen the picker
-    confirmLayoutPrompt(roleKey)
-    // Dividers + bay count only — never restore info-strip state from a layout file
     const cleaned = sanitizeWorkspaceLayout({
       ...layout,
       roleKey,
       rolesLabel: layout.rolesLabel || formatEssaRolesLabel(layout.roles),
     })
     activeLayout.value = cleaned
-    closedSectionIds.value = new Set()
+    if (opts?.resetClosed !== false) closedSectionIds.value = new Set()
     persistActiveLayout(activeLayout.value)
   }
 
+  function applyLayout(layout: WorkspaceLayout) {
+    const roleKey = layout.roleKey || essaRoleKey(layout.roles)
+    // Close + confirm first so reactive cascades cannot reopen the picker
+    confirmLayoutPrompt(roleKey)
+    previewLayout(layout)
+  }
+
   /**
-   * Apply a built-in default for `structureRoles` (e.g. CD-only profile).
-   * `stampRoles` defaults to structureRoles; pass current live roles when
-   * loading another combo's DEFAULT without changing the role selection.
+   * Built-in default for `structureRoles` (e.g. CD-only profile) on the board
+   * without confirming the picker. `stampRoles` defaults to structureRoles.
    */
-  function applyBuiltInDefault(
+  function previewBuiltInDefault(
     serverLayout: EfsLayout,
     structureRoles: string[],
     stampRoles?: string[],
@@ -337,12 +386,30 @@ export function useWorkspace() {
       }
     }
     closedSectionIds.value = closed
-    applyLayout({
-      ...built,
-      roleKey: essaRoleKey(stamp),
-      roles: [...stamp],
-      rolesLabel: formatEssaRolesLabel(stamp),
-    })
+    previewLayout(
+      {
+        ...built,
+        roleKey: essaRoleKey(stamp),
+        roles: [...stamp],
+        rolesLabel: formatEssaRolesLabel(stamp),
+      },
+      { resetClosed: false },
+    )
+  }
+
+  /**
+   * Apply a built-in default for `structureRoles` (e.g. CD-only profile).
+   * `stampRoles` defaults to structureRoles; pass current live roles when
+   * loading another combo's DEFAULT without changing the role selection.
+   */
+  function applyBuiltInDefault(
+    serverLayout: EfsLayout,
+    structureRoles: string[],
+    stampRoles?: string[],
+  ) {
+    const stamp = stampRoles ?? structureRoles
+    previewBuiltInDefault(serverLayout, structureRoles, stamp)
+    confirmLayoutPrompt(essaRoleKey(stamp))
   }
 
   function setColumnCount(n: number, serverLayout: EfsLayout) {
@@ -419,12 +486,13 @@ export function useWorkspace() {
   function sectionsInColumn(col: number): WorkspaceSection[] {
     const layout = activeLayout.value
     if (!layout) return []
+    const bodyH = columnBodyHeightByCol.value[col] ?? 0
     return layout.sections
       .filter((s) => s.anchorColumn === col)
       .slice()
       .sort((a, b) => {
-        const ay = a.y
-        const by = b.y
+        const ay = effectiveSectionY(a, bodyH)
+        const by = effectiveSectionY(b, bodyH)
         if (ay != null && by != null && ay !== by) return ay - by
         if (ay != null && by == null) return -1
         if (ay == null && by != null) return 1
@@ -441,15 +509,44 @@ export function useWorkspace() {
     const sorted = sectionsInColumn(col)
     const bodyH = columnBodyHeightByCol.value[col] ?? 0
     if (!sorted.length) return bodyH > 0 ? bodyH : 0
-    const y0 = sorted[0]!.y
+    const y0 = effectiveSectionY(sorted[0]!, bodyH)
     return y0 != null && y0 > 0 ? y0 : 0
+  }
+
+  /** Bake yRatio → absolute y once column body height is known (DEFAULT CD EOBT). */
+  function materializeYRatios(col: number): boolean {
+    const layout = activeLayout.value
+    if (!layout) return false
+    const bodyH = columnBodyHeightByCol.value[col] ?? 0
+    if (bodyH <= 0) return false
+    let changed = false
+    const sections = layout.sections.map((s) => {
+      if (s.anchorColumn !== col || s.yRatio == null) return s
+      const y = effectiveSectionY(s, bodyH)
+      if (y == null || y === s.y) return s
+      changed = true
+      return { ...s, y }
+    })
+    if (!changed) return false
+    activeLayout.value = { ...layout, sections }
+    return true
   }
 
   function setColumnBodyHeight(col: number, height: number) {
     const h = Math.max(0, Math.round(height))
-    if (columnBodyHeightByCol.value[col] === h) return
-    columnBodyHeightByCol.value = { ...columnBodyHeightByCol.value, [col]: h }
-    scheduleOverflowRepack()
+    const prev = columnBodyHeightByCol.value[col]
+    if (prev !== h) {
+      columnBodyHeightByCol.value = { ...columnBodyHeightByCol.value, [col]: h }
+    }
+    // Reload/HMR can freeze headers at y≈0 before the bay has height; heal once body is real.
+    // Also re-check when height is unchanged (Vite HMR remount keeps the workspace singleton).
+    if (h >= WORKSPACE_MIN_SECTION_H * 2) {
+      const ratioed = materializeYRatios(col)
+      const healed = healCollapsedColumnYs(col)
+      if (healed || columnHasUnsetYs(col)) syncColumnYsFromDom(col)
+      else if (ratioed) scheduleOverflowRepack()
+    }
+    if (prev !== h) scheduleOverflowRepack()
   }
 
   function setSectionTopOrder(instanceId: string, stripIds: string[]) {
@@ -539,31 +636,121 @@ export function useWorkspace() {
   }
 
   /**
-   * Capture current header tops into `y` so later removes/moves keep visual positions.
+   * True when absolute header tops form a header-only stack at the top of a tall bay
+   * (reload / HMR before flex layout, or a persisted bad sync).
    */
-  function syncColumnYsFromDom(col: number) {
+  function columnYsLookStacked(ys: number[], bodyH: number, headerH: number): boolean {
+    const n = ys.length
+    if (n < 2) return false
+    if (bodyH < n * WORKSPACE_MIN_SECTION_H) return false
+    const sorted = ys.slice().sort((a, b) => a - b)
+    const span = sorted[sorted.length - 1]! - sorted[0]!
+    // Healthy equal-flex span is ~bodyH*(n-1)/n; a header clump spans ~(n-1)*headerH.
+    const clumpMax = (n - 1) * headerH + 12
+    return span <= clumpMax && sorted[0]! <= headerH
+  }
+
+  /** Evenly space headers down the column (fallback when DOM snapshot is collapsed). */
+  function assignEvenColumnYs(col: number, bodyH: number): boolean {
     const layout = activeLayout.value
-    if (!layout) return
+    if (!layout) return false
+    const sorted = sectionsInColumn(col)
+    if (sorted.length < 1) return false
+    if (bodyH < sorted.length * WORKSPACE_MIN_SECTION_H) return false
+    const step = bodyH / sorted.length
+    const yById = new Map<string, number>()
+    sorted.forEach((s, i) => yById.set(s.instanceId, Math.round(i * step)))
+    activeLayout.value = {
+      ...layout,
+      sections: layout.sections.map((s) => {
+        const y = yById.get(s.instanceId)
+        return y != null ? { ...s, y } : s
+      }),
+    }
+    return true
+  }
+
+  /**
+   * If this column's stored absolute Ys are a top-of-bay header stack, clear them
+   * so equal-flex can redistribute (then a later sync can freeze healthy tops).
+   */
+  function healCollapsedColumnYs(col: number): boolean {
+    const layout = activeLayout.value
+    if (!layout) return false
+    const sorted = sectionsInColumn(col).filter((s) => s.y != null)
+    if (sorted.length < 2) return false
+    const bodyH =
+      columnBodyHeightByCol.value[col] ??
+      columnBodyEl(col)?.getBoundingClientRect().height ??
+      0
+    const headerH = measureHeaderHeight(sorted[0]?.instanceId)
+    const ys = sorted.map((s) => s.y ?? 0)
+    if (!columnYsLookStacked(ys, bodyH, headerH)) return false
+    activeLayout.value = {
+      ...layout,
+      sections: layout.sections.map((s) => {
+        if (s.anchorColumn !== col) return s
+        const { y: _y, height: _h, ...rest } = s
+        return rest
+      }),
+    }
+    persistActiveLayout(activeLayout.value)
+    return true
+  }
+
+  /**
+   * Capture current header tops into `y` so later removes/moves keep visual positions.
+   * Rejects / repairs collapsed snapshots so reload & layout refresh cannot lock a
+   * header stack at the top of each bay.
+   * @returns true when the column now has usable absolute Ys
+   */
+  function syncColumnYsFromDom(col: number): boolean {
+    const layout = activeLayout.value
+    if (!layout) return false
     const body = columnBodyEl(col)
-    if (!body) return
+    if (!body) return false
+    const bodyH = Math.round(body.getBoundingClientRect().height)
     const bodyTop = body.getBoundingClientRect().top
-    const next = layout.sections.map((s) => {
-      if (s.anchorColumn !== col) return s
+    const headerH = measureHeaderHeight()
+    const measured: { id: string; y: number }[] = []
+    for (const s of layout.sections) {
+      if (s.anchorColumn !== col) continue
       const el = document.querySelector(
         `[data-ws-instance="${CSS.escape(s.instanceId)}"]`,
       ) as HTMLElement | null
-      if (!el) return s
-      const y = Math.max(0, Math.round(el.getBoundingClientRect().top - bodyTop))
-      return { ...s, y }
-    })
-    activeLayout.value = { ...layout, sections: next }
+      if (!el) continue
+      measured.push({
+        id: s.instanceId,
+        y: Math.max(0, Math.round(el.getBoundingClientRect().top - bodyTop)),
+      })
+    }
+    if (!measured.length) return false
+
+    const ys = measured.map((m) => m.y)
+    if (columnYsLookStacked(ys, bodyH, headerH)) {
+      // Prefer mathematical even spacing over writing a bad stack into the layout.
+      return assignEvenColumnYs(col, bodyH)
+    }
+
+    const yById = new Map(measured.map((m) => [m.id, m.y]))
+    activeLayout.value = {
+      ...layout,
+      sections: layout.sections.map((s) => {
+        const y = yById.get(s.instanceId)
+        return y != null ? { ...s, y } : s
+      }),
+    }
+    return true
   }
 
-  /** True when any header in this column still lacks an absolute `y` (equal-flex). */
+  /** True when any header in this column still lacks a resolvable Y (equal-flex). */
   function columnHasUnsetYs(col: number): boolean {
     const layout = activeLayout.value
     if (!layout) return false
-    return layout.sections.some((s) => s.anchorColumn === col && s.y == null)
+    const bodyH = columnBodyHeightByCol.value[col] ?? 0
+    return layout.sections.some(
+      (s) => s.anchorColumn === col && effectiveSectionY(s, bodyH) == null,
+    )
   }
 
   /**
@@ -573,7 +760,12 @@ export function useWorkspace() {
    */
   function ensureColumnAbsoluteYs(col: number) {
     if (!columnHasUnsetYs(col)) return
-    syncColumnYsFromDom(col)
+    if (syncColumnYsFromDom(col)) return
+    const bodyH =
+      columnBodyHeightByCol.value[col] ??
+      columnBodyEl(col)?.getBoundingClientRect().height ??
+      0
+    assignEvenColumnYs(col, bodyH)
   }
 
   function clientYToColumnY(col: number, clientY: number): number {
@@ -756,7 +948,8 @@ export function useWorkspace() {
       const sorted = all
         .filter((s) => s.anchorColumn === col && s.y != null)
         .sort((a, b) => (a.y ?? 0) - (b.y ?? 0))
-      const desired = sorted.length ? (sorted[sorted.length - 1].y ?? 0) + headerH : 0
+      const last = sorted.length ? sorted[sorted.length - 1] : undefined
+      const desired = last ? (last.y ?? 0) + headerH : 0
       const probe = { ...sec, y: desired }
       const y = collideHeaderY(probe, col, desired, [...all, probe], {
         allowMergeOverlap: false,
@@ -1001,12 +1194,29 @@ export function useWorkspace() {
     if (!layout) return
     // Already present?
     if (layout.sections.some((s) => s.sectionId === sectionId)) return
+    const store = useEfsStore()
     const isRwy = isEssaDynamicRunwaySectionId(sectionId)
-    const col = isRwy
+    const catalogMode = store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa'
+    // Place TMA in the same column as CTR / CTR ARR / CTR DEP when possible
+    let col = column
+    if (catalogMode === 'saab' && sectionId === 'tma') {
+      const ctrCol = layout.sections.find((s) => {
+        const t = (s.title || '').toUpperCase().trim()
+        return (
+          t === 'CTR' ||
+          t === 'CTR ARR' ||
+          t === 'CTR DEP' ||
+          s.groupId === 'saab_ctr' ||
+          (s.groupId === 'saab_ctr_tma' && s.member === 'ctr') ||
+          s.sectionId === 'ctr_arr' ||
+          s.sectionId === 'ctr_dep'
+        )
+      })?.anchorColumn
+      if (ctrCol != null) col = ctrCol
+    }
+    col = isRwy
       ? preferredRunwayColumn(layout, serverLayout, sectionId)
-      : Math.min(layout.columnCount - 1, Math.max(0, column))
-    const bayId = serverBayIdForSection(serverLayout, sectionId)
-    void bayId
+      : Math.min(layout.columnCount - 1, Math.max(0, col))
     const nextClosed = new Set(closedSectionIds.value)
     nextClosed.delete(sectionId)
     closedSectionIds.value = nextClosed
@@ -1015,8 +1225,9 @@ export function useWorkspace() {
       nextManual.add(sectionId)
       manuallyAddedRunwayIds.value = nextManual
     }
-    const anno = annotateCatalogSection(sectionId, title)
+    const anno = annotateCatalogSection(sectionId, title, catalogMode)
     const sec: WorkspaceSection = {
+      // Match server/YAML sections: stable instanceId === sectionId
       instanceId: sectionId,
       sectionId,
       title: anno.title ?? title,
@@ -1041,28 +1252,32 @@ export function useWorkspace() {
     const cols: Bay[] = []
     for (let c = 0; c < layout.columnCount; c++) {
       const sorted = sectionsInColumn(c)
-      const useY = sorted.some((s) => s.y != null)
+      const bodyH = columnBodyHeightByCol.value[c] ?? 0
+      const useY = sorted.some((s) => effectiveSectionY(s, bodyH) != null)
       // If absolute Y is in use, coerce missing/overlapping tops so headers never share pixels.
       // Null-y siblings must NOT pack to header-only gaps (that stacked whole columns when an
       // empty divider first introduced a `y` into an equal-flex bay) — keep a section-sized step.
-      const tops = useY
-        ? (() => {
-            const headerH = measureHeaderHeight()
-            const nullStep = Math.max(headerH, WORKSPACE_MIN_SECTION_H)
-            let prev = -headerH
-            return sorted.map((s) => {
-              let y = s.y
-              if (y == null) y = prev + nullStep
-              else if (y < prev + headerH) y = prev + headerH
-              prev = y
-              return y
-            })
-          })()
-        : null
+      // If stored Ys are a top-of-bay header clump, fall back to equal-flex (heal runs on body size).
+      let tops: number[] | null = null
+      if (useY) {
+        const headerH = measureHeaderHeight()
+        const nullStep = Math.max(headerH, WORKSPACE_MIN_SECTION_H)
+        let prev = -headerH
+        const packed = sorted.map((s) => {
+          let y = effectiveSectionY(s, bodyH)
+          if (y == null) y = prev + nullStep
+          else if (y < prev + headerH) y = prev + headerH
+          prev = y
+          return y
+        })
+        tops = columnYsLookStacked(packed, bodyH, headerH) ? null : packed
+      }
       const colSections = sorted.map((s, i): Section => {
         let height = s.height
         if (tops && i < sorted.length - 1) {
-          height = Math.max(0, tops[i + 1] - tops[i])
+          const a = tops[i]
+          const b = tops[i + 1]
+          height = a != null && b != null ? Math.max(0, b - a) : height
         } else if (tops && i === sorted.length - 1) {
           height = undefined // last flexes to fill
         }
@@ -1112,39 +1327,183 @@ export function useWorkspace() {
   function catalogSections(
     serverLayout: EfsLayout,
     _roles?: string[],
-  ): { sectionId: string; title: string; present: boolean }[] {
+    opts?: { mode?: 'essa' | 'saab' },
+  ): {
+    sectionId: string
+    title: string
+    present: boolean
+    flow?: 'arrival' | 'departure'
+  }[] {
+    const mode = opts?.mode ?? 'essa'
+    const store = useEfsStore()
     const presentIds = new Set(
       (activeLayout.value?.sections ?? []).map((s) => s.sectionId).filter(Boolean) as string[],
     )
+    // DEP header covers both pending_dep and cleared
+    if (presentIds.has('pending_dep') || presentIds.has('cleared')) {
+      presentIds.add('pending_dep')
+      presentIds.add('cleared')
+    }
+    // Also treat server layout sections as present when workspace layout is empty
+    if (presentIds.size === 0) {
+      for (const bay of serverLayout.bays) {
+        for (const sec of bay.sections) presentIds.add(sec.id)
+      }
+      if (presentIds.has('pending_dep') || presentIds.has('cleared')) {
+        presentIds.add('pending_dep')
+        presentIds.add('cleared')
+      }
+    }
     const serverTitle = new Map<string, string>()
     for (const bay of serverLayout.bays) {
       for (const sec of bay.sections) {
         if (!serverTitle.has(sec.id)) serverTitle.set(sec.id, sec.title)
       }
     }
-    const out: { sectionId: string; title: string; present: boolean }[] = []
+    const out: {
+      sectionId: string
+      title: string
+      present: boolean
+      flow?: 'arrival' | 'departure'
+    }[] = []
     const seen = new Set<string>()
-    const push = (sectionId: string, title: string) => {
-      if (seen.has(sectionId)) return
+    const push = (sectionId: string, title: string, flow?: 'arrival' | 'departure') => {
+      // OTHER: allow same sectionId with different titles (DEP vs PENDING CLR)
+      const seenKey = mode === 'saab' ? `${sectionId}::${title}` : sectionId
+      if (seen.has(seenKey)) return
       // YAML placeholders — physical pairs are listed separately
-      if (sectionId === 'arr_runway' || sectionId === 'dep_runway') return
-      seen.add(sectionId)
+      if (mode === 'essa' && (sectionId === 'arr_runway' || sectionId === 'dep_runway')) return
+      seen.add(seenKey)
+      // Prefer catalog title for OTHER fixed labels (never inherit ESSA YAML names)
+      const preferCatalog =
+        mode === 'saab' &&
+        (sectionId === 'pending_dep' ||
+          sectionId === 'cleared' ||
+          sectionId === 'ctr_arr' ||
+          sectionId === 'tma' ||
+          sectionId === 'ctr' ||
+          sectionId === 'taxi' ||
+          sectionId === 'push_start')
+      // TMA / CTR / DEP cover multiple server ids — overridden below for saab specials
+      let present = presentIds.has(sectionId)
+      if (mode === 'saab' && sectionId === 'ctr_arr' && title === 'TMA / CTR') {
+        present =
+          presentIds.has('ctr_arr') ||
+          presentIds.has('ctr_dep') ||
+          presentIds.has('tma') ||
+          presentIds.has('ctr')
+      }
+      if (mode === 'saab' && sectionId === 'pending_dep' && title === 'DEP') {
+        present = presentIds.has('pending_dep') || presentIds.has('cleared')
+      }
       out.push({
         sectionId,
-        title: serverTitle.get(sectionId) ?? title,
-        present: presentIds.has(sectionId),
+        title: preferCatalog ? title : (serverTitle.get(sectionId) ?? title),
+        present,
+        ...(flow ? { flow } : {}),
       })
     }
-    for (const entry of ESSA_CATALOG_SECTIONS) {
-      push(entry.sectionId, entry.title)
-    }
-    for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
-      push(essaRunwaySectionId(pair), formatEssaRunwaySectionTitle(pair))
-    }
-    // Any extra server section not in the static catalog
-    for (const bay of serverLayout.bays) {
-      for (const sec of bay.sections) {
-        push(sec.id, sec.title)
+    if (mode === 'saab') {
+      const wsSections = activeLayout.value?.sections ?? []
+      const titleU = (s: { title?: string }) => (s.title || '').toUpperCase().trim()
+      const titleCompact = (s: { title?: string }) => titleU(s).replace(/\s+/g, '')
+      const hasTmaOnBoard =
+        presentIds.has('tma') ||
+        wsSections.some((s) => {
+          const t = titleCompact(s)
+          return (
+            s.sectionId === 'tma' ||
+            (s.groupId === 'saab_ctr_tma' && s.member === 'tma') ||
+            t === 'TMA/CTR' ||
+            t === 'CTR/TMA'
+          )
+        })
+      const hasCtrOnBoard =
+        presentIds.has('ctr_arr') ||
+        presentIds.has('ctr_dep') ||
+        presentIds.has('ctr') ||
+        wsSections.some((s) => {
+          const t = titleU(s)
+          if (t === 'CTR' || t === 'CTR ARR' || t === 'CTR DEP') return true
+          if (s.groupId === 'saab_ctr') return true
+          if (s.groupId === 'saab_ctr_tma' && s.member === 'ctr') return true
+          return false
+        })
+      const hasDepMerged = wsSections.some((s) => {
+        if (titleU(s) !== 'DEP') return false
+        return (
+          s.sectionId === 'pending_dep' ||
+          s.sectionId === 'cleared' ||
+          s.groupId === 'saab_clearance'
+        )
+      })
+      const hasPendingClr =
+        hasDepMerged ||
+        presentIds.has('pending_dep') ||
+        wsSections.some(
+          (s) =>
+            s.sectionId === 'pending_dep' ||
+            (s.groupId === 'saab_clearance' && s.member === 'pending'),
+        )
+      const hasCleared =
+        hasDepMerged ||
+        presentIds.has('cleared') ||
+        wsSections.some(
+          (s) =>
+            s.sectionId === 'cleared' ||
+            (s.groupId === 'saab_clearance' && s.member === 'cleared'),
+        )
+      // Empty divider is first in the menu (TopBar). Then arr↓ / shared / dep↑ (DEP last).
+      for (const entry of SAAB_CATALOG_SECTIONS) {
+        push(entry.sectionId, entry.title, entry.flow)
+        // Physical runway_* directly under RUNWAY
+        if (entry.sectionId === 'runway') {
+          for (const rwy of store.saabRunwayCatalog) {
+            push(rwy.sectionId, rwy.title, 'arrival')
+          }
+        }
+      }
+      // TMA: always listed; addable only when CTR is on the board and TMA is not
+      const tmaIdx = out.findIndex((e) => e.sectionId === 'tma' && e.title === 'TMA')
+      if (tmaIdx >= 0) {
+        out[tmaIdx]!.present = !hasCtrOnBoard || hasTmaOnBoard
+        out[tmaIdx]!.title = 'TMA'
+      }
+      // CTR: always listed; greyed when any CTR / CTR ARR / CTR DEP / TMA·CTR is present
+      const ctrIdx = out.findIndex((e) => e.sectionId === 'ctr' && e.title === 'CTR')
+      if (ctrIdx >= 0) {
+        out[ctrIdx]!.present = hasCtrOnBoard
+        out[ctrIdx]!.title = 'CTR'
+      }
+      // DEP / PENDING CLR / CLEARED — greyed when already on the board (or covered by merge)
+      const depIdx = out.findIndex((e) => e.sectionId === 'pending_dep' && e.title === 'DEP')
+      if (depIdx >= 0) {
+        out[depIdx]!.present = hasPendingClr || hasCleared
+        out[depIdx]!.title = 'DEP'
+      }
+      const pendingClrIdx = out.findIndex(
+        (e) => e.sectionId === 'pending_dep' && e.title === 'PENDING CLR',
+      )
+      if (pendingClrIdx >= 0) {
+        out[pendingClrIdx]!.present = hasPendingClr
+        out[pendingClrIdx]!.title = 'PENDING CLR'
+      }
+      const clearedIdx = out.findIndex((e) => e.sectionId === 'cleared' && e.title === 'CLEARED')
+      if (clearedIdx >= 0) {
+        out[clearedIdx]!.present = hasCleared
+        out[clearedIdx]!.title = 'CLEARED'
+      }
+    } else {
+      for (const entry of ESSA_CATALOG_SECTIONS) {
+        push(entry.sectionId, entry.title)
+      }
+      for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
+        push(essaRunwaySectionId(pair), formatEssaRunwaySectionTitle(pair))
+      }
+      for (const bay of serverLayout.bays) {
+        for (const sec of bay.sections) {
+          push(sec.id, sec.title)
+        }
       }
     }
     return out
@@ -1192,12 +1551,15 @@ export function useWorkspace() {
     layoutDialogReason,
     searchDialogOpen,
     pendingRoleKey,
+    pendingSaabSavedLayout,
     closedSectionIds,
     draggingSectionId,
     ensureFromServer,
     onRolesChanged,
     applyLayout,
+    previewLayout,
     applyBuiltInDefault,
+    previewBuiltInDefault,
     confirmLayoutPrompt,
     invalidateLayoutPrompt,
     dismissLayoutDialog,
@@ -1217,6 +1579,7 @@ export function useWorkspace() {
     overflowPack,
     sectionsInColumn,
     syncColumnYsFromDom,
+    healCollapsedColumnYs,
     columnAtClientX,
     placeSection,
     findMergeableAtY,
@@ -1253,21 +1616,22 @@ export function getWorkspace() {
   return gApi.__vatefsWorkspaceApi
 }
 
-/** Watch roles fingerprint and open dialog — call once from bay container. */
+/** Watch roles / OTHER profile — call once from bay container. */
 export function watchEssaRolesForWorkspace(
   rolesRef: Ref<string[]>,
   serverLayoutRef: Ref<EfsLayout>,
   essaRolesMode: Ref<boolean>,
+  workspaceMode?: Ref<boolean>,
+  saabLayoutId?: Ref<string | null>,
 ) {
   const ws = getWorkspace()
-  // Only role/mode changes prompt the layout dialog — not every layout websocket refresh
+  const inWorkspace = () => (workspaceMode ? workspaceMode.value : essaRolesMode.value)
+
+  // ESSA: role changes prompt the layout dialog
   watch(
     [essaRolesMode, () => essaRoleKey(rolesRef.value)],
     ([mode, key], [prevMode, prevKey]) => {
-      if (!mode) {
-        ws.clearWorkspace()
-        return
-      }
+      if (!mode) return
       if (!serverLayoutRef.value.bays.length) return
       if (key !== prevKey || (mode && !prevMode)) {
         ws.onRolesChanged(serverLayoutRef.value, rolesRef.value)
@@ -1277,13 +1641,75 @@ export function watchEssaRolesForWorkspace(
     },
     { immediate: true },
   )
-  watch(serverLayoutRef, (layout) => {
-    if (!essaRolesMode.value || !layout.bays.length) return
+
+  const store = useEfsStore()
+
+  // Drop local workspace when the YAML config file changes (OTHER↔ESSA↔RTC, …)
+  watch(
+    () => store.activeConfig,
+    (file, prev) => {
+      if (prev && file && file !== prev) {
+        ws.clearWorkspace()
+      }
+    },
+  )
+
+  // OTHER: rebuild workspace when profile changes (server layout swap)
+  if (saabLayoutId) {
+    watch(
+      saabLayoutId,
+      (id, prev) => {
+        if (!inWorkspace() || essaRolesMode.value) return
+        if (!id || !serverLayoutRef.value.bays.length) return
+        if (id !== prev || !ws.activeLayout.value) {
+          ws.ensureFromServer(serverLayoutRef.value, [], {
+            forceBuiltIn: id !== prev,
+            saabProfileId: id,
+          })
+        }
+      },
+      { immediate: true },
+    )
+  }
+
+  watch(
+    () => inWorkspace(),
+    (mode) => {
+      if (!mode) {
+        ws.clearWorkspace()
+        return
+      }
+      // Only build when we have no workspace yet — never from a stale pre-refresh layout
+      if (
+        serverLayoutRef.value.bays.length &&
+        !ws.activeLayout.value &&
+        !essaRolesMode.value
+      ) {
+        ws.ensureFromServer(serverLayoutRef.value, [])
+      }
+    },
+    { immediate: true },
+  )
+
+  watch(serverLayoutRef, (layout, prev) => {
+    if (!inWorkspace() || !layout.bays.length) return
     if (!ws.activeLayout.value) {
-      ws.ensureFromServer(layout, rolesRef.value)
-    } else {
+      ws.ensureFromServer(layout, essaRolesMode.value ? rolesRef.value : [])
+    } else if (essaRolesMode.value) {
       // ES RWY config / assigned-pair headers — keep workspace runway dividers in sync
       ws.syncRunwaySectionsFromServer(layout)
+    } else if (store.saabLayoutsMode) {
+      // Profile switch: refresh clears bays then loads the new map — always rebuild
+      // when coming back from empty, or when roleKey no longer matches.
+      const profileId = store.saabLayoutId || '1rwy4'
+      const roleKey = `saab:${profileId}`
+      const afterRefresh = !(prev?.bays?.length) && layout.bays.length > 0
+      if (afterRefresh || ws.activeLayout.value.roleKey !== roleKey) {
+        ws.ensureFromServer(layout, [], {
+          forceBuiltIn: true,
+          saabProfileId: profileId,
+        })
+      }
     }
   })
 }

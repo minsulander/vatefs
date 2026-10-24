@@ -1,8 +1,15 @@
 /**
- * Full ESSA placeable-section catalog for the top-right workspace menu.
- * Independent of the role-filtered server layout — controllers can add any
- * header even when their current role would hide it from the default bay.
+ * Placeable-section catalogs for the top-right workspace menu.
+ *
+ * OTHER Sections menu (flat): Empty divider is rendered first by the top bar, then:
+ *   INBOUND → TMA / CTR → TMA → CTR → RUNWAY → TAXIWAY → PUSH&START
+ *     → CLEARED → PENDING CLR → DEP (bottom; read upward DEP → PENDING CLR → CLEARED)
+ * TMA / CTR / DEP slices are always listed (greyed when not addable).
+ * TMA / CTR splits → TMA + CTR; CTR splits → CTR ARR + CTR DEP.
+ * DEP splits → PENDING CLR + CLEARED.
  */
+
+/** Full ESSA placeable-section catalog (role-independent). */
 export const ESSA_CATALOG_SECTIONS: readonly { sectionId: string; title: string }[] = [
   { sectionId: 'inbound', title: 'INBOUND' },
   { sectionId: 'inbound_twr_e', title: 'INBOUND TWR-E' },
@@ -24,3 +31,38 @@ export const ESSA_CATALOG_SECTIONS: readonly { sectionId: string; title: string 
   { sectionId: 'cleared_eobt', title: 'EOBT' },
   { sectionId: 'pending_dep', title: 'CD ALL' },
 ] as const
+
+export type SaabCatalogFlow = 'arrival' | 'departure'
+
+export type SaabCatalogEntry = {
+  sectionId: string
+  title: string
+  flow: SaabCatalogFlow
+}
+
+/**
+ * OTHER (classic) sections — menu order (Empty divider is separate, above this list).
+ *
+ * TMA / CTR uses primary id ctr_arr (ensures tma + ctr_dep on add).
+ * DEP uses primary id pending_dep (ensures cleared on add); splits to PENDING CLR / CLEARED.
+ */
+export const SAAB_CATALOG_SECTIONS: readonly SaabCatalogEntry[] = [
+  { sectionId: 'inbound', title: 'INBOUND', flow: 'arrival' },
+  { sectionId: 'ctr_arr', title: 'TMA / CTR', flow: 'arrival' },
+  { sectionId: 'tma', title: 'TMA', flow: 'arrival' },
+  // Synthetic id — unions ctr_arr + ctr_dep strips (see saab_ctr_tma)
+  { sectionId: 'ctr', title: 'CTR', flow: 'arrival' },
+  { sectionId: 'runway', title: 'RUNWAY', flow: 'arrival' },
+  // physical runway_* inserted after RUNWAY by catalogSections()
+  { sectionId: 'taxi', title: 'TAXIWAY', flow: 'arrival' },
+  { sectionId: 'push_start', title: 'PUSH&START', flow: 'departure' },
+  // Bottom of menu upward: DEP → PENDING CLR → CLEARED
+  { sectionId: 'cleared', title: 'CLEARED', flow: 'departure' },
+  { sectionId: 'pending_dep', title: 'PENDING CLR', flow: 'departure' },
+  { sectionId: 'pending_dep', title: 'DEP', flow: 'departure' },
+] as const
+
+/** Flat list (unique sectionIds) for lookups that ignore flow grouping. */
+export const SAAB_CATALOG_SECTION_IDS: readonly string[] = [
+  ...new Set(SAAB_CATALOG_SECTIONS.map((e) => e.sectionId)),
+]

@@ -30,6 +30,7 @@ import {
     requiresSsrCoordination,
     sidsMatch,
     withVectRemark,
+    canonicalPushStartSectionId,
 } from "@vatefs/common"
 import {
     collapseExpandersOnLeaveCdAllOrTsat,
@@ -214,16 +215,105 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     /**
-     * Enter MAN on CD ALL / TSAT: freeze `orderedIds` (current visual order) into
-     * strip positions and sync flightStore via WS so add-from-top keeps that sequence.
+     * Enter MAN on CD ALL / TSAT / PENDING CLR / CLEARED / merged DEP:
+     * freeze `orderedIds` (current visual order) into strip positions and sync
+     * flightStore via WS so add-from-top keeps that sequence.
+     * Ids may span pending_dep+cleared under a merged DEP header.
      */
     function enterManualSortMode(bayId: string, sectionId: string, orderedIds: string[]) {
         if (!isModeToggleSectionId(sectionId)) return
         if (orderedIds.length > 0) {
-            reindexTopStripsByIds(bayId, sectionId, orderedIds)
-            sendMessage({ type: 'reorderStrips', bayId, sectionId, stripIds: orderedIds })
+            commitManualTopOrder(bayId, sectionId, orderedIds)
+            return
         }
         setSectionSortMode(bayId, sectionId, 'man')
+    }
+
+    /**
+     * Apply a visual top→bottom order as sticky MAN for a mode-toggle header.
+     * Positions are global across the list (merged DEP = pending + cleared).
+     * Membership section of each strip is preserved unless `movedStripId` is given
+     * a `membershipSectionId` (cross-header drop into this bay).
+     */
+    function commitManualTopOrder(
+        bayId: string,
+        modeSectionId: string,
+        orderedIds: string[],
+        opts?: { movedStripId?: string; membershipSectionId?: string },
+    ) {
+        if (orderedIds.length === 0) {
+            markManualOrder(bayId, modeSectionId)
+            return
+        }
+        const groups = new Map<string, { bayId: string; sectionId: string; ids: string[] }>()
+        let movedOldBay: string | undefined
+        let movedOldSection: string | undefined
+        let movedOldBottom: boolean | undefined
+        let movedOldPosition: number | undefined
+        /** Drop intent (e.g. push_back) — may differ from stored YAML sectionId */
+        let movedDropIntent: string | undefined
+
+        orderedIds.forEach((id, index) => {
+            const strip = strips.value.get(id)
+            if (!strip || strip.bottom) return
+            if (opts?.movedStripId === id) {
+                movedOldBay = strip.bayId
+                movedOldSection = strip.sectionId
+                movedOldBottom = strip.bottom
+                movedOldPosition = strip.position
+                if (opts.membershipSectionId) {
+                    movedDropIntent = opts.membershipSectionId
+                    strip.sectionId = canonicalPushStartSectionId(opts.membershipSectionId)
+                }
+            }
+            strip.bayId = bayId
+            strip.bottom = false
+            strip.position = index
+            const key = `${strip.bayId}\0${strip.sectionId}`
+            let g = groups.get(key)
+            if (!g) {
+                g = { bayId: strip.bayId, sectionId: strip.sectionId, ids: [] }
+                groups.set(key, g)
+            }
+            g.ids.push(id)
+        })
+        stripsVersion.value++
+
+        const movedId = opts?.movedStripId
+        if (movedId) {
+            const strip = strips.value.get(movedId)
+            const dropIntent = movedDropIntent ?? strip?.sectionId
+            const pushSplitRetarget =
+                !!movedDropIntent &&
+                (movedDropIntent === 'push_back' || movedDropIntent === 'start_up') &&
+                movedOldSection === 'push_start'
+            if (
+                strip &&
+                (movedOldBay !== strip.bayId ||
+                    movedOldSection !== strip.sectionId ||
+                    movedOldBottom !== false ||
+                    movedOldPosition !== strip.position ||
+                    pushSplitRetarget)
+            ) {
+                sendMessage({
+                    type: 'moveStrip',
+                    stripId: movedId,
+                    targetBayId: strip.bayId,
+                    targetSectionId: dropIntent!,
+                    position: strip.position,
+                    isBottom: false,
+                })
+            }
+        }
+        for (const g of groups.values()) {
+            sendMessage({
+                type: 'reorderStrips',
+                bayId: g.bayId,
+                sectionId: g.sectionId,
+                stripIds: g.ids,
+            })
+        }
+        markManualOrder(bayId, modeSectionId)
     }
 
     function markManualOrder(bayId: string, sectionId: string) {
@@ -307,6 +397,14 @@ export const useEfsStore = defineStore("efs", () => {
     const essaRolesManual = ref(false)
     /** TWR AOR: runway ends we cover; null = all (solo / no split) */
     const essaCoveredRunways = ref<string[] | null>(null)
+
+    // OTHER bay-profile mode (saab.yml + Layout / catalog; digital SAAB look)
+    const saabLayoutsMode = ref(false)
+    const saabLayoutId = ref<string | null>(null)
+    const saabLayouts = ref<Array<{ id: string; name: string; bayCount: number }>>([])
+    const saabRunwayCatalog = ref<Array<{ sectionId: string; title: string }>>([])
+    /** ESSA roles or OTHER layouts — workspace catalog + bay rearrange */
+    const workspaceMode = computed(() => essaRolesMode.value || saabLayoutsMode.value)
 
     // ESGG paper role picker (CD / GND / TWR)
     const esggRolesMode = ref(false)
@@ -1025,6 +1123,12 @@ export const useEfsStore = defineStore("efs", () => {
                     case 'configList':
                         availableConfigs.value = message.configs
                         activeConfig.value = message.activeConfig
+                        if (message.saabLayouts) {
+                            saabLayouts.value = message.saabLayouts
+                        }
+                        if (message.saabLayoutId !== undefined) {
+                            saabLayoutId.value = message.saabLayoutId ?? null
+                        }
                         break
                     case 'controllers':
                         controllers.value = message.controllers
@@ -1191,6 +1295,19 @@ export const useEfsStore = defineStore("efs", () => {
 
         const prev = strips.value.get(strip.id)
 
+        // Automove / server relocate: cock only applies in-place — land flush
+        let nextStrip = strip
+        if (prev && (autoMoved || prev.bayId !== strip.bayId || prev.sectionId !== strip.sectionId || !!prev.bottom !== !!strip.bottom)) {
+            const relocated =
+                prev.bayId !== strip.bayId ||
+                prev.sectionId !== strip.sectionId ||
+                !!prev.bottom !== !!strip.bottom ||
+                prev.position !== strip.position
+            if (relocated && (strip.klack === 'left' || strip.klack === 'right')) {
+                nextStrip = { ...strip, klack: undefined }
+            }
+        }
+
         // Capture old position and clone for fly-across animation before updating.
         // Fly is wall-clock driven so it still completes when the tab is backgrounded.
         if (autoMoved) {
@@ -1239,16 +1356,16 @@ export const useEfsStore = defineStore("efs", () => {
                 beginPrintAnim(strip.id, durationMs)
             }
         }
-        strips.value.set(strip.id, strip)
+        strips.value.set(nextStrip.id, nextStrip)
         stripsVersion.value++
 
         // Bind pending “open zoom” to newly created note / vehicle strip id
         if (
             isNew &&
-            (strip.stripType === 'note' || strip.stripType === 'vehicle') &&
+            (nextStrip.stripType === 'note' || nextStrip.stripType === 'vehicle') &&
             pendingNoteScribbleId.value === PENDING_NOTE_SCRIBBLE_AWAIT
         ) {
-            pendingNoteScribbleId.value = strip.id
+            pendingNoteScribbleId.value = nextStrip.id
         }
     }
 
@@ -1412,6 +1529,10 @@ export const useEfsStore = defineStore("efs", () => {
         esggRolesManual?: boolean
         essaCoveredRunways?: string[]
         look?: StripLook
+        saabLayoutsMode?: boolean
+        saabLayoutId?: string | null
+        saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
+        saabRunwayCatalog?: Array<{ sectionId: string; title: string }>
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
@@ -1429,6 +1550,10 @@ export const useEfsStore = defineStore("efs", () => {
         // Only update when present — `?? false` was clearing mode on partial status frames
         if (typeof message.essaRolesMode === 'boolean') {
             essaRolesMode.value = message.essaRolesMode
+            if (!message.essaRolesMode) {
+                essaRoles.value = []
+                essaRolesManual.value = false
+            }
         }
         if (message.essaRoles) {
             essaRoles.value = message.essaRoles
@@ -1438,12 +1563,32 @@ export const useEfsStore = defineStore("efs", () => {
         }
         if (typeof message.esggRolesMode === 'boolean') {
             esggRolesMode.value = message.esggRolesMode
+            if (!message.esggRolesMode) {
+                esggRoles.value = []
+                esggRolesManual.value = false
+            }
         }
         if (message.esggRoles) {
             esggRoles.value = message.esggRoles
         }
         if (typeof message.esggRolesManual === 'boolean') {
             esggRolesManual.value = message.esggRolesManual
+        }
+        if (typeof message.saabLayoutsMode === 'boolean') {
+            saabLayoutsMode.value = message.saabLayoutsMode
+            if (!message.saabLayoutsMode) {
+                saabLayoutId.value = null
+                saabRunwayCatalog.value = []
+            }
+        }
+        if (message.saabLayoutId !== undefined) {
+            saabLayoutId.value = message.saabLayoutId ?? null
+        }
+        if (message.saabLayouts) {
+            saabLayouts.value = message.saabLayouts
+        }
+        if (message.saabRunwayCatalog) {
+            saabRunwayCatalog.value = message.saabRunwayCatalog
         }
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
@@ -1784,16 +1929,43 @@ export const useEfsStore = defineStore("efs", () => {
      * align store positions to the current DOM order so insert indices match what the user sees.
      * Also syncs backend/flightStore (same as sticky taxi) so the following moveStrip
      * and later add-from-top use the frozen visual sequence.
+     * `matchSectionIds` — merged DEP etc.: assign one visual sequence across members.
      */
-    function syncTimeSortSectionFromDom(bayId: string, sectionId: string, container: Element | null) {
+    function syncTimeSortSectionFromDom(
+        bayId: string,
+        sectionId: string,
+        container: Element | null,
+        matchSectionIds?: string[],
+    ) {
         if (isInboundAppSection(sectionId) || isCtrDepSectionId(sectionId)) return
-        if (!isTimeSortSectionId(sectionId)) return
+        if (!isTimeSortSectionId(sectionId) && !(matchSectionIds?.some(isTimeSortSectionId))) return
         if (hasManualOrder(bayId, sectionId)) return
         if (!container) return
         const ids = Array.from(container.querySelectorAll<HTMLElement>('[data-strip-id]'))
             .map((el) => el.getAttribute('data-strip-id'))
             .filter((id): id is string => !!id)
         if (ids.length === 0) return
+        const allowed = matchSectionIds?.length ? new Set(matchSectionIds) : null
+        if (allowed) {
+            ids.forEach((id, index) => {
+                const strip = strips.value.get(id)
+                if (!strip || strip.bottom || !allowed.has(strip.sectionId)) return
+                strip.position = index
+            })
+            stripsVersion.value++
+            const groups = new Map<string, string[]>()
+            for (const id of ids) {
+                const strip = strips.value.get(id)
+                if (!strip || !allowed.has(strip.sectionId)) continue
+                const list = groups.get(strip.sectionId) ?? []
+                list.push(id)
+                groups.set(strip.sectionId, list)
+            }
+            for (const [sec, secIds] of groups) {
+                sendMessage({ type: 'reorderStrips', bayId, sectionId: sec, stripIds: secIds })
+            }
+            return
+        }
         reindexTopStripsByIds(bayId, sectionId, ids)
         sendMessage({ type: 'reorderStrips', bayId, sectionId, stripIds: ids })
     }
@@ -1860,15 +2032,19 @@ export const useEfsStore = defineStore("efs", () => {
         if (!strip) return
         if (!allowMoveOwnedStrip(strip)) return
 
+        // Workspace may pass push_back / start_up — store as YAML push_start
+        const dropIntentSectionId = targetSectionId
+        const storeSectionId = canonicalPushStartSectionId(targetSectionId)
+
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
         const oldBottom = strip.bottom
         const oldPosition = strip.position
-        const isSameSection = oldBayId === targetBayId && oldSectionId === targetSectionId
+        const isSameSection = oldBayId === targetBayId && oldSectionId === storeSectionId
         const isSameZone = isSameSection && !oldBottom  // moving within top zone
 
         // Get target strips count (excluding the moving strip)
-        const targetStrips = getTopStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
+        const targetStrips = getTopStrips(targetBayId, storeSectionId).filter(s => s.id !== stripId)
         let targetPosition = resolveTargetPosition(position, targetStrips.length)
 
         // Paper: pending (above KLARERING) → cleared always inserts at top of CLEARED
@@ -1876,22 +2052,22 @@ export const useEfsStore = defineStore("efs", () => {
             !isSameSection &&
             isPaperLook.value &&
             isPendingDepSectionId(oldSectionId) &&
-            isClearedSectionId(targetSectionId)
+            isClearedSectionId(storeSectionId)
         ) {
             targetPosition = 0
         }
 
         // Handle gaps for same-zone moves
         if (isSameZone) {
-            adjustGapsForMove(targetBayId, targetSectionId, oldPosition, targetPosition)
+            adjustGapsForMove(targetBayId, storeSectionId, oldPosition, targetPosition)
         }
 
-        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, targetSectionId)
-        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, targetSectionId, strip.ctot)
+        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, storeSectionId)
+        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, storeSectionId, strip.ctot)
 
         // Update strip location
         strip.bayId = targetBayId
-        strip.sectionId = targetSectionId
+        strip.sectionId = storeSectionId
         strip.bottom = false
 
         // Insert strip at target position and recompute all positions
@@ -1906,21 +2082,32 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Cleanup gaps
         if (!oldBottom || isSameSection) {
-            cleanupGaps(targetBayId, targetSectionId)
+            cleanupGaps(targetBayId, storeSectionId)
         }
         if (!isSameSection && !oldBottom) {
             cleanupGaps(oldBayId, oldSectionId)
         }
 
-        stripsVersion.value++
-        markManualOrder(targetBayId, targetSectionId)
+        // Cock/klack only applies in-place — any real relocate resets flush
+        const relocated =
+            oldBayId !== targetBayId ||
+            oldSectionId !== storeSectionId ||
+            !!oldBottom ||
+            oldPosition !== targetPosition
+        if (relocated && (strip.klack === 'left' || strip.klack === 'right')) {
+            strip.klack = undefined
+            sendMessage({ type: 'setKlack', stripId, klack: null })
+        }
 
-        // Send update to server
+        stripsVersion.value++
+        markManualOrder(targetBayId, storeSectionId)
+
+        // Send update to server (drop intent may be push_back / start_up)
         sendMessage({
             type: 'moveStrip',
             stripId,
             targetBayId,
-            targetSectionId,
+            targetSectionId: dropIntentSectionId,
             position: targetPosition,
             isBottom: false
         })
@@ -1936,20 +2123,24 @@ export const useEfsStore = defineStore("efs", () => {
         if (!strip) return
         if (!allowMoveOwnedStrip(strip)) return
 
+        const dropIntentSectionId = targetSectionId
+        const storeSectionId = canonicalPushStartSectionId(targetSectionId)
+
         const oldBayId = strip.bayId
         const oldSectionId = strip.sectionId
         const oldBottom = strip.bottom
+        const oldPosition = strip.position
 
         // Get target bottom strips count (excluding the moving strip)
-        const targetStrips = getBottomStrips(targetBayId, targetSectionId).filter(s => s.id !== stripId)
+        const targetStrips = getBottomStrips(targetBayId, storeSectionId).filter(s => s.id !== stripId)
         const targetPosition = resolveTargetPosition(position, targetStrips.length)
 
-        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, targetSectionId)
-        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, targetSectionId, strip.ctot)
+        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, storeSectionId)
+        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, storeSectionId, strip.ctot)
 
         // Update strip location
         strip.bayId = targetBayId
-        strip.sectionId = targetSectionId
+        strip.sectionId = storeSectionId
         strip.bottom = true
 
         // Insert strip at target position and recompute all positions
@@ -1958,7 +2149,7 @@ export const useEfsStore = defineStore("efs", () => {
         reindexStrips(targetStrips)
 
         // Recompute old section if moved from different zone
-        if (oldBayId !== targetBayId || oldSectionId !== targetSectionId || !oldBottom) {
+        if (oldBayId !== targetBayId || oldSectionId !== storeSectionId || !oldBottom) {
             recomputePositions(oldBayId, oldSectionId, oldBottom)
         }
 
@@ -1967,22 +2158,33 @@ export const useEfsStore = defineStore("efs", () => {
             cleanupGaps(oldBayId, oldSectionId)
         }
 
+        // Cock/klack only applies in-place — any real relocate resets flush
+        const relocated =
+            oldBayId !== targetBayId ||
+            oldSectionId !== storeSectionId ||
+            !oldBottom ||
+            oldPosition !== targetPosition
+        if (relocated && (strip.klack === 'left' || strip.klack === 'right')) {
+            strip.klack = undefined
+            sendMessage({ type: 'setKlack', stripId, klack: null })
+        }
+
         stripsVersion.value++
 
         // ESGG paper: pin tray on UTFLYGNING → rising / (backend XFERs on isBottom)
         if (
             isPaperLook.value &&
-            (targetSectionId === 'ctr_dep' || targetSectionId.endsWith('_ctr_dep'))
+            (storeSectionId === 'ctr_dep' || storeSectionId.endsWith('_ctr_dep'))
         ) {
             pushRisingDiagonalLeftCol(stripId, 'blue', 'xfer-app')
         }
 
-        // Send update to server
+        // Send update to server (drop intent may be push_back / start_up)
         sendMessage({
             type: 'moveStrip',
             stripId,
             targetBayId,
-            targetSectionId,
+            targetSectionId: dropIntentSectionId,
             position: targetPosition,
             isBottom: true
         })
@@ -2463,7 +2665,7 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
-    /** Paper sideways offset (klack). Null resets. Synced to peers. */
+    /** Sideways offset — paper klack / SAAB cock. Null resets. Synced to peers. */
     function setKlack(stripId: string, klack: 'left' | 'right' | null) {
         const strip = strips.value.get(stripId)
         if (strip) {
@@ -2556,6 +2758,24 @@ export const useEfsStore = defineStore("efs", () => {
 
     function switchConfig(file: string) {
         sendMessage({ type: 'switchConfig', file })
+    }
+
+    function switchSaabLayout(layoutId: string) {
+        sendMessage({ type: 'switchSaabLayout', layoutId })
+    }
+
+    function saabEnsureSection(
+        sectionId: string,
+        title: string,
+        opts?: { bayId?: string; beforeSectionId?: string },
+    ) {
+        sendMessage({
+            type: 'saabEnsureSection',
+            sectionId,
+            title,
+            bayId: opts?.bayId,
+            beforeSectionId: opts?.beforeSectionId,
+        })
     }
 
     /** Set ESSA roles manually, or pass manual=false to return to auto-detect. */
@@ -3322,6 +3542,7 @@ export const useEfsStore = defineStore("efs", () => {
         getSectionSortMode,
         setSectionSortMode,
         enterManualSortMode,
+        commitManualTopOrder,
         isModeToggleSectionId,
         isCtrDepSectionId,
         reindexTopStripsByIds,
@@ -3339,6 +3560,11 @@ export const useEfsStore = defineStore("efs", () => {
         essaRoles,
         essaRolesManual,
         essaCoveredRunways,
+        saabLayoutsMode,
+        saabLayoutId,
+        saabLayouts,
+        saabRunwayCatalog,
+        workspaceMode,
         setEssaRoles,
         esggRolesMode,
         esggRoles,
@@ -3451,6 +3677,8 @@ export const useEfsStore = defineStore("efs", () => {
         availableConfigs,
         activeConfig,
         switchConfig,
+        switchSaabLayout,
+        saabEnsureSection,
         sendRequest,
         connect,
         refresh,

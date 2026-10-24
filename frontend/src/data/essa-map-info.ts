@@ -4,11 +4,6 @@
  * procedure text abbreviated from AIP IAC missed-approach.
  */
 
-import {
-  essaPhysicalPairForRunway,
-  essaRunwaySectionId,
-} from '@vatefs/common'
-
 export type MapAppSector = 'ARR-E' | 'ARR-W'
 
 export type MapTurn = 'LEFT' | 'RIGHT'
@@ -147,8 +142,10 @@ export function getEssaMapInfo(configId: string): EssaMapInfo | null {
   }
 }
 
-/** Physical ESSA runway section id that hosts this ARR runway. */
-export function essaMapDefaultSectionId(runway: string): string | null {
-  const pair = essaPhysicalPairForRunway(runway)
-  return pair ? essaRunwaySectionId(pair) : null
+/**
+ * Default host for G/A / MAP (and breakout) info strips: bottom of CTR ARR.
+ * `runway` kept for call-site compatibility; placement no longer follows ARR RWY.
+ */
+export function essaMapDefaultSectionId(_runway?: string): string | null {
+  return 'ctr_arr'
 }

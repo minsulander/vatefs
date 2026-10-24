@@ -179,6 +179,8 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.columnCount = config.columnCount
     staticConfig.activeAirports = config.activeAirports
     staticConfig.columnAirports = config.columnAirports
+    staticConfig.saabLayoutId = config.saabLayoutId
+    staticConfig.saabLayouts = config.saabLayouts
     staticConfig.essaRoles = undefined
     staticConfig.essaRolesManual = undefined
     staticConfig.esggRoles = undefined

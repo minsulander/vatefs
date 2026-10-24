@@ -51,6 +51,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
+import { focusPopupInput } from '@/composables/focusPopupInput'
 
 export type TobtMenuKind = 'tobt' | 'eobt'
 
@@ -114,25 +115,13 @@ function seedText() {
   manualText.value = formatHhmmColon(digits.length === 4 ? digits : utcNowHhmm())
 }
 
-function focusManualInput() {
-  // v-menu content mounts asynchronously; nextTick alone can miss the input.
-  nextTick(() => {
-    requestAnimationFrame(() => {
-      const el = manualInput.value
-      if (!el) return
-      el.focus()
-      el.select()
-    })
-  })
-}
-
 watch(
   () => props.modelValue,
   (open) => {
     if (open) {
       ignoreCloseUntil = Date.now() + 450
       seedText()
-      focusManualInput()
+      focusPopupInput(() => manualInput.value)
     }
   },
 )

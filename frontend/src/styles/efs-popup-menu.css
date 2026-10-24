@@ -400,14 +400,50 @@ button.efs-popup-folder--nested {
   line-height: 1.2;
 }
 
-.efs-popup-chip:hover {
+.efs-popup-chip:hover:not(:disabled) {
   background: #1a3a6e;
   color: var(--efs-popup-strip-white);
   border-color: #000;
+}
+
+.efs-popup-chip:disabled {
+  background: #b0b0b0;
+  color: #777;
+  border-color: #999;
+  cursor: default;
+  opacity: 0.7;
 }
 
 .efs-popup-chip.active {
   background: var(--efs-popup-strip-white);
   color: #1a3a6e;
   box-shadow: inset 0 0 0 2px #1a3a6e;
+}
+
+.efs-popup-menu .layout-pick-item {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.efs-popup-menu .layout-pick-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.efs-popup-menu .layout-pick-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.efs-popup-menu .layout-cols-tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
 }

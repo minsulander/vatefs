@@ -2,7 +2,6 @@ import { nextTick, ref } from 'vue'
 import {
   collapseStripExpanders,
   getStripExpanderState,
-  isCdAllOrTsatSection,
   setStripExpanderState,
 } from './useStripExpanders'
 import {
@@ -47,20 +46,6 @@ export function clearAutoFitState(stripId: string): void {
 export function adoptManualStripFitBaseline(stripId: string): void {
   setStripFitBaseline(stripId, snapshotCurrent(stripId))
   manualSizeLockById.add(stripId)
-}
-
-export function isAutoFitExemptSection(sectionId: string): boolean {
-  if (isCdAllOrTsatSection(sectionId)) return true
-  if (sectionId === 'dep') return true
-  if (!sectionId.endsWith('_dep')) return false
-  if (
-    sectionId.endsWith('_pending_dep') ||
-    sectionId.endsWith('_taxi_dep') ||
-    sectionId.endsWith('_ctr_dep')
-  ) {
-    return false
-  }
-  return true
 }
 
 function snapshotCurrent(stripId: string): StripFitBaseline {

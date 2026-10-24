@@ -88,6 +88,7 @@ import {
 } from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
+import { focusPopupInput } from '@/composables/focusPopupInput'
 
 export interface CflOption {
   label: string
@@ -138,10 +139,10 @@ watch(
       await Promise.all([fetchAppClr(), fetchTransitionAltitude()])
       await nextTick()
       scrollToSelected()
-      // Layout settles after APPCLR rows mount
+      // Layout settles after APPCLR rows mount — then focus + select manual entry
       requestAnimationFrame(() => {
         scrollToSelected()
-        manualInput.value?.focus()
+        focusPopupInput(() => manualInput.value)
       })
     } else {
       manualText.value = ''
