@@ -409,7 +409,8 @@ function breakoutForceKey(v: BreakoutVariant): string {
 /** Active breakout variants (auto + each manually added config). */
 export function getActiveBreakoutVariants(): BreakoutVariant[] {
   const store = useEfsStore()
-  if (!store.essaRolesMode) return []
+  // ESSA roles layout, or RTC with an ESSA column (manual catalog / auto if config known)
+  if (!store.essaRolesMode && !store.multiAirport) return []
   const out: BreakoutVariant[] = []
   const seen = new Set<string>()
   const add = (v: BreakoutVariant | null) => {
@@ -430,7 +431,7 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
   const store = useEfsStore()
 
   const autoVariant = computed<BreakoutVariant | null>(() => {
-    if (!store.essaRolesMode) return null
+    if (!store.essaRolesMode && !store.multiAirport) return null
     const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
     if (v && !essaCoversInfoRunway(store, v.runway)) return null
     return v
@@ -497,7 +498,7 @@ function mapVariantForConfig(cfg: string): MapInfoVariant | null {
 /** Active MAP variants (auto config + each manually added config). */
 export function getActiveMapVariants(): MapInfoVariant[] {
   const store = useEfsStore()
-  if (!store.essaRolesMode) return []
+  if (!store.essaRolesMode && !store.multiAirport) return []
   const out: MapInfoVariant[] = []
   const seen = new Set<string>()
   const add = (v: MapInfoVariant | null) => {
@@ -521,7 +522,7 @@ export function useMapInfoStrip(configIdSource?: MaybeRefOrGetter<string | undef
   const store = useEfsStore()
 
   const autoVariant = computed<MapInfoVariant | null>(() => {
-    if (!store.essaRolesMode) return null
+    if (!store.essaRolesMode && !store.multiAirport) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
     const v = mapVariantForConfig(cfg)
@@ -613,7 +614,7 @@ function depVariantForConfig(cfg: string): DepInfoVariant | null {
 /** Active DEP variants (auto config + each manually added config). */
 export function getActiveDepVariants(): DepInfoVariant[] {
   const store = useEfsStore()
-  if (!store.essaRolesMode) return []
+  if (!store.essaRolesMode && !store.multiAirport) return []
   const out: DepInfoVariant[] = []
   const seen = new Set<string>()
   const add = (v: DepInfoVariant | null) => {
@@ -637,7 +638,7 @@ export function useDepInfoStrip(configIdSource?: MaybeRefOrGetter<string | undef
   const store = useEfsStore()
 
   const autoVariant = computed<DepInfoVariant | null>(() => {
-    if (!store.essaRolesMode) return null
+    if (!store.essaRolesMode && !store.multiAirport) return null
     const cfg = store.essaRwyConfigIdResolved
     if (!cfg) return null
     const v = depVariantForConfig(cfg)
@@ -991,8 +992,13 @@ function configMenuLabel(configId: string): string {
   return `${configId} · ${formatEssaRwyPdfName(combo)}`
 }
 
-/** Catalog / bottom-bar: auto strips + per-config manual add folders. */
-export function useInfoStripMenu() {
+/**
+ * Catalog / bottom-bar: auto strips + per-config manual add folders.
+ * `forceEssaCatalog` — show ESSA info folders (RTC ESSA column).
+ */
+export function useInfoStripMenu(opts?: {
+  forceEssaCatalog?: MaybeRefOrGetter<boolean>
+}) {
   const store = useEfsStore()
   const breakout = useBreakoutInfoStrip()
   const map = useMapInfoStrip()
@@ -1002,7 +1008,7 @@ export function useInfoStripMenu() {
   const r16 = useR16InfoStrip()
 
   const folders = computed<InfoCatalogFolder[]>(() => {
-    const essa = store.essaRolesMode
+    const essa = store.essaRolesMode || !!toValue(opts?.forceEssaCatalog)
     if (!essa) return []
 
     const activeBreakoutIds = new Set(getActiveBreakoutVariants().map((v) => v.id))

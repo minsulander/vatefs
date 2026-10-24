@@ -225,7 +225,7 @@
           <button
             type="button"
             class="section-hdr-btn section-hdr-close"
-            :disabled="!workspaceMode"
+            :disabled="!workspaceMode && !isRtcEmptyDivider"
             title="Close"
             @mousedown.stop
             @touchstart.stop
@@ -459,6 +459,7 @@ import {
   runwayTimerStartCountdown,
   runwayTimerTick,
 } from '@/composables/runwaySectionTimers'
+import { removeRtcEmptyDivider } from '@/composables/rtcColumnExtras'
 import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
 import MapInfoStrip from './MapInfoStrip.vue'
 import DepInfoStrip from './DepInfoStrip.vue'
@@ -634,13 +635,16 @@ const store = useEfsStore()
 const { startResize } = useSectionResize()
 const ws = getWorkspace()
 
-const isEmptyWorkspaceHeader = computed(
-  () =>
+const isEmptyWorkspaceHeader = computed(() => {
+  // RTC client empty dividers (catalog → Empty divider)
+  if (store.multiAirport && props.section.id.startsWith('rtc_empty_')) return true
+  return (
     props.workspaceMode &&
     (!props.section.title || props.section.title.trim() === '') &&
     !!props.workspaceInstanceId &&
-    !ws.getWorkspaceSection(props.workspaceInstanceId)?.sectionId,
-)
+    !ws.getWorkspaceSection(props.workspaceInstanceId)?.sectionId
+  )
+})
 
 const workspaceSection = computed(() =>
   props.workspaceInstanceId ? ws.getWorkspaceSection(props.workspaceInstanceId) : undefined,
@@ -703,7 +707,15 @@ function onWorkspaceSplit() {
   ws.splitSection(props.workspaceInstanceId, props.section.title)
 }
 
+const isRtcEmptyDivider = computed(
+  () => store.multiAirport && props.section.id.startsWith('rtc_empty_'),
+)
+
 function onWorkspaceClose() {
+  if (isRtcEmptyDivider.value) {
+    removeRtcEmptyDivider(props.bayId, props.section.id)
+    return
+  }
   if (!props.workspaceMode || !props.workspaceInstanceId) return
   ws.closeSection(props.workspaceInstanceId)
 }

@@ -1,10 +1,11 @@
-import { computed, type ComputedRef, type Ref } from 'vue'
+import { computed, toValue, type ComputedRef, type MaybeRefOrGetter, type Ref } from 'vue'
 import {
   ESSA_PHYSICAL_RWY_PAIRS,
   essaRunwaySectionId,
   isEssaDynamicRunwaySectionId,
 } from '@vatefs/common'
 import { useEfsStore } from '@/store/efs'
+import { logicalSectionIdFromRtc } from '@/composables/rtcColumnExtras'
 
 export const RWY_OCCUPIED_FLAG_KIND = 'rwyOccupied'
 export const RWY_CLOSED_FLAG_KIND = 'rwyClosed'
@@ -36,6 +37,7 @@ export function isRwyFlagStripId(id: string): boolean {
 export function isRwyFlagHostSection(sectionId: string, sectionTitle?: string): boolean {
   if (isEssaDynamicRunwaySectionId(sectionId)) return true
   if (sectionId === 'arr_runway' || sectionId === 'dep_runway') return true
+  if (sectionId === 'rwy' || sectionId.endsWith('_rwy')) return true
   const title = (sectionTitle || '').toUpperCase()
   return title === 'RUNWAY' || title.startsWith('RUNWAY ')
 }
@@ -105,12 +107,19 @@ export type RwyFlagMenuRow = {
   closed: boolean
 }
 
-/** Bottom-bar / catalog: RWY occupied / closed rows. */
-export function useRwyFlagMenu() {
+/**
+ * Bottom-bar / catalog: RWY occupied / closed rows.
+ * Optional `airport` / `bayId` scope rows to one RTC column.
+ */
+export function useRwyFlagMenu(
+  airportSource?: MaybeRefOrGetter<string | null | undefined>,
+  bayIdSource?: MaybeRefOrGetter<string | null | undefined>,
+) {
   const store = useEfsStore()
 
-  /** ESSA pairs, or OTHER runway headers currently on the board. */
+  /** ESSA pairs, OTHER runway headers, or RTC bay runway. */
   const showTable = computed(() => {
+    if (store.multiAirport) return true
     if (store.essaRolesMode) return true
     if (store.saabLayoutsMode) return true
     return store.myAirports.some((a) => a.toUpperCase() === 'ESSA')
@@ -119,6 +128,31 @@ export function useRwyFlagMenu() {
   const rows = computed<RwyFlagMenuRow[]>(() => {
     void store.activeRwyFlagsVersion
     void store.stripsVersion
+    const scopeAirport = (toValue(airportSource) || '').toUpperCase() || null
+    const scopeBayId = toValue(bayIdSource) || null
+
+    // RTC column: only this bay’s RUNWAY section(s)
+    if (store.multiAirport && scopeBayId) {
+      const bay = store.layout.bays.find((b) => b.id === scopeBayId)
+      if (!bay) return []
+      const out: RwyFlagMenuRow[] = []
+      for (const sec of bay.sections) {
+        const log = logicalSectionIdFromRtc(sec.id)
+        if (log !== 'rwy' && !sec.id.endsWith('_rwy') && sec.id !== 'rwy') continue
+        const label =
+          scopeAirport ||
+          (sec.title || '').replace(/^.*RUNWAY\s+/i, '') ||
+          sec.id
+        out.push({
+          sectionId: sec.id,
+          label,
+          occupied: store.isRwyFlagActive(rwyFlagId(RWY_OCCUPIED_FLAG_KIND, sec.id)),
+          closed: store.isRwyFlagActive(rwyFlagId(RWY_CLOSED_FLAG_KIND, sec.id)),
+        })
+      }
+      return out
+    }
+
     if (store.saabLayoutsMode && !store.essaRolesMode) {
       const out: RwyFlagMenuRow[] = []
       const seen = new Set<string>()
@@ -143,6 +177,8 @@ export function useRwyFlagMenu() {
       }
       return out
     }
+    // ESSA physical pairs — optional airport filter (only ESSA has these)
+    if (scopeAirport && scopeAirport !== 'ESSA') return []
     return ESSA_PHYSICAL_RWY_PAIRS.map((pair) => {
       const sectionId = essaRunwaySectionId(pair)
       return {

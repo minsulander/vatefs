@@ -1,7 +1,8 @@
 <template>
   <div class="efs-top-bar text-body-2 text-grey">
-      <!-- Left arrow: trash (recover / drop-to-delete) -->
+      <!-- Left arrow: trash (recover / drop-to-delete) — RTC: per-column header -->
       <button
+        v-if="!efs.multiAirport"
         type="button"
         class="top-menu-btn top-trash-btn efs-trash-drop"
         :class="{ 'drag-over': trashDragOver }"
@@ -14,7 +15,7 @@
       >
         <span class="top-menu-tri" aria-hidden="true" />
       </button>
-      <TrashDialog v-model="trashOpen" />
+      <TrashDialog v-if="!efs.multiAirport" v-model="trashOpen" />
       <v-btn
         variant="text"
         icon="mdi-cog"
@@ -151,8 +152,8 @@
           </div>
         </div>
       </v-dialog>
-      <!-- Airports (+ ATIS/QNH when several): classic 1RWY/2RWY / RTC (hidden ESSA roles + paper) -->
-      <template v-if="!efs.essaRolesMode && !efs.isPaperLook">
+      <!-- Airports (+ ATIS/QNH): classic / OTHER — RTC uses per-column headers -->
+      <template v-if="!efs.essaRolesMode && !efs.isPaperLook && !efs.multiAirport">
       <span
         v-for="info in atisDisplayItems"
         :key="info.airport"
@@ -193,10 +194,10 @@
       <span v-if="atisDisplayItems.length === 0 && efs.displayAirports.length > 0" class="text-grey-darken-1 ml-2">
         {{ efs.displayAirports.join(' ') }}
       </span>
+      </template>
       <span v-if="efs.multiAirport && efs.pendingIdleSwap" class="idle-hint ml-2">
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
-      </template>
       <div v-if="showDclControls" class="top-status-cluster">
         <v-btn
           variant="text"
@@ -523,9 +524,18 @@
           </div>
         </Teleport>
 
-        <!-- ESSA / OTHER: right arrow catalog. Else fullscreen. -->
+        <!-- RTC: Handover on global bar (Catalog lives per column) -->
+        <button
+          v-if="efs.multiAirport"
+          type="button"
+          class="top-handover-btn"
+          title="Handover Assistant"
+          @click="onRightHandover"
+        >Handover</button>
+
+        <!-- ESSA / OTHER: catalog triangle (points inward). RTC: no global Catalog. -->
         <v-menu
-          v-if="efs.workspaceMode"
+          v-if="efs.workspaceMode && !efs.multiAirport"
           v-model="rightMenuOpen"
           location="bottom end"
           offset="4"
@@ -738,8 +748,9 @@
             </div>
           </div>
         </v-menu>
+        <!-- Fullscreen: right of catalog triangle (all configs) -->
         <button
-          v-else-if="!isStandalone"
+          v-if="!isStandalone"
           type="button"
           class="top-menu-btn top-fs-btn"
           :class="{ 'is-fullscreen': fullscreen }"
@@ -1614,7 +1625,8 @@ const dclAirportTaken = computed(
 )
 
 /** DCL chrome only for the CD / DEL controller */
-const showDclControls = computed(() => hasCdRole.value)
+/** DCL chrome only for CD/DEL — never in RTC (per-column / voice only) */
+const showDclControls = computed(() => hasCdRole.value && !efs.multiAirport)
 
 const dclOtherTooltip = computed(() => {
   const apt = efs.dclAirport || 'airport'
@@ -1777,7 +1789,7 @@ onUnmounted(() => {
   width: 0;
   height: 0;
   border-style: solid;
-  /* Point right when closed */
+  /* Left chrome: point right (inward) when closed */
   border-width: calc(5px * var(--tb)) 0 calc(5px * var(--tb)) calc(7px * var(--tb));
   border-color: transparent transparent transparent currentColor;
 }
@@ -1788,9 +1800,10 @@ onUnmounted(() => {
   border-color: currentColor transparent transparent transparent;
 }
 
+/* Right chrome: point left (inward), not toward the screen edge */
 .top-menu-tri--right {
-  border-width: calc(5px * var(--tb)) 0 calc(5px * var(--tb)) calc(7px * var(--tb));
-  border-color: transparent transparent transparent currentColor;
+  border-width: calc(5px * var(--tb)) calc(7px * var(--tb)) calc(5px * var(--tb)) 0;
+  border-color: transparent currentColor transparent transparent;
 }
 
 .top-trash-btn.drag-over,
@@ -1899,6 +1912,25 @@ span.essa-status-btn.esgg-roles-readonly {
   gap: calc(8px * var(--tb));
   margin-left: calc(4px * var(--tb));
   flex-shrink: 0;
+}
+
+.top-handover-btn {
+  font-size: calc(11px * var(--tb));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #c8c8c8;
+  background: transparent;
+  border: 1px solid #4a4e54;
+  border-radius: calc(4px * var(--tb));
+  padding: calc(2px * var(--tb)) calc(8px * var(--tb));
+  cursor: pointer;
+  appearance: none;
+  white-space: nowrap;
+}
+.top-handover-btn:hover {
+  color: #fff;
+  border-color: #6a6e74;
+  filter: brightness(1.1);
 }
 
 .top-sep-group {

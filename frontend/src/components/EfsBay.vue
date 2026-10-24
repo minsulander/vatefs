@@ -36,6 +36,22 @@
         }"
         :style="{ background: accent }"
       >
+        <!-- Left: trash (global trash lives on top bar only when not RTC) -->
+        <button
+          type="button"
+          class="bay-trash-btn top-menu-btn efs-trash-drop"
+          :class="{ 'drag-over': trashDragOver }"
+          title="Trash — open recover · drop strip to delete"
+          @click="trashOpen = true"
+          @dragover.prevent="onTrashDragOver"
+          @dragenter.prevent="onTrashDragEnter"
+          @dragleave="onTrashDragLeave"
+          @drop.prevent="onTrashDrop"
+        >
+          <span class="bay-menu-tri" aria-hidden="true" />
+        </button>
+        <TrashDialog v-model="trashOpen" />
+
         <button
           ref="pickerBtn"
           type="button"
@@ -66,6 +82,13 @@
             @click.stop="onHeaderQnhClick"
           >{{ headerQnh }}</button>
         </div>
+
+        <!-- Right: catalog (Sections / info / RWY strips) -->
+        <RtcColumnCatalogMenu
+          v-if="!isEmpty"
+          :bay="bay"
+          :airport="selectedAirport"
+        />
 
         <Teleport to="body">
           <div
@@ -139,9 +162,9 @@
       <template v-else>
         <!-- Continuous flow: empty top / empty column = extension of previous bay -->
         <div
-          v-if="workspaceMode && (columnTopGap > 0 || bay.sections.length === 0)"
+          v-if="workspaceMode && (columnTopGap > 0 || displaySections.length === 0)"
           class="ws-overflow-gap"
-          :class="{ 'ws-overflow-gap--fill': bay.sections.length === 0 }"
+          :class="{ 'ws-overflow-gap--fill': displaySections.length === 0 }"
           :style="overflowGapStyle"
           :title="'Overflow from previous bay'"
           @dragover="onWorkspaceBayDragOver"
@@ -156,12 +179,12 @@
           />
         </div>
         <EfsSection
-          v-for="(section, index) in bay.sections"
+          v-for="(section, index) in displaySections"
           :key="workspaceInstanceId(section.id) || section.id"
           :section="section"
           :bay-id="bay.id"
           :is-first-section="index === 0"
-          :is-last-section="index === bay.sections.length - 1"
+          :is-last-section="index === displaySections.length - 1"
           :workspace-mode="workspaceMode"
           :workspace-instance-id="workspaceInstanceId(section.id)"
           :workspace-column-index="columnIndex ?? 0"
@@ -176,9 +199,12 @@ import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import type { Bay } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { buildRtcAirportList } from '@/composables/rtcAirportList'
+import { mergeRtcBaySections, rtcExtrasVersion } from '@/composables/rtcColumnExtras'
 import { getWorkspace } from '@/workspace'
 import EfsSection from './EfsSection.vue'
 import WsOverflowHost from './WsOverflowHost.vue'
+import TrashDialog from './TrashDialog.vue'
+import RtcColumnCatalogMenu from './RtcColumnCatalogMenu.vue'
 
 const props = defineProps<{
   bay: Bay
@@ -186,7 +212,15 @@ const props = defineProps<{
   workspaceMode?: boolean
 }>()
 
+const store = useEfsStore()
 const ws = getWorkspace()
+
+/** Server sections + RTC empty dividers / unhide overlay */
+const displaySections = computed(() => {
+  if (!store.multiAirport) return props.bay.sections
+  void rtcExtrasVersion()
+  return mergeRtcBaySections(props.bay)
+})
 
 const columnTopGap = computed(() => {
   if (!props.workspaceMode || props.columnIndex == null) return 0
@@ -203,7 +237,7 @@ const overflowHost = computed(() => {
 })
 
 const overflowGapStyle = computed(() => {
-  if (props.bay.sections.length === 0) {
+  if (displaySections.value.length === 0) {
     // Empty column: flex-fill the body (height already = body via getColumnTopGap)
     return { flex: '1 1 auto', minHeight: 0 }
   }
@@ -289,8 +323,33 @@ const BAY_REF_WIDTH_PX = 400
 const BAY_SCALE_MIN = 0.55
 const BAY_SCALE_MAX = 2.2
 
-const store = useEfsStore()
 const bayEl = ref<HTMLElement | null>(null)
+
+const trashOpen = ref(false)
+const trashDragOver = ref(false)
+
+function onTrashDragOver() {
+  trashDragOver.value = true
+}
+function onTrashDragEnter() {
+  trashDragOver.value = true
+}
+function onTrashDragLeave(e: DragEvent) {
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as HTMLElement)?.contains(related)) return
+  trashDragOver.value = false
+}
+function onTrashDrop(e: DragEvent) {
+  trashDragOver.value = false
+  const raw = e.dataTransfer?.getData('application/json')
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw) as { stripId?: string }
+    if (data.stripId) store.deleteStrip(data.stripId)
+  } catch {
+    /* ignore */
+  }
+}
 const bayHeader = ref<HTMLElement | null>(null)
 let bayResizeObs: ResizeObserver | null = null
 let bayBodyResizeObs: ResizeObserver | null = null
@@ -850,7 +909,45 @@ onMounted(() => {
   height: max(calc(18px * var(--bay-scale)), calc(20px * var(--efs-scale, 1)));
 }
 
-/* ICAO centred; QNH/ATIS overlay on the right */
+.bay-trash-btn {
+  position: absolute;
+  left: calc(2px * var(--bay-scale));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  color: rgba(255, 255, 255, 0.9);
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  appearance: none;
+}
+.bay-trash-btn:hover {
+  filter: brightness(1.2);
+}
+.bay-trash-btn.drag-over {
+  color: #f44336;
+  outline: 1px solid #f44336;
+}
+.bay-menu-tri {
+  display: block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* Point right (inward from left edge) */
+  border-width: 5px 0 5px 7px;
+  border-color: transparent transparent transparent currentColor;
+}
+.bay-header :deep(.bay-catalog-btn) {
+  position: absolute;
+  right: calc(2px * var(--bay-scale));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  margin-left: 0;
+}
+
+/* ICAO centred; QNH/ATIS overlay on the right (inboard of catalog) */
 .airport-picker-btn {
   position: absolute;
   left: 50%;
@@ -883,7 +980,8 @@ onMounted(() => {
 
 .bay-header-meta {
   position: absolute;
-  right: calc(4px * var(--bay-scale));
+  /* Leave room for catalog triangle on the right */
+  right: calc(26px * var(--bay-scale));
   top: 0;
   bottom: 0;
   z-index: 2;
