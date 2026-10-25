@@ -3527,14 +3527,20 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     if (!fp.IsValid()) {
                         DisplayMessage("assignHeading: Flight plan not found: " + callsign);
                     } else {
-                        bool ok = fp.GetControllerAssignedData().SetAssignedHeading(heading);
+                        auto cad = fp.GetControllerAssignedData();
+                        // AHD and DCT are mutually exclusive — clear DCT when setting a heading.
+                        if (heading > 0) {
+                            cad.SetDirectToPointName("");
+                        }
+                        bool ok = cad.SetAssignedHeading(heading);
                         if (!ok) DisplayMessage("assignHeading: Failed for " + callsign);
                     }
                 } else if (message["type"] == "assignDirect") {
                     // DCT / FPR: update FLEG like ES COPX / "clear direct".
                     // Set: flash fix via scratch (VOR/NDB/FIX → DCT, updates next route).
-                    // Clear: same as ES clear-direct — zero AHDG, clear DirectTo, flash
-                    // empty scratch (then restore) so FLEG drops the DCT.
+                    // Clear: clear DirectTo and flash empty scratch so FLEG drops the DCT.
+                    // Do NOT zero AHD when clearing DCT — backend clears DCT right after
+                    // assignHeading, and wiping AHD made the strip/TopSky heading vanish.
                     auto callsign = message["callsign"].get<std::string>();
                     auto point = message["point"].get<std::string>();
                     DebugMessage("assignDirect: " + callsign + " -> " + (point.empty() ? "(clear)" : point));
@@ -3547,8 +3553,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         DisplayMessage("assignDirect: Flight plan not found: " + callsign);
                     } else {
                         auto cad = fp.GetControllerAssignedData();
-                        // Direct and assigned heading are mutually exclusive
-                        cad.SetAssignedHeading(0);
+                        // Setting a DCT point clears AHD. Clearing DCT leaves AHD alone.
+                        if (!point.empty()) {
+                            cad.SetAssignedHeading(0);
+                        }
                         bool ok = cad.SetDirectToPointName(point.c_str());
                         if (!ok) {
                             // Empty clear often returns false when already cleared — not fatal
