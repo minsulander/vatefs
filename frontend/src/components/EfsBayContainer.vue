@@ -532,17 +532,18 @@ function onContainerClick() {
 <!-- Unscoped: klack/cock raise — strip paints over bay gutter / neighbour -->
 <style>
 /*
- * SAAB: don't clip cocked strips at the content edge (paper already visible).
- * Gutter is bay-row gap; strip must be free to paint into that gap above it.
+ * SAAB / ESSA / OTHER: keep bay content overflow:hidden so section chrome never
+ * paints over the bottom bar (paper uses per-bay clip-path instead).
+ * Cocked-strip gutter bleed is handled on klack-raised columns via clip-path
+ * (overflow-x:visible + overflow-y:hidden collapses to both auto).
  */
 .efs-bay-container:not(.efs-bay-container--paper) .efs-bay-content {
-  overflow: visible;
+  overflow: hidden;
 }
 .efs-bay-container--paper .efs-bay-content:not(.efs-bay-content--table-scroll) {
   overflow: visible !important;
 }
-.efs-bay-container--paper .bay-row--paper,
-.efs-bay-container:not(.efs-bay-container--paper) .bay-row {
+.efs-bay-container--paper .bay-row--paper {
   overflow: visible;
   isolation: isolate;
 }
@@ -555,12 +556,16 @@ function onContainerClick() {
 
 /*
  * SAAB only — widen the strip list into the gutter (paper has its own bleed).
+ * Clip vertically at the column box; expand horizontally into the gutter.
  * Bleed padding stays transparent so bay-row gutter colour remains visible;
  * only the cocked strip paints above it. Bay fill stays on section-content
  * (in-column) — never paint bay-bg into the bleed.
  */
 .efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised {
   --saab-cock-bleed: calc(4px + var(--efs-bay-gutter, 8px));
+  clip-path: inset(
+    0 calc(-1 * var(--saab-cock-bleed)) 0 calc(-1 * var(--saab-cock-bleed))
+  );
 }
 .efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .efs-bay,
 .efs-bay-container:not(.efs-bay-container--paper) .bay-column.bay-column--klack-raised .bay-body,

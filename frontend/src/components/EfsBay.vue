@@ -199,7 +199,11 @@ import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import type { Bay } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
 import { buildRtcAirportList } from '@/composables/rtcAirportList'
-import { mergeRtcBaySections, rtcExtrasVersion } from '@/composables/rtcColumnExtras'
+import {
+  mergeRtcBaySections,
+  rtcExtrasVersion,
+  setRtcBayBodyHeight,
+} from '@/composables/rtcColumnExtras'
 import { getWorkspace } from '@/workspace'
 import EfsSection from './EfsSection.vue'
 import WsOverflowHost from './WsOverflowHost.vue'
@@ -365,10 +369,14 @@ function updateBayScale() {
 }
 
 function reportBayBodyHeight() {
-  if (!props.workspaceMode || props.columnIndex == null) return
   const body = bayEl.value?.querySelector('.bay-body') as HTMLElement | null
   if (!body) return
-  ws.setColumnBodyHeight(props.columnIndex, body.clientHeight)
+  if (props.workspaceMode && props.columnIndex != null) {
+    ws.setColumnBodyHeight(props.columnIndex, body.clientHeight)
+  }
+  if (store.multiAirport) {
+    setRtcBayBodyHeight(props.bay.id, body.clientHeight)
+  }
 }
 
 function scheduleBayScale() {
@@ -610,7 +618,11 @@ onMounted(() => {
     bayResizeObs.observe(bayEl.value)
   }
   const body = bayEl.value?.querySelector('.bay-body') as HTMLElement | null
-  if (body && props.workspaceMode && typeof ResizeObserver !== 'undefined') {
+  if (
+    body &&
+    typeof ResizeObserver !== 'undefined' &&
+    (props.workspaceMode || store.multiAirport)
+  ) {
     bayBodyResizeObs = new ResizeObserver(() => reportBayBodyHeight())
     bayBodyResizeObs.observe(body)
     reportBayBodyHeight()
@@ -693,6 +705,11 @@ onMounted(() => {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+}
+
+/* ESSA continuous-flow: never let overflow-gap / floor-parked headers paint past the bay */
+.efs-bay--workspace .bay-body {
+  overflow: hidden;
 }
 
 
@@ -1141,10 +1158,12 @@ onMounted(() => {
 .ws-overflow-gap {
   flex: 0 0 auto;
   min-height: 0;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   background: transparent;
   pointer-events: auto;
+  overflow: hidden;
 }
 .ws-overflow-gap--fill {
   flex: 1 1 auto;

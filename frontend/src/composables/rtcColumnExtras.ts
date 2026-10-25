@@ -625,19 +625,38 @@ function sortSectionsByY(sections: Section[], ys: Record<string, number>): Secti
  * nextY - thisY; last flexes. Clears store-locked heights when Ys unused so
  * equal-flex is not stuck on a prior mount lock.
  */
-function applyRtcSectionHeights(sections: Section[], ys: Record<string, number>): Section[] {
+function applyRtcSectionHeights(
+  sections: Section[],
+  ys: Record<string, number>,
+  bodyH = 0,
+): Section[] {
   const sorted = sortSectionsByY(sections, ys)
   const useY = Object.keys(ys).length > 0 && sorted.some((s) => ys[s.id] != null)
   if (!useY) {
     // Ignore store-locked equal-flex heights — they squash last sections (DEP)
     return sorted.map((s) => ({ ...s, height: undefined }))
   }
+  // Stale Ys from a taller window must not push section chrome past the bay floor.
+  let fitted = ys
+  if (bodyH > 0) {
+    const maxAllowed = Math.max(0, bodyH - RTC_HEADER_H)
+    const present = sorted.map((s) => ys[s.id]).filter((y): y is number => y != null)
+    const maxTop = present.length ? Math.max(...present) : 0
+    if (maxTop > maxAllowed && maxTop > 0) {
+      const scale = maxAllowed / maxTop
+      fitted = { ...ys }
+      for (const s of sorted) {
+        const y = ys[s.id]
+        if (y != null) fitted[s.id] = Math.round(y * scale)
+      }
+    }
+  }
   return sorted.map((s, i) => {
     if (i >= sorted.length - 1) {
       return { ...s, height: undefined }
     }
-    const y0 = ys[s.id]
-    const y1 = ys[sorted[i + 1]!.id]
+    const y0 = fitted[s.id]
+    const y1 = fitted[sorted[i + 1]!.id]
     if (y0 == null || y1 == null) return { ...s, height: undefined }
     return { ...s, height: Math.max(0, Math.round(y1 - y0)) }
   })
@@ -666,7 +685,49 @@ export function mergeRtcBaySections(bay: Bay): Section[] {
   const withSplits = applyRtcSplitViews(bay.id, ordered, extras)
   // Re-apply order so synthetic ids (arr_app / clr / push_start) follow sectionOrder
   const reordered = applySectionOrder(withSplits, extras.sectionOrder)
-  return applyRtcSectionHeights(reordered, extras.sectionYs)
+  const bodyEl =
+    typeof document !== 'undefined'
+      ? (document.querySelector(
+          `.efs-bay[data-bay-id="${CSS.escape(bay.id)}"] .bay-body`,
+        ) as HTMLElement | null)
+      : null
+  const bodyH = bodyEl?.clientHeight ?? rtcBayBodyHeightById.value[bay.id] ?? 0
+  return applyRtcSectionHeights(reordered, extras.sectionYs, bodyH)
+}
+
+/** Per-bay body heights — resize rescale so free-Y headers stay in-bay. */
+const rtcBayBodyHeightById = ref<Record<string, number>>({})
+
+/** Call from EfsBay ResizeObserver (RTC / multi-airport). */
+export function setRtcBayBodyHeight(bayId: string, height: number) {
+  const h = Math.max(0, Math.round(height))
+  const prev = rtcBayBodyHeightById.value[bayId]
+  if (prev === h) return
+  rtcBayBodyHeightById.value = { ...rtcBayBodyHeightById.value, [bayId]: h }
+  if (prev != null && prev > 0 && h > 0 && h !== prev) {
+    const cur = normalizeExtras(bayId)
+    const ys = cur.sectionYs
+    const vals = Object.values(ys)
+    if (vals.length > 0) {
+      const maxAllowed = Math.max(0, h - RTC_HEADER_H)
+      const maxTop = Math.max(...vals)
+      if (maxTop > maxAllowed && maxTop > 0) {
+        const scale = maxAllowed / maxTop
+        const next: Record<string, number> = {}
+        for (const [id, y] of Object.entries(ys)) {
+          next[id] = Math.round(y * scale)
+        }
+        extrasByBay.value = {
+          ...extrasByBay.value,
+          [bayId]: { ...cur, sectionYs: next },
+        }
+        bump(true)
+        return
+      }
+    }
+  }
+  // Body grew / no overflow — still bump so heights recompute against new bodyH
+  bump(false)
 }
 
 function measureRtcHeaderH(bayBodyEl: HTMLElement): number {

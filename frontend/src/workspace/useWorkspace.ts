@@ -519,17 +519,58 @@ export function useWorkspace() {
     if (!layout) return false
     const bodyH = columnBodyHeightByCol.value[col] ?? 0
     if (bodyH <= 0) return false
+    const headerH = measureHeaderHeight()
+    const maxY = Math.max(0, bodyH - headerH)
     let changed = false
     const sections = layout.sections.map((s) => {
       if (s.anchorColumn !== col || s.yRatio == null) return s
-      const y = effectiveSectionY(s, bodyH)
-      if (y == null || y === s.y) return s
+      let y = effectiveSectionY(s, bodyH)
+      if (y == null) return s
+      if (y > maxY) y = maxY
+      const ratio = bodyH > 0 ? y / bodyH : s.yRatio
+      if (y === s.y && ratio === s.yRatio) return s
       changed = true
-      return { ...s, y }
+      return { ...s, y, yRatio: ratio }
     })
     if (!changed) return false
     activeLayout.value = { ...layout, sections }
     return true
+  }
+
+  /** Attach absolute y + yRatio so headers reflow when the bay body resizes. */
+  function yFields(y: number, bodyH: number): { y: number; yRatio?: number } {
+    const yy = Math.max(0, Math.round(y))
+    if (bodyH > 0) return { y: yy, yRatio: yy / bodyH }
+    return { y: yy }
+  }
+
+  /**
+   * Backfill missing yRatio from absolute y, clamp any header past the bay floor,
+   * then rematerialize so resize / ESSA overflow columns cannot paint onto the bar.
+   */
+  function rescaleColumnYsForBody(col: number, bodyH: number, prevBodyH: number) {
+    const layout = activeLayout.value
+    if (!layout || bodyH <= 0) return false
+    const headerH = measureHeaderHeight()
+    const maxY = Math.max(0, bodyH - headerH)
+    let changed = false
+    const sections = layout.sections.map((s) => {
+      if (s.anchorColumn !== col) return s
+      const basis = prevBodyH > 0 ? prevBodyH : bodyH
+      let next = s
+      if (s.yRatio == null && s.y != null && Number.isFinite(s.y) && basis > 0) {
+        changed = true
+        next = { ...next, yRatio: Math.max(0, s.y) / basis }
+      }
+      const eff = effectiveSectionY(next, bodyH)
+      if (eff != null && eff > maxY) {
+        changed = true
+        next = { ...next, ...yFields(maxY, bodyH) }
+      }
+      return next
+    })
+    if (changed) activeLayout.value = { ...layout, sections }
+    return materializeYRatios(col) || changed
   }
 
   function setColumnBodyHeight(col: number, height: number) {
@@ -541,6 +582,10 @@ export function useWorkspace() {
     // Reload/HMR can freeze headers at y≈0 before the bay has height; heal once body is real.
     // Also re-check when height is unchanged (Vite HMR remount keeps the workspace singleton).
     if (h >= WORKSPACE_MIN_SECTION_H * 2) {
+      // Always run on first measure (prev unset) and on resize — ESSA continuous-flow
+      // columns often park a header on the floor (CTR DEP / TAXIWAY DEP).
+      const basis = prev != null && prev > 0 ? prev : h
+      rescaleColumnYsForBody(col, h, basis)
       const ratioed = materializeYRatios(col)
       const healed = healCollapsedColumnYs(col)
       if (healed || columnHasUnsetYs(col)) syncColumnYsFromDom(col)
@@ -664,7 +709,7 @@ export function useWorkspace() {
       ...layout,
       sections: layout.sections.map((s) => {
         const y = yById.get(s.instanceId)
-        return y != null ? { ...s, y } : s
+        return y != null ? { ...s, ...yFields(y, bodyH) } : s
       }),
     }
     return true
@@ -690,7 +735,7 @@ export function useWorkspace() {
       ...layout,
       sections: layout.sections.map((s) => {
         if (s.anchorColumn !== col) return s
-        const { y: _y, height: _h, ...rest } = s
+        const { y: _y, yRatio: _yr, height: _h, ...rest } = s
         return rest
       }),
     }
@@ -737,7 +782,7 @@ export function useWorkspace() {
       ...layout,
       sections: layout.sections.map((s) => {
         const y = yById.get(s.instanceId)
-        return y != null ? { ...s, y } : s
+        return y != null ? { ...s, ...yFields(y, bodyH) } : s
       }),
     }
     return true
@@ -772,7 +817,12 @@ export function useWorkspace() {
     const body = columnBodyEl(col)
     if (!body) return Math.max(0, clientY)
     const rect = body.getBoundingClientRect()
-    return Math.max(0, Math.min(rect.height - 20, clientY - rect.top))
+    // Keep full header above the bay floor (and bottom bar). A fixed -20px was
+    // too small when --bay-scale grows the header, so floor-parked ESSA dividers
+    // (CTR DEP / TAXIWAY DEP) spilled onto the bottom bar.
+    const headerH = measureHeaderHeight()
+    const maxY = Math.max(0, rect.height - headerH)
+    return Math.max(0, Math.min(maxY, clientY - rect.top))
   }
 
   /**
@@ -1014,9 +1064,13 @@ export function useWorkspace() {
     const moving2 = layout2.sections.find((s) => s.instanceId === instanceId) ?? moving
     const rawY = Math.round(clientYToColumnY(col, clientY))
     const y = collideHeaderY(moving2, col, rawY, layout2.sections)
+    const bodyH =
+      columnBodyHeightByCol.value[col] ??
+      columnBodyEl(col)?.getBoundingClientRect().height ??
+      0
 
     const placed = layout2.sections.map((s) =>
-      s.instanceId === instanceId ? { ...s, anchorColumn: col, y } : s,
+      s.instanceId === instanceId ? { ...s, anchorColumn: col, ...yFields(y, bodyH) } : s,
     )
     // After a committed place, guarantee no residual header overlap in the target column
     activeLayout.value = {
@@ -1252,7 +1306,12 @@ export function useWorkspace() {
     const cols: Bay[] = []
     for (let c = 0; c < layout.columnCount; c++) {
       const sorted = sectionsInColumn(c)
-      const bodyH = columnBodyHeightByCol.value[c] ?? 0
+      // Prefer observed height; fall back to live DOM so first paint still clamps.
+      let bodyH = columnBodyHeightByCol.value[c] ?? 0
+      if (bodyH <= 0) {
+        const live = columnBodyEl(c)?.clientHeight ?? 0
+        if (live > 0) bodyH = live
+      }
       const useY = sorted.some((s) => effectiveSectionY(s, bodyH) != null)
       // If absolute Y is in use, coerce missing/overlapping tops so headers never share pixels.
       // Null-y siblings must NOT pack to header-only gaps (that stacked whole columns when an
@@ -1263,13 +1322,23 @@ export function useWorkspace() {
         const headerH = measureHeaderHeight()
         const nullStep = Math.max(headerH, WORKSPACE_MIN_SECTION_H)
         let prev = -headerH
-        const packed = sorted.map((s) => {
+        let packed = sorted.map((s) => {
           let y = effectiveSectionY(s, bodyH)
           if (y == null) y = prev + nullStep
           else if (y < prev + headerH) y = prev + headerH
           prev = y
           return y
         })
+        // Stale absolute Ys (saved on a taller window) must not push headers past
+        // the bay floor / under the bottom bar.
+        if (bodyH > 0 && packed.length > 0) {
+          const maxAllowed = Math.max(0, bodyH - headerH)
+          const maxTop = Math.max(...packed)
+          if (maxTop > maxAllowed && maxTop > 0) {
+            const scale = maxAllowed / maxTop
+            packed = packed.map((t) => Math.round(t * scale))
+          }
+        }
         tops = columnYsLookStacked(packed, bodyH, headerH) ? null : packed
       }
       const colSections = sorted.map((s, i): Section => {

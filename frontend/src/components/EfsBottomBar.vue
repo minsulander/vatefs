@@ -504,6 +504,9 @@ function findDropTarget(x: number, y: number): DropTarget | null {
   padding: 0 calc(6px * var(--bb));
   box-sizing: border-box;
   overflow: hidden;
+  /* Keep chrome above bay columns (klack-raised uses z-index 100) */
+  position: relative;
+  z-index: 200;
 }
 
 .bottom-bar-side {
