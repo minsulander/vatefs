@@ -19,6 +19,7 @@ const {
     arrHopsFromLanding,
     applyConfig6Dep,
     delTargetGndFamily,
+    cdIdealGndFamily,
     twrFamilyForRunway,
     dedupeHops,
     firstOnlineInChain,
@@ -45,6 +46,14 @@ check("DEL GNDE falls to GW when AGE offline", () => {
     assert.equal(delTargetGndFamily("GE", false), "GW")
     assert.equal(delTargetGndFamily("GE", true), "GE")
     assert.equal(delTargetGndFamily("GN", false), "GN")
+})
+
+check("CD hop keeps parking sector when only AGW is open", () => {
+    assert.equal(cdIdealGndFamily("GE", false), "GE")
+    assert.equal(cdIdealGndFamily("GN", false), "GN")
+    assert.equal(cdIdealGndFamily("GW", false), "GW")
+    assert.equal(cdIdealGndFamily(undefined, false), "GW")
+    assert.equal(cdIdealGndFamily(undefined, true), "GE")
 })
 
 check("TWR family for runway", () => {
@@ -166,6 +175,27 @@ check("ARR 01R parking GE → GE", () => {
     assert.deepEqual(hops, [{ kind: "gnd", family: "GE" }])
 })
 
+check("ARR 19L parking GN → GE then GN", () => {
+    const hops = arrHopsFromLanding("19L", "GN", "TEST1", undefined)
+    assert.deepEqual(hops, [
+        { kind: "gnd", family: "GE" },
+        { kind: "gnd", family: "GN" },
+    ])
+})
+
+check("ARR 19L parking GW → GE then GW", () => {
+    const hops = arrHopsFromLanding("19L", "GW", "TEST1", undefined)
+    assert.deepEqual(hops, [
+        { kind: "gnd", family: "GE" },
+        { kind: "gnd", family: "GW" },
+    ])
+})
+
+check("ARR 19L parking GE → GE", () => {
+    const hops = arrHopsFromLanding("19L", "GE", "TEST1", undefined)
+    assert.deepEqual(hops, [{ kind: "gnd", family: "GE" }])
+})
+
 check("ARR 08 parking GE via GN", () => {
     const hops = arrHopsFromLanding("08", "GE", "TEST1", undefined)
     assert.deepEqual(hops[0], { kind: "gnd", family: "GN" })
@@ -233,6 +263,54 @@ check("CD GNDN finds AGW by callsign when positionId missing", () => {
     assert.ok(hit)
     assert.equal(hit!.si, "AGW")
     assert.equal(hit!.frequency, 121.705)
+})
+
+check("GNDE covered by AGW with AFV XC → display AGE freq", () => {
+    setForceIdealAppDepFrequency(false)
+    __setGndOwnerChainsForTest({ GE: ["AGE", "AGW"] })
+    __setEsePositionForTest({
+        callsign: "ESSA_E_GND",
+        frequency: 121.98,
+        si: "AGE",
+        airport: "ESSA",
+        role: "GND",
+    })
+    __setEsePositionForTest({
+        callsign: "ESSA_W_GND",
+        frequency: 121.705,
+        si: "AGW",
+        airport: "ESSA",
+        role: "GND",
+    })
+    staticConfig.onlineControllers = new Map([
+        [
+            "ESSA_W_GND",
+            { role: "GND", frequency: 121.705, callsign: "ESSA_W_GND", positionId: "AGW" },
+        ],
+    ])
+    __setAfvFrequenciesForTest({
+        ESSA_W_GND: ["121.705", "121.980"],
+    })
+    const hit = firstOnlineInChain([{ kind: "gnd", family: "GE" }], "ESSA_DEL")
+    assert.ok(hit)
+    assert.equal(hit!.callsign, "ESSA_W_GND")
+    assert.equal(hit!.si, "AGW")
+    assert.equal(hit!.displaySi, "AGE")
+    assert.equal(hit!.displayFrequency, 121.98)
+    assert.equal(hit!.xc, true)
+})
+
+check("GNDE covered by AGW without XC → display AGW freq", () => {
+    setForceIdealAppDepFrequency(false)
+    __setAfvFrequenciesForTest({
+        ESSA_W_GND: ["121.705"],
+    })
+    const hit = firstOnlineInChain([{ kind: "gnd", family: "GE" }], "ESSA_DEL")
+    assert.ok(hit)
+    assert.equal(hit!.callsign, "ESSA_W_GND")
+    assert.equal(hit!.displaySi, "AGW")
+    assert.equal(hit!.displayFrequency, 121.705)
+    assert.equal(hit!.xc, false)
 })
 
 check("GNDN covered by AGW with AFV XC → display AGN freq", () => {

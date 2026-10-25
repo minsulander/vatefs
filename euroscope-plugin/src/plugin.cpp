@@ -3,6 +3,7 @@
 #include "local-ip.h"
 
 #include "json.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <ctime>
@@ -3531,14 +3532,20 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     if (!fp.IsValid()) {
                         DisplayMessage("assignHeading: Flight plan not found: " + callsign);
                     } else {
-                        bool ok = fp.GetControllerAssignedData().SetAssignedHeading(heading);
+                        auto cad = fp.GetControllerAssignedData();
+                        // AHD and DCT are mutually exclusive — clear DCT when setting a heading.
+                        if (heading > 0) {
+                            cad.SetDirectToPointName("");
+                        }
+                        bool ok = cad.SetAssignedHeading(heading);
                         if (!ok) DisplayMessage("assignHeading: Failed for " + callsign);
                     }
                 } else if (message["type"] == "assignDirect") {
                     // DCT / FPR: update FLEG like ES COPX / "clear direct".
                     // Set: flash fix via scratch (VOR/NDB/FIX → DCT, updates next route).
-                    // Clear: same as ES clear-direct — zero AHDG, clear DirectTo, flash
-                    // empty scratch (then restore) so FLEG drops the DCT.
+                    // Clear: clear DirectTo and flash empty scratch so FLEG drops the DCT.
+                    // Do NOT zero AHD when clearing DCT — backend clears DCT right after
+                    // assignHeading, and wiping AHD made the strip/TopSky heading vanish.
                     auto callsign = message["callsign"].get<std::string>();
                     auto point = message["point"].get<std::string>();
                     DebugMessage("assignDirect: " + callsign + " -> " + (point.empty() ? "(clear)" : point));
@@ -3551,8 +3558,10 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         DisplayMessage("assignDirect: Flight plan not found: " + callsign);
                     } else {
                         auto cad = fp.GetControllerAssignedData();
-                        // Direct and assigned heading are mutually exclusive
-                        cad.SetAssignedHeading(0);
+                        // Setting a DCT point clears AHD. Clearing DCT leaves AHD alone.
+                        if (!point.empty()) {
+                            cad.SetAssignedHeading(0);
+                        }
                         bool ok = cad.SetDirectToPointName(point.c_str());
                         if (!ok) {
                             // Empty clear often returns false when already cleared — not fatal
@@ -5659,6 +5668,62 @@ void VatEFSPlugin::PollBackendOutput()
     }
 }
 
+static bool IsSessionVatEfsLogName(const char *name)
+{
+    // VatEFS-YYMMDD-HHMM.log
+    static const char prefix[] = "VatEFS-";
+    const size_t prefixLen = sizeof(prefix) - 1;
+    if (strncmp(name, prefix, prefixLen) != 0) return false;
+    for (int i = 0; i < 6; ++i) {
+        if (name[prefixLen + i] < '0' || name[prefixLen + i] > '9') return false;
+    }
+    if (name[prefixLen + 6] != '-') return false;
+    for (int i = 0; i < 4; ++i) {
+        if (name[prefixLen + 7 + i] < '0' || name[prefixLen + 7 + i] > '9') return false;
+    }
+    return strcmp(name + prefixLen + 11, ".log") == 0;
+}
+
+/** Directory EuroScope logs live in. Falls back to the plugin directory. */
+static std::string VatEfsLogDirectory()
+{
+    const char *appdata = getenv("APPDATA");
+    if (appdata && appdata[0] != '\0')
+        return std::string(appdata) + "\\EuroScope";
+
+    std::string dir = DllPathFile;
+    const size_t dllLen = strlen("VatEFS.dll");
+    if (dir.size() >= dllLen)
+        dir.resize(dir.size() - dllLen);
+    while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/'))
+        dir.pop_back();
+    return dir;
+}
+
+/** Drop session logs beyond the five newest (by date+time in the name). */
+static void PruneVatEfsLogs(const std::string &dir)
+{
+    static constexpr size_t kKeep = 5;
+    const std::string pattern = dir + "\\VatEFS-??????-????.log";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    std::vector<std::string> names;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (!IsSessionVatEfsLogName(fd.cFileName)) continue;
+        names.emplace_back(fd.cFileName);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+
+    std::sort(names.begin(), names.end(), [](const std::string &a, const std::string &b) {
+        return a > b;
+    });
+    for (size_t i = kKeep; i < names.size(); ++i)
+        DeleteFileA((dir + "\\" + names[i]).c_str());
+}
+
 void VatEFSPlugin::StartBackend()
 {
     if (backendProcess != nullptr) {
@@ -5683,26 +5748,44 @@ void VatEFSPlugin::StartBackend()
         return;
     }
 
-    // Open log file in %APPDATA%\EuroScope (writable, next to VatEFSsettings.json)
-    std::string logPath;
-    const char *appdata = getenv("APPDATA");
-    if (appdata && appdata[0] != '\0') {
-        logPath = std::string(appdata) + "\\EuroScope\\VatEFS.log";
-    } else {
-        // Fallback to plugin directory if APPDATA is unavailable
-        logPath = DllPathFile;
-        logPath.resize(logPath.size() - strlen("VatEFS.dll"));
-        logPath += "VatEFS.log";
-    }
+    // One file per backend session, next to EuroScope's own logs. Older
+    // sessions are dropped so only the five newest remain.
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char sessionName[32];
+    sprintf_s(sessionName, "VatEFS-%02u%02u%02u-%02u%02u.log",
+              st.wYear % 100, st.wMonth, st.wDay, st.wHour, st.wMinute);
+    const std::string logDir = VatEfsLogDirectory();
+    const std::string logPath = logDir + "\\" + sessionName;
 
+    // CREATE_NEW keeps a prior same-minute session; fall back to append if
+    // .efs start is hit again within the same minute.
     HANDLE hLog = CreateFileA(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hLog == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
+        hLog = CreateFileA(logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
     if (hLog == INVALID_HANDLE_VALUE) {
         DisplayMessage("Failed to create log file: " + logPath +
                        " (error " + std::to_string(GetLastError()) + ")");
         return;
     }
     backendLogFile = hLog;
+    PruneVatEfsLogs(logDir);
+
+    // Session banner before backend stdout — plugin version is known here;
+    // backend version is logged as soon as efs.exe starts.
+    {
+        char ts[16];
+        sprintf_s(ts, "[%02u:%02u:%02u] ", st.wHour, st.wMinute, st.wSecond);
+        const std::string banner =
+            std::string(ts) + "=== VatEFS session start ===\r\n" +
+            ts + "EuroScope plugin version: " + PLUGIN_VERSION + "\r\n" +
+            ts + "Log file: " + logPath + "\r\n";
+        DWORD written = 0;
+        WriteFile(hLog, banner.c_str(), (DWORD)banner.size(), &written, NULL);
+    }
 
     // Create pipe to capture stdout/stderr
     SECURITY_ATTRIBUTES sa = {};

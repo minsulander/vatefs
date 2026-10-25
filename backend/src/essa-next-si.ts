@@ -185,11 +185,20 @@ function myLoggedInGndFamily(): EssaGndFamily | undefined {
     return si ? siToGndFamily(si) : undefined
 }
 
-/** DEL two-way split: GNDE → GW unless AGE online */
+/**
+ * Who should see a cleared strip when AGE is offline (TSAT visibility).
+ * GNDE traffic falls to GW. Do not use this as the CD hop — that drops the
+ * ideal SI, so AFV cross-couple cannot show AGE/AGN frequency.
+ */
 export function delTargetGndFamily(parking: EssaGndFamily | undefined, ageOnline: boolean): EssaGndFamily {
     if (!parking) return ageOnline ? "GE" : "GW"
     if (parking === "GE" && !ageOnline) return "GW"
     return parking
+}
+
+/** CD next hop: parking sector stays ideal. OWNER chain picks the online GND. */
+function cdIdealGndFamily(parking: EssaGndFamily | undefined, ageOnline: boolean): EssaGndFamily {
+    return parking ?? (ageOnline ? "GE" : "GW")
 }
 
 /**
@@ -746,9 +755,40 @@ function arrHopsFromLanding(
     const skipGeGwGnDetour =
         inGndn && towardGndeTwyW && towardGnde && !towardT2Gndw
 
-    const pair01r19l = r === "01R" || r === "19L"
+    // 19L vacates on the east side. TWR hands to GND E (121.980) even when
+    // the stand is north; GND E passes them to GND N. Direct GN only once
+    // the aircraft is already in the north and not detouring via the west.
+    if (r === "19L") {
+        if (parking === "GE") return [{ kind: "gnd", family: "GE" }]
+        if (parking === "GN") {
+            if (skipGeGwGnDetour) return [{ kind: "gnd", family: "GN" }]
+            if (towardT2Gndw) {
+                return [
+                    { kind: "gnd", family: "GE" },
+                    { kind: "gnd", family: "GW" },
+                    { kind: "gnd", family: "GN" },
+                ]
+            }
+            return [
+                { kind: "gnd", family: "GE" },
+                { kind: "gnd", family: "GN" },
+            ]
+        }
+        if (parking === "GW") {
+            if (inGndn && towardGndeTwyW && towardGndn) {
+                return [
+                    { kind: "gnd", family: "GN" },
+                    { kind: "gnd", family: "GW" },
+                ]
+            }
+            return [
+                { kind: "gnd", family: "GE" },
+                { kind: "gnd", family: "GW" },
+            ]
+        }
+    }
 
-    if (pair01r19l) {
+    if (r === "01R") {
         if (parking === "GN") {
             if (!skipGeGwGnDetour && towardT2Gndw) {
                 return [
@@ -957,7 +997,9 @@ export function resolveEssaNextSi(
         const sector = resolveIdealAppDepSector(flight, true)
         hops = [{ kind: "app", sector }]
     } else if (coveringCd && cdPhase) {
-        const fam = delTargetGndFamily(parking, ageOnline)
+        // Keep parking family (GE/GN/GW). Only AGW online still transfers to AGW
+        // via OWNER, and AFV XC can show 121.980 / 121.930 instead of 121.705.
+        const fam = cdIdealGndFamily(parking, ageOnline)
         hops = [{ kind: "gnd", family: fam }]
         relevant.add("CD")
         relevant.add(familyToRole(fam))
@@ -1322,6 +1364,7 @@ export const __test = {
     applyConfig6Dep,
     applyConfig6Arr,
     delTargetGndFamily,
+    cdIdealGndFamily,
     twrFamilyForRunway,
     dedupeHops,
     normalizeRwy,
