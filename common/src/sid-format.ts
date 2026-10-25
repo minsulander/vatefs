@@ -78,6 +78,17 @@ export function isVectorSidName(sid: string | undefined | null): boolean {
 }
 
 /**
+ * True for radar-vector SIDs that vector to a *different* exit than the SID name
+ * (ARS6E·KOGAV). False for same-exit form (ARS6E·ARS) and non-vector SIDs —
+ * used for amber SID highlight (plain ARS 6E must not be orange).
+ */
+export function isOffExitVectorSid(sid: string | undefined | null): boolean {
+    const parsed = parseVectorSidName(sid)
+    if (!parsed) return false
+    return namedSidPrefix(parsed.base) !== parsed.exit
+}
+
+/**
  * True for heading/track SLOW SIDs only (NNN·EXIT / NNN·NNN·EXIT).
  * Radar-vector SIDs (ARS6E·KOGAV) return false.
  */
@@ -196,21 +207,22 @@ function namedSidPrefix(base: string): string | undefined {
 
 /**
  * Display for radar-vector SIDs: "ARS 6E veKOGAV" (or "ARS6EveKOGAV" when compact).
- * Prefers filled TMA exit from FPL when provided.
- * When the exit is the SID itself (ARS6E·ARS → traffic to ARS), omit "veARS" → "ARS 6E".
+ * Uses the exit encoded in the SID (ARS6E·RESNA → veRESNA), not FPL tmaExit —
+ * otherwise a first-fix ARS would wrongly collapse ARS6E·RESNA to plain "ARS 6E".
+ * When the SID exit is the procedure name itself (ARS6E·ARS), omit "veARS" → "ARS 6E".
+ * `tmaExit` is unused (kept for call-site compatibility).
  */
 export function formatVectorSidDisplay(
     sid: string | undefined | null,
-    tmaExit?: string | null,
+    _tmaExit?: string | null,
     compact = false,
 ): string | null {
     const parsed = parseVectorSidName(sid)
     if (!parsed) return null
-    const exit = (tmaExit || "").trim().toUpperCase() || parsed.exit
     const baseLabel = formatNamedSidBase(parsed.base, compact)
-    // SID already names the exit (config 11 ARS→ARS 6E) — "ve ARS" is noise
-    if (namedSidPrefix(parsed.base) === exit) return baseLabel
-    return `${baseLabel} ve${exit}`
+    // Same-exit SID (ARS6E·ARS) — "veARS" is noise
+    if (namedSidPrefix(parsed.base) === parsed.exit) return baseLabel
+    return `${baseLabel} ve${parsed.exit}`
 }
 
 /** @deprecated AHDG is no longer derived from SID */

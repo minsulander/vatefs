@@ -119,6 +119,7 @@ export {
     hasForcedSidInRoute,
     isTrackSidName,
     isVectorSidName,
+    isOffExitVectorSid,
     isIfrSidEligible,
     resolveDisplayFlightRules,
     hasSlowRemark,

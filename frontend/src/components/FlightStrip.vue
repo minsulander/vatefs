@@ -1635,7 +1635,7 @@ import {
   isIfrSidEligible,
   isLocalInboundPresentation,
   isTrackSidName,
-  isVectorSidName,
+  isOffExitVectorSid,
   needsEssaEastSidBox,
   normalizeEssaRwy,
   requiresAccCoordination,
@@ -3302,8 +3302,9 @@ const sidHighlight = computed(() => {
   if (!shown) return false
   if (unclearedFieldHighlight.value) return true
   if (props.strip.flightRules === 'V' || /^VFR/i.test(raw)) return true
-  // Radar-vector (ARS6E·KOGAV / "ARS 6E veKOGAV") — same orange as SLOW, still not SLOW altitude
-  if (isVectorSidName(raw) || /[A-Z]{2,}\s+\d+[A-Z]+\s+ve[A-Z]{2,}/i.test(shown)) return true
+  // Off-exit radar-vector (ARS6E·KOGAV / "ARS 6E veKOGAV") — same orange as SLOW.
+  // Same-exit ARS6E·ARS displays as "ARS 6E" and must not amber.
+  if (isOffExitVectorSid(raw) || /[A-Z]{2,}\s+\d+[A-Z]+\s+ve[A-Z]{2,}/i.test(shown)) return true
   if (isTrackSidName(raw) || formatTrackSidDisplay(raw)) return true
   // Formatted SLOW display: 120veBABAP / 010·240veNOSLI
   if (/\d{3}(·\d{3})?ve[A-Z]{2,}/i.test(shown)) return true
