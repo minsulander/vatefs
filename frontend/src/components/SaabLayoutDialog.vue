@@ -340,7 +340,10 @@ async function onImportFile(ev: Event) {
   try {
     const text = await file.text()
     const imported = parseImportPayload(JSON.parse(text))
-    mergeImportedLayouts(imported)
+    const mode = window.confirm('Replace layouts with the same name? OK=replace, Cancel=keep both')
+      ? 'replace'
+      : 'keepBoth'
+    mergeImportedLayouts(imported, mode)
     savedTick.value++
   } catch (err) {
     window.alert(err instanceof Error ? err.message : 'Import failed')

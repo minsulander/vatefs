@@ -1,24 +1,126 @@
 /**
- * Client-only RTC column extras: empty dividers + hidden template sections.
+ * Client-only RTC column extras: empty dividers, hidden sections, free-Y order.
  * Merged into bay.sections for display; survives layout broadcasts via localStorage.
+ *
+ * Divider drag matches OTHER/ESSA workspace: absolute header Y → section heights
+ * (gaps between headers), not midpoint list-swapping.
  */
 
 import { ref } from 'vue'
 import type { Bay, Section } from '@vatefs/common'
 
 const STORAGE_KEY = 'efs/rtcColumnExtras'
+/** Fallback header bar height (matches .section-header CSS). */
+const RTC_HEADER_H = 18
 
 export type RtcEmptyDivider = {
   id: string
-  /** Insert after this section id (full bayN_* id); null = top */
-  afterSectionId: string | null
   title: string
 }
+
+export type RtcStripSize = 'compact' | 'normal' | 'expanded'
+const RTC_STRIP_SIZE_ORDER: RtcStripSize[] = ['normal', 'compact', 'expanded']
 
 export type RtcBayExtras = {
   emptyDividers: RtcEmptyDivider[]
   /** Logical ids: arr | app | rwy | twy | dep */
   hiddenLogical: string[]
+  /** Display order of section ids (template + empty). Missing ids append in server order. */
+  sectionOrder: string[]
+  /** Absolute Y of each section header within .bay-body (px from top). */
+  sectionYs: Record<string, number>
+  /** ARR + CTR combined into one "ARR / CTR" header */
+  arrAppMerged: boolean
+  /** DEP split into CLR + PUSH&START (push/start leave TAXIWAY visually) */
+  depSplit: boolean
+  /** Per display-section strip size (normal → compact → expanded), like workspace */
+  stripSizes: Record<string, RtcStripSize>
+}
+
+/** Synthetic display ids (not server section ids). */
+export function rtcArrAppMergedId(bayId: string): string {
+  return `${bayId}_arr_app`
+}
+export function rtcClrId(bayId: string): string {
+  return `${bayId}_clr`
+}
+export function rtcPushStartId(bayId: string): string {
+  return `${bayId}_push_start`
+}
+
+export function isRtcArrAppMergedId(sectionId: string): boolean {
+  return /^(?:bay\d+|idle)_arr_app$/i.test(sectionId)
+}
+export function isRtcClrId(sectionId: string): boolean {
+  return /^(?:bay\d+|idle)_clr$/i.test(sectionId)
+}
+export function isRtcPushStartId(sectionId: string): boolean {
+  return /^(?:bay\d+|idle)_push_start$/i.test(sectionId)
+}
+
+/** Groundstates that belong under PUSH&START when DEP is split. */
+export function isRtcPushStartGroundstate(gs: string | undefined | null): boolean {
+  const g = (gs || '').toUpperCase()
+  return g === 'STUP' || g === 'PUSH'
+}
+
+/** Basics that must not be closed with X. */
+export function isRtcBasicSectionId(sectionId: string): boolean {
+  if (isRtcEmptyDividerId(sectionId)) return false
+  if (isRtcClrId(sectionId) || isRtcPushStartId(sectionId)) return false
+  if (isRtcArrAppMergedId(sectionId)) return true
+  const log = logicalSectionIdFromRtc(sectionId)
+  return log === 'arr' || log === 'app' || log === 'rwy' || log === 'twy' || log === 'dep'
+}
+
+/** All RTC dividers can show X (close hides via catalog / removes empty / merges DEP halves). */
+export function rtcCanCloseSection(_sectionId: string): boolean {
+  return true
+}
+
+export function rtcCanSplitSection(sectionId: string): boolean {
+  return isRtcArrAppMergedId(sectionId) || logicalSectionIdFromRtc(sectionId) === 'dep'
+}
+
+export function getRtcStripSize(bayId: string, sectionId: string): RtcStripSize {
+  const s = normalizeExtras(bayId).stripSizes[sectionId]
+  return s === 'compact' || s === 'expanded' ? s : 'normal'
+}
+
+export function cycleRtcStripSize(bayId: string, sectionId: string): RtcStripSize {
+  const cur = normalizeExtras(bayId)
+  const prev = getRtcStripSize(bayId, sectionId)
+  const next = RTC_STRIP_SIZE_ORDER[(RTC_STRIP_SIZE_ORDER.indexOf(prev) + 1) % RTC_STRIP_SIZE_ORDER.length]!
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      stripSizes: { ...cur.stripSizes, [sectionId]: next },
+    },
+  }
+  bump()
+  return next
+}
+
+/** Close a divider: empty remove, DEP halves merge, basics hide (catalog restore). */
+export function closeRtcSection(bayId: string, sectionId: string) {
+  if (isRtcEmptyDividerId(sectionId)) {
+    removeRtcEmptyDivider(bayId, sectionId)
+    return
+  }
+  if (isRtcClrId(sectionId) || isRtcPushStartId(sectionId)) {
+    mergeRtcDep(bayId)
+    return
+  }
+  if (isRtcArrAppMergedId(sectionId)) {
+    hideRtcLogicalSection(bayId, 'arr')
+    hideRtcLogicalSection(bayId, 'app')
+    return
+  }
+  const log = logicalSectionIdFromRtc(sectionId)
+  if (log === 'arr' || log === 'app' || log === 'rwy' || log === 'twy' || log === 'dep') {
+    hideRtcLogicalSection(bayId, log)
+  }
 }
 
 /** RTC bay template logical section ids (catalog). */
@@ -33,6 +135,8 @@ export const RTC_CATALOG_SECTIONS: readonly { logical: string; title: string }[]
 const extrasByBay = ref<Record<string, RtcBayExtras>>(loadExtras())
 /** Bumps when extras change so Vue computeds re-run */
 const extrasEpoch = ref(0)
+/** Section id currently being dragged (RTC divider) */
+export const rtcDraggingSectionId = ref<string | null>(null)
 
 function loadExtras(): Record<string, RtcBayExtras> {
   try {
@@ -40,7 +144,50 @@ function loadExtras(): Record<string, RtcBayExtras> {
     if (!raw) return {}
     const obj = JSON.parse(raw) as unknown
     if (!obj || typeof obj !== 'object') return {}
-    return obj as Record<string, RtcBayExtras>
+    const out: Record<string, RtcBayExtras> = {}
+    for (const [bayId, v] of Object.entries(obj as Record<string, Partial<RtcBayExtras> & {
+      emptyDividers?: Array<{ id: string; title?: string; afterSectionId?: string | null }>
+    }>)) {
+      const empties = (v.emptyDividers ?? []).map((e) => ({
+        id: e.id,
+        title: e.title || '',
+      }))
+      // Migrate legacy afterSectionId empties into sectionOrder if needed
+      let order = Array.isArray(v.sectionOrder) ? [...v.sectionOrder] : []
+      if (order.length === 0 && empties.length > 0) {
+        for (const e of v.emptyDividers ?? []) {
+          const after = (e as { afterSectionId?: string | null }).afterSectionId
+          if (!after) order.unshift(e.id)
+          else {
+            const i = order.indexOf(after)
+            if (i >= 0) order.splice(i + 1, 0, e.id)
+            else order.push(e.id)
+          }
+        }
+      }
+      const ys: Record<string, number> = {}
+      if (v.sectionYs && typeof v.sectionYs === 'object') {
+        for (const [id, y] of Object.entries(v.sectionYs)) {
+          if (typeof y === 'number' && Number.isFinite(y)) ys[id] = Math.round(y)
+        }
+      }
+      const stripSizes: Record<string, RtcStripSize> = {}
+      if (v.stripSizes && typeof v.stripSizes === 'object') {
+        for (const [id, sz] of Object.entries(v.stripSizes)) {
+          if (sz === 'compact' || sz === 'normal' || sz === 'expanded') stripSizes[id] = sz
+        }
+      }
+      out[bayId] = {
+        emptyDividers: empties,
+        hiddenLogical: Array.isArray(v.hiddenLogical) ? [...v.hiddenLogical] : [],
+        sectionOrder: order,
+        sectionYs: ys,
+        arrAppMerged: !!v.arrAppMerged,
+        depSplit: !!v.depSplit,
+        stripSizes,
+      }
+    }
+    return out
   } catch {
     return {}
   }
@@ -54,14 +201,38 @@ function persist() {
   }
 }
 
-function bump() {
+function bump(write = true) {
   extrasByBay.value = { ...extrasByBay.value }
   extrasEpoch.value++
-  persist()
+  if (write) persist()
+}
+
+function normalizeExtras(bayId: string): RtcBayExtras {
+  const cur = extrasByBay.value[bayId]
+  if (!cur) {
+    return {
+      emptyDividers: [],
+      hiddenLogical: [],
+      sectionOrder: [],
+      sectionYs: {},
+      arrAppMerged: false,
+      depSplit: false,
+      stripSizes: {},
+    }
+  }
+  return {
+    emptyDividers: cur.emptyDividers ?? [],
+    hiddenLogical: cur.hiddenLogical ?? [],
+    sectionOrder: cur.sectionOrder ?? [],
+    sectionYs: cur.sectionYs ?? {},
+    arrAppMerged: !!cur.arrAppMerged,
+    depSplit: !!cur.depSplit,
+    stripSizes: cur.stripSizes ?? {},
+  }
 }
 
 export function getRtcBayExtras(bayId: string): RtcBayExtras {
-  return extrasByBay.value[bayId] ?? { emptyDividers: [], hiddenLogical: [] }
+  return normalizeExtras(bayId)
 }
 
 /** Reactive version tick — depend on this in computeds. */
@@ -82,55 +253,115 @@ export function fullRtcSectionId(bayId: string, logical: string): string {
   return `${bayId}_${logical}`
 }
 
+function stripYs(ys: Record<string, number>, dropId: string): Record<string, number> {
+  if (!(dropId in ys)) return ys
+  const next = { ...ys }
+  delete next[dropId]
+  return next
+}
+
 export function addRtcEmptyDivider(bayId: string, afterSectionId: string | null = null) {
-  const cur = getRtcBayExtras(bayId)
+  const cur = normalizeExtras(bayId)
   const id = `rtc_empty_${bayId}_${Date.now().toString(36)}`
+  let order = [...cur.sectionOrder]
+  if (order.length === 0 && afterSectionId) {
+    order = [afterSectionId, id]
+  } else if (!afterSectionId) {
+    order.unshift(id)
+  } else {
+    const i = order.indexOf(afterSectionId)
+    if (i >= 0) order.splice(i + 1, 0, id)
+    else order.push(afterSectionId, id)
+  }
+  const ys = { ...cur.sectionYs }
+  if (Object.keys(ys).length > 0) {
+    const afterY = afterSectionId != null ? ys[afterSectionId] : undefined
+    if (afterY != null) ys[id] = afterY + RTC_HEADER_H
+    else {
+      const maxY = Math.max(0, ...Object.values(ys))
+      ys[id] = maxY + RTC_HEADER_H
+    }
+  }
   extrasByBay.value = {
     ...extrasByBay.value,
     [bayId]: {
       ...cur,
-      emptyDividers: [
-        ...cur.emptyDividers,
-        { id, afterSectionId, title: '' },
-      ],
+      emptyDividers: [...cur.emptyDividers, { id, title: '' }],
+      sectionOrder: order,
+      sectionYs: ys,
     },
   }
   bump()
 }
 
 export function removeRtcEmptyDivider(bayId: string, emptyId: string) {
-  const cur = getRtcBayExtras(bayId)
+  const cur = normalizeExtras(bayId)
   extrasByBay.value = {
     ...extrasByBay.value,
     [bayId]: {
       ...cur,
       emptyDividers: cur.emptyDividers.filter((e) => e.id !== emptyId),
+      sectionOrder: cur.sectionOrder.filter((id) => id !== emptyId),
+      sectionYs: stripYs(cur.sectionYs, emptyId),
     },
   }
   bump()
 }
 
 export function hideRtcLogicalSection(bayId: string, logical: string) {
-  const cur = getRtcBayExtras(bayId)
+  const cur = normalizeExtras(bayId)
   if (cur.hiddenLogical.includes(logical)) return
+  const full = fullRtcSectionId(bayId, logical)
+  let order = cur.sectionOrder.filter(
+    (id) => id !== full && logicalSectionIdFromRtc(id) !== logical,
+  )
+  let ys = stripYs(cur.sectionYs, full)
+  let arrAppMerged = cur.arrAppMerged
+  let depSplit = cur.depSplit
+  if (logical === 'arr' || logical === 'app') {
+    arrAppMerged = false
+    const mergedId = rtcArrAppMergedId(bayId)
+    order = order.filter((id) => id !== mergedId)
+    ys = stripYs(ys, mergedId)
+  }
+  if (logical === 'dep') {
+    depSplit = false
+    const clrId = rtcClrId(bayId)
+    const pushId = rtcPushStartId(bayId)
+    order = order.filter((id) => id !== clrId && id !== pushId)
+    ys = stripYs(stripYs(ys, clrId), pushId)
+  }
   extrasByBay.value = {
     ...extrasByBay.value,
     [bayId]: {
       ...cur,
       hiddenLogical: [...cur.hiddenLogical, logical],
+      sectionOrder: order,
+      sectionYs: ys,
+      arrAppMerged,
+      depSplit,
     },
   }
   bump()
 }
 
 export function ensureRtcLogicalSection(bayId: string, logical: string) {
-  const cur = getRtcBayExtras(bayId)
+  const cur = normalizeExtras(bayId)
   if (!cur.hiddenLogical.includes(logical)) return
+  const full = fullRtcSectionId(bayId, logical)
+  const order = cur.sectionOrder.includes(full) ? cur.sectionOrder : [...cur.sectionOrder, full]
+  const ys = { ...cur.sectionYs }
+  if (Object.keys(ys).length > 0 && ys[full] == null) {
+    const maxY = Math.max(0, ...Object.values(ys))
+    ys[full] = maxY + RTC_HEADER_H
+  }
   extrasByBay.value = {
     ...extrasByBay.value,
     [bayId]: {
       ...cur,
       hiddenLogical: cur.hiddenLogical.filter((l) => l !== logical),
+      sectionOrder: order,
+      sectionYs: ys,
     },
   }
   bump()
@@ -140,12 +371,281 @@ export function isRtcLogicalPresent(bay: Bay, logical: string): boolean {
   void extrasByBay.value
   const extras = getRtcBayExtras(bay.id)
   if (extras.hiddenLogical.includes(logical)) return false
+  if (extras.arrAppMerged && (logical === 'arr' || logical === 'app')) return true
+  if (extras.depSplit && logical === 'dep') return true
   const full = fullRtcSectionId(bay.id, logical)
   return bay.sections.some((s) => s.id === full || logicalSectionIdFromRtc(s.id) === logical)
 }
 
+/** Replace order entry `from` with `toIds` (preserving neighbours). */
+function replaceOrderIds(order: string[], from: string | string[], toIds: string[]): string[] {
+  const fromSet = new Set(Array.isArray(from) ? from : [from])
+  const out: string[] = []
+  let inserted = false
+  for (const id of order) {
+    if (fromSet.has(id)) {
+      if (!inserted) {
+        out.push(...toIds)
+        inserted = true
+      }
+      continue
+    }
+    if (toIds.includes(id)) continue
+    out.push(id)
+  }
+  if (!inserted) out.push(...toIds)
+  return out
+}
+
+function rewriteYs(
+  ys: Record<string, number>,
+  removeIds: string[],
+  add: Record<string, number>,
+): Record<string, number> {
+  const next = { ...ys }
+  for (const id of removeIds) delete next[id]
+  Object.assign(next, add)
+  return next
+}
+
+/** Merge ARR + CTR into one header (drop one onto the other). */
+export function mergeRtcArrApp(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (cur.arrAppMerged) return
+  const arrId = fullRtcSectionId(bayId, 'arr')
+  const appId = fullRtcSectionId(bayId, 'app')
+  const mergedId = rtcArrAppMergedId(bayId)
+  const yArr = cur.sectionYs[arrId]
+  const yApp = cur.sectionYs[appId]
+  const yMerged =
+    yArr != null && yApp != null ? Math.min(yArr, yApp) : (yArr ?? yApp ?? undefined)
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      arrAppMerged: true,
+      sectionOrder: replaceOrderIds(cur.sectionOrder, [arrId, appId], [mergedId]),
+      sectionYs:
+        yMerged != null
+          ? rewriteYs(cur.sectionYs, [arrId, appId], { [mergedId]: yMerged })
+          : stripYs(stripYs(cur.sectionYs, arrId), appId),
+    },
+  }
+  bump()
+}
+
+/** Split merged ARR / CTR back into ARR + CTR. */
+export function splitRtcArrApp(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (!cur.arrAppMerged) return
+  const arrId = fullRtcSectionId(bayId, 'arr')
+  const appId = fullRtcSectionId(bayId, 'app')
+  const mergedId = rtcArrAppMergedId(bayId)
+  const y0 = cur.sectionYs[mergedId]
+  const addYs: Record<string, number> = {}
+  if (y0 != null) {
+    addYs[arrId] = y0
+    addYs[appId] = y0 + RTC_HEADER_H
+  }
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      arrAppMerged: false,
+      sectionOrder: replaceOrderIds(cur.sectionOrder, mergedId, [arrId, appId]),
+      sectionYs: rewriteYs(cur.sectionYs, [mergedId], addYs),
+    },
+  }
+  bump()
+}
+
+/** Split DEP → CLR + PUSH&START. */
+export function splitRtcDep(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (cur.depSplit) return
+  const depId = fullRtcSectionId(bayId, 'dep')
+  const clrId = rtcClrId(bayId)
+  const pushId = rtcPushStartId(bayId)
+  const y0 = cur.sectionYs[depId]
+  const addYs: Record<string, number> = {}
+  if (y0 != null) {
+    addYs[clrId] = y0
+    addYs[pushId] = y0 + RTC_HEADER_H
+  }
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      depSplit: true,
+      sectionOrder: replaceOrderIds(cur.sectionOrder, depId, [clrId, pushId]),
+      sectionYs: rewriteYs(cur.sectionYs, [depId], addYs),
+    },
+  }
+  bump()
+}
+
+/** Recombine CLR + PUSH&START → DEP (also used when closing either half). */
+export function mergeRtcDep(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (!cur.depSplit) return
+  const depId = fullRtcSectionId(bayId, 'dep')
+  const clrId = rtcClrId(bayId)
+  const pushId = rtcPushStartId(bayId)
+  const yClr = cur.sectionYs[clrId]
+  const yPush = cur.sectionYs[pushId]
+  const yDep =
+    yClr != null && yPush != null ? Math.min(yClr, yPush) : (yClr ?? yPush ?? undefined)
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      depSplit: false,
+      sectionOrder: replaceOrderIds(cur.sectionOrder, [clrId, pushId], [depId]),
+      sectionYs:
+        yDep != null
+          ? rewriteYs(cur.sectionYs, [clrId, pushId], { [depId]: yDep })
+          : stripYs(stripYs(cur.sectionYs, clrId), pushId),
+    },
+  }
+  bump()
+}
+
+/** True when dragging ARR onto CTR (or vice versa) in the same bay. */
+export function tryRtcMergeArrApp(bayId: string, aId: string, bId: string): boolean {
+  const logs = new Set([logicalSectionIdFromRtc(aId), logicalSectionIdFromRtc(bId)])
+  if (!logs.has('arr') || !logs.has('app')) return false
+  if (aId === bId) return false
+  mergeRtcArrApp(bayId)
+  return true
+}
+
+export function splitRtcSection(bayId: string, sectionId: string) {
+  if (isRtcArrAppMergedId(sectionId)) {
+    splitRtcArrApp(bayId)
+    return
+  }
+  if (logicalSectionIdFromRtc(sectionId) === 'dep') {
+    splitRtcDep(bayId)
+  }
+}
+
 /**
- * Merge server bay sections with extras: drop hidden logicals, inject empty dividers.
+ * Server section ids whose strips paint under this RTC display section.
+ */
+export function rtcStripMatchIds(bayId: string, displaySectionId: string): string[] {
+  if (isRtcEmptyDividerId(displaySectionId)) return [displaySectionId]
+  if (isRtcArrAppMergedId(displaySectionId)) {
+    return [fullRtcSectionId(bayId, 'arr'), fullRtcSectionId(bayId, 'app')]
+  }
+  if (isRtcClrId(displaySectionId)) {
+    return [fullRtcSectionId(bayId, 'dep')]
+  }
+  if (isRtcPushStartId(displaySectionId)) {
+    return [fullRtcSectionId(bayId, 'twy')]
+  }
+  return [displaySectionId]
+}
+
+/**
+ * Server section id used for strip moves / gaps when dropping on a display header.
+ */
+export function rtcDropSectionId(bayId: string, displaySectionId: string): string {
+  if (isRtcArrAppMergedId(displaySectionId)) return fullRtcSectionId(bayId, 'arr')
+  if (isRtcClrId(displaySectionId)) return fullRtcSectionId(bayId, 'dep')
+  if (isRtcPushStartId(displaySectionId)) return fullRtcSectionId(bayId, 'twy')
+  return displaySectionId
+}
+
+/** Apply ARR/CTR merge and DEP split to the ordered section list. */
+function applyRtcSplitViews(bayId: string, sections: Section[], extras: RtcBayExtras): Section[] {
+  let list = [...sections]
+  if (extras.arrAppMerged) {
+    const arrId = fullRtcSectionId(bayId, 'arr')
+    const appId = fullRtcSectionId(bayId, 'app')
+    const mergedId = rtcArrAppMergedId(bayId)
+    const hasArr = list.some((s) => s.id === arrId)
+    const hasApp = list.some((s) => s.id === appId)
+    if (hasArr || hasApp) {
+      const firstIdx = list.findIndex((s) => s.id === arrId || s.id === appId)
+      list = list.filter((s) => s.id !== arrId && s.id !== appId)
+      list.splice(Math.max(0, firstIdx), 0, { id: mergedId, title: 'ARR / CTR' })
+    }
+  }
+  if (extras.depSplit) {
+    const depId = fullRtcSectionId(bayId, 'dep')
+    const clrId = rtcClrId(bayId)
+    const pushId = rtcPushStartId(bayId)
+    const depIdx = list.findIndex((s) => s.id === depId)
+    if (depIdx >= 0) {
+      list.splice(depIdx, 1, { id: clrId, title: 'CLR' }, { id: pushId, title: 'PUSH&START' })
+    }
+  }
+  return list
+}
+
+/**
+ * Apply saved sectionOrder to a list of sections (unknown ids keep relative server order at end).
+ */
+function applySectionOrder(sections: Section[], order: string[]): Section[] {
+  if (order.length === 0) return sections
+  const byId = new Map(sections.map((s) => [s.id, s]))
+  const out: Section[] = []
+  const seen = new Set<string>()
+  for (const id of order) {
+    const s = byId.get(id)
+    if (!s || seen.has(id)) continue
+    out.push(s)
+    seen.add(id)
+  }
+  for (const s of sections) {
+    if (seen.has(s.id)) continue
+    out.push(s)
+  }
+  return out
+}
+
+/** Sort by absolute Y when present; otherwise keep current order. */
+function sortSectionsByY(sections: Section[], ys: Record<string, number>): Section[] {
+  const keys = Object.keys(ys)
+  if (keys.length === 0) return sections
+  return sections
+    .slice()
+    .sort((a, b) => {
+      const ay = ys[a.id]
+      const by = ys[b.id]
+      if (ay == null && by == null) return 0
+      if (ay == null) return 1
+      if (by == null) return -1
+      return ay - by || a.id.localeCompare(b.id)
+    })
+}
+
+/**
+ * Derive section heights from header Ys (workspace-style): non-last height =
+ * nextY - thisY; last flexes. Clears store-locked heights when Ys unused so
+ * equal-flex is not stuck on a prior mount lock.
+ */
+function applyRtcSectionHeights(sections: Section[], ys: Record<string, number>): Section[] {
+  const sorted = sortSectionsByY(sections, ys)
+  const useY = Object.keys(ys).length > 0 && sorted.some((s) => ys[s.id] != null)
+  if (!useY) {
+    // Ignore store-locked equal-flex heights — they squash last sections (DEP)
+    return sorted.map((s) => ({ ...s, height: undefined }))
+  }
+  return sorted.map((s, i) => {
+    if (i >= sorted.length - 1) {
+      return { ...s, height: undefined }
+    }
+    const y0 = ys[s.id]
+    const y1 = ys[sorted[i + 1]!.id]
+    if (y0 == null || y1 == null) return { ...s, height: undefined }
+    return { ...s, height: Math.max(0, Math.round(y1 - y0)) }
+  })
+}
+
+/**
+ * Merge server bay sections with extras: drop hidden logicals, inject empty dividers,
+ * apply order / free-Y heights.
  */
 export function mergeRtcBaySections(bay: Bay): Section[] {
   void extrasByBay.value
@@ -157,19 +657,177 @@ export function mergeRtcBaySections(bay: Bay): Section[] {
     return !hidden.has(log)
   })
 
-  let out = [...base]
-  for (const empty of extras.emptyDividers) {
-    const sec: Section = { id: empty.id, title: empty.title || '' }
-    if (!empty.afterSectionId) {
-      out = [sec, ...out]
-      continue
-    }
-    const idx = out.findIndex((s) => s.id === empty.afterSectionId)
-    if (idx < 0) {
-      out.push(sec)
-    } else {
-      out.splice(idx + 1, 0, sec)
-    }
+  const empties: Section[] = extras.emptyDividers.map((e) => ({
+    id: e.id,
+    title: e.title || '',
+  }))
+  const combined = [...base, ...empties.filter((e) => !base.some((b) => b.id === e.id))]
+  const ordered = applySectionOrder(combined, extras.sectionOrder)
+  const withSplits = applyRtcSplitViews(bay.id, ordered, extras)
+  // Re-apply order so synthetic ids (arr_app / clr / push_start) follow sectionOrder
+  const reordered = applySectionOrder(withSplits, extras.sectionOrder)
+  return applyRtcSectionHeights(reordered, extras.sectionYs)
+}
+
+function measureRtcHeaderH(bayBodyEl: HTMLElement): number {
+  const h = bayBodyEl.querySelector('.section-header')?.getBoundingClientRect().height
+  return h && h > 0 ? h : RTC_HEADER_H
+}
+
+/** Snapshot current header tops into sectionYs (equal-flex → absolute). */
+export function syncRtcSectionYsFromDom(
+  bayId: string,
+  bayBodyEl: HTMLElement | null,
+  opts?: { persist?: boolean },
+): boolean {
+  if (!bayBodyEl) return false
+  const bodyTop = bayBodyEl.getBoundingClientRect().top
+  const sectionEls = Array.from(bayBodyEl.querySelectorAll<HTMLElement>('.efs-section'))
+  const ys: Record<string, number> = {}
+  const order: string[] = []
+  for (const el of sectionEls) {
+    // Prefer display id (synthetics: arr_app / clr / push_start)
+    const id = el.getAttribute('data-section-id') || el.getAttribute('data-efs-section-id')
+    if (!id) continue
+    const top = Math.max(0, Math.round(el.getBoundingClientRect().top - bodyTop))
+    ys[id] = top
+    order.push(id)
   }
-  return out
+  if (order.length === 0) return false
+  const cur = normalizeExtras(bayId)
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      sectionYs: ys,
+      sectionOrder: order,
+    },
+  }
+  bump(opts?.persist !== false)
+  return true
+}
+
+function ensureRtcAbsoluteYs(
+  bayId: string,
+  bayBodyEl: HTMLElement | null,
+  opts?: { persist?: boolean },
+) {
+  const cur = normalizeExtras(bayId)
+  if (Object.keys(cur.sectionYs).length > 0) return
+  syncRtcSectionYsFromDom(bayId, bayBodyEl, opts)
+}
+
+function collideRtcHeaderY(
+  desiredY: number,
+  movingId: string,
+  ys: Record<string, number>,
+  headerH: number,
+): number {
+  const obstacles = Object.entries(ys)
+    .filter(([id]) => id !== movingId)
+    .map(([id, y]) => ({ id, y }))
+    .sort((a, b) => a.y - b.y)
+  let y = Math.max(0, desiredY)
+  for (let pass = 0; pass < 12; pass++) {
+    let blocked: { id: string; y: number } | null = null
+    for (const o of obstacles) {
+      if (y < o.y + headerH && y + headerH > o.y) {
+        blocked = o
+        break
+      }
+    }
+    if (!blocked) break
+    const mid = blocked.y + headerH / 2
+    y = y + headerH / 2 < mid ? Math.max(0, blocked.y - headerH) : blocked.y + headerH
+  }
+  return Math.round(y)
+}
+
+/**
+ * Place a divider at absolute Y in the bay (workspace-style free drag with gaps).
+ */
+export function placeRtcSectionByClientY(
+  bayId: string,
+  sectionId: string,
+  clientY: number,
+  bayBodyEl: HTMLElement | null,
+  opts?: { persist?: boolean },
+) {
+  if (!bayBodyEl) return
+  ensureRtcAbsoluteYs(bayId, bayBodyEl, { persist: false })
+  const cur = normalizeExtras(bayId)
+  const bodyRect = bayBodyEl.getBoundingClientRect()
+  const headerH = measureRtcHeaderH(bayBodyEl)
+  const rawY = Math.max(
+    0,
+    Math.min(bodyRect.height - headerH, Math.round(clientY - bodyRect.top)),
+  )
+  const ys = { ...cur.sectionYs }
+  // If moving id missing (new empty), seed others from DOM first
+  if (Object.keys(ys).length === 0 || (ys[sectionId] == null && Object.keys(ys).length > 0)) {
+    syncRtcSectionYsFromDom(bayId, bayBodyEl, { persist: false })
+    Object.assign(ys, normalizeExtras(bayId).sectionYs)
+  }
+  const y = collideRtcHeaderY(rawY, sectionId, ys, headerH)
+  ys[sectionId] = y
+  const order = Object.keys(ys).sort((a, b) => (ys[a]! - ys[b]!) || a.localeCompare(b))
+  // Keep any known order ids that lack Y at end
+  for (const id of cur.sectionOrder) {
+    if (!order.includes(id)) order.push(id)
+  }
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...normalizeExtras(bayId),
+      sectionYs: ys,
+      sectionOrder: order,
+    },
+  }
+  bump(opts?.persist !== false)
+}
+
+export function beginRtcSectionDrag(sectionId: string) {
+  rtcDraggingSectionId.value = sectionId
+}
+
+export function endRtcSectionDrag() {
+  rtcDraggingSectionId.value = null
+}
+
+/** Move an empty divider from one bay to another (template sections stay put). */
+export function moveRtcEmptyDividerToBay(
+  fromBayId: string,
+  toBayId: string,
+  emptyId: string,
+  clientY: number,
+  toBayBodyEl: HTMLElement | null,
+) {
+  if (!isRtcEmptyDividerId(emptyId)) return
+  if (fromBayId === toBayId) {
+    placeRtcSectionByClientY(toBayId, emptyId, clientY, toBayBodyEl)
+    return
+  }
+  const from = normalizeExtras(fromBayId)
+  const empty = from.emptyDividers.find((e) => e.id === emptyId)
+  if (!empty) return
+  const to = normalizeExtras(toBayId)
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [fromBayId]: {
+      ...from,
+      emptyDividers: from.emptyDividers.filter((e) => e.id !== emptyId),
+      sectionOrder: from.sectionOrder.filter((id) => id !== emptyId),
+      sectionYs: stripYs(from.sectionYs, emptyId),
+    },
+    [toBayId]: {
+      ...to,
+      emptyDividers: [...to.emptyDividers, empty],
+      sectionOrder: to.sectionOrder.includes(emptyId)
+        ? to.sectionOrder
+        : [...to.sectionOrder, emptyId],
+      sectionYs: to.sectionYs,
+    },
+  }
+  bump()
+  placeRtcSectionByClientY(toBayId, emptyId, clientY, toBayBodyEl)
 }

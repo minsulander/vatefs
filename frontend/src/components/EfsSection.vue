@@ -17,13 +17,16 @@
     :class="{
       'efs-section--no-header': !!section.hideHeader,
       'efs-section--stick-bottom': stickBottomZone,
-      'efs-section--ws-dragging': workspaceMode && ws.draggingSectionId.value === workspaceInstanceId,
+      'efs-section--rtc-flex': store.multiAirport,
+      'efs-section--ws-dragging':
+        (workspaceMode && ws.draggingSectionId.value === workspaceInstanceId) ||
+        (store.multiAirport && rtcDraggingSectionId === section.id),
       'efs-section--workspace-blocker': isEmptyWorkspaceHeader,
     }"
     :data-section-id="section.id"
     :data-efs-bay-id="effectiveBayId"
     :data-efs-section-id="effectiveSectionId"
-    :data-efs-drop-section-id="section.id"
+    :data-efs-drop-section-id="effectiveSectionId"
     :data-efs-match-sections="sectionIdsForStripMatch().join(',')"
     :data-ws-instance="workspaceInstanceId || undefined"
     :style="sectionStyle"
@@ -38,11 +41,11 @@
         { 'section-header--rtc': store.multiAirport && !store.isPaperLook },
         { 'section-header--rtc-rwy': !!rtcHeaderRwy },
         { 'header-drop-active': headerDropActive },
-        { 'section-header--workspace-draggable': workspaceMode },
+        { 'section-header--workspace-draggable': workspaceMode || store.multiAirport },
         { 'section-header--empty-blocker': isEmptyWorkspaceHeader },
       ]"
       :title="
-        workspaceMode
+        workspaceMode || store.multiAirport
           ? 'Drag header to reposition in bay or move to another bay'
           : store.isPaperLook && !isFirstSection
             ? 'Drag to adjust height · double-click to reset'
@@ -61,24 +64,25 @@
       <template v-if="!store.isPaperLook">
         <div class="section-header-left">
           <button
-            v-if="workspaceMode && !isEmptyWorkspaceHeader"
+            v-if="(workspaceMode || store.multiAirport) && !isEmptyWorkspaceHeader"
             type="button"
             class="section-hdr-btn section-hdr-size"
-            :title="`Strip size: ${workspaceStripSizeLabel}`"
+            :title="`Strip size: ${headerStripSizeLabel}`"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
-            @click.stop="onWorkspaceCycleSize"
+            @click.stop="onHeaderCycleSize"
           >
             <span
               class="section-hdr-size-icon"
-              :class="`is-${workspaceStripSize}`"
+              :class="`is-${headerStripSize}`"
               aria-hidden="true"
             >
               <span /><span />
             </span>
           </button>
           <button
-            v-else-if="!workspaceMode"
+            v-else-if="!workspaceMode && !store.multiAirport"
             type="button"
             class="section-hdr-btn section-hdr-drag"
             :class="{ 'is-inactive': isFirstSection }"
@@ -95,6 +99,7 @@
             type="button"
             class="section-hdr-btn section-hdr-flow"
             :title="workspaceSortFlow === 'newestTop' ? 'Sort flow: new on top, first at bottom' : 'Sort flow: new at bottom, first on top'"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
             @click.stop="onWorkspaceToggleFlow"
@@ -108,6 +113,7 @@
             title="Search (use bottom bar)"
             disabled
             aria-disabled="true"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
             @click.stop
@@ -130,6 +136,7 @@
               'is-hover-down': !rwyTimerRunning && rwyTimerHoverSide === 'down',
             }"
             :title="rwyTimerTitle"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
             @pointermove.stop="onRwyTimerPointerMove"
@@ -143,6 +150,7 @@
             type="button"
             class="section-hdr-btn section-sort-btn"
             :title="sortModeTitle"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
             @click.stop="toggleSortMode"
@@ -186,13 +194,14 @@
             :title="rtcHeaderRwyTitle"
           >{{ rtcHeaderRwy }}</span>
           <button
-            v-if="workspaceMode && workspaceCanSplit"
+            v-if="(workspaceMode && workspaceCanSplit) || rtcCanSplit"
             type="button"
             class="section-hdr-btn section-hdr-split"
             title="Split section"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
-            @click.stop="onWorkspaceSplit"
+            @click.stop="onHeaderSplit"
           >
             <svg class="section-hdr-split-icon" viewBox="0 0 16 16" aria-hidden="true">
               <!-- Stem + fork ending at tips; chevrons share each branch axis -->
@@ -223,10 +232,11 @@
             </svg>
           </button>
           <button
+            v-if="workspaceMode || store.multiAirport"
             type="button"
             class="section-hdr-btn section-hdr-close"
-            :disabled="!workspaceMode && !isRtcEmptyDivider"
             title="Close"
+            @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
             @click.stop="onWorkspaceClose"
@@ -459,7 +469,29 @@ import {
   runwayTimerStartCountdown,
   runwayTimerTick,
 } from '@/composables/runwaySectionTimers'
-import { removeRtcEmptyDivider } from '@/composables/rtcColumnExtras'
+import {
+  beginRtcSectionDrag,
+  endRtcSectionDrag,
+  placeRtcSectionByClientY,
+  moveRtcEmptyDividerToBay,
+  getRtcBayExtras,
+  syncRtcSectionYsFromDom,
+  isRtcEmptyDividerId,
+  rtcCanSplitSection,
+  splitRtcSection,
+  closeRtcSection,
+  cycleRtcStripSize,
+  getRtcStripSize,
+  tryRtcMergeArrApp,
+  rtcStripMatchIds,
+  rtcDropSectionId,
+  isRtcPushStartId,
+  isRtcPushStartGroundstate,
+  isRtcClrId,
+  logicalSectionIdFromRtc,
+  rtcExtrasVersion,
+  rtcDraggingSectionId,
+} from '@/composables/rtcColumnExtras'
 import BreakoutInfoStrip from './BreakoutInfoStrip.vue'
 import MapInfoStrip from './MapInfoStrip.vue'
 import DepInfoStrip from './DepInfoStrip.vue'
@@ -520,7 +552,7 @@ type TimeSortDir = 'asc' | 'desc'
 
 const TIME_SORT_SECTIONS = new Set(['pending_dep', 'cleared', 'dep'])
 
-/** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep — not ctr_dep */
+/** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep / *_clr — not ctr_dep */
 function isTimeSortSectionId(sectionId: string): boolean {
   if (TIME_SORT_SECTIONS.has(sectionId)) return true
   if (
@@ -531,7 +563,7 @@ function isTimeSortSectionId(sectionId: string): boolean {
   ) {
     return true
   }
-  return /^(bay\d+|idle)_dep$/.test(sectionId)
+  return /^(bay\d+|idle)_(dep|clr)$/.test(sectionId)
 }
 
 /**
@@ -558,14 +590,22 @@ function isCtrDepSectionId(sectionId: string): boolean {
   return sectionId === 'ctr_dep' || sectionId.endsWith('_ctr_dep')
 }
 
-/** RTC ARR section (bayN_arr / arr) */
+/** RTC ARR / CTR (bayN_arr|app|arr_app) — ETA earliest at bottom */
 function isRtcArrSectionId(sectionId: string): boolean {
-  return sectionId === 'arr' || /^(bay\d+|idle)_arr$/.test(sectionId)
+  return (
+    sectionId === 'arr' ||
+    sectionId === 'app' ||
+    /^(bay\d+|idle)_(arr|app|arr_app)$/.test(sectionId)
+  )
 }
 
-/** RTC DEP section (bayN_dep / dep) — not ctr_dep / pending_dep */
+/** RTC DEP / CLR (bayN_dep / bayN_clr) — not ctr_dep / pending_dep */
 function isRtcDepSectionId(sectionId: string): boolean {
-  return sectionId === 'dep' || /^(bay\d+|idle)_dep$/.test(sectionId)
+  return (
+    sectionId === 'dep' ||
+    /^(bay\d+|idle)_dep$/.test(sectionId) ||
+    /^(bay\d+|idle)_clr$/.test(sectionId)
+  )
 }
 
 function isClearedSectionId(sectionId: string): boolean {
@@ -653,6 +693,16 @@ const workspaceSection = computed(() =>
 const workspaceStripSize = computed(() => workspaceSection.value?.stripSize ?? 'normal')
 const workspaceStripSizeLabel = computed(() => workspaceStripSize.value)
 const workspaceSortFlow = computed(() => workspaceSection.value?.sortFlow ?? 'newestBottom')
+
+/** Strip size for header control — workspace instance or RTC per-section. */
+const headerStripSize = computed(() => {
+  if (store.multiAirport && !props.workspaceMode) {
+    void rtcExtrasVersion()
+    return getRtcStripSize(props.bayId, props.section.id)
+  }
+  return workspaceStripSize.value
+})
+const headerStripSizeLabel = computed(() => headerStripSize.value)
 const workspaceCanSplit = computed(() => {
   const s = workspaceSection.value
   if (!s) return false
@@ -688,6 +738,9 @@ const effectiveBayId = computed(() => {
 
 /** Logical section id to use for strip membership on the server. */
 const effectiveSectionId = computed(() => {
+  if (store.multiAirport && !props.workspaceMode) {
+    return rtcDropSectionId(props.bayId, props.section.id)
+  }
   if (!props.workspaceMode) return props.section.id
   const ids = sectionIdsForStripMatch()
   return ids[0] ?? props.section.id
@@ -696,9 +749,18 @@ const effectiveSectionId = computed(() => {
 function onWorkspaceCycleSize() {
   if (!props.workspaceInstanceId) return
   ws.cycleStripSize(props.workspaceInstanceId)
-  applyWorkspaceStripSizeToStrips()
+  applyHeaderStripSizeToStrips()
   // Strip heights change → re-pack overflow into following columns
   requestAnimationFrame(() => ws.scheduleOverflowRepack())
+}
+
+function onHeaderCycleSize() {
+  if (store.multiAirport && !props.workspaceMode) {
+    cycleRtcStripSize(props.bayId, props.section.id)
+    applyHeaderStripSizeToStrips()
+    return
+  }
+  onWorkspaceCycleSize()
 }
 
 function onWorkspaceSplit() {
@@ -707,13 +769,25 @@ function onWorkspaceSplit() {
   ws.splitSection(props.workspaceInstanceId, props.section.title)
 }
 
+function onHeaderSplit() {
+  if (store.multiAirport && rtcCanSplit.value) {
+    splitRtcSection(props.bayId, props.section.id)
+    return
+  }
+  onWorkspaceSplit()
+}
+
 const isRtcEmptyDivider = computed(
   () => store.multiAirport && props.section.id.startsWith('rtc_empty_'),
 )
 
+const rtcCanSplit = computed(
+  () => store.multiAirport && rtcCanSplitSection(props.section.id),
+)
+
 function onWorkspaceClose() {
-  if (isRtcEmptyDivider.value) {
-    removeRtcEmptyDivider(props.bayId, props.section.id)
+  if (store.multiAirport && !props.workspaceMode) {
+    closeRtcSection(props.bayId, props.section.id)
     return
   }
   if (!props.workspaceMode || !props.workspaceInstanceId) return
@@ -730,8 +804,8 @@ function collectSectionStrips(): FlightStripData[] {
 }
 
 /** Apply section strip-size mode to all strips here (same as per-strip size menu). */
-function applyWorkspaceStripSizeToStrips() {
-  const size = workspaceStripSize.value
+function applyHeaderStripSizeToStrips() {
+  const size = headerStripSize.value
   for (const strip of collectSectionStrips()) {
     if (size === 'compact') {
       collapseStripExpanders(strip.id)
@@ -753,18 +827,18 @@ function isWorkspaceSectionDrag(e: DragEvent): boolean {
 }
 
 function onHeaderMouseDown(e: MouseEvent) {
-  if (props.workspaceMode) return // pointerdown handles workspace
+  if (props.workspaceMode || store.multiAirport) return // pointerdown handles divider drag
   if (store.isPaperLook) onResizeStart(e)
 }
 
 function onHeaderTouchStart(e: TouchEvent) {
-  if (props.workspaceMode) return
+  if (props.workspaceMode || store.multiAirport) return
   if (store.isPaperLook) onResizeStart(e)
 }
 
 function onHeaderDblClick(e: MouseEvent) {
-  // Workspace: free Y placement — never half-split / center on double-click
-  if (props.workspaceMode) {
+  // Workspace / RTC: free divider placement — never half-split on double-click
+  if (props.workspaceMode || store.multiAirport) {
     e.preventDefault()
     e.stopPropagation()
     return
@@ -776,10 +850,105 @@ function onHeaderDblClick(e: MouseEvent) {
 let wsHeaderDragging = false
 let wsHeaderPointerId: number | null = null
 
+function rtcBayBodyAtPoint(clientX: number, clientY: number): {
+  bayId: string
+  body: HTMLElement
+} | null {
+  const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+  const bay = el?.closest('.efs-bay') as HTMLElement | null
+  if (!bay) return null
+  const bayId = bay.getAttribute('data-bay-id')
+  const body = bay.querySelector('.bay-body') as HTMLElement | null
+  if (!bayId || !body) return null
+  return { bayId, body }
+}
+
+function onRtcHeaderPointerDown(e: PointerEvent) {
+  if (!store.multiAirport || props.workspaceMode) return false
+  const t = e.target as HTMLElement | null
+  // Same as OTHER/ESSA workspace: drag anywhere on the divider except action buttons
+  if (t?.closest('button, .section-hdr-btn, a, input, select, textarea')) return false
+  if (e.button !== 0) return false
+  if (e.detail > 1) return false
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  const sectionId = props.section.id
+  const fromBayId = effectiveBayId.value
+  beginRtcSectionDrag(sectionId)
+  clearDragHighlights()
+  wsHeaderDragging = true
+  wsHeaderPointerId = e.pointerId
+  try {
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  } catch {
+    /* ignore */
+  }
+
+  const homeBody = () =>
+    document.querySelector(
+      `.efs-bay[data-bay-id="${CSS.escape(fromBayId)}"] .bay-body`,
+    ) as HTMLElement | null
+
+  // Freeze equal-flex tops once (keep existing free-Y layout if already set)
+  if (Object.keys(getRtcBayExtras(fromBayId).sectionYs).length === 0) {
+    syncRtcSectionYsFromDom(fromBayId, homeBody(), { persist: false })
+  }
+
+  const onMove = (ev: PointerEvent) => {
+    if (!wsHeaderDragging) return
+    if (wsHeaderPointerId != null && ev.pointerId !== wsHeaderPointerId) return
+    const hit = rtcBayBodyAtPoint(ev.clientX, ev.clientY)
+    // Live preview only in the home bay (cross-bay empty move applies on pointerup)
+    if (hit && hit.bayId !== fromBayId && isRtcEmptyDividerId(sectionId)) return
+    placeRtcSectionByClientY(fromBayId, sectionId, ev.clientY, homeBody(), { persist: false })
+  }
+
+  const onUp = (ev: PointerEvent) => {
+    if (wsHeaderPointerId != null && ev.pointerId !== wsHeaderPointerId) return
+    document.removeEventListener('pointermove', onMove)
+    document.removeEventListener('pointerup', onUp)
+    document.removeEventListener('pointercancel', onUp)
+    wsHeaderDragging = false
+    wsHeaderPointerId = null
+    const hit = rtcBayBodyAtPoint(ev.clientX, ev.clientY)
+    // ARR ↔ CTR: drop one header onto the other to merge into ARR / CTR
+    const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+    const underSec = under?.closest?.('.efs-section') as HTMLElement | null
+    const underId =
+      underSec?.getAttribute('data-section-id') ||
+      underSec?.getAttribute('data-efs-section-id')
+    if (
+      underId &&
+      underId !== sectionId &&
+      (hit?.bayId ?? fromBayId) === fromBayId &&
+      tryRtcMergeArrApp(fromBayId, sectionId, underId)
+    ) {
+      endRtcSectionDrag()
+      clearDragHighlights()
+      return
+    }
+    if (hit && hit.bayId !== fromBayId && isRtcEmptyDividerId(sectionId)) {
+      moveRtcEmptyDividerToBay(fromBayId, hit.bayId, sectionId, ev.clientY, hit.body)
+    } else {
+      placeRtcSectionByClientY(fromBayId, sectionId, ev.clientY, homeBody(), { persist: true })
+    }
+    endRtcSectionDrag()
+    clearDragHighlights()
+  }
+
+  document.addEventListener('pointermove', onMove)
+  document.addEventListener('pointerup', onUp)
+  document.addEventListener('pointercancel', onUp)
+  return true
+}
+
 function onWorkspaceHeaderPointerDown(e: PointerEvent) {
+  if (onRtcHeaderPointerDown(e)) return
   if (!props.workspaceMode || !props.workspaceInstanceId) return
   const t = e.target as HTMLElement | null
-  if (t?.closest('.section-hdr-btn')) return
+  if (t?.closest('button, .section-hdr-btn, a, input, select, textarea')) return
   if (e.button !== 0) return
   // Ignore 2nd click of a double-click (would re-place / feel like a snap-to-center)
   if (e.detail > 1) return
@@ -1542,14 +1711,19 @@ const isCtrDepSection = computed(() => isCtrDepSectionId(props.section.id))
 const hasEssa = computed(() =>
   store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
-/** Time-sort auto-sort: single-airport dep sections (not RTC multi columns). */
-const timeSortEnabled = computed(
-  () => isTimeSortedSection.value && !store.multiAirport,
-)
+/** Time-sort: classic dep bays, or RTC DEP/CLR (earliest EOBT on top). */
+const timeSortEnabled = computed(() => {
+  if (!isTimeSortedSection.value) return false
+  // RTC enables DEP/CLR EOBT sort; single-airport keeps existing dep sections
+  if (store.multiAirport) return isRtcDepSectionId(props.section.id)
+  return true
+})
 /** INBOUND APP only: always ETA auto-sort (no sticky manual order). */
 const etaSortEnabled = computed(() => isInboundAppSection.value)
-/** RTC ARR: ETA + assumed-below-sequence auto-sort */
-const rtcArrSortEnabled = computed(() => isRtcArrSectionId(props.section.id))
+/** RTC ARR/CTR: ETA earliest at bottom (+ deps appended at bottom) */
+const rtcArrSortEnabled = computed(
+  () => store.multiAirport && isRtcArrSectionId(props.section.id),
+)
 /** CTR DEP: always ATD auto-sort (earliest at top; no ATD → add sequence at bottom). */
 const atdSortEnabled = computed(() => isCtrDepSection.value)
 /** RUNWAY: CFTO above L/U; sticky appearance within each tier (addFromTop:false). */
@@ -1774,8 +1948,14 @@ function activeTimeSortDir(): TimeSortDir {
  */
 const preferManualOrder = computed(() => {
   if (etaSortEnabled.value || atdSortEnabled.value) return false
-  // Paper above-KLARERING is a time-sort section (EOBT); drag → sticky MAN
-  if (!timeSortEnabled.value && !paperPendingKlarering.value) return false
+  // Paper KLARERING / RTC ARR·CTR ETA / RTC DEP·CLR EOBT: drag → sticky until time changes
+  if (
+    !timeSortEnabled.value &&
+    !paperPendingKlarering.value &&
+    !rtcArrSortEnabled.value
+  ) {
+    return false
+  }
   return store.hasManualOrder(effectiveBayId.value, effectiveSectionId.value)
 })
 
@@ -1853,6 +2033,9 @@ function sectionIdsForStripMatch(): string[] {
       mode: store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa',
     })
   }
+  if (store.multiAirport) {
+    return rtcStripMatchIds(props.bayId, props.section.id)
+  }
   return [props.section.id]
 }
 
@@ -1874,6 +2057,18 @@ function stripMatchesThisSection(strip: FlightStripData): boolean {
       )
     ) {
       return false
+    }
+    return true
+  }
+  if (store.multiAirport) {
+    if (strip.bayId !== props.bayId) return false
+    const extras = getRtcBayExtras(props.bayId)
+    // When DEP is split: PUSH&START takes STUP/PUSH off TAXIWAY; TWY keeps the rest
+    if (extras.depSplit) {
+      const pushGs = isRtcPushStartGroundstate(strip.groundstate)
+      if (isRtcPushStartId(props.section.id)) return pushGs
+      if (logicalSectionIdFromRtc(props.section.id) === 'twy') return !pushGs
+      if (isRtcClrId(props.section.id)) return !pushGs // CLR = dep bay only
     }
     return true
   }
@@ -2002,6 +2197,41 @@ function sortRtcArrByEtaAndAssume(list: FlightStripData[]): FlightStripData[] {
   })
 }
 
+/** ARR/CTR strip that belongs in the arrival ETA stack (vs dep appended below). */
+function isRtcArrLikeStrip(strip: FlightStripData): boolean {
+  if (strip.stripType === 'arrival') return true
+  if (strip.stripType === 'departure') return false
+  if (strip.stripType === 'local') {
+    const gs = (strip.groundstate || '').toUpperCase()
+    if (gs === 'ARR' || gs === 'TXIN' || gs === 'PARK') return true
+    if (strip.clearedToLand) return true
+    // Airborne local without taxi-in cues → treat as arrival sequence in CTR
+    if (strip.airborne) return true
+    return false
+  }
+  // vfr / cross / note / vehicle — keep with arrival stack when airborne/ETA relevant
+  return true
+}
+
+/**
+ * RTC ARR / CTR: arrivals by ETA (earliest at bottom); departures appended at bottom
+ * in appearance order (new deps add at bottom).
+ */
+function sortRtcArrCtrStack(list: FlightStripData[]): FlightStripData[] {
+  const arrs: FlightStripData[] = []
+  const deps: FlightStripData[] = []
+  for (const s of list) {
+    if (isRtcArrLikeStrip(s)) arrs.push(s)
+    else deps.push(s)
+  }
+  const sortedArrs = sortRtcArrByEtaAndAssume(arrs)
+  const sortedDeps = [...deps].sort((a, b) => {
+    if (a.position !== b.position) return a.position - b.position
+    return a.callsign.localeCompare(b.callsign)
+  })
+  return [...sortedArrs, ...sortedDeps]
+}
+
 /**
  * Paper stick-bottom INBOUND — stack justified to bottom; earliest ETA at top of
  * that stack (later toward the bay floor); missing ETA at bottom of stack.
@@ -2082,9 +2312,9 @@ const showGaps = computed(
   () =>
     !stickBottomZone.value &&
     !etaSortEnabled.value &&
-    !rtcArrSortEnabled.value &&
     !atdSortEnabled.value &&
     !runwayLuSortEnabled.value &&
+    (!rtcArrSortEnabled.value || preferManualOrder.value) &&
     (!timeSortEnabled.value || preferManualOrder.value),
 )
 
@@ -2112,9 +2342,12 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
     return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
   }
 
-  // RTC ARR: non-assumed / pending-in above assumed; closest ETA at bottom of each tier
+  // RTC ARR/CTR: ETA earliest at bottom; deps appended at bottom. Drag → sticky.
   if (rtcArrSortEnabled.value) {
-    return sortRtcArrByEtaAndAssume(list)
+    if (preferManualOrder.value) {
+      return list.sort((a, b) => a.position - b.position)
+    }
+    return sortRtcArrCtrStack(list)
   }
 
   // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
@@ -2187,6 +2420,7 @@ watch(
  * Time-sort bays (TSAT, CD ALL) freeze to manual on drop, so the pointer index sticks.
  */
 function displayReordersDrop(): boolean {
+  if (preferManualOrder.value) return false
   return (
     etaSortEnabled.value ||
     atdSortEnabled.value ||
@@ -2342,19 +2576,20 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
 /** Last preferred HHMM per strip — RTC dep sticky-manual clears when times change */
 const lastSortTimes = ref<Map<string, string>>(new Map())
 
-// RTC / non-toggle time-sort sections: drop sticky manual when TOBT/EOBT changes
+// RTC / non-toggle time-sort + ARR ETA: drop sticky manual when times change
 watch(
   () => [store.stripsVersion, hasEssa.value, store.multiAirport] as const,
   () => {
-    if (!timeSortEnabled.value) return
+    if (!timeSortEnabled.value && !rtcArrSortEnabled.value) return
     // CD ALL / TSAT use explicit TOBT|MAN / TSAT|MAN — do not auto-clear MAN
     if (store.isModeToggleSectionId(props.section.id)) return
-    const field = activeTimeSortField()
     const list = collectTopStrips()
     const nextTimes = new Map<string, string>()
     let timeChanged = false
     for (const strip of list) {
-      const time = preferredDepTime(strip, field) || ''
+      const time = rtcArrSortEnabled.value
+        ? strip.eta || ''
+        : preferredDepTime(strip, activeTimeSortField()) || ''
       nextTimes.set(strip.id, time)
       if (lastSortTimes.value.has(strip.id) && lastSortTimes.value.get(strip.id) !== time) {
         timeChanged = true
@@ -2504,6 +2739,8 @@ let autoFitSettleUntil = 0
 /** @param force skip settle lock (strip list / header height — intentional). */
 function scheduleAutoFitRecheck(force = false) {
   if (store.isPaperLook) return
+  // RTC: short equal-flex / free-Y sections must not compact strips (looks clipped)
+  if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
   // During an in-flight fit, queue a follow-up — do not drop resize/list updates
@@ -2522,6 +2759,7 @@ function scheduleAutoFitRecheck(force = false) {
 
 async function runScheduledAutoFit() {
   if (store.isPaperLook) return
+  if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
   if (autoFitApplying.value) {
@@ -2754,12 +2992,14 @@ watchEffect(() => {
 
 const sectionStyle = computed(() => {
   const noHeader = !!props.section.hideHeader
+  // Workspace + RTC free-Y: allow heights below the classic 80px floor
+  const freeY = props.workspaceMode || store.multiAirport
 
   // Last section always flexes to fill remaining space
   if (props.isLastSection) {
     return {
       flex: '1 1 auto',
-      minHeight: props.workspaceMode ? '0px' : noHeader ? '0px' : '80px',
+      minHeight: freeY || noHeader ? '0px' : '80px',
     }
   }
   // Other sections: apply stored height, don't grow or shrink
@@ -2768,13 +3008,16 @@ const sectionStyle = computed(() => {
     return {
       height: `${props.section.height}px`,
       flex: '0 0 auto',
-      // Workspace free-Y: allow heights below the classic 80px floor
-      minHeight: props.workspaceMode ? '0px' : undefined,
+      minHeight: freeY ? '0px' : undefined,
     }
   }
   // Headerless strip zones (e.g. pending above KLARERING) size to content
   if (noHeader) {
     return { flex: '1 1 auto', minHeight: '0px' }
+  }
+  // RTC equal-flex (before first free-Y drag): share column space evenly
+  if (store.multiAirport) {
+    return { flex: '1 1 0', minHeight: '0px' }
   }
   return {}
 })
@@ -3525,8 +3768,9 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   min-height: 0;
 }
 
-/* Free header Y — do not force the classic 80px section floor */
-.efs-section[data-ws-instance] {
+/* Free header Y — do not force the classic 80px section floor (workspace + RTC) */
+.efs-section[data-ws-instance],
+.efs-section--rtc-flex {
   min-height: 0;
 }
 
@@ -3592,7 +3836,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   box-shadow: inset 0 -3px 0 0 rgb(0, 150, 180);
 }
 
-.section-header.no-resize {
+.section-header.no-resize:not(.section-header--workspace-draggable) {
   cursor: default;
 }
 

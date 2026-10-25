@@ -4781,6 +4781,15 @@ class FlightStore {
         if (flight && this.isTaxiSectionId(sectionId)) {
             addFromTop = this.taxiStripAddFromTop(flight)
         }
+        // RTC ARR / CTR: arrivals top; departures bottom (matches frontend rtcInsertAtTop)
+        if (flight && isMultiAirportConfig(this.config)) {
+            const logical = sectionId.includes("_")
+                ? sectionId.slice(sectionId.lastIndexOf("_") + 1)
+                : sectionId
+            if (logical === "arr" || logical === "app") {
+                addFromTop = this.taxiStripAddFromTop(flight)
+            }
+        }
 
         // Clear previous shifted callsigns
         this.lastShiftedCallsigns = []

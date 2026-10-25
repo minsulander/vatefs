@@ -647,6 +647,9 @@ onMounted(() => {
       ws.scheduleOverflowRepack()
       return
     }
+    // RTC: never lock equal-flex pixel heights — with 5 sections that
+    // squashes DEP/last strips, and free-Y drag owns heights via sectionYs.
+    if (store.multiAirport) return
     const sections = props.bay.sections
     const sectionEls = bayEl.value.querySelectorAll('.efs-section')
     for (let i = 0; i < sections.length - 1; i++) {

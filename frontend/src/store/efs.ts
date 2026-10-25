@@ -115,7 +115,7 @@ export const useEfsStore = defineStore("efs", () => {
     const TIME_SORT_SECTION_IDS = new Set(['pending_dep', 'cleared', 'dep'])
     const SECTION_SORT_MODE_PREFIX = 'efs/sectionSortMode/'
 
-    /** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep — not ctr_dep */
+    /** E/TOBT–TSAT sort: pending/cleared(/tsat/eobt), or RTC bay*_dep / *_clr — not ctr_dep */
     function isTimeSortSectionId(sectionId: string): boolean {
         if (TIME_SORT_SECTION_IDS.has(sectionId)) return true
         if (
@@ -126,7 +126,17 @@ export const useEfsStore = defineStore("efs", () => {
         ) {
             return true
         }
-        return /^(bay\d+|idle)_dep$/.test(sectionId)
+        // RTC DEP / CLR (earliest EOBT on top)
+        return /^(bay\d+|idle)_(dep|clr)$/.test(sectionId)
+    }
+
+    /** RTC ARR/CTR(/merged): ETA auto-sort with sticky manual after drag */
+    function isRtcArrEtaSortSectionId(sectionId: string): boolean {
+        return (
+            sectionId === 'arr' ||
+            sectionId === 'app' ||
+            /^(bay\d+|idle)_(arr|app|arr_app)$/.test(sectionId)
+        )
     }
 
     /** CD ALL / TSAT (/EOBT) — sections that show time|MAN controls (not REQ PUSH) */
@@ -323,7 +333,8 @@ export const useEfsStore = defineStore("efs", () => {
             setSectionSortMode(bayId, sectionId, 'man')
             return
         }
-        if (!isTimeSortSectionId(sectionId)) return
+        // Time-sort (incl. RTC DEP/CLR) or RTC ARR/CTR ETA sort → sticky after drag
+        if (!isTimeSortSectionId(sectionId) && !isRtcArrEtaSortSectionId(sectionId)) return
         const next = new Set(manualOrderSections.value)
         next.add(sectionOrderKey(bayId, sectionId))
         manualOrderSections.value = next
@@ -1938,7 +1949,13 @@ export const useEfsStore = defineStore("efs", () => {
         matchSectionIds?: string[],
     ) {
         if (isInboundAppSection(sectionId) || isCtrDepSectionId(sectionId)) return
-        if (!isTimeSortSectionId(sectionId) && !(matchSectionIds?.some(isTimeSortSectionId))) return
+        const sticky =
+            isTimeSortSectionId(sectionId) ||
+            isRtcArrEtaSortSectionId(sectionId) ||
+            !!matchSectionIds?.some(
+                (id) => isTimeSortSectionId(id) || isRtcArrEtaSortSectionId(id),
+            )
+        if (!sticky) return
         if (hasManualOrder(bayId, sectionId)) return
         if (!container) return
         const ids = Array.from(container.querySelectorAll<HTMLElement>('[data-strip-id]'))
