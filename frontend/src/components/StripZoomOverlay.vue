@@ -9,6 +9,7 @@
       @keydown.escape.prevent="onEscape"
     >
       <div
+        ref="shellEl"
         class="strip-zoom-shell"
         :class="{ 'keys-above': keysAbove }"
         :style="shellStyle"
@@ -192,6 +193,7 @@ const emit = defineEmits<{
 }>()
 
 const overlayEl = ref<HTMLElement | null>(null)
+const shellEl = ref<HTMLElement | null>(null)
 const stageEl = ref<HTMLElement | null>(null)
 const drawEl = ref<SVGSVGElement | null>(null)
 
@@ -238,6 +240,10 @@ const stageHeight = ref(0)
 /** Locked shell position — avoid recentering on every strip-height RO tick (zoom twitch). */
 const shellLeft = ref(0)
 const shellTop = ref(0)
+/** Panel width last used by placeShell — height scales with it on Size %. */
+let placedPanelWidth = 0
+let relocateRaf = 0
+let clampRaf = 0
 /** Reactive viewport width so narrow RTC 1-col can flip keys above the strip */
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 
@@ -253,6 +259,18 @@ let pendingStartX = 0
 let pendingStartY = 0
 
 let stageResizeObs: ResizeObserver | null = null
+
+function cancelPlacementRafs() {
+  if (typeof window === 'undefined') return
+  if (relocateRaf) {
+    cancelAnimationFrame(relocateRaf)
+    relocateRaf = 0
+  }
+  if (clampRaf) {
+    cancelAnimationFrame(clampRaf)
+    clampRaf = 0
+  }
+}
 
 const zoomFactor = computed(() => zoomScalePercent.value / 100)
 
@@ -336,7 +354,8 @@ function placeShell() {
       : anchor
         ? Math.max(72, anchor.height * (pw / Math.max(1, anchor.width)))
         : 120
-  const estH = keysH + stageH + barH
+  // Panel border box sits under the scale bar's -1px overlap.
+  const estH = keysH + stageH + barH - 1
 
   let left: number
   let top: number
@@ -355,6 +374,78 @@ function placeShell() {
   const maxLeft = Math.max(0, vw - totalW)
   shellLeft.value = Math.round(Math.max(0, Math.min(left, maxLeft)))
   shellTop.value = Math.round(Math.max(0, Math.min(top, Math.max(0, vh - estH))))
+  placedPanelWidth = pw
+  // DOM top updates on the next frame — pull in any border the estimate still misses.
+  scheduleClampIntoView()
+}
+
+/**
+ * Pull the shell back inside the viewport without recentering.
+ * Used when the strip grows after placement (Size % up, expander) so a bottom
+ * strip does not end up partly off-screen.
+ */
+function clampShellIntoView() {
+  const shell = shellEl.value
+  if (!shell || typeof window === 'undefined') return
+  const rect = shell.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const vh = window.innerHeight
+  const vw = window.innerWidth
+  let top = shellTop.value
+  let left = shellLeft.value
+  const overflowBottom = rect.bottom - vh
+  const overflowRight = rect.right - vw
+  if (overflowBottom > 1) top -= overflowBottom
+  if (overflowRight > 1) left -= overflowRight
+  if (top < 0) top = 0
+  if (left < 0) left = 0
+  const nextTop = Math.round(top)
+  const nextLeft = Math.round(left)
+  if (nextTop !== shellTop.value) shellTop.value = nextTop
+  if (nextLeft !== shellLeft.value) shellLeft.value = nextLeft
+}
+
+function scheduleClampIntoView() {
+  if (typeof window === 'undefined') return
+  if (clampRaf) cancelAnimationFrame(clampRaf)
+  clampRaf = requestAnimationFrame(() => {
+    clampRaf = 0
+    if (!props.modelValue) return
+    clampShellIntoView()
+  })
+}
+
+/** True once the zoomed strip has copied --zoom-strip-scale onto --strip-scale. */
+function zoomScaleApplied(): boolean {
+  const stage = stageEl.value
+  if (!stage) return false
+  const strip = stage.querySelector('.flight-strip') as HTMLElement | null
+  if (!strip) return true
+  const zoom = parseFloat(getComputedStyle(stage).getPropertyValue('--zoom-strip-scale'))
+  if (!Number.isFinite(zoom) || zoom <= 0) return true
+  const applied = parseFloat(strip.style.getPropertyValue('--strip-scale'))
+  if (!Number.isFinite(applied) || applied <= 0) return false
+  return Math.abs(zoom - applied) < 0.03
+}
+
+/**
+ * FlightStrip applies --strip-scale on the frame after Size % commits.
+ * Measure only after that, so a stale shorter height cannot clamp the shell too low.
+ */
+function scheduleMeasuredRelocate(attempt = 0) {
+  if (typeof window === 'undefined') return
+  if (relocateRaf) cancelAnimationFrame(relocateRaf)
+  relocateRaf = requestAnimationFrame(() => {
+    relocateRaf = requestAnimationFrame(() => {
+      relocateRaf = 0
+      if (!props.modelValue) return
+      if (!zoomScaleApplied() && attempt < 4) {
+        scheduleMeasuredRelocate(attempt + 1)
+        return
+      }
+      measureStage({ relocate: true })
+    })
+  })
 }
 
 function onZoomScaleDrag(event: Event) {
@@ -381,12 +472,14 @@ function measureStage(opts?: { relocate?: boolean }) {
     bands.value = []
     return
   }
-  const h = stage.clientHeight
-  if (h > 0 && Math.abs(h - stageHeight.value) >= STAGE_HEIGHT_DEADBAND_PX) {
-    stageHeight.value = h
-  }
+  const h = stage.offsetHeight
+  const heightChanged =
+    h > 0 && Math.abs(h - stageHeight.value) >= STAGE_HEIGHT_DEADBAND_PX
+  if (heightChanged) stageHeight.value = h
   bands.value = measureScribbleBands(stage)
   if (opts?.relocate) placeShell()
+  // Skip while a Size % relocate is pending — that pass recenters with the real height.
+  else if (heightChanged && !relocateRaf) scheduleClampIntoView()
 }
 
 /** Paper toggle mode: off → blue → red → off */
@@ -790,6 +883,8 @@ watch(
       stageResizeObs = null
       bands.value = []
       stageHeight.value = 0
+      placedPanelWidth = 0
+      cancelPlacementRafs()
       return
     }
     penMode.value = false
@@ -806,10 +901,26 @@ watch([topExpanded, bottomExpanded], async () => {
   measureStage()
 })
 
-watch(zoomScalePercent, async () => {
+watch(zoomScalePercent, async (next, prev) => {
   if (!props.modelValue) return
+  // Predict height from the new panel width before --strip-scale has laid out.
+  // A stale (smaller) height lets the bottom clamp sit too low; the strip then
+  // grows off the screen — worst for bay strips already near the bottom.
+  const nextPw = panelWidth.value
+  if (
+    prev > 0 &&
+    placedPanelWidth > 0 &&
+    stageHeight.value > 0 &&
+    nextPw > 0
+  ) {
+    stageHeight.value = Math.max(
+      1,
+      Math.round(stageHeight.value * (nextPw / placedPanelWidth)),
+    )
+  }
+  placeShell()
   await nextTick()
-  measureStage({ relocate: true })
+  scheduleMeasuredRelocate()
 })
 
 watch(scribbleMode, (mode) => {
@@ -822,6 +933,7 @@ onUnmounted(() => {
   }
   stageResizeObs?.disconnect()
   stageResizeObs = null
+  cancelPlacementRafs()
 })
 </script>
 
