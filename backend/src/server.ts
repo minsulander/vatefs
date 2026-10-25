@@ -6,14 +6,40 @@ import serveStatic from "serve-static"
 import { WebSocket, WebSocketServer } from "ws"
 import dgram from "dgram"
 import { inspect } from "util"
+import { logTimestamp, prefixLogLines } from "./log-time.js"
 
-// Force synchronous stdout/stderr so output isn't buffered when piped
+// Force synchronous stdout/stderr so output isn't buffered when piped.
+// Each line is stamped with local HH:MM:SS so it can be lined up with EuroScope logs.
 function formatArgs(args: unknown[]): string {
     return args.map(a => typeof a === "string" ? a : inspect(a)).join(" ")
 }
-console.log = (...args: unknown[]) => { fs.writeSync(1, formatArgs(args) + "\n") }
-console.warn = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
-console.error = (...args: unknown[]) => { fs.writeSync(2, formatArgs(args) + "\n") }
+function writeLog(fd: number, args: unknown[]) {
+    fs.writeSync(fd, prefixLogLines(formatArgs(args)) + "\n")
+}
+console.log = (...args: unknown[]) => { writeLog(1, args) }
+console.warn = (...args: unknown[]) => { writeLog(2, args) }
+console.error = (...args: unknown[]) => { writeLog(2, args) }
+
+// morgan writes straight to stdout, bypassing console.log.
+function attachLineTimestamps(stream: NodeJS.WriteStream) {
+    let pending = ""
+    const origWrite = stream.write
+    stream.write = function (this: NodeJS.WriteStream, chunk: unknown, enc?: unknown, cb?: unknown) {
+        if (typeof chunk !== "string") {
+            return origWrite.call(this, chunk as never, enc as never, cb as never)
+        }
+        pending += chunk
+        const nl = pending.lastIndexOf("\n")
+        if (nl === -1) return true
+        const complete = pending.slice(0, nl)
+        pending = pending.slice(nl + 1)
+        const stamped = complete.split("\n").map((line) => logTimestamp() + line).join("\n") + "\n"
+        if (typeof enc === "function") return origWrite.call(this, stamped, enc as never)
+        return origWrite.call(this, stamped, enc as never, cb as never)
+    } as typeof stream.write
+}
+attachLineTimestamps(process.stdout)
+attachLineTimestamps(process.stderr)
 
 import {
     constants,
