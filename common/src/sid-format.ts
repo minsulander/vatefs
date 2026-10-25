@@ -3,7 +3,7 @@
  *
  * - RNAV: "PETEV3G" → "PETEV 3G"
  * - VFR:  "VFR·NORTH" / "VFR.NORTH" → "NORTH"
- * - Radar-vector (not SLOW): "ARS6E·KOGAV" → "ARS 6E veKOGAV"
+ * - Radar-vector (not SLOW): "ARS6E·KOGAV" → "ARS 6E veKOGAV"; "ARS6E·ARS" → "ARS 6E"
  * - SLOW track:
  *   - one separator:  "120·BABAP" → "120veBABAP"
  *   - two separators: "010·240·NOSLI" → "010·240veNOSLI" (keep first ·, replace second with ve)
@@ -187,8 +187,17 @@ export function formatTrackSidDisplay(sid: string | undefined | null): string | 
 }
 
 /**
+ * Named SID designator prefix (ARS from ARS6E) — used to drop redundant "veARS".
+ */
+function namedSidPrefix(base: string): string | undefined {
+    const m = base.toUpperCase().match(/^([A-Z]{2,})(?=\d)/)
+    return m?.[1]
+}
+
+/**
  * Display for radar-vector SIDs: "ARS 6E veKOGAV" (or "ARS6EveKOGAV" when compact).
  * Prefers filled TMA exit from FPL when provided.
+ * When the exit is the SID itself (ARS6E·ARS → traffic to ARS), omit "veARS" → "ARS 6E".
  */
 export function formatVectorSidDisplay(
     sid: string | undefined | null,
@@ -198,7 +207,10 @@ export function formatVectorSidDisplay(
     const parsed = parseVectorSidName(sid)
     if (!parsed) return null
     const exit = (tmaExit || "").trim().toUpperCase() || parsed.exit
-    return `${formatNamedSidBase(parsed.base, compact)} ve${exit}`
+    const baseLabel = formatNamedSidBase(parsed.base, compact)
+    // SID already names the exit (config 11 ARS→ARS 6E) — "ve ARS" is noise
+    if (namedSidPrefix(parsed.base) === exit) return baseLabel
+    return `${baseLabel} ve${exit}`
 }
 
 /** @deprecated AHDG is no longer derived from SID */

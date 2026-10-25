@@ -119,6 +119,7 @@ function escapeRe(s: string): string {
 /**
  * Find ESE SID matching prefix+letter on runway. Skips names containing `?`.
  * When `exit` is set, prefer radar-vector form `BASE·EXIT` (e.g. ARS6E·KOGAV).
+ * Skip vector preference when exit === SID prefix (ARS→ARS6E, not ARS6E·ARS).
  */
 export function findNamedSid(
     airport: string,
@@ -133,13 +134,17 @@ export function findNamedSid(
 
     if (exit) {
         const exitU = exit.toUpperCase()
-        const vectorRe = new RegExp(
-            `^${escapeRe(prefix)}\\d+${escapeRe(letter)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
-            "i",
-        )
-        const vectorHits = names.filter(n => vectorRe.test(n))
-        if (vectorHits.length === 1) return vectorHits[0]
-        if (vectorHits.length > 1) return [...vectorHits].sort()[0]
+        const prefixU = prefix.toUpperCase()
+        // Same name as exit: plain RNAV SID (ARS 6E), not ARS6E·ARS
+        if (exitU !== prefixU) {
+            const vectorRe = new RegExp(
+                `^${escapeRe(prefix)}\\d+${escapeRe(letter)}${escapeRe(TRACK_SEP)}${escapeRe(exitU)}$`,
+                "i",
+            )
+            const vectorHits = names.filter(n => vectorRe.test(n))
+            if (vectorHits.length === 1) return vectorHits[0]
+            if (vectorHits.length > 1) return [...vectorHits].sort()[0]
+        }
     }
 
     const matches = names.filter(name => namedSidRegex(prefix, letter).test(name))
