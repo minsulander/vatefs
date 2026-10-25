@@ -32,5 +32,8 @@ coverage
 *.zip
 /backend/public/fdp/*.*json
 /vatefs*.msi
+*.wixobj
+*.wixpdb
+*.generated.wxs
 /notes
 /tmp-capture-frames/

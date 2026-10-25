@@ -10,9 +10,16 @@
 
 import { isPropellerEngine } from "./slow-aircraft.js"
 
-/** Normalize stand labels: "F 28" → "F28", trim spaces. */
+/** Normalize stand labels: "F 28" → "F28", "APK2"/"APNK2" → "K2", "01" → "1". */
 export function normalizeStandName(stand: string | undefined | null): string {
-    return (stand ?? "").trim().toUpperCase().replace(/\s+/g, "")
+    let s = (stand ?? "").trim().toUpperCase().replace(/\s+/g, "")
+    // GRplugin apron K uses APK1/APK2 (not K1/K2).
+    if (/^APK[0-9]/.test(s)) s = "K" + s.slice(3)
+    // Display / alt forms: APNK2 → K2, APNG141 → G141
+    else if (s.startsWith("APN") && s.length > 3) s = s.slice(3)
+    // Pier stands are zero-padded in GRplugin (01) but tables use 1.
+    if (/^\d+$/.test(s)) s = String(Number.parseInt(s, 10))
+    return s
 }
 
 function normalizeType(aircraftType: string | undefined | null): string {
@@ -228,7 +235,7 @@ function isAlwaysPushStand(stand: string): boolean {
     // Pier B: 12,14,16,18,20
     if (["12", "14", "16", "18", "20"].includes(stand)) return true
     // Pier F west / east
-    if (/^F(28L|28R|29L|30|31|32L|32R|33|34|35|36L|36R|37|38|39L|39R)$/.test(stand)) return true
+    if (/^F(28L|28R|29L|29R|30|31|32L|32R|33|34|35|36L|36R|37|38|39L|39R)$/.test(stand)) return true
     // Apron D even 102–112
     if (["102", "104", "106", "108", "110", "112"].includes(stand)) return true
     // Apron E odd 101–119
@@ -266,7 +273,7 @@ function lookupStandRule(stand: string): StandRule | undefined {
     if (stand === "R3" || stand === "R4") {
         return rule(R3_R4_STARTUP, setOf(), true, true)
     }
-    if (/^R(5|6|7|8|9|10|10C)$/.test(stand)) {
+    if (/^R(5|6|7|8|9|10|10[ABC])$/.test(stand)) {
         return rule(R5_STARTUP, R5_PUSH, false, true)
     }
 
@@ -279,13 +286,32 @@ function lookupStandRule(stand: string): StandRule | undefined {
     }
 
     // Apron K (simplified: known push / startup type lists; majority jet PUSH / prop START UP)
-    if (/^K(1|2|3[ABCE]|4[ABC]|5|5L|5R)$/.test(stand)) {
+    // GRplugin: K3A–K3E, K5/K5L/K5R; APK1/APK2 normalize to K1/K2
+    if (/^K(1|2|3[ABCDE]|4[ABC]|5|5L|5R)$/.test(stand)) {
         return rule(APRON_K_STARTUP, APRON_K_PUSH, false, true)
     }
 
     if (isAlwaysPushStand(stand)) return ALWAYS_PUSH_RULE
 
     return undefined
+}
+
+/** How a stand name maps into the push/start tables (after normalize). */
+export type EssaPushStandCoverage =
+    | "always-startup"
+    | "always-push"
+    | "typed-rule"
+    | "unknown"
+
+export function classifyEssaPushStandCoverage(
+    stand: string | undefined | null,
+): EssaPushStandCoverage {
+    const s = canonicalStand(normalizeStandName(stand))
+    if (!s) return "unknown"
+    if (isAlwaysStartupStand(s)) return "always-startup"
+    if (isAlwaysPushStand(s)) return "always-push"
+    if (lookupStandRule(s)) return "typed-rule"
+    return "unknown"
 }
 
 function resolveFromRule(
