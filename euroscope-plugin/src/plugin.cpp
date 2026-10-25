@@ -5684,6 +5684,19 @@ void VatEFSPlugin::StartBackend()
     backendLogFile = hLog;
     PruneVatEfsLogs(logDir);
 
+    // Session banner before backend stdout — plugin version is known here;
+    // backend version is logged as soon as efs.exe starts.
+    {
+        char ts[16];
+        sprintf_s(ts, "[%02u:%02u:%02u] ", st.wHour, st.wMinute, st.wSecond);
+        const std::string banner =
+            std::string(ts) + "=== VatEFS session start ===\r\n" +
+            ts + "EuroScope plugin version: " + PLUGIN_VERSION + "\r\n" +
+            ts + "Log file: " + logPath + "\r\n";
+        DWORD written = 0;
+        WriteFile(hLog, banner.c_str(), (DWORD)banner.size(), &written, NULL);
+    }
+
     // Create pipe to capture stdout/stderr
     SECURITY_ATTRIBUTES sa = {};
     sa.nLength = sizeof(sa);

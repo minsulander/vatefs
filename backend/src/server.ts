@@ -53,6 +53,8 @@ import {
     mergeEssaSepIndicators,
     ESSA_SEP_CYCLE,
 } from "@vatefs/common"
+
+console.log(`VatEFS backend version: ${constants.version}`)
 import type { EssaSepOverrides, EssaSepField } from "@vatefs/common"
 import type {
     LayoutMessage,
@@ -8538,7 +8540,9 @@ udpIn.on("message", (msg, rinfo) => {
             if (typeof msg.pluginVersion === "string" && msg.pluginVersion.trim()) {
                 const v = msg.pluginVersion.trim()
                 if (reportedPluginVersion !== v) {
-                    console.log(`EuroScope plugin version: ${v}`)
+                    console.log(
+                        `VatEFS versions: backend=${constants.version} plugin=${v}`
+                    )
                 }
                 reportedPluginVersion = v
             }
