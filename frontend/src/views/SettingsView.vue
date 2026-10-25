@@ -102,6 +102,9 @@
                     <p class="text-caption text-grey mt-1">
                         Off by default. When on, VatIRIS can create paper strips via
                         <code class="fsp-inline">POST /api/print/external</code>.
+                        From <code class="fsp-inline">https://vatiris.se</code> you must use
+                        <code class="fsp-inline">http://127.0.0.1:17770</code> — a LAN address
+                        like <code class="fsp-inline">192.168.x.x</code> is blocked by the browser.
                     </p>
                     <div class="fsp-url-row" :class="{ 'fsp-url-row--disabled': !efs.fspServerEnabled }">
                         <code class="fsp-url-value">{{ fspUrlDisplay }}</code>
@@ -119,7 +122,7 @@
                         Paste into VatIRIS → Settings → FSP Server URL (enable FSP there too).
                     </p>
                     <p v-if="fspAltUrls.length" class="text-caption text-grey mt-1">
-                        Other LAN addresses:
+                        Other LAN addresses (only if IRIS is on another machine):
                         <button
                             v-for="u in fspAltUrls"
                             :key="u"

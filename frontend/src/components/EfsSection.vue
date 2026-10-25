@@ -543,7 +543,11 @@ import {
   releaseDropHighlight,
   useDropHighlightOwner,
 } from '@/composables/useDropHighlightOwner'
-import { isRunwayOrderSectionId, sortRunwayLuOrder } from '@vatefs/common'
+import {
+  isLocalInboundPresentation,
+  isRunwayOrderSectionId,
+  sortRunwayLuOrder,
+} from '@vatefs/common'
 import { rtcInsertAtTop } from '@/composables/rtcStripInsert'
 
 type SpecialStripType = 'vfrDep' | 'vfrArr' | 'cross' | 'note' | 'vehicle'
@@ -2093,10 +2097,7 @@ function taxiMixedStackRank(strip: FlightStripData): number {
   if (strip.stripType === 'arrival') return 0
   if (strip.stripType === 'departure') return 1
   if (strip.stripType === 'local') {
-    const gs = (strip.groundstate || '').toUpperCase()
-    if (gs === 'ARR' || gs === 'TXIN' || gs === 'PARK') return 0
-    if (strip.clearedToLand) return 0
-    return 1
+    return isLocalInboundPresentation(strip) ? 0 : 1
   }
   return 1
 }
@@ -2202,12 +2203,7 @@ function isRtcArrLikeStrip(strip: FlightStripData): boolean {
   if (strip.stripType === 'arrival') return true
   if (strip.stripType === 'departure') return false
   if (strip.stripType === 'local') {
-    const gs = (strip.groundstate || '').toUpperCase()
-    if (gs === 'ARR' || gs === 'TXIN' || gs === 'PARK') return true
-    if (strip.clearedToLand) return true
-    // Airborne local without taxi-in cues → treat as arrival sequence in CTR
-    if (strip.airborne) return true
-    return false
+    return isLocalInboundPresentation(strip)
   }
   // vfr / cross / note / vehicle — keep with arrival stack when airborne/ETA relevant
   return true

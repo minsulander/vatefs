@@ -128,11 +128,17 @@ import { startSpoofRepl } from "./spoof-cli.js"
 import {
     blankPaperInfoKind,
     externalStripType,
+    fspPrintSuccessBody,
     listFspServerBaseUrls,
     parseExternalRflFeet,
     pickExternalField,
     type ExternalPrintBody,
 } from "./fsp-api.js"
+import {
+    resolveEsaaPackageDir,
+    resolveEsaaPluginsDir,
+    resolveIcaoAirlinesFile,
+} from "./euroscope-paths.js"
 import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
 import type { ControllerRole, EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
@@ -455,6 +461,12 @@ function updateHoppieConfigFeedState(euroscopeDir: string) {
 
 if (EUROSCOPE_DIR) {
     console.log(`EuroScope directory: ${EUROSCOPE_DIR}`)
+    const esaaPkg = resolveEsaaPackageDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    if (esaaPkg) {
+        console.log(`ESAA package directory: ${esaaPkg}`)
+    } else {
+        console.warn(`ESAA package directory not found under ${EUROSCOPE_DIR}`)
+    }
     try {
         const n = loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
         if (n <= 0) console.warn("Stand file loaded 0 stands")
@@ -474,7 +486,10 @@ if (EUROSCOPE_DIR) {
     // AFV multi-freq (VATSIM Radar "Monitoring") for APP/DEP XC detection
     startAfvTransceiverPolling()
     try {
-        loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
+        const airlinesFile =
+            resolveIcaoAirlinesFile(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) ??
+            path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt")
+        loadIcaoAirlines(airlinesFile)
     } catch (err) {
         console.warn(`Failed to load ICAO airlines: ${err instanceof Error ? err.message : err}`)
     }
@@ -4114,7 +4129,10 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
             console.warn(`Reload TopSkyAirspace failed: ${err instanceof Error ? err.message : err}`)
         }
         try {
-            loadIcaoAirlines(path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt"))
+            const airlinesFile =
+                resolveIcaoAirlinesFile(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) ??
+                path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "ICAO", "ICAO_Airlines.txt")
+            loadIcaoAirlines(airlinesFile)
         } catch (err) {
             console.warn(`Reload ICAO airlines failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -6751,26 +6769,35 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 break
             }
             void (async () => {
-                const result = await flightStore.printStrip(message.callsign)
-                if (result.softDeleted) {
-                    console.log(`[PRINT] ${message.callsign} soft-deleted by rules`)
-                    lastPendingPrintFp = ""
-                    broadcastPendingPrintList()
-                } else if (result.strip) {
-                    const applied = applyPrintStripResult(result)
-                    if (applied) {
-                        console.log(
-                            `[PRINT] Strip printed for ${message.callsign} -> ${applied.sectionId}`,
-                        )
+                try {
+                    const result = await flightStore.printStrip(message.callsign)
+                    if (result.softDeleted) {
+                        console.log(`[PRINT] ${message.callsign} soft-deleted by rules`)
+                        lastPendingPrintFp = ""
+                        broadcastPendingPrintList()
+                    } else if (result.strip) {
+                        const applied = applyPrintStripResult(result)
+                        if (applied) {
+                            console.log(
+                                `[PRINT] Strip printed for ${message.callsign} -> ${applied.sectionId}`,
+                            )
+                        }
+                    } else {
+                        sendMessage(socket, {
+                            type: "notify",
+                            level: "info",
+                            text: `No FPL found for ${message.callsign.toUpperCase()}`,
+                        })
+                        lastPendingPrintFp = ""
+                        broadcastPendingPrintList()
                     }
-                } else {
+                } catch (err) {
+                    console.error(`[PRINT] Failed for ${message.callsign}:`, err)
                     sendMessage(socket, {
                         type: "notify",
-                        level: "info",
-                        text: `No FPL found for ${message.callsign.toUpperCase()}`,
+                        level: "error",
+                        text: `Failed to print ${message.callsign}`,
                     })
-                    lastPendingPrintFp = ""
-                    broadcastPendingPrintList()
                 }
             })()
             break
@@ -7755,24 +7782,42 @@ wsServer.on("connection", (socket) => {
 })
 
 const app = express()
-app.use(logRequests("dev"))
-app.use(express.json({ limit: "64kb" }))
 
-/** CORS for VatIRIS → VatEFS FSP print API (browser cross-origin). */
+/**
+ * CORS for VatIRIS (https://vatiris.se) → VatEFS FSP API on loopback/LAN.
+ * Must run before body parsing so failed JSON / early errors still get CORS headers —
+ * otherwise the browser hides the response and IRIS never marks the strip printed.
+ */
+function isFspApiPath(req: express.Request): boolean {
+    const p = (req.originalUrl || req.url || req.path || "").split("?")[0]
+    return p.startsWith("/api/print") || p.startsWith("/api/fsp") || p.startsWith("/api/printer")
+}
+
 app.use((req, res, next) => {
-    if (!req.path.startsWith("/api/print") && !req.path.startsWith("/api/fsp")) {
+    if (!isFspApiPath(req)) {
         next()
         return
     }
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    const origin = req.headers.origin
+    // Reflect Origin when present (VatIRIS); wildcard otherwise (curl / local tools)
+    res.setHeader("Access-Control-Allow-Origin", typeof origin === "string" && origin ? origin : "*")
+    res.setHeader("Vary", "Origin")
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
+    res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Access-Control-Request-Private-Network",
+    )
+    // Chrome Private Network Access: https://vatiris.se → http://127.0.0.1
+    res.setHeader("Access-Control-Allow-Private-Network", "true")
     if (req.method === "OPTIONS") {
         res.sendStatus(204)
         return
     }
     next()
 })
+
+app.use(logRequests("dev"))
+app.use(express.json({ limit: "64kb" }))
 
 function isLocalDevRequest(req: express.Request): boolean {
     const ip = req.socket.remoteAddress || ""
@@ -7934,7 +7979,7 @@ app.get("/api/fsp", (_req, res) => {
         enabled,
         port,
         urls,
-        /** Prefer first LAN URL for IRIS */
+        /** Prefer 127.0.0.1 — works from https://vatiris.se on the same PC */
         fspUrl: urls[0],
         printPath: "/api/print/external",
     })
@@ -7959,7 +8004,13 @@ app.get("/api/printer/status", (_req, res) => {
  * POST /api/print/external
  */
 app.post("/api/print/external", async (req, res) => {
+    const body = (req.body ?? {}) as ExternalPrintBody
+    const callsign = pickExternalField(body, "callsign")?.toUpperCase()
+    const stripType = externalStripType(body)
     try {
+        console.log(
+            `[FSP] POST /api/print/external look=${staticConfig.look} enabled=${!!currentUiSettings.fspServerEnabled} cs=${callsign ?? "(blank)"}`,
+        )
         if (staticConfig.look !== "paper") {
             res.status(400).json({
                 error: "Paper look required",
@@ -7974,10 +8025,6 @@ app.post("/api/print/external", async (req, res) => {
             })
             return
         }
-
-        const body = (req.body ?? {}) as ExternalPrintBody
-        const callsign = pickExternalField(body, "callsign")?.toUpperCase()
-        const stripType = externalStripType(body)
 
         // Blank strip (no callsign) → paper empty DEP/ARR holder
         if (!callsign) {
@@ -7998,19 +8045,21 @@ app.post("/api/print/external", async (req, res) => {
                 })
                 return
             }
-            for (const peer of store.getStripsForSection(strip.bayId, strip.sectionId, false)) {
-                if (peer.id !== strip.id) broadcastStrip(peer)
+            try {
+                for (const peer of store.getStripsForSection(strip.bayId, strip.sectionId, false)) {
+                    if (peer.id !== strip.id) broadcastStrip(peer)
+                }
+                broadcastStrip(strip, { playPrintAnim: true })
+                void pushStripToRemote(strip.id)
+            } catch (broadcastErr) {
+                console.warn(
+                    `[FSP] blank strip broadcast failed (still reporting success):`,
+                    broadcastErr,
+                )
             }
-            broadcastStrip(strip, { playPrintAnim: true })
-            void pushStripToRemote(strip.id)
             console.log(`[FSP] Blank ${stripType} strip printed (${kind}) -> ${strip.sectionId}`)
-            res.json({
-                success: true,
-                message: "Blank flight strip printed successfully",
-                callsign: null,
-                type: stripType,
-                blank: true,
-            })
+            // Respond with VatFSP shape so IRIS markAsPrinted runs
+            res.json(fspPrintSuccessBody(null, stripType, true))
             return
         }
 
@@ -8034,33 +8083,47 @@ app.post("/api/print/external", async (req, res) => {
             stripKind: stripType,
         }
 
-        const result = await flightStore.printStripFromExternal(callsign, overlay)
-        const applied = applyPrintStripResult(result, { playPrintAnim: true })
+        let applied: import("@vatefs/common").FlightStrip | undefined
+        try {
+            const result = await flightStore.printStripFromExternal(callsign, overlay)
+            applied = applyPrintStripResult(result, { playPrintAnim: true })
+            if (!applied && result.softDeleted) {
+                console.warn(`[FSP] ${callsign} soft-deleted by rules after print`)
+            }
+        } catch (placeErr) {
+            console.error(`[FSP] place failed for ${callsign}:`, placeErr)
+        }
+
+        // Idempotent success: strip on the board (new or already there) → IRIS can grey the button
+        if (!applied) {
+            applied = store.getAllStrips().find((s) => s.callsign === callsign)
+        }
         if (!applied) {
             res.status(404).json({
                 error: "Failed to print flight strip",
-                details: result.softDeleted
-                    ? `Strip for ${callsign} was soft-deleted by rules`
-                    : `Could not place strip for ${callsign} (no section / layout)`,
+                details: `Could not place strip for ${callsign} (no section / layout)`,
                 callsign,
             })
             return
         }
+
         console.log(`[FSP] Strip printed for ${callsign} -> ${applied.sectionId}`)
-        res.json({
-            success: true,
-            message: `Flight strip for ${callsign} printed successfully`,
-            callsign,
-            type: stripType,
-            blank: false,
-            sectionId: applied.sectionId,
-        })
+        res.json(fspPrintSuccessBody(callsign, stripType, false))
     } catch (err) {
         console.error("[FSP] print/external failed:", err)
+        // Last resort: if the strip is already on the board, still report success so IRIS tracks it
+        if (callsign) {
+            const existing = store.getAllStrips().find((s) => s.callsign === callsign)
+            if (existing) {
+                console.warn(`[FSP] recovering success for on-board ${callsign} after error`)
+                res.json(fspPrintSuccessBody(callsign, stripType, false))
+                return
+            }
+        }
         res.status(500).json({
             error: "Failed to print flight strip",
             details: err instanceof Error ? err.message : String(err),
-            callsign: typeof req.body?.callsign === "string" ? req.body.callsign : undefined,
+            callsign,
         })
     }
 })
@@ -8517,6 +8580,11 @@ app.use(serveStatic(publicDir))
 app.get("/*splat", (req, res) => res.sendFile(publicDir + "/index.html"))
 const server = app.listen(port, "0.0.0.0", () => {
     console.log(`EFS backend ${constants.version} listening at http://0.0.0.0:${port}`)
+    const fspUrls = listFspServerBaseUrls(port)
+    const fspOn = !!currentUiSettings.fspServerEnabled && staticConfig.look === "paper"
+    console.log(
+        `[FSP] ${fspOn ? "enabled" : "disabled"} look=${staticConfig.look} url=${fspUrls[0] ?? "n/a"}`,
+    )
     startSpoofRepl({
         apply: (callsign, fields) => {
             const result = applyDevSpoofAndBroadcast(callsign, fields)
@@ -9682,7 +9750,9 @@ let lastCdmDataSnapshot = new Map<string, string>()
 
 function findCdmDataDir(): string | undefined {
     if (!EUROSCOPE_DIR) return undefined
-    const plugins = path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "Plugins")
+    const plugins =
+        resolveEsaaPluginsDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) ??
+        path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "Plugins")
     if (!fs.existsSync(plugins)) return undefined
     try {
         const has = fs.readdirSync(plugins).some((f) => /^CDM_data_.*\.txt$/i.test(f))

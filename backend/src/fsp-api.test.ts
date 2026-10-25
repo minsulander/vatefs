@@ -6,6 +6,7 @@ import assert from "node:assert/strict"
 import {
     blankPaperInfoKind,
     externalStripType,
+    fspPrintSuccessBody,
     listFspServerBaseUrls,
     parseExternalRflFeet,
     pickExternalField,
@@ -46,12 +47,26 @@ check("parseExternalRflFeet", () => {
     assert.equal(parseExternalRflFeet(""), undefined)
 })
 
-check("listFspServerBaseUrls returns http URLs", () => {
+check("listFspServerBaseUrls prefers 127.0.0.1 for VatIRIS browser", () => {
     const urls = listFspServerBaseUrls(17770)
     assert.ok(urls.length >= 1)
+    assert.equal(urls[0], "http://127.0.0.1:17770")
     for (const u of urls) {
         assert.match(u, /^http:\/\/.+:17770$/)
     }
+})
+
+check("fspPrintSuccessBody matches VatFSP so IRIS marks printed", () => {
+    const ok = fspPrintSuccessBody("SAS123", "departure", false)
+    assert.equal(ok.success, true)
+    assert.equal(ok.callsign, "SAS123")
+    assert.equal(ok.type, "departure")
+    assert.equal(ok.blank, false)
+    assert.match(ok.message, /SAS123/)
+    const blank = fspPrintSuccessBody(null, "arrival", true)
+    assert.equal(blank.success, true)
+    assert.equal(blank.callsign, null)
+    assert.equal(blank.blank, true)
 })
 
 console.log(`\n${passed} passed`)

@@ -5,6 +5,7 @@
 
 import fs from "fs"
 import path from "path"
+import { resolveEsaaPluginFile } from "./euroscope-paths.js"
 
 interface WavPlayer {
     play: (params: { path: string; sync?: boolean; loop?: boolean }) => Promise<void>
@@ -39,6 +40,8 @@ function playWav(soundPath: string | null, label: string) {
 }
 
 function resolvePluginSound(euroscopeDir: string, fileName: string): string | null {
+    const nested = resolveEsaaPluginFile(euroscopeDir, fileName)
+    if (nested) return nested
     const soundFile = path.join(euroscopeDir, "ESAA", "Plugins", fileName)
     if (fs.existsSync(soundFile)) return soundFile
     return null
@@ -74,7 +77,9 @@ export function loadDclSound(euroscopeDir: string) {
     if (dclSoundPath) {
         console.log(`DCL sound loaded: ${dclSoundPath}`)
     } else {
-        console.log(`DCL sound file not found: ${path.join(euroscopeDir, "ESAA", "Plugins", "TopSkySoundCPDLC.wav")}`)
+        console.log(
+            `DCL sound file not found under ESAA/Plugins (looked for TopSkySoundCPDLC.wav)`,
+        )
     }
 }
 

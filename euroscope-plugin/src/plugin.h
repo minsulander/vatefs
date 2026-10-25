@@ -78,8 +78,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     /** Poll VCH + EFS annotations (H/S=4, CTL=3, EFSGA=5, DepC=6) — ES has no CAD DataType for annotations */
     void PollVchAnnotationChanges();
     /**
-     * Ground Radar "Arrival stand" list item. The scratch GRP/S broadcast that sets
-     * flight.stand is sent on handoff; the list already has the stand before that.
+     * Ground Radar stand list item (tag 2). Scratch GRP/S / GRP/M also set stand;
+     * the list often has the gate earlier (incl. departures to non-ES ADES).
      */
     void PollGrpArrivalStands();
     /**

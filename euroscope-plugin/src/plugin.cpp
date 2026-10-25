@@ -601,9 +601,17 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
                 // Swedish clear-ground-state token — treat as empty GS for the backend
                 SetJsonIfValidUtf8(message, "groundstate", "");
                 SetJsonIfValidUtf8(message, "scratch", scratch.c_str());
-            } else if (scratch.length() > 6 && scratch.find("GRP/S/") != std::string::npos) {
-                // Ensure we have enough characters for substr(6)
+            } else if (scratch.find("GRP/S/") != std::string::npos && scratch.length() > 6) {
+                // GRP/S/<stand> — handoff/list stand broadcast
                 SetJsonIfValidUtf8(message, "stand", scratch.substr(6).c_str());
+            } else if (scratch.rfind("GRP/M/", 0) == 0) {
+                // GRP/M/<airport>/<stand> — Ground Radar move-to-stand (e.g. GRP/M/ESSA/F34)
+                const size_t lastSlash = scratch.find_last_of('/');
+                if (lastSlash != std::string::npos && lastSlash + 1 < scratch.size()) {
+                    SetJsonIfValidUtf8(message, "stand", scratch.substr(lastSlash + 1).c_str());
+                } else {
+                    SetJsonIfValidUtf8(message, "scratch", scratch.c_str());
+                }
             } else {
                 SetJsonIfValidUtf8(message, "scratch", scratch.c_str());
             }
@@ -1177,14 +1185,16 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
 }
 
 /**
- * Ground Radar plugin (this ESAA build) keeps the arrival stand in tag item 2
- * ("Arrival stand") — the STD column on the arrival list. VatEFS previously
- * learned it only from the GRP/S scratch broadcast, which is delivered on handoff.
+ * Ground Radar plugin (this ESAA build) keeps the assigned stand in tag item 2
+ * ("Arrival stand") — STD on ARR lists and gate on DEP lists. VatEFS previously
+ * learned it only from the GRP/S scratch broadcast (handoff) and skipped
+ * departures to non-ES destinations (e.g. ESSA→EFHK), so position detection
+ * could stick a neighbouring stand (FIN4AW F36L vs GRP F34).
  *
  * Offsets below were taken from GRplugin.dll loaded with ESAA (image base
  * 0x10000000): EuroScopePlugInInit stores the CPlugIn* at RVA 0x2701C4, and
  * OnGetTagItem is vtable slot 13. A fault disables the poll; scratch GRP/S
- * still updates the stand on transfer.
+ * and GRP/M still update the stand when seen live.
  */
 static const DWORD GRP_PLUGIN_INSTANCE_RVA = 0x2701C4;
 static const int GRP_ONGETTAGITEM_SLOT = 13;
@@ -1287,7 +1297,11 @@ void VatEFSPlugin::PollGrpArrivalStands()
         if (!cs || cs[0] == '\0') continue;
         EuroScopePlugIn::CFlightPlanData fpData = fp.GetFlightPlanData();
         const char *dest = fpData.GetDestination();
-        if (!dest || strncmp(dest, "ES", 2) != 0) continue;
+        const char *origin = fpData.GetOrigin();
+        const bool destEs = dest && strncmp(dest, "ES", 2) == 0;
+        const bool originEs = origin && strncmp(origin, "ES", 2) == 0;
+        // Arrivals (ADES ES*) and departures/locals (ADEP ES*) — gate lives in same tag
+        if (!destEs && !originEs) continue;
 
         EuroScopePlugIn::CRadarTarget rt = fp.GetCorrelatedRadarTarget();
         void *fpWord = nullptr;

@@ -3549,15 +3549,19 @@ class FlightStore {
         if (message.scratch !== undefined) {
             const grpStand = standFromGrpScratch(message.scratch)
             if (grpStand && grpStand !== flight.stand) {
-                console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${grpStand} (GRP/S)`)
+                console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${grpStand} (GRP scratch)`)
                 flight.stand = grpStand
             }
         }
-        // GRP arrival-list stand (already assigned). Do not apply to pure departures.
+        // GRP list stand (tag item). Prefer over position guess for arrivals and
+        // departures/locals at our airports (FIN4AW: GRP/M F34 vs position F36L).
         if (message.arrivalStand) {
             const dest = flight.destination?.toUpperCase()
+            const origin = flight.origin?.toUpperCase()
             const destMine = !!dest && this.config.myAirports.some((a) => a.toUpperCase() === dest)
-            if (destMine && message.arrivalStand !== flight.stand) {
+            const originMine =
+                !!origin && this.config.myAirports.some((a) => a.toUpperCase() === origin)
+            if ((destMine || originMine) && message.arrivalStand !== flight.stand) {
                 console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${message.arrivalStand} (GRP list)`)
                 flight.stand = message.arrivalStand
             }
@@ -3588,7 +3592,14 @@ class FlightStore {
                 flight.coo = nextCoo
             }
         }
-        if (message.stand !== undefined) flight.stand = message.stand
+        if (message.stand !== undefined) {
+            // Empty stand from plugin: keep existing (position/GRP); do not wipe
+            const nextStand = message.stand.trim() || undefined
+            if (nextStand && nextStand !== flight.stand) {
+                console.log(`[STAND] ${callsign}: ${flight.stand ?? '-'} -> ${nextStand} (plugin)`)
+                flight.stand = nextStand
+            }
+        }
         if (message.asp !== undefined) flight.asp = message.asp
         if (message.mach !== undefined) flight.mach = message.mach
         if (message.arc !== undefined) flight.arc = message.arc

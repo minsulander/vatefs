@@ -391,8 +391,13 @@ export function setEssaAssignedRunways(assigned: { arr: string[]; dep: string[] 
  * Checks if callsign matches any of our airports and ends with _DEL or _GND.
  * Also detects _APP and _CTR roles (excluding _R_APP and _R_CTR remote tower positions).
  * Everything else defaults to TWR.
+ * Missing/empty callsign (unowned printed strip) → TWR — never throw.
  */
-export function parseControllerRole(callsign: string, _myAirports: string[]): ControllerRole {
+export function parseControllerRole(
+    callsign: string | undefined | null,
+    _myAirports: string[],
+): ControllerRole {
+    if (!callsign) return 'TWR'
     const upper = callsign.toUpperCase()
     // DEL and GND are always local positions in VATSIM — no airport prefix needed
     if (upper.endsWith('_DEL')) return 'DEL'

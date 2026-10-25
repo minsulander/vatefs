@@ -83,6 +83,13 @@ export {
 } from "./push-start-section.js"
 
 export {
+    isLocalInboundPresentation,
+    isLocalArrSideSection,
+    isLocalDepSideSection,
+} from "./local-strip.js"
+export type { LocalStripPresentationFields } from "./local-strip.js"
+
+export {
     DEFAULT_TRANSITION_ALTITUDE_FT,
     parseAltitudeToFeet,
     parseManualCfl,

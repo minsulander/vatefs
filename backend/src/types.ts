@@ -403,7 +403,8 @@ export interface ControllerAssignedDataUpdateMessage {
     /**
      * Ground Radar "Arrival stand" list item (tag code 2).
      * Published before the GRP/S scratch broadcast that arrives with the handoff.
-     * Applied only when destination is one of our airports.
+     * Also polled for departures (origin at our airports) — same tag holds the gate.
+     * Applied when origin or destination is one of our airports.
      */
     arrivalStand?: string
     /** VCH hold short — strip annotation 4 (empty string clears) */

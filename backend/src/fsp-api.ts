@@ -75,8 +75,12 @@ function lanScore(ip: string): number {
 }
 
 /**
- * Preferred LAN HTTP base URLs for VatIRIS FSP settings (copy into IRIS).
- * Excludes loopback / link-local.
+ * HTTP base URLs for VatIRIS FSP settings (copy into IRIS).
+ *
+ * Prefer 127.0.0.1 first: VatIRIS runs as https://vatiris.se and the browser
+ * blocks mixed-content / private-network fetches to LAN IPs, but allows
+ * http://127.0.0.1 when EFS is on the same PC. LAN addresses follow for rare
+ * remote-client setups.
  */
 export function listFspServerBaseUrls(port: number = EFS_HTTP_PORT): string[] {
     const scored: { ip: string; score: number }[] = []
@@ -91,9 +95,28 @@ export function listFspServerBaseUrls(port: number = EFS_HTTP_PORT): string[] {
         }
     }
     scored.sort((a, b) => b.score - a.score || a.ip.localeCompare(b.ip))
-    const urls = scored.map((s) => `http://${s.ip}:${port}`)
-    if (urls.length === 0) urls.push(`http://127.0.0.1:${port}`)
-    return urls
+    const urls = [`http://127.0.0.1:${port}`, ...scored.map((s) => `http://${s.ip}:${port}`)]
+    return [...new Set(urls)]
+}
+
+/**
+ * VatFSP success body. VatIRIS only greys the print button after
+ * `result.success === true` from POST /api/print/external.
+ */
+export function fspPrintSuccessBody(
+    callsign: string | null,
+    stripType: "departure" | "arrival",
+    blank: boolean,
+) {
+    return {
+        success: true as const,
+        message: blank
+            ? "Blank flight strip printed successfully"
+            : `Flight strip for ${callsign} printed successfully`,
+        callsign,
+        type: stripType,
+        blank,
+    }
 }
 
 export function parseExternalRflFeet(raw: string | undefined): number | undefined {

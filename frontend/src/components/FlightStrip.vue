@@ -1633,6 +1633,7 @@ import {
   isHeavyAsLeaderAircraftType,
   isThickAtypBorderAircraftType,
   isIfrSidEligible,
+  isLocalInboundPresentation,
   isTrackSidName,
   isVectorSidName,
   needsEssaEastSidBox,
@@ -3286,8 +3287,7 @@ const canDragStrip = computed(() => {
  * departure clearance is not yet given. Arrivals never use the DEP clearance flag.
  */
 const unclearedFieldHighlight = computed(() => {
-  const t = props.strip.stripType
-  if (t !== 'departure' && t !== 'local') return false
+  if (!isDeparture.value) return false
   return !props.strip.clearance
 })
 
@@ -3426,14 +3426,19 @@ const ownerSiTitle = computed(() => {
   const owner = withFreq(props.strip.ownerCallsign, props.strip.ownerFrequency, props.strip.ownerSi)
   return owner ? `Tracked by ${owner}` : undefined
 })
+/** Local outbound = DEP layout; local inbound/return = ARR layout (SAS181). */
+const isLocalInbound = computed(() => isLocalInboundPresentation(props.strip))
 const isDeparture = computed(
   () =>
     props.strip.stripType === 'departure' ||
-    props.strip.stripType === 'local' ||
+    (props.strip.stripType === 'local' && !isLocalInbound.value) ||
     paperInfoKind.value === 'empty_dep',
 )
 const isArrLayout = computed(
-  () => props.strip.stripType === 'arrival' || paperInfoKind.value === 'empty_arr',
+  () =>
+    props.strip.stripType === 'arrival' ||
+    isLocalInbound.value ||
+    paperInfoKind.value === 'empty_arr',
 )
 /** Arrival on ground: hide CFL/AHD cells (cleared to land / taxi-in). */
 const hideArrGroundAssignFields = computed(() => {
@@ -4398,7 +4403,7 @@ const isPushStartOrLater = computed(() =>
 
 const isEssaDep = computed(() =>
   CDM_AIRPORTS.has(props.strip.adep) &&
-  (props.strip.stripType === 'departure' || props.strip.stripType === 'local')
+  isDeparture.value
 )
 
 const isDepartingIfr = computed(() =>
@@ -4445,11 +4450,11 @@ const showPrimaryTime = computed(() => {
   if (isEssaDep.value && isPushStartOrLater.value && !props.strip.clearedForTakeoff) {
     return true
   }
-  // Departures/local: no EOBT from taxi onward (CTOT shown separately)
-  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
+  // Outbound dep/local: no EOBT from taxi onward (CTOT shown separately)
+  if (isDeparture.value) {
     return false
   }
-  // Arrivals: keep ETA unless CTOT somehow applies (it shouldn't for arr)
+  // Arrivals / inbound local: keep ETA unless CTOT somehow applies
   return !(showCtot.value)
 })
 
@@ -4585,7 +4590,7 @@ const primaryTimeKind = computed((): PrimaryTimeKind => {
   if (isEssaDep.value) {
     return isPushStartOrLater.value ? 'ttot' : 'tobt'
   }
-  if (props.strip.stripType === 'departure' || props.strip.stripType === 'local') {
+  if (isDeparture.value) {
     return props.strip.tobt ? 'tobt' : 'eobt'
   }
   return 'eta'

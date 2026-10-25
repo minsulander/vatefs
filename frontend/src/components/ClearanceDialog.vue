@@ -1,5 +1,11 @@
 <template>
-  <v-dialog v-model="dialogOpen" max-width="320" content-class="clnc-dialog-wrapper">
+  <!-- Above StripZoomOverlay (2400) and zoom strip menus (2600) -->
+  <v-dialog
+    v-model="dialogOpen"
+    max-width="320"
+    :z-index="dialogZ"
+    content-class="clnc-dialog-wrapper"
+  >
     <div class="efs-popup-menu efs-popup-menu--wide clnc-dialog" @click.stop>
       <div class="efs-popup-header">{{ clearanceDialogTitle }}</div>
       <div class="efs-popup-subheader clnc-subheader">
@@ -304,8 +310,10 @@ async function fetchDepartureName() {
   }
 }
 
-/** Above v-dialog (default ~2400) — same menus as strip boxes */
-const menuZ = 2700
+/** Above StripZoomOverlay (2400) / zoom menus (2600) so CLR/DCL is usable while zoomed */
+const dialogZ = 2800
+/** Above this dialog — same menus as strip boxes */
+const menuZ = 2900
 const menuTarget = ref<[number, number]>([0, 0])
 const rwyMenuOpen = ref(false)
 const sidMenuOpen = ref(false)

@@ -167,6 +167,13 @@ check("GRP/S stand broadcast is not remarks", () => {
     assert.equal(isProtocolScratch("GRP/S/F38"), false)
 })
 
+check("GRP/M move-to-stand extracts stand and is not remarks", () => {
+    assert.equal(standFromGrpScratch("GRP/M/ESSA/F34"), "F34")
+    assert.equal(standFromGrpScratch("GRP/M/ESGG/16"), "16")
+    assert.equal(standFromGrpScratch("GRP/M/ESSA"), undefined)
+    assert.deepEqual(parseCombinedScratch("GRP/M/ESSA/F34"), { remarks: null, hp: null })
+})
+
 check("build roundtrip (no EST)", () => {
     assert.equal(buildCombinedScratch("URNAV", "Y2"), ".URNAV /Y2")
     assert.equal(buildCombinedScratch(undefined, "Y2"), "/Y2")

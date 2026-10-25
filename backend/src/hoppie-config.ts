@@ -1,6 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { isValidHoppieLogonCode } from "@vatefs/common"
+import { resolveEsaaPluginsDir } from "./euroscope-paths.js"
 
 /** Code read from ESAA/Plugins/TopSkyCPDLChoppieCode.txt */
 let fileLogonCode: string | null = null
@@ -15,7 +16,7 @@ export type HoppieLogonSource = "manual" | "file" | "none"
  * Reads logon code from TopSkyCPDLChoppieCode.txt and DCL templates from TopSkyCPDLC.txt.
  */
 export function loadHoppieConfig(euroscopeDir: string): { logonCode: string | null; dclTemplates: Map<string, string> } {
-    const pluginsDir = path.join(euroscopeDir, "ESAA", "Plugins")
+    const pluginsDir = resolveEsaaPluginsDir(euroscopeDir) ?? path.join(euroscopeDir, "ESAA", "Plugins")
 
     // Load logon code
     const codeFile = path.join(pluginsDir, "TopSkyCPDLChoppieCode.txt")

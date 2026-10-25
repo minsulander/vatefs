@@ -79,15 +79,19 @@ export function isProtocolScratch(scratch: string): boolean {
 }
 
 /**
- * Ground Radar arrival-stand broadcast embedded in the scratch pad.
- * Lists show this assignment immediately; the scratch token is the same value.
+ * Ground Radar stand broadcast embedded in the scratch pad.
+ * - GRP/S/<stand> — list/handoff stand token
+ * - GRP/M/<airport>/<stand> — move-to-stand (authoritative assignment)
  * Returns undefined when the scratch is not a stand broadcast (leave flight.stand).
  */
 export function standFromGrpScratch(scratch: string | undefined | null): string | undefined {
     if (!scratch) return undefined
-    const match = scratch.match(/GRP\/S\/([A-Z0-9]{1,6})/i)
-    if (!match?.[1]) return undefined
-    return match[1].toUpperCase()
+    const setMatch = scratch.match(/GRP\/S\/([A-Z0-9]{1,6})/i)
+    if (setMatch?.[1]) return setMatch[1].toUpperCase()
+    // GRP/M/ESSA/F34 — airport + stand (seen when controller moves ACFT on stand in GR)
+    const moveMatch = scratch.match(/GRP\/M\/[A-Z]{4}\/([A-Z0-9]{1,6})/i)
+    if (moveMatch?.[1]) return moveMatch[1].toUpperCase()
+    return undefined
 }
 
 function parseRemarksAndHp(body: string): {

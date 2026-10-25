@@ -11,6 +11,7 @@
 import fs from "fs"
 import path from "path"
 import { DEFAULT_TRANSITION_ALTITUDE_FT } from "@vatefs/common"
+import { resolveEsaaPluginFile } from "./euroscope-paths.js"
 
 let defaultTransitionAltitudeFt = DEFAULT_TRANSITION_ALTITUDE_FT
 /** ICAO → TA feet */
@@ -47,7 +48,9 @@ export function loadTopSkyAirspace(euroscopeDir: string): {
     topskyFileLoaded = false
     defaultTransitionAltitudeFt = DEFAULT_TRANSITION_ALTITUDE_FT
 
-    const file = path.join(euroscopeDir, "ESAA", "Plugins", "TopSkyAirspace.txt")
+    const file =
+        resolveEsaaPluginFile(euroscopeDir, "TopSkyAirspace.txt") ??
+        path.join(euroscopeDir, "ESAA", "Plugins", "TopSkyAirspace.txt")
     if (!fs.existsSync(file)) {
         console.log(`TopSkyAirspace.txt not found: ${file} (using TA ${defaultTransitionAltitudeFt} ft)`)
         return { defaultTaFt: defaultTransitionAltitudeFt, airportCount: 0 }
