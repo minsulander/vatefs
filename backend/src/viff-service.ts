@@ -206,6 +206,63 @@ export class ViffService {
         return this.sendDpi(callsign, `EOBT/${eobt}`)
     }
 
+    /** Claim CDM master for an airport (CDM `.cdm master` / setMaster). Auth via VatIRIS proxy. */
+    async setMasterAirport(airport: string, position: string): Promise<boolean> {
+        const url = new URL(`${this.baseUrl}/airport/setMaster`)
+        url.searchParams.set("airport", airport.toUpperCase())
+        url.searchParams.set("position", position)
+        try {
+            const res = await fetch(url.toString(), {
+                method: "POST",
+                signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+            })
+            if (!res.ok) {
+                const body = await res.text().catch(() => "")
+                console.error(`[VIFF] setMaster ${airport} failed ${res.status}: ${body}`)
+                return false
+            }
+            const body = (await res.text().catch(() => "")).trim().toLowerCase()
+            if (body && body !== "true" && !body.includes("true")) {
+                console.warn(`[VIFF] setMaster ${airport} unexpected body: ${body}`)
+                return false
+            }
+            console.log(`[VIFF] setMaster ${airport} → ${position}`)
+            return true
+        } catch (err) {
+            console.error(
+                `[VIFF] setMaster ${airport} error:`,
+                err instanceof Error ? err.message : err,
+            )
+            return false
+        }
+    }
+
+    /** Release CDM master for an airport (CDM `.cdm slave` / removeMaster). */
+    async removeMasterAirport(airport: string, position: string): Promise<boolean> {
+        const url = new URL(`${this.baseUrl}/airport/removeMaster`)
+        url.searchParams.set("airport", airport.toUpperCase())
+        url.searchParams.set("position", position)
+        try {
+            const res = await fetch(url.toString(), {
+                method: "POST",
+                signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+            })
+            if (!res.ok) {
+                const body = await res.text().catch(() => "")
+                console.error(`[VIFF] removeMaster ${airport} failed ${res.status}: ${body}`)
+                return false
+            }
+            console.log(`[VIFF] removeMaster ${airport} ← ${position}`)
+            return true
+        } catch (err) {
+            console.error(
+                `[VIFF] removeMaster ${airport} error:`,
+                err instanceof Error ? err.message : err,
+            )
+            return false
+        }
+    }
+
     /**
      * Set TOBT via CDM endpoint; fall back to DPI TOBT/… if the endpoint rejects.
      * Defaults: taxi 15 min; omit empty cdmSts (some proxies reject blank).

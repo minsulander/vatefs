@@ -7466,6 +7466,50 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "cdmMasterToggle": {
+            // ESSA CDM master claim/release via VatIRIS setMaster / removeMaster
+            const position = (staticConfig.myCallsign || "").trim()
+            if (!position) {
+                console.warn("[CDM] setMaster/removeMaster skipped — no myCallsign")
+                sendMessage(socket, buildCdmMasterStatusMessage())
+                break
+            }
+            if (!isEssaRolesConfig(staticConfig)) {
+                console.warn("[CDM] setMaster/removeMaster skipped — not ESSA roles config")
+                sendMessage(socket, buildCdmMasterStatusMessage())
+                break
+            }
+            const airport = "ESSA"
+            const amMaster =
+                !!cdmMasterEssa &&
+                cdmMasterEssa.toUpperCase() === position.toUpperCase()
+            console.log(
+                `[CDM] cdmMasterToggle ${amMaster ? "removeMaster" : "setMaster"} ${airport} as ${position}` +
+                    (cdmMasterEssa ? ` (current master: ${cdmMasterEssa})` : " (no master)"),
+            )
+            if (amMaster) {
+                const ok = await viffService.removeMasterAirport(airport, position)
+                if (ok) {
+                    setCdmMasterEssa(null)
+                    viffService.pollSoon()
+                } else {
+                    console.warn(`[CDM] removeMaster failed for ${airport}`)
+                    // Unchanged status — still ack so the client clears its loading state
+                    sendMessage(socket, buildCdmMasterStatusMessage())
+                }
+            } else {
+                const ok = await viffService.setMasterAirport(airport, position)
+                if (ok) {
+                    setCdmMasterEssa(position)
+                    viffService.pollSoon()
+                } else {
+                    console.warn(`[CDM] setMaster failed for ${airport}`)
+                    sendMessage(socket, buildCdmMasterStatusMessage())
+                }
+            }
+            break
+        }
+
         case "viffRea": {
             const reaStrip = store.getStrip(message.stripId)
             if (!reaStrip) break

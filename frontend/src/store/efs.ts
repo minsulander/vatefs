@@ -471,6 +471,19 @@ export const useEfsStore = defineStore("efs", () => {
 
     /** CDM master ATC callsign for ESSA (null = none). */
     const cdmMasterPosition = ref<string | null>(null)
+    /** True while setMaster/removeMaster round-trip is in flight. */
+    const cdmMasterPending = ref(false)
+    let cdmMasterPendingTimer: ReturnType<typeof setTimeout> | null = null
+    const CDM_MASTER_PENDING_MS = 15_000
+
+    function clearCdmMasterPending() {
+        cdmMasterPending.value = false
+        if (cdmMasterPendingTimer) {
+            clearTimeout(cdmMasterPendingTimer)
+            cdmMasterPendingTimer = null
+        }
+    }
+
     const cdmMasterIsMe = computed(() => {
         const mine = (myCallsign.value || '').trim().toUpperCase()
         const master = (cdmMasterPosition.value || '').trim().toUpperCase()
@@ -1131,6 +1144,7 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'cdmMasterStatus':
                         cdmMasterPosition.value = message.position?.trim() || null
+                        clearCdmMasterPending()
                         break
                     case 'atisUpdate':
                         applyAtisUpdate(message.airports)
@@ -2654,6 +2668,18 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'dclAction', action: 'logout' })
     }
 
+    /** Claim or release ESSA CDM master (vIFF setMaster / removeMaster). */
+    function cdmMasterToggle() {
+        if (cdmMasterPending.value) return
+        cdmMasterPending.value = true
+        if (cdmMasterPendingTimer) clearTimeout(cdmMasterPendingTimer)
+        cdmMasterPendingTimer = setTimeout(() => {
+            cdmMasterPendingTimer = null
+            cdmMasterPending.value = false
+        }, CDM_MASTER_PENDING_MS)
+        sendMessage({ type: 'cdmMasterToggle' })
+    }
+
     function dclSend(stripId: string, remarks: string, proactive = false) {
         sendMessage({ type: 'dclSend', stripId, remarks, ...(proactive ? { proactive: true } : {}) })
     }
@@ -3765,6 +3791,8 @@ export const useEfsStore = defineStore("efs", () => {
         cdmMasterPosition,
         cdmMasterIsMe,
         cdmMasterLabel,
+        cdmMasterPending,
+        cdmMasterToggle,
         viffRea,
         viffUpdateEobt,
         viffUpdateTobt,

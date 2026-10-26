@@ -269,13 +269,18 @@
         >{{ esggRwyLabel }}</span>
       </div>
       <v-spacer />
-      <!-- ESSA CDM master indicator (read-only) — left of config selector -->
-      <span
+      <!-- ESSA CDM master — claim/release via IRIS setMaster / removeMaster -->
+      <v-btn
         v-if="showCdmMasterIndicator"
-        class="cdm-master-status"
+        variant="text"
+        size="small"
+        class="cdm-master-btn"
         :class="efs.cdmMasterIsMe ? 'text-green' : 'text-grey'"
+        :loading="efs.cdmMasterPending"
+        :disabled="!efs.isController || efs.cdmMasterPending"
         :title="cdmMasterTooltip"
-      >{{ efs.cdmMasterLabel }}</span>
+        @click="onCdmMasterClick"
+      >{{ efs.cdmMasterLabel }}</v-btn>
       <!-- Config selector (chevron only — name lives in the menu) -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
@@ -1721,10 +1726,19 @@ function onDclClick() {
 }
 
 const cdmMasterTooltip = computed(() => {
-  if (efs.cdmMasterIsMe) return 'You are CDM master for ESSA (set in EuroScope CDM panel)'
-  if (efs.cdmMasterPosition) return `CDM master: ${efs.cdmMasterPosition}`
-  return 'No CDM master for ESSA'
+  if (!efs.isController) return 'CDM master (controllers only)'
+  if (efs.cdmMasterPending) return 'CDM master — updating…'
+  if (efs.cdmMasterIsMe) return 'You are CDM master for ESSA — click to release'
+  if (efs.cdmMasterPosition) {
+    return `CDM master: ${efs.cdmMasterPosition} — click to claim ESSA`
+  }
+  return 'No CDM master for ESSA — click to claim'
 })
+
+function onCdmMasterClick() {
+  if (!efs.isController || efs.cdmMasterPending) return
+  efs.cdmMasterToggle()
+}
 
 function requestFullScreen() {
   const element = document.body as any
@@ -2174,14 +2188,13 @@ span.essa-status-btn.esgg-roles-readonly {
   font-weight: 600;
 }
 
-.cdm-master-status {
-  font-size: calc(16px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
+.efs-top-bar :deep(.cdm-master-btn.v-btn) {
+  font-size: calc(16px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1)))) !important;
   font-weight: 600;
   letter-spacing: 0.3px;
-  line-height: 1;
-  padding-inline: calc(6px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
-  user-select: none;
-  white-space: nowrap;
+  text-transform: none;
+  min-width: 0 !important;
+  padding-inline: calc(6px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1)))) !important;
 }
 
 .dcl-other-status {
