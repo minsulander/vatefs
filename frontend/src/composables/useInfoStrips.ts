@@ -5,6 +5,7 @@ import {
   formatEssaRwyPdfName,
   getEssaRwyCombination,
   isEssaRnpStar,
+  isEssaIlsLikeRnpLetter,
   parseEssaRnpOpText,
   essaRnpBreakoutRunways,
   type EssaBreakoutRunway,
@@ -421,7 +422,7 @@ const BREAKOUT_RUNWAYS: BreakoutRunway[] = ['01L', '01R', '19L', '19R']
 
 /** Breakout phraseology by ARR runway (TWR briefing). */
 const BREAKOUT_BY_RUNWAY: Record<BreakoutRunway, Omit<BreakoutVariant, 'id' | 'mirror'>> = {
-  '01L': { runway: '01L', turn: 'LEFT', heading: '030', climbFt: 'XXXX' },
+  '01L': { runway: '01L', turn: 'LEFT', heading: '330', climbFt: 'XXXX' },
   '01R': { runway: '01R', turn: 'RIGHT', heading: '040', climbFt: 'XXXX' },
   '19L': { runway: '19L', turn: 'LEFT', heading: '150', climbFt: 'XXXX' },
   '19R': { runway: '19R', turn: 'RIGHT', heading: '230', climbFt: 'XXXX' },
@@ -459,21 +460,27 @@ function breakoutVariantForKey(key: string | null | undefined): BreakoutVariant 
   return rwy ? makeBreakoutVariant(rwy) : null
 }
 
-/** Auto breakout from current ESSA RWY config’s ARR runway. */
-function breakoutVariantForConfig(cfg: string | null | undefined): BreakoutVariant | null {
-  if (!cfg) return null
-  const map = getEssaMapInfo(cfg)
-  if (!map) return null
-  return breakoutVariantForKey(map.runway)
-}
-
 export function breakoutForceKey(v: BreakoutVariant): string {
   return v.runway
 }
 
+/** Prefer EoR RNP AR runway (01L/19R) over ILS-side when collecting hints. */
+function preferEorBreakoutHint(
+  current: string | null,
+  next: string | null | undefined,
+): string | null {
+  if (!next) return current
+  const n = next.toUpperCase()
+  if (!current) return n
+  const eor = (r: string) => r === '01L' || r === '19R'
+  if (eor(n) && !eor(current)) return n
+  return current
+}
+
 /**
- * When any ESSA arrival has an RNP APP STAR or RNP OP-TEXT2, return both
- * parallel breakout runways (EoR monitor) for the matched / config pair.
+ * When parallel APP (EoR) is detected — RNP STAR / OP-TEXT2 on traffic —
+ * return both breakout runways of the parallel pair (e.g. config 1 + RNP 01L
+ * → 01L+01R; config 2 + RNP 19R → 19L+19R). Never a single ARR-only strip.
  */
 export function getRnpAutoBreakoutRunways(): BreakoutRunway[] {
   const store = useEfsStore()
@@ -491,47 +498,49 @@ export function getRnpAutoBreakoutRunways(): BreakoutRunway[] {
 
     if (isEssaRnpStar(strip.star)) {
       found = true
-      hintRunway = hintRunway || strip.runway?.toUpperCase() || null
+      hintRunway = preferEorBreakoutHint(hintRunway, strip.runway)
     }
     const op = parseEssaRnpOpText(strip.remarks)
-    if (op) {
+    // RNP Z ≈ ILS — do not trigger parallel-APP breakouts
+    if (op && !isEssaIlsLikeRnpLetter(op.letter)) {
       found = true
-      if (op.runway) hintRunway = hintRunway || op.runway
+      hintRunway = preferEorBreakoutHint(hintRunway, op.runway ?? strip.runway)
     }
   }
   if (!found) return []
 
   const cfg = store.essaRwyConfigIdResolved
   const combo = cfg ? getEssaRwyCombination(cfg) : undefined
-  const rwys = essaRnpBreakoutRunways({
+  // Full parallel pair — do not AOR-filter (both breakouts needed for EoR)
+  return essaRnpBreakoutRunways({
     hintRunway,
     configArr: combo?.arr?.[0] ?? getEssaMapInfo(cfg || '')?.runway,
     configDep: combo?.dep?.[0],
   })
-  return rwys.filter((r) => essaCoversInfoRunway(store, r))
 }
 
-/** Active breakout variants (auto + each manually added runway). */
+/** Active breakout variants (auto parallel pair + each manually added runway). */
 export function getActiveBreakoutVariants(): BreakoutVariant[] {
   const store = useEfsStore()
   // ESSA roles layout, or RTC with an ESSA column (manual catalog / auto if config known)
   if (!store.essaRolesMode && !store.multiAirport) return []
   const out: BreakoutVariant[] = []
   const seen = new Set<string>()
-  const add = (v: BreakoutVariant | null) => {
-    if (!v || seen.has(v.id) || dismissed.value.has(v.id)) return
+  const add = (v: BreakoutVariant | null, opts?: { manual?: boolean }) => {
+    if (!v || seen.has(v.id)) return
+    // Auto respects dismiss; catalog-forced strips stay until the user closes them
+    // (dismiss removes the force key — they are not auto-cleared when RNP ends).
+    if (!opts?.manual && dismissed.value.has(v.id)) return
     seen.add(v.id)
     out.push(v)
   }
-  // RNP / EoR: auto both parallel RWYs when STAR or OP-TEXT2 indicates RNP
+  // Auto: both parallel RWYs when RNP / parallel APP detected
   for (const rwy of getRnpAutoBreakoutRunways()) {
     add(makeBreakoutVariant(rwy))
   }
-  // Default: config ARR breakout (when no RNP pair already covering)
-  const auto = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
-  if (auto && essaCoversInfoRunway(store, auto.runway)) add(auto)
+  // Manual catalog adds — keep placement; never cleared when auto pair drops
   for (const key of getInfoStripForcedKeys(BREAKOUT_INFO_KIND)) {
-    add(breakoutVariantForKey(key))
+    add(breakoutVariantForKey(key), { manual: true })
   }
   return out
 }
@@ -543,21 +552,13 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
   const autoVariant = computed<BreakoutVariant | null>(() => {
     if (!store.essaRolesMode && !store.multiAirport) return null
     const rnp = getRnpAutoBreakoutRunways()
-    if (rnp.length) return makeBreakoutVariant(rnp[0]!)
-    const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
-    if (v && !essaCoversInfoRunway(store, v.runway)) return null
-    return v
+    return rnp.length ? makeBreakoutVariant(rnp[0]!) : null
   })
 
-  /** All auto-shown breakout runways (RNP pair and/or config ARR). */
+  /** Auto-shown breakout runways — only when parallel APP (RNP) is detected. */
   const autoRunways = computed<BreakoutRunway[]>(() => {
     if (!store.essaRolesMode && !store.multiAirport) return []
-    const out: BreakoutRunway[] = [...getRnpAutoBreakoutRunways()]
-    const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
-    if (v && essaCoversInfoRunway(store, v.runway) && !out.includes(v.runway)) {
-      out.push(v.runway)
-    }
-    return out
+    return [...getRnpAutoBreakoutRunways()]
   })
 
   const variant = computed<BreakoutVariant | null>(() => {

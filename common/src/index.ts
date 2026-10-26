@@ -57,7 +57,9 @@ export type { EssaRwyCombination, EssaPhysicalRwyPair } from "./essa-rwy-config.
 export {
     normalizeEssaProcText,
     isEssaRnpStar,
+    isEssaIlsLikeRnpLetter,
     essaRnpLetterFromStar,
+    essaRnpIndicatorLabel,
     essaRnpCflLabel,
     parseEssaRnpOpText,
     isEssaRnpOpTextScratch,

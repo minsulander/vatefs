@@ -9,6 +9,7 @@ import {
     essaParallelBreakoutPair,
     essaRnpBreakoutRunways,
     normalizeEssaProcText,
+    essaRnpIndicatorLabel,
     essaRnpCflLabel,
 } from './essa-rnp.js'
 
@@ -18,7 +19,8 @@ assert.equal(normalizeEssaProcText('ALJAC·RNP·Y'), 'ALJAC RNP Y')
 assert.ok(isEssaRnpStar('ALJAC RNP Y'))
 assert.ok(isEssaRnpStar('ALJAC·RNP·Y'))
 assert.ok(isEssaRnpStar('INLUX RNP X'))
-assert.ok(isEssaRnpStar('RNP Z'))
+assert.ok(!isEssaRnpStar('RNP Z')) // ILS-like — no highlight
+assert.ok(!isEssaRnpStar('ALJAC RNP Z'))
 assert.ok(isEssaRnpStar('RNP'))
 assert.ok(!isEssaRnpStar('ELTOK1G'))
 assert.ok(!isEssaRnpStar(''))
@@ -60,17 +62,30 @@ assert.deepEqual(
     ['19L', '19R'],
 )
 assert.deepEqual(
+    essaRnpBreakoutRunways({ hintRunway: '01L' }),
+    ['01L', '01R'],
+)
+assert.deepEqual(
     essaRnpBreakoutRunways({ configArr: '01R', configDep: '01L' }),
     ['01L', '01R'],
 )
+assert.deepEqual(
+    essaRnpBreakoutRunways({ configArr: '19L', configDep: '19R' }),
+    ['19L', '19R'],
+)
+// No single ARR-only auto breakout without a parallel pair
+assert.deepEqual(essaRnpBreakoutRunways({ configArr: '26', configDep: '08' }), [])
 
-assert.equal(essaRnpCflLabel('ALJAC RNP Y', undefined), 'RNPY')
-assert.equal(essaRnpCflLabel(undefined, 'RNPX 19R'), 'RNPX')
-assert.equal(essaRnpCflLabel('RNP Z', undefined), 'RNPZ')
-assert.equal(essaRnpCflLabel('RNP', undefined), 'RNP')
-assert.equal(essaRnpCflLabel(undefined, 'RQ RNP'), undefined)
-assert.equal(essaRnpCflLabel(undefined, 'REQ RNP'), undefined)
-assert.equal(essaRnpCflLabel(undefined, 'REQUEST RNP'), undefined)
-assert.equal(essaRnpCflLabel(undefined, 'SLOW'), undefined)
+assert.equal(essaRnpIndicatorLabel('ALJAC RNP Y', undefined), 'RNP Y')
+assert.equal(essaRnpIndicatorLabel(undefined, 'RNPX 19R'), 'RNP X')
+assert.equal(essaRnpIndicatorLabel('RNP Z', undefined), undefined)
+assert.equal(essaRnpIndicatorLabel(undefined, 'RNP Z'), undefined)
+assert.equal(essaRnpIndicatorLabel('RNP', undefined), 'RNP')
+assert.equal(essaRnpIndicatorLabel(undefined, 'RQ RNP'), undefined)
+assert.equal(essaRnpIndicatorLabel(undefined, 'REQ RNP'), undefined)
+assert.equal(essaRnpIndicatorLabel(undefined, 'REQUEST RNP'), undefined)
+assert.equal(essaRnpIndicatorLabel(undefined, 'SLOW'), undefined)
+// Alias still works
+assert.equal(essaRnpCflLabel('ALJAC RNP Y', undefined), 'RNP Y')
 
 console.log('ok')

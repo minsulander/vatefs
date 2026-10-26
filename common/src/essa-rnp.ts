@@ -22,13 +22,29 @@ export function normalizeEssaProcText(text: string | undefined | null): string {
 }
 
 /**
- * True when a STAR / approach procedure name is an RNP APP procedure.
- * Matches "… RNP Y", "RNP Z", "RNP", "FOO·RNP·X", etc.
+ * RNP Z is practically identical to an ILS APP — do not highlight / do not
+ * treat as EoR parallel-APP for breakouts.
+ */
+export function isEssaIlsLikeRnpLetter(
+    letter: string | undefined | null,
+): boolean {
+    return !!letter && letter.toUpperCase() === 'Z'
+}
+
+/**
+ * True when a STAR / approach procedure name is an RNP APP procedure that
+ * should highlight (EoR). Matches "… RNP Y", "RNP", "FOO·RNP·X", etc.
+ * RNP Z is excluded (ILS-like).
  */
 export function isEssaRnpStar(star: string | undefined | null): boolean {
     const n = normalizeEssaProcText(star).toUpperCase()
     if (!n) return false
-    return /(?:^|\s)RNP(?:\s+[WXYZ])?(?:\s|$)/.test(n) || /(?:^|\s)RNP[WXYZ](?:\s|$)/.test(n)
+    if (!/(?:^|\s)RNP(?:\s+[WXYZ])?(?:\s|$)/.test(n) && !/(?:^|\s)RNP[WXYZ](?:\s|$)/.test(n)) {
+        return false
+    }
+    // Explicit RNP Z only → ILS-like, no highlight
+    if (isEssaIlsLikeRnpLetter(essaRnpLetterFromStar(star))) return false
+    return true
 }
 
 /** Letter from STAR name when present (e.g. "ALJAC RNP Y" → Y). */
@@ -94,22 +110,34 @@ export function isEssaRnpOpTextScratch(scratch: string | undefined | null): bool
 }
 
 /**
- * CFL cell label when CA is set and RNP APP is indicated (STAR and/or informed
- * OP-TEXT2), same slot as CAT2/CAT3. Compact: RNPY / RNPX / RNP.
+ * RNP APP indicator text (shown under the RWY cell — not in CFL).
+ * STAR and/or informed OP-TEXT2 → "RNP Y" / "RNP X" / "RNP".
  *
- * Does **not** paint for bare CA, nor for RQ/REQ/REQUEST RNP (pilot request only).
+ * Does **not** paint for RQ/REQ/REQUEST RNP (pilot request only).
  */
-export function essaRnpCflLabel(
+export function essaRnpIndicatorLabel(
     star: string | undefined | null,
     remarks: string | undefined | null,
 ): string | undefined {
     const op = parseEssaRnpOpText(remarks)
-    // Ignore pilot-request remarks entirely for CFL (RQ / REQ / REQUEST RNP)
+    // Ignore pilot-request remarks entirely (RQ / REQ / REQUEST RNP)
     const informed = op && !op.request ? op : null
+    // RNP Z in OP-TEXT alone is ILS-like — ignore
+    const informedHighlight =
+        informed && !isEssaIlsLikeRnpLetter(informed.letter) ? informed : null
     const fromStar = isEssaRnpStar(star)
-    if (!fromStar && !informed) return undefined
-    const letter = informed?.letter ?? essaRnpLetterFromStar(star)
-    return letter ? `RNP${letter}` : 'RNP'
+    if (!fromStar && !informedHighlight) return undefined
+    const letter = informedHighlight?.letter ?? essaRnpLetterFromStar(star)
+    if (isEssaIlsLikeRnpLetter(letter)) return undefined
+    return letter ? `RNP ${letter}` : 'RNP'
+}
+
+/** @deprecated Use essaRnpIndicatorLabel — kept as alias for older call sites. */
+export function essaRnpCflLabel(
+    star: string | undefined | null,
+    remarks: string | undefined | null,
+): string | undefined {
+    return essaRnpIndicatorLabel(star, remarks)
 }
 
 function normalizeBreakoutRwy(raw: string | undefined): EssaBreakoutRunway | undefined {
@@ -131,9 +159,21 @@ export function essaParallelBreakoutPair(
 }
 
 /**
- * Runways that should show breakout strips when RNP is detected.
- * Prefer the matched approach runway’s parallel pair; else ARR+DEP from config
- * when they form a parallel pair; else the config ARR if it is a breakout rwy.
+ * EoR RNP AR runway (parallel to ILS): 01L with config 1 / 19R with config 2.
+ * ILS main side is 01R / 19L.
+ */
+export function isEssaEorRnpRunway(runway: string | undefined | null): boolean {
+    if (!runway) return false
+    const u = runway.toUpperCase()
+    return u === '01L' || u === '19R'
+}
+
+/**
+ * Parallel breakout pair when RNP / EoR parallel approaches are detected.
+ * Always returns both RWYs of the pair (never a single ARR-only breakout).
+ *
+ * Prefer the matched approach runway’s pair (e.g. RNP on 01L → 01L+01R);
+ * else ARR/DEP from config when they form a parallel pair (configs 1 & 2).
  */
 export function essaRnpBreakoutRunways(opts: {
     hintRunway?: string | null
@@ -150,11 +190,6 @@ export function essaRnpBreakoutRunways(opts: {
     const fromDep = essaParallelBreakoutPair(dep)
     if (fromDep) return fromDep
 
-    if (arr && (BREAKOUT_RWYS as string[]).includes(arr)) {
-        return [arr as EssaBreakoutRunway]
-    }
-    if (dep && (BREAKOUT_RWYS as string[]).includes(dep)) {
-        return [dep as EssaBreakoutRunway]
-    }
+    // No single-runway fallback — auto breakouts only for parallel APP pairs
     return []
 }

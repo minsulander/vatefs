@@ -31,7 +31,7 @@ import {
     sidsMatch,
     withVectRemark,
     canonicalPushStartSectionId,
-    essaRnpCflLabel,
+    essaRnpIndicatorLabel,
 } from "@vatefs/common"
 import {
     collapseExpandersOnLeaveCdAllOrTsat,
@@ -3030,25 +3030,17 @@ export const useEfsStore = defineStore("efs", () => {
      * CFL shown on strip — only when a real CFL is set and it differs from XFL.
      * XFL === CFL → empty CFL cell (XFL cell carries the level).
      * Arrivals: CA is treated as empty (VA / CAT2/3 / OS still shown).
+     * ESSA RNP is shown under the RWY cell — not in CFL.
      */
     function displayCflForStrip(strip: FlightStrip): string {
         if (!hasRealAssignedCfl(strip)) return ''
         const formatted =
             formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
         if (!formatted) return ''
-        // Arrivals/locals: bare CA is hidden; ESSA RNP APP (STAR / informed OP-TEXT2)
-        // shows like CAT2/3. RQ/REQ RNP alone never paints.
-        if (
-            (strip.stripType === 'arrival' || strip.stripType === 'local') &&
-            formatted === 'CA'
-        ) {
-            const dest = (strip.ades || '').toUpperCase()
-            const orig = (strip.adep || '').toUpperCase()
-            if (dest === 'ESSA' || orig === 'ESSA') {
-                const rnp = essaRnpCflLabel(strip.star, strip.remarks)
-                if (rnp) return rnp
-            }
-            return ''
+        // Arrivals/locals: bare CA is hidden (RNP indicator lives under RWY).
+        // Also hide legacy RNP* values that used to be painted in this cell.
+        if (strip.stripType === 'arrival' || strip.stripType === 'local') {
+            if (formatted === 'CA' || formatted.startsWith('RNP')) return ''
         }
         // Display-string match (same level, any token form) + feet fallback
         const xflFormatted = displayXflForStrip(strip)
@@ -3057,6 +3049,18 @@ export const useEfsStore = defineStore("efs", () => {
         const xflFeet = xflFeetForStrip(strip)
         if (cflFeet != null && xflFeet != null && cflFeet === xflFeet) return ''
         return formatted
+    }
+
+    /**
+     * ESSA RNP APP text under the RWY box (e.g. "RNP Y") when STAR /
+     * informed OP-TEXT2 indicates RNP. Does not require CA. RQ/REQ alone never paints.
+     */
+    function displayRnpForStrip(strip: FlightStrip): string {
+        if (strip.stripType !== 'arrival' && strip.stripType !== 'local') return ''
+        const dest = (strip.ades || '').toUpperCase()
+        const orig = (strip.adep || '').toUpperCase()
+        if (dest !== 'ESSA' && orig !== 'ESSA') return ''
+        return essaRnpIndicatorLabel(strip.star, strip.remarks) ?? ''
     }
 
     /** No CFL selected → XFL shown in orange. */
@@ -3720,6 +3724,7 @@ export const useEfsStore = defineStore("efs", () => {
         xflFeetForStrip,
         displayXflForStrip,
         displayCflForStrip,
+        displayRnpForStrip,
         refreshEssaPreferredSids,
         preferSidForStrip,
         clearTrackSidForStrip,

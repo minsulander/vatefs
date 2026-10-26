@@ -1376,6 +1376,11 @@
             :title="rwyCellTitle"
             @click.stop="onRwyClick"
           >{{ strip.runway || 'RWY' }}</div>
+          <div
+            v-if="displayRnp && isArrLayout"
+            class="rwy-rnp-label"
+            title="RNP approach"
+          >{{ displayRnp }}</div>
 
           <template v-if="isArrLayout">
             <div v-if="!isCompactBay" class="cell cell-cto" :class="{ 'has-ctot': !!triangleTimeText }">
@@ -3607,6 +3612,8 @@ const displayXfl = computed(() => {
   return store.displayXflForStrip(props.strip)
 })
 const displayCfl = computed(() => store.displayCflForStrip(props.strip))
+/** ESSA RNP under RWY (plain text, e.g. "RNP Y") — not a framed cell. */
+const displayRnp = computed(() => store.displayRnpForStrip(props.strip))
 
 /** RTC: pink XFL for outbound REQUESTED_BY_ME or inbound REQUESTED_BY_OTHER. */
 const xflCoordPink = computed(
@@ -8663,9 +8670,10 @@ button.tobt-setby-pm:hover {
 }
 .strip-grid-arr .strip-main {
   grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  /* rnp = plain text under RWY box (no framed cell) */
   grid-template-areas:
     'cs  cs  .   .   .   hs  hp  rwy'
-    'cto std cfl ahd .   .   .   .';
+    'cto std cfl ahd .   .   .   rnp';
 }
 /* RTC: no HS (ESSA-only); STD|triangle; SID|AHD; SID framed; PEL slot = xfl area (pink C when pending) */
 .flight-strip.rtc-layout .strip-grid-arr .strip-main {
@@ -8769,6 +8777,26 @@ button.tobt-setby-pm:hover {
 .flight-strip.strip-compact .strip-main .cell-ahd { grid-area: ahd; }
 .flight-strip.strip-compact .strip-main .cell-sid { grid-area: sid; }
 .flight-strip.strip-compact .strip-main .cell-rwy { grid-area: rwy; }
+/* Compact: RNP to the left of RWY (steal one SID track when present) */
+.flight-strip.strip-compact .strip-grid-arr .strip-main:has(.rwy-rnp-label) {
+  grid-template-areas: 'cs cs std ahd sid sid rnp rwy';
+}
+.flight-strip.strip-compact.rtc-layout .strip-grid-arr .strip-main:has(.rwy-rnp-label) {
+  grid-template-areas: 'cs cs std ahd sid rnp rwy';
+}
+.flight-strip.strip-compact .rwy-rnp-label {
+  grid-area: rnp;
+  align-self: center;
+  justify-self: end;
+  height: auto;
+  width: 100%;
+  font-size: calc(10px * var(--strip-scale, 1));
+  line-height: 1;
+  padding: 0 calc(2px * var(--strip-scale, 1)) 0 0;
+  margin: 0;
+  transform: none;
+  z-index: 2;
+}
 .flight-strip.strip-compact .cell-compact-spacer {
   pointer-events: none;
   border: none !important;
@@ -8970,6 +8998,29 @@ button.tobt-setby-pm:hover {
   font-size: var(--fs-ghost);
   font-weight: 700;
   border: none !important;
+}
+/* Plain RNP text under the RWY box — no frame / not a cell */
+.rwy-rnp-label {
+  grid-area: rnp;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-ghost);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: #111;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  border: none !important;
+  outline: none !important;
+  margin: 0;
+  /* Nudge left — extra space before the action key */
+  padding: 0 calc(5px * var(--strip-scale, 1)) 0 0;
+  box-sizing: border-box;
+  transform: translateX(calc(-2px * var(--strip-scale, 1)));
+  background: transparent;
 }
 .cell-rwy.editable {
   cursor: pointer;
