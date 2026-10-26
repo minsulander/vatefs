@@ -18,7 +18,7 @@ function emptyStore(): WorkspaceStoreFile {
  * be snapshotted into workspace layout JSON.
  */
 export function sanitizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayout {
-  const sections: WorkspaceSection[] = layout.sections.map((s) => {
+  const mapped: WorkspaceSection[] = layout.sections.map((s) => {
     const out: WorkspaceSection = {
       instanceId: s.instanceId,
       sectionId: s.sectionId,
@@ -35,6 +35,18 @@ export function sanitizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayou
     if (s.height != null) out.height = s.height
     return out
   })
+
+  // One workspace header per logical sectionId (empty blockers keep unique instanceIds).
+  // Stops duplicate CD / INBOUND APP from older catalog bugs or corrupt saves.
+  const seenIds = new Set<string>()
+  const sections: WorkspaceSection[] = []
+  for (const s of mapped) {
+    if (s.sectionId) {
+      if (seenIds.has(s.sectionId)) continue
+      seenIds.add(s.sectionId)
+    }
+    sections.push(s)
+  }
 
   // ESSA: "CD ALL" only when CD is merged with TSAT / EOBT. Standalone pending → "CD".
   // Also retag standalone TSAT / EOBT as cd_all.cleared so it can merge with CD.

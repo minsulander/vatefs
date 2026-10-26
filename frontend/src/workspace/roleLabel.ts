@@ -103,11 +103,12 @@ export function compareEssaRoleFolderOrder(
 }
 
 /**
- * Layout-menu folders: every CD / GND / TWR / APP family combo (full families only —
+ * Layout-menu folders: every CD / GND / TWR family combo (full families only —
  * no separate E/N/W or E/W split folders). Partial splits from saved layouts are
  * merged in by the dialog.
  *
- * Omits CD+TWR without GND and CD+APP without GND — VATSIM top-down: GND covers CD.
+ * APP: only one option — CD + GND + TWR + APP (all roles), sorted absolute top.
+ * Omits CD+TWR without GND — VATSIM top-down: GND covers CD.
  */
 export function essaFamilyRoleCombinations(): EssaRoleCombination[] {
   const out: EssaRoleCombination[] = []
@@ -116,7 +117,9 @@ export function essaFamilyRoleCombinations(): EssaRoleCombination[] {
     const hasGnd = !!(mask & 2)
     const hasTwr = !!(mask & 4)
     const hasApp = !!(mask & 8)
-    if (hasCd && (hasTwr || hasApp) && !hasGnd) continue
+    if (hasCd && hasTwr && !hasGnd) continue
+    // Single APP folder: full delivery/ground/tower + APP (no APP-only / APP+TWR / …)
+    if (hasApp && !(hasCd && hasGnd && hasTwr)) continue
     const roles: string[] = []
     if (hasCd) roles.push('CD')
     if (hasGnd) roles.push(...ALL_GND)

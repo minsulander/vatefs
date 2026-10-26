@@ -155,8 +155,23 @@ function essaDefaultColumnPlan(
       columnCount: 4,
       columns: [
         [{ sectionId: 'inbound_acc', title: 'INBOUND ACC' }],
-        [{ sectionId: 'ctr_arr', title: 'TMA ARR' }],
-        [{ sectionId: 'ctr_dep', title: 'TMA DEP', addFromTop: false }],
+        [
+          {
+            sectionId: 'ctr_arr',
+            title: 'TMA ARR',
+            groupId: 'essa_tma',
+            member: 'arr',
+          },
+        ],
+        [
+          {
+            sectionId: 'ctr_dep',
+            title: 'TMA DEP',
+            groupId: 'essa_tma',
+            member: 'dep',
+            addFromTop: false,
+          },
+        ],
         [],
       ],
     }
@@ -166,8 +181,19 @@ function essaDefaultColumnPlan(
   // INBOUND ACC and TMA ARR / TMA DEP instead of INBOUND APP / CTR ARR / CTR DEP.
   if (hasApp && hasTwr) {
     const inboundAcc: SecDraft = { sectionId: 'inbound_acc', title: 'INBOUND ACC' }
-    const tmaArr: SecDraft = { sectionId: 'ctr_arr', title: 'TMA ARR' }
-    const tmaDep: SecDraft = { sectionId: 'ctr_dep', title: 'TMA DEP', addFromTop: false }
+    const tmaArr: SecDraft = {
+      sectionId: 'ctr_arr',
+      title: 'TMA ARR',
+      groupId: 'essa_tma',
+      member: 'arr',
+    }
+    const tmaDep: SecDraft = {
+      sectionId: 'ctr_dep',
+      title: 'TMA DEP',
+      groupId: 'essa_tma',
+      member: 'dep',
+      addFromTop: false,
+    }
 
     if (hasGnd && hasCd) {
       return {
@@ -431,7 +457,15 @@ export function annotateGroup(
   title: string,
   mode: WorkspaceCatalogMode = 'essa',
 ): Pick<WorkspaceSection, 'groupId' | 'member' | 'title'> {
+  const titleU = (title || '').toUpperCase().replace(/\s+/g, ' ').trim()
   for (const g of splitGroupsForMode(mode)) {
+    // ESSA TMA vs CTR share ctr_arr/ctr_dep — only match the title family
+    if (g.id === 'essa_tma') {
+      if (!(titleU === 'TMA' || titleU.startsWith('TMA '))) continue
+    }
+    if (g.id === 'essa_ctr') {
+      if (!(titleU === 'CTR' || titleU.startsWith('CTR '))) continue
+    }
     const mem = g.members.find((m) => m.sectionId === sectionId)
     if (mem) {
       return { groupId: g.id, member: mem.member, title: mem.title || title }
@@ -476,6 +510,45 @@ export function annotateCatalogSection(
     }
     if (sectionId === 'push_start') {
       return { groupId: 'push_start', title: title.trim() || 'PUSH BACK / START UP' }
+    }
+    // Never keep the bare YAML placeholder — catalog / defaults use INBOUND APP.
+    // Merged / split INBOUND TWR-* forms use inbound_twr.
+    if (sectionId === 'inbound') {
+      const t = title.trim().toUpperCase()
+      if (!t || t === 'INBOUND') {
+        return { title: 'INBOUND APP' }
+      }
+      if (t === 'INBOUND APP') {
+        return { title: 'INBOUND APP' }
+      }
+      if (/^INBOUND\s+TWR\b/.test(t)) {
+        return {
+          groupId: 'inbound_twr',
+          title: title.trim() || 'INBOUND TWR-E, TWR-W',
+        }
+      }
+    }
+    // TMA / CTR air dividers (shared YAML ids — title selects family)
+    if (sectionId === 'ctr_arr' || sectionId === 'ctr_dep') {
+      const isTma =
+        titleU === 'TMA' || titleU === 'TMA ARR' || titleU === 'TMA DEP'
+      const isCtr =
+        titleU === 'CTR' || titleU === 'CTR ARR' || titleU === 'CTR DEP'
+      if (isTma || isCtr) {
+        const groupId = isTma ? 'essa_tma' : 'essa_ctr'
+        const g = findSplitGroupById(groupId)
+        if (titleU === 'TMA' || titleU === 'CTR') {
+          return { groupId, title: isTma ? 'TMA' : 'CTR' }
+        }
+        const mem = g?.members.find((m) => m.sectionId === sectionId)
+        if (mem) {
+          return {
+            groupId,
+            member: mem.member,
+            title: mem.title,
+          }
+        }
+      }
     }
   }
 

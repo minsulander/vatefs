@@ -201,6 +201,13 @@ export function useWorkspace() {
       manuallyAddedRunwayIds.value = new Set()
       persistActiveLayout(activeLayout.value)
     } else {
+      // Re-sanitize in place so duplicate CD / INBOUND APP from older saves drop
+      const before = activeLayout.value
+      const cleaned = sanitizeWorkspaceLayout(before)
+      if (cleaned.sections.length !== before.sections.length) {
+        activeLayout.value = cleaned
+        persistActiveLayout(cleaned)
+      }
       syncRunwaySectionsFromServer(serverLayout)
     }
   }
@@ -1246,11 +1253,37 @@ export function useWorkspace() {
   ) {
     const layout = activeLayout.value
     if (!layout) return
-    // Already present?
-    if (layout.sections.some((s) => s.sectionId === sectionId)) return
     const store = useEfsStore()
     const isRwy = isEssaDynamicRunwaySectionId(sectionId)
     const catalogMode = store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa'
+    // Same YAML id, different catalog title (INBOUND APP ↔ TWR combined; TMA ↔ CTR) —
+    // retitle in place instead of no-oping.
+    const existing = layout.sections.find((s) => s.sectionId === sectionId)
+    if (existing) {
+      const anno = annotateCatalogSection(sectionId, title, catalogMode)
+      const sameTitle =
+        (existing.title || '').trim().toUpperCase() ===
+        (anno.title ?? title).trim().toUpperCase()
+      const sameGroup = (existing.groupId || '') === (anno.groupId || '')
+      const sameMember = (existing.member || '') === (anno.member || '')
+      if (sameTitle && sameGroup && sameMember) return
+      activeLayout.value = {
+        ...layout,
+        sections: layout.sections.map((s) =>
+          s.instanceId === existing.instanceId
+            ? {
+                ...s,
+                title: anno.title ?? title,
+                groupId: anno.groupId,
+                member: anno.member,
+                members: undefined,
+              }
+            : s,
+        ),
+      }
+      persistActiveLayout(activeLayout.value)
+      return
+    }
     // Place TMA in the same column as CTR / CTR ARR / CTR DEP when possible
     let col = column
     if (catalogMode === 'saab' && sectionId === 'tma') {
@@ -1303,9 +1336,30 @@ export function useWorkspace() {
     const layout = activeLayout.value
     if (!layout) return serverLayout.bays
 
+    // One header per logical sectionId across the whole board (corrupt saves /
+    // older catalog bugs could leave two CD or two INBOUND APP).
+    const seenSectionIds = new Set<string>()
+
     const cols: Bay[] = []
     for (let c = 0; c < layout.columnCount; c++) {
-      const sorted = sectionsInColumn(c)
+      const sorted = sectionsInColumn(c).filter((s) => {
+        if (s.sectionId) {
+          if (seenSectionIds.has(s.sectionId)) return false
+          seenSectionIds.add(s.sectionId)
+        }
+        // ESSA: never show bare "INBOUND" — drop orphan when server hid it (e.g. APP)
+        // or when the title would still be the YAML placeholder.
+        if (s.sectionId !== 'inbound') return true
+        const wsTitle = (s.title || '').trim().toUpperCase()
+        const isTwrForm =
+          s.groupId === 'inbound_twr' || /^INBOUND\s+TWR\b/.test(wsTitle)
+        const serverSec = findServerSection(serverLayout, 'inbound')
+        // APP role hides INBOUND APP on the server; keep an explicit TWR-* catalog
+        // placement, but drop APP / bare orphans.
+        if (!serverSec) return isTwrForm
+        const live = (serverSec.title || s.title || '').trim().toUpperCase()
+        return live !== '' && live !== 'INBOUND'
+      })
       // Prefer observed height; fall back to live DOM so first paint still clamps.
       let bodyH = columnBodyHeightByCol.value[c] ?? 0
       if (bodyH <= 0) {
@@ -1361,11 +1415,41 @@ export function useWorkspace() {
           }
         }
         const serverSec = findServerSection(serverLayout, s.sectionId)
-        // Split/merged workspace titles (TSAT / EOBT, …) win over YAML; else live server title
-        const title =
-          s.member || s.groupId
-            ? (s.title ?? serverSec?.title ?? s.sectionId)
-            : (serverSec?.title ?? s.title ?? s.sectionId)
+        // Runway + GND peer lists stay live from the server. INBOUND APP vs
+        // INBOUND TWR-E,TWR-W share YAML id `inbound` — keep the workspace
+        // catalog title so the server role retitle cannot turn TWR into APP.
+        const liveServerTitle =
+          s.sectionId === 'inbound_gnd' ||
+          s.sectionId.startsWith('inbound_twr') ||
+          s.sectionId.startsWith('inbound_gnd_') ||
+          isEssaDynamicRunwaySectionId(s.sectionId)
+        let title = liveServerTitle
+          ? (serverSec?.title ?? s.title ?? s.sectionId)
+          : (s.title ?? serverSec?.title ?? s.sectionId)
+        if (s.sectionId === 'inbound') {
+          const wsU = (s.title || '').trim().toUpperCase()
+          const isTwrForm =
+            s.groupId === 'inbound_twr' || /^INBOUND\s+TWR\b/.test(wsU)
+          if (isTwrForm) {
+            // Prefer live peer list when server is in GND-only TWR form
+            const srv = (serverSec?.title || '').trim()
+            title =
+              srv.toUpperCase().startsWith('INBOUND TWR')
+                ? srv
+                : s.title || 'INBOUND TWR-E, TWR-W'
+          } else if (wsU === 'INBOUND APP' || !wsU || wsU === 'INBOUND') {
+            title = 'INBOUND APP'
+          } else {
+            title = s.title || serverSec?.title || 'INBOUND APP'
+          }
+        }
+        // ESSA safety: never paint the empty placeholder label
+        if (
+          s.sectionId === 'inbound' &&
+          (title || '').trim().toUpperCase() === 'INBOUND'
+        ) {
+          title = 'INBOUND APP'
+        }
         return {
           id: s.sectionId,
           title,
@@ -1437,22 +1521,41 @@ export function useWorkspace() {
     }[] = []
     const seen = new Set<string>()
     const push = (sectionId: string, title: string, flow?: 'arrival' | 'departure') => {
-      // OTHER: allow same sectionId with different titles (DEP vs PENDING CLR)
-      const seenKey = mode === 'saab' ? `${sectionId}::${title}` : sectionId
+      // Allow same sectionId with different titles (ESSA TMA ARR vs CTR ARR; OTHER DEP vs PENDING CLR)
+      const seenKey = `${sectionId}::${title}`
       if (seen.has(seenKey)) return
       // YAML placeholders — physical pairs are listed separately
       if (mode === 'essa' && (sectionId === 'arr_runway' || sectionId === 'dep_runway')) return
       seen.add(seenKey)
-      // Prefer catalog title for OTHER fixed labels (never inherit ESSA YAML names)
+      // Prefer catalog title for fixed labels (never inherit live YAML / retitled names)
+      const essaAirDividerTitle =
+        title === 'TMA' ||
+        title === 'TMA ARR' ||
+        title === 'TMA DEP' ||
+        title === 'CTR' ||
+        title === 'CTR ARR' ||
+        title === 'CTR DEP'
       const preferCatalog =
-        mode === 'saab' &&
-        (sectionId === 'pending_dep' ||
-          sectionId === 'cleared' ||
-          sectionId === 'ctr_arr' ||
-          sectionId === 'tma' ||
-          sectionId === 'ctr' ||
-          sectionId === 'taxi' ||
-          sectionId === 'push_start')
+        (mode === 'saab' &&
+          (sectionId === 'pending_dep' ||
+            sectionId === 'cleared' ||
+            sectionId === 'ctr_arr' ||
+            sectionId === 'tma' ||
+            sectionId === 'ctr' ||
+            sectionId === 'taxi' ||
+            sectionId === 'push_start')) ||
+        (mode === 'essa' &&
+          ((sectionId === 'ctr_arr' || sectionId === 'ctr_dep') && essaAirDividerTitle)) ||
+        (mode === 'essa' &&
+          (title === 'CD ALL' ||
+            title === 'INBOUND APP' ||
+            title === 'INBOUND TWR-E, TWR-W' ||
+            title.startsWith('INBOUND TWR-') ||
+            title.startsWith('INBOUND GND') ||
+            title === 'INBOUND ACC' ||
+            title === 'TSAT / EOBT' ||
+            title === 'TSAT' ||
+            title === 'EOBT'))
       // TMA / CTR / DEP cover multiple server ids — overridden below for saab specials
       let present = presentIds.has(sectionId)
       if (mode === 'saab' && sectionId === 'ctr_arr' && title === 'TMA / CTR') {
@@ -1464,6 +1567,76 @@ export function useWorkspace() {
       }
       if (mode === 'saab' && sectionId === 'pending_dep' && title === 'DEP') {
         present = presentIds.has('pending_dep') || presentIds.has('cleared')
+      }
+      // ESSA: TMA vs CTR share YAML ids — grey by title family, not bare sectionId
+      if (
+        mode === 'essa' &&
+        (sectionId === 'ctr_arr' || sectionId === 'ctr_dep') &&
+        essaAirDividerTitle
+      ) {
+        const wsSecs = activeLayout.value?.sections ?? []
+        const wantTma = title.startsWith('TMA')
+        const wantCtr = title.startsWith('CTR')
+        const matchesFamily = (s: { title?: string; groupId?: string; member?: string; sectionId?: string | null }) => {
+          const tu = (s.title || '').toUpperCase().replace(/\s+/g, ' ').trim()
+          if (wantTma) {
+            if (s.groupId === 'essa_tma') return true
+            return tu === 'TMA' || tu.startsWith('TMA ')
+          }
+          if (wantCtr) {
+            if (s.groupId === 'essa_ctr') return true
+            return tu === 'CTR' || tu.startsWith('CTR ')
+          }
+          return false
+        }
+        if (title === 'TMA' || title === 'CTR') {
+          // Merged header present, or both ARR+DEP slices of that family
+          const fam = wsSecs.filter(matchesFamily)
+          const hasMerged = fam.some((s) => !s.member)
+          const hasArr = fam.some(
+            (s) => s.member === 'arr' || (s.sectionId === 'ctr_arr' && !!s.member),
+          )
+          const hasDep = fam.some(
+            (s) => s.member === 'dep' || (s.sectionId === 'ctr_dep' && !!s.member),
+          )
+          present = hasMerged || (hasArr && hasDep)
+        } else if (title.endsWith(' ARR')) {
+          present = wsSecs.some(
+            (s) =>
+              matchesFamily(s) &&
+              (s.member === 'arr' ||
+                !s.member ||
+                (s.sectionId === 'ctr_arr' && !!s.member)),
+          )
+        } else if (title.endsWith(' DEP')) {
+          present = wsSecs.some(
+            (s) =>
+              matchesFamily(s) &&
+              (s.member === 'dep' ||
+                !s.member ||
+                (s.sectionId === 'ctr_dep' && !!s.member)),
+          )
+        }
+      }
+      // ESSA: inbound APP vs combined TWR share YAML id — grey by catalog title
+      if (mode === 'essa' && sectionId === 'inbound') {
+        const wsSecs = activeLayout.value?.sections ?? []
+        const inbound = wsSecs.find((s) => s.sectionId === 'inbound')
+        if (!inbound) {
+          present = false
+        } else {
+          const tu = (inbound.title || '').toUpperCase().replace(/\s+/g, ' ').trim()
+          const onBoardIsTwr =
+            inbound.groupId === 'inbound_twr' || /^INBOUND\s+TWR\b/.test(tu)
+          if (title === 'INBOUND APP') present = !onBoardIsTwr
+          else if (title === 'INBOUND TWR-E, TWR-W' || title.startsWith('INBOUND TWR'))
+            present = onBoardIsTwr
+          else present = true
+        }
+      }
+      // ESSA: CD ALL covers standalone CD (pending_dep) on the board
+      if (mode === 'essa' && sectionId === 'pending_dep' && title === 'CD ALL') {
+        present = presentIds.has('pending_dep')
       }
       out.push({
         sectionId,
@@ -1564,15 +1737,15 @@ export function useWorkspace() {
       }
     } else {
       for (const entry of ESSA_CATALOG_SECTIONS) {
+        // Never list bare YAML "CD" / "INBOUND" — catalog has CD ALL + INBOUND APP / TWR
+        const t = entry.title.trim().toUpperCase()
+        if (t === 'CD' || t === 'INBOUND') continue
         push(entry.sectionId, entry.title)
       }
+      // Physical runway pairs only — do NOT dump server bay sections (YAML titles
+      // like bare "CD" / "INBOUND" duplicated catalog entries and confused the menu).
       for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
         push(essaRunwaySectionId(pair), formatEssaRunwaySectionTitle(pair))
-      }
-      for (const bay of serverLayout.bays) {
-        for (const sec of bay.sections) {
-          push(sec.id, sec.title)
-        }
       }
     }
     return out

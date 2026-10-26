@@ -28,13 +28,15 @@ layout:
           title: INBOUND ACC
           visibleFor: [APP]
         inbound:
-          # TWR → titled INBOUND APP; ETN≤15 gate (ESSA override) + ETN sort.
+          # Placeholder title only — runtime always resolves to INBOUND APP (TWR)
+          # or INBOUND TWR-E, TWR-W (GND-only). Never shown as bare "INBOUND".
           # Hidden when APP family is also selected (inbound-from-yourself).
-          # GND → INBOUND TWR-* (near/tower-bound rules, no ETN gate; appearance order).
+          # TWR: ETN≤15 gate + ETN sort. GND: tower-bound rules, appearance order.
           title: INBOUND
           visibleFor: [GND, TWR]
         ctr_arr:
-          # TWR without APP → CTR ARR; APP board retitles to TMA ARR (same strip home).
+          # Same strip home for CTR ARR (TWR) and TMA ARR (APP / CD+GND+TWR+APP default).
+          # filterEssaLayout retitles to TMA ARR when APP family is selected.
           title: CTR ARR
           visibleFor: [TWR, APP]
         arr_runway:
@@ -52,7 +54,8 @@ layout:
     bay2:
       sections:
         ctr_dep:
-          # TWR without APP → CTR DEP; APP board retitles to TMA DEP (same strip home).
+          # Same strip home for CTR DEP (TWR) and TMA DEP (APP / CD+GND+TWR+APP default).
+          # filterEssaLayout retitles to TMA DEP when APP family is selected.
           title: CTR DEP
           addFromTop: false
           visibleFor: [TWR, APP]

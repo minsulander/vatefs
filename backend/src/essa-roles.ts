@@ -325,10 +325,11 @@ export function activeOnlineTwrRoles(onlineCallsigns: Iterable<string>): EssaPos
  * - TWR covered → INBOUND APP (arrivals from approach)
  * - GND-only → INBOUND TWR-E, TWR-W (always both physical TWRs; stable vs flaky
  *   online detection — e.g. ARR 01R / TWR-E linked still lists TWR-W and TWR-E)
+ * Never returns the bare YAML placeholder "INBOUND".
  */
 export function resolveInboundTitle(
     roles: EssaPositionRole[],
-    yamlTitle: string,
+    _yamlTitle: string,
     _activeTwrPeers?: EssaPositionRole[]
 ): string {
     const families = familiesFromRoles(roles)
@@ -336,7 +337,8 @@ export function resolveInboundTitle(
     if (families.has('GND')) {
         return `INBOUND ${ALL_TWR_POSITIONS.join(', ')}`
     }
-    return yamlTitle
+    // Visible only for GND/TWR; never surface the empty placeholder title
+    return 'INBOUND APP'
 }
 
 /**

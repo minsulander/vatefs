@@ -9,14 +9,21 @@
  * DEP splits → PENDING CLR + CLEARED.
  */
 
-/** Full ESSA placeable-section catalog (role-independent). */
+/**
+ * Full ESSA placeable-section catalog (role-independent).
+ * TMA ARR/DEP and CTR ARR/DEP share YAML ids (`ctr_arr` / `ctr_dep`) — title selects
+ * the header label; APP default layout uses TMA; TWR-only uses CTR.
+ */
 export const ESSA_CATALOG_SECTIONS: readonly { sectionId: string; title: string }[] = [
   { sectionId: 'inbound_acc', title: 'INBOUND ACC' },
-  { sectionId: 'inbound', title: 'INBOUND' },
+  { sectionId: 'inbound', title: 'INBOUND APP' },
+  { sectionId: 'inbound', title: 'INBOUND TWR-E, TWR-W' },
   { sectionId: 'inbound_twr_e', title: 'INBOUND TWR-E' },
   { sectionId: 'inbound_twr_w', title: 'INBOUND TWR-W' },
+  { sectionId: 'ctr_arr', title: 'TMA' },
   { sectionId: 'ctr_arr', title: 'TMA ARR' },
   { sectionId: 'ctr_dep', title: 'TMA DEP' },
+  { sectionId: 'ctr_arr', title: 'CTR' },
   { sectionId: 'ctr_arr', title: 'CTR ARR' },
   { sectionId: 'ctr_dep', title: 'CTR DEP' },
   { sectionId: 'inbound_gnd', title: 'INBOUND GND-E, GND-N, GND-W' },
@@ -32,6 +39,7 @@ export const ESSA_CATALOG_SECTIONS: readonly { sectionId: string; title: string 
   { sectionId: 'cleared', title: 'TSAT / EOBT' },
   { sectionId: 'cleared_tsat', title: 'TSAT' },
   { sectionId: 'cleared_eobt', title: 'EOBT' },
+  /** Merged CD + TSAT/EOBT — split → CD + TSAT / EOBT (do not list bare YAML "CD") */
   { sectionId: 'pending_dep', title: 'CD ALL' },
 ] as const
 

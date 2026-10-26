@@ -11,6 +11,10 @@ export type SplitGroupId =
   | 'cd_cleared'
   | 'push_start'
   | 'taxiway'
+  /** ESSA: TMA → TMA ARR + TMA DEP (same YAML ids as CTR; title selects family) */
+  | 'essa_tma'
+  /** ESSA: CTR → CTR ARR + CTR DEP */
+  | 'essa_ctr'
   /** OTHER: TMA / CTR → TMA + CTR */
   | 'saab_ctr_tma'
   /** OTHER: CTR → CTR ARR + CTR DEP (child of saab_ctr_tma) */

@@ -155,6 +155,50 @@ export const ESSA_SPLIT_GROUPS: SplitGroupDef[] = [
       { member: 'arr', sectionId: 'taxi_arr', title: 'TAXIWAY ARR' },
     ],
   },
+  /**
+   * TMA ARR + TMA DEP ↔ TMA. Shares YAML ids with CTR; titles / groupId select family.
+   */
+  {
+    id: 'essa_tma',
+    mergedTitle: 'TMA',
+    mergedSectionIds: ['ctr_arr', 'ctr_dep'],
+    members: [
+      {
+        member: 'arr',
+        sectionId: 'ctr_arr',
+        title: 'TMA ARR',
+        stripSectionIds: ['ctr_arr'],
+      },
+      {
+        member: 'dep',
+        sectionId: 'ctr_dep',
+        title: 'TMA DEP',
+        stripSectionIds: ['ctr_dep'],
+      },
+    ],
+  },
+  /**
+   * CTR ARR + CTR DEP ↔ CTR. Same strip homes as TMA; titles / groupId select family.
+   */
+  {
+    id: 'essa_ctr',
+    mergedTitle: 'CTR',
+    mergedSectionIds: ['ctr_arr', 'ctr_dep'],
+    members: [
+      {
+        member: 'arr',
+        sectionId: 'ctr_arr',
+        title: 'CTR ARR',
+        stripSectionIds: ['ctr_arr'],
+      },
+      {
+        member: 'dep',
+        sectionId: 'ctr_dep',
+        title: 'CTR DEP',
+        stripSectionIds: ['ctr_dep'],
+      },
+    ],
+  },
 ]
 
 /**
@@ -485,6 +529,17 @@ function isInboundTwrMergedHeader(section: WorkspaceSection): boolean {
   return /^INBOUND\s+TWR\b/.test(t)
 }
 
+/** Title family for ESSA air dividers that share ctr_arr / ctr_dep. */
+function essaAirDividerFamily(
+  section: WorkspaceSection,
+): 'tma' | 'ctr' | undefined {
+  const t = (section.title || '').toUpperCase().replace(/\s+/g, ' ').trim()
+  if (!t) return undefined
+  if (t === 'TMA' || t.startsWith('TMA ')) return 'tma'
+  if (t === 'CTR' || t.startsWith('CTR ')) return 'ctr'
+  return undefined
+}
+
 /**
  * Resolve split group for a workspace section.
  * Prefer `groupId` (unique across configs). Without it, `mode` scopes the
@@ -505,6 +560,13 @@ export function splitGroupForSection(
     if (!isMember && !isMerged) return false
     if (g.id === 'inbound_twr' && isMerged && !section.member) {
       return isInboundTwrMergedHeader(section)
+    }
+    // ctr_arr / ctr_dep are shared by ESSA TMA and CTR families — title selects
+    if (g.id === 'essa_tma' || g.id === 'essa_ctr') {
+      const fam = essaAirDividerFamily(section)
+      if (g.id === 'essa_tma') return fam === 'tma'
+      if (g.id === 'essa_ctr') return fam === 'ctr'
+      return false
     }
     // Ambiguous sectionIds (pending_dep / cleared / ctr_*) need groupId or mode
     if (!mode && (section.sectionId === 'pending_dep' || section.sectionId === 'cleared')) {
@@ -541,11 +603,13 @@ export function canSplitSection(
   if (g.id === 'saab_runway' || g.id === 'saab_taxi') {
     return false
   }
-  // Top-level merged OTHER headers (TMA / CTR, CTR, DEP)
+  // Top-level merged OTHER headers (TMA / CTR, CTR, DEP) + ESSA TMA / CTR
   if (
     g.id === 'saab_ctr_tma' ||
     g.id === 'saab_ctr' ||
-    g.id === 'saab_clearance'
+    g.id === 'saab_clearance' ||
+    g.id === 'essa_tma' ||
+    g.id === 'essa_ctr'
   ) {
     return section.groupId === g.id && !section.member
   }
