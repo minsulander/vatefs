@@ -264,6 +264,13 @@
         >{{ esggRwyLabel }}</span>
       </div>
       <v-spacer />
+      <!-- ESSA CDM master indicator (read-only) — left of config selector -->
+      <span
+        v-if="showCdmMasterIndicator"
+        class="cdm-master-status"
+        :class="efs.cdmMasterIsMe ? 'text-green' : 'text-grey'"
+        :title="cdmMasterTooltip"
+      >{{ efs.cdmMasterLabel }}</span>
       <!-- Config selector (chevron only — name lives in the menu) -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
@@ -1637,9 +1644,21 @@ const dclAirportTaken = computed(
   () => !dclConnected.value && !!efs.dclAirportStationOnline,
 )
 
-/** DCL chrome only for the CD / DEL controller */
-/** DCL chrome only for CD/DEL — never in RTC (per-column / voice only) */
-const showDclControls = computed(() => hasCdRole.value && !efs.multiAirport)
+/**
+ * DCL chrome for CD/DEL — never in RTC.
+ * Stay visible while Hoppie/DCL remains connected even if CD role is dropped.
+ */
+const showDclControls = computed(
+  () => (hasCdRole.value || dclConnected.value) && !efs.multiAirport,
+)
+
+/**
+ * ESSA CDM master indicator: same sticky rule as DCL —
+ * show for CD, or keep showing while we are still CDM master.
+ */
+const showCdmMasterIndicator = computed(
+  () => efs.essaRolesMode && !efs.multiAirport && (hasCdRole.value || efs.cdmMasterIsMe),
+)
 
 const dclOtherTooltip = computed(() => {
   const apt = efs.dclAirport || 'airport'
@@ -1687,6 +1706,12 @@ function onDclClick() {
     efs.dclLogin()
   }
 }
+
+const cdmMasterTooltip = computed(() => {
+  if (efs.cdmMasterIsMe) return 'You are CDM master for ESSA (set in EuroScope CDM panel)'
+  if (efs.cdmMasterPosition) return `CDM master: ${efs.cdmMasterPosition}`
+  return 'No CDM master for ESSA'
+})
 
 function requestFullScreen() {
   const element = document.body as any
@@ -2134,6 +2159,16 @@ span.essa-status-btn.esgg-roles-readonly {
 .efs-top-bar :deep(.dcl-btn.v-btn) {
   font-size: calc(16px * var(--tb)) !important;
   font-weight: 600;
+}
+
+.cdm-master-status {
+  font-size: calc(16px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: 1;
+  padding-inline: calc(6px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
+  user-select: none;
+  white-space: nowrap;
 }
 
 .dcl-other-status {

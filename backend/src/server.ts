@@ -68,6 +68,7 @@ import type {
     FeedsStatus,
     FeedStatusItem,
     DclStatusMessage,
+    CdmMasterStatusMessage,
     HoppieMessage,
     AtisUpdateMessage,
     EssaSepIndicatorsMessage,
@@ -2073,6 +2074,33 @@ function sendDclStatus(socket: WebSocket) {
     sendMessage(socket, buildDclStatusMessage())
 }
 
+/** Current CDM master ATC callsign for ESSA (from vIFF GET /airport), or null. */
+let cdmMasterEssa: string | null = null
+
+function buildCdmMasterStatusMessage(): CdmMasterStatusMessage {
+    return {
+        type: "cdmMasterStatus",
+        airport: "ESSA",
+        position: cdmMasterEssa,
+    }
+}
+
+function setCdmMasterEssa(position: string | null, opts?: { forceBroadcast?: boolean }) {
+    const next = position?.trim() || null
+    if (!opts?.forceBroadcast && next === cdmMasterEssa) return
+    cdmMasterEssa = next
+    broadcast(buildCdmMasterStatusMessage())
+}
+
+function sendCdmMasterStatus(socket: WebSocket) {
+    sendMessage(socket, buildCdmMasterStatusMessage())
+}
+
+function applyCdmMastersFromPoll(masters: { icao: string; position: string }[]) {
+    const entry = masters.find((m) => m.icao.toUpperCase() === "ESSA")
+    setCdmMasterEssa(entry?.position ?? null)
+}
+
 function stopDclAirportOnlinePolling() {
     if (dclAirportOnlineTimer) {
         clearInterval(dclAirportOnlineTimer)
@@ -2853,21 +2881,6 @@ function isCdOrDelRole(): boolean {
 }
 
 /**
- * When CD/DEL role is lost (e.g. ESSA auto-roles drop CD after another GND opens),
- * disconnect Hoppie/DCL so the session does not linger after the DCL/CDM UI disappears.
- */
-function maybeAutoDisconnectDclWhenNoCdRole(reason: string) {
-    if (!hoppieService) return
-    if (isCdOrDelRole()) return
-    console.log(`[DCL] Auto-disconnect (${reason}): CD/DEL role no longer held`)
-    hoppieService.logout()
-    hoppieService = null
-    // Match manual logout: drop to available immediately, then recheck Hoppie reachability
-    updateDclStatus("available")
-    recalculateDclAvailability()
-}
-
-/**
  * ESSA CDM: after DCL WILCO/DONE, set TSAC (communicated TSAT) from the live TSAT
  * that was included in the clearance — same value controllers set via the TSAC box.
  */
@@ -3505,7 +3518,6 @@ function reprocessAllStripsForRoleChange(reason: string) {
     store.reprocessAllFlights()
     // ESSA / ESGG auto roles may have changed — push status + remapped layout before refresh
     if (isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)) {
-        maybeAutoDisconnectDclWhenNoCdRole(reason)
         broadcastStatus()
         broadcastLayout()
     }
@@ -6903,7 +6915,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(
                     `[ESSA] Roles ${message.manual ? "manual" : "auto"}: ${(staticConfig.essaRoles ?? []).join(", ")}`
                 )
-                maybeAutoDisconnectDclWhenNoCdRole("ESSA roles changed")
                 store.reprocessAllFlights()
                 broadcastStatus()
                 broadcastLayout()
@@ -6921,7 +6932,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(
                     `[ESGG] Roles (auto covering): ${(staticConfig.esggRoles ?? []).join(", ")}`,
                 )
-                maybeAutoDisconnectDclWhenNoCdRole("ESGG roles changed")
                 store.reprocessAllFlights()
                 broadcastStatus()
                 broadcastLayout()
@@ -7811,6 +7821,7 @@ wsServer.on("connection", (socket) => {
     sendRwyFlags(socket)
     sendStatus(socket)
     sendDclStatus(socket)
+    sendCdmMasterStatus(socket)
     sendUserSettings(socket)
     sendAtisUpdate(socket)
     sendEssaSepIndicators(socket)
@@ -9072,7 +9083,6 @@ udpIn.on("message", (msg, rinfo) => {
                 console.log(
                     `[ESGG] Covering: ${esggRolesNow || "(none)"} | layout staffed: ${esggLayoutNow || "(none)"}`,
                 )
-                maybeAutoDisconnectDclWhenNoCdRole("ESGG covering roles from myselfUpdate")
                 store.reprocessAllFlights()
                 broadcastLayout()
                 broadcastRefresh("ESGG covering/layout roles updated")
@@ -9586,6 +9596,8 @@ function isDepartingIfrStrip(strip: FlightStrip): boolean {
 }
 
 function applyViffPoll(result: ViffPollResult) {
+    applyCdmMastersFromPoll(result.masters ?? [])
+
     const ctotByCs = new Map<string, { ctot: string; reason?: string }>()
     for (const entry of result.restricted) {
         ctotByCs.set(entry.callsign.toUpperCase(), {

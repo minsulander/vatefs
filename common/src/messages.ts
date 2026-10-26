@@ -172,6 +172,13 @@ export interface DclStatusMessage {
     dclAirport?: string
 }
 
+/** CDM master for an airport (vIFF GET /airport). position = ATC callsign or null if none. */
+export interface CdmMasterStatusMessage {
+    type: 'cdmMasterStatus'
+    airport: string
+    position: string | null
+}
+
 export interface HoppieMessage {
     type: 'hoppieMessage'
     from: string
@@ -359,7 +366,7 @@ export interface OpenVatIrisSignInMessage {
     detail?: string
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | CdmMasterStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage
 
 // Client -> Server messages
 
@@ -825,7 +832,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
     const type = (data as { type: unknown }).type
     return type === 'layout' || type === 'strip' || type === 'stripDelete' ||
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
-           type === 'refresh' || type === 'status' || type === 'dclStatus' ||
+           type === 'refresh' || type === 'status' || type === 'dclStatus' || type === 'cdmMasterStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'essaSepIndicators' || type === 'configList' ||
            type === 'controllers' || type === 'userSettings' || type === 'notify' ||
            type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags' ||

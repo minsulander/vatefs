@@ -42,10 +42,17 @@ export interface ViffCdmEntry {
     tobtSetBy?: 'P' | 'A'
 }
 
+export interface ViffMasterAirport {
+    icao: string
+    position: string
+}
+
 export interface ViffPollResult {
     restricted: ViffRestrictedEntry[]
     statuses: ViffStatusEntry[]
     cdm: ViffCdmEntry[]
+    /** CDM master airports from GET /airport */
+    masters: ViffMasterAirport[]
 }
 
 type PollCallback = (result: ViffPollResult) => void
@@ -237,14 +244,15 @@ export class ViffService {
         if (this.polling) return
         this.polling = true
         try {
-            const [restricted, statuses, cdm] = await Promise.all([
+            const [restricted, statuses, cdm, masters] = await Promise.all([
                 this.fetchRestricted(),
                 this.fetchAllStatus(),
                 this.fetchCdmFlights(),
+                this.fetchMasterAirports(),
             ])
             this.everPolled = true
             this.lastPollOk = true
-            this.onPoll({ restricted, statuses, cdm })
+            this.onPoll({ restricted, statuses, cdm, masters })
         } catch (err) {
             this.everPolled = true
             this.lastPollOk = false
@@ -319,6 +327,35 @@ export class ViffService {
             return out
         } catch (err) {
             console.warn(`[VIFF] depAirport ${airport} error:`, err instanceof Error ? err.message : err)
+            return []
+        }
+    }
+
+    /** GET /airport — CDM master list `[{ icao, position }, …]`. */
+    private async fetchMasterAirports(): Promise<ViffMasterAirport[]> {
+        const url = `${this.baseUrl}/airport`
+        try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) })
+            if (!res.ok) {
+                console.warn(`[VIFF] airport (masters) HTTP ${res.status}`)
+                return []
+            }
+            const data = await res.json()
+            if (!Array.isArray(data)) return []
+            const out: ViffMasterAirport[] = []
+            for (const item of data) {
+                if (!item || typeof item !== "object") continue
+                const icao = String((item as any).icao ?? "").trim().toUpperCase()
+                const position = String((item as any).position ?? "").trim()
+                if (!icao || !position) continue
+                out.push({ icao, position })
+            }
+            return out
+        } catch (err) {
+            console.warn(
+                `[VIFF] airport (masters) error:`,
+                err instanceof Error ? err.message : err,
+            )
             return []
         }
     }

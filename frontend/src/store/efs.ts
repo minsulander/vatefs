@@ -468,6 +468,19 @@ export const useEfsStore = defineStore("efs", () => {
     const dclAirportStationOnline = ref(false)
     const dclAirport = ref<string | undefined>(undefined)
 
+    /** CDM master ATC callsign for ESSA (null = none). */
+    const cdmMasterPosition = ref<string | null>(null)
+    const cdmMasterIsMe = computed(() => {
+        const mine = (myCallsign.value || '').trim().toUpperCase()
+        const master = (cdmMasterPosition.value || '').trim().toUpperCase()
+        return !!mine && !!master && mine === master
+    })
+    const cdmMasterLabel = computed(() => {
+        if (cdmMasterIsMe.value) return 'CDM: MASTER'
+        const pos = cdmMasterPosition.value?.trim()
+        return pos ? `CDM: ${pos}` : 'CDM: NO MASTER'
+    })
+
     // Transient toast (ROF failures, etc.)
     const notifyText = ref('')
     const notifyLevel = ref<'error' | 'info'>('info')
@@ -1114,6 +1127,9 @@ export const useEfsStore = defineStore("efs", () => {
                         if (message.dclMode) dclMode.value = message.dclMode
                         dclAirportStationOnline.value = !!message.airportStationOnline
                         dclAirport.value = message.dclAirport
+                        break
+                    case 'cdmMasterStatus':
+                        cdmMasterPosition.value = message.position?.trim() || null
                         break
                     case 'atisUpdate':
                         applyAtisUpdate(message.airports)
@@ -3732,6 +3748,9 @@ export const useEfsStore = defineStore("efs", () => {
         dclSend,
         dclReject,
         dclSetMode,
+        cdmMasterPosition,
+        cdmMasterIsMe,
+        cdmMasterLabel,
         viffRea,
         viffUpdateEobt,
         viffUpdateTobt,
