@@ -55,6 +55,18 @@ export {
 export type { EssaRwyCombination, EssaPhysicalRwyPair } from "./essa-rwy-config.js"
 
 export {
+    normalizeEssaProcText,
+    isEssaRnpStar,
+    essaRnpLetterFromStar,
+    essaRnpCflLabel,
+    parseEssaRnpOpText,
+    isEssaRnpOpTextScratch,
+    essaParallelBreakoutPair,
+    essaRnpBreakoutRunways,
+} from "./essa-rnp.js"
+export type { EssaBreakoutRunway, EssaRnpOpTextMatch } from "./essa-rnp.js"
+
+export {
     essaSccLookupDesignator,
     parseEssaSccFromWxText,
     resolveEssaSepNm,

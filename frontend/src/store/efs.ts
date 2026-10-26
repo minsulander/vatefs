@@ -31,6 +31,7 @@ import {
     sidsMatch,
     withVectRemark,
     canonicalPushStartSectionId,
+    essaRnpCflLabel,
 } from "@vatefs/common"
 import {
     collapseExpandersOnLeaveCdAllOrTsat,
@@ -3009,7 +3010,20 @@ export const useEfsStore = defineStore("efs", () => {
         const formatted =
             formatStripAltitude(strip.clearedAltitude, DEFAULT_TRANSITION_ALTITUDE_FT) ?? ''
         if (!formatted) return ''
-        if (strip.stripType === 'arrival' && formatted === 'CA') return ''
+        // Arrivals/locals: bare CA is hidden; ESSA RNP APP (STAR / informed OP-TEXT2)
+        // shows like CAT2/3. RQ/REQ RNP alone never paints.
+        if (
+            (strip.stripType === 'arrival' || strip.stripType === 'local') &&
+            formatted === 'CA'
+        ) {
+            const dest = (strip.ades || '').toUpperCase()
+            const orig = (strip.adep || '').toUpperCase()
+            if (dest === 'ESSA' || orig === 'ESSA') {
+                const rnp = essaRnpCflLabel(strip.star, strip.remarks)
+                if (rnp) return rnp
+            }
+            return ''
+        }
         // Display-string match (same level, any token form) + feet fallback
         const xflFormatted = displayXflForStrip(strip)
         if (xflFormatted && formatted === xflFormatted) return ''

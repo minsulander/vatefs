@@ -69,6 +69,7 @@ import {
     isLopFprDepAirport,
     fprDepDisplayFix,
     parsePobFromRemarks,
+    essaRnpCflLabel,
 } from "@vatefs/common"
 import { getTransitionAltitudeFt } from "./topsky-airspace.js"
 import { getRtfCallsign } from "./icao-airlines.js"
@@ -4986,6 +4987,12 @@ class FlightStore {
             if (flight.cfl === 1) {
                 const t = (flight.approachType || '').toUpperCase()
                 if (t && t !== 'CA' && t !== 'VA') return t
+                // ESSA: RNP APP (STAR / OP-TEXT2) in CFL like CAT2/CAT3 when CA set
+                const dest = (flight.destination || '').toUpperCase()
+                if (dest === 'ESSA' || (flight.origin || '').toUpperCase() === 'ESSA') {
+                    const rnp = essaRnpCflLabel(flight.star, flight.remarks)
+                    if (rnp) return rnp
+                }
                 return 'CA'
             }
             if (flight.cfl === 2) {

@@ -43,6 +43,18 @@ check("remarks + HP", () => {
 check("SLOW", () => {
     assert.deepEqual(parseCombinedScratch("SLOW"), { remarks: "SLOW", hp: undefined })
     assert.deepEqual(parseCombinedScratch(".SLOW"), { remarks: "SLOW", hp: undefined })
+
+    // ESSA OP-TEXT2 RNP markers (no leading dot)
+    assert.deepEqual(parseCombinedScratch("RNPX 19R"), {
+        remarks: "RNPX 19R",
+        hp: undefined,
+    })
+    assert.deepEqual(parseCombinedScratch("RNP Y"), { remarks: "RNP Y", hp: undefined })
+    assert.deepEqual(parseCombinedScratch("RQ RNP"), { remarks: "RQ RNP", hp: undefined })
+    assert.deepEqual(parseCombinedScratch(".RNP X 01L"), {
+        remarks: "RNP X 01L",
+        hp: undefined,
+    })
 })
 
 check("EST is ordinary remarks (coo uses ann 6)", () => {

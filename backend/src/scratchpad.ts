@@ -15,6 +15,7 @@
  * touch remarks or HP — return null to leave existing fields unchanged.
  */
 
+import { isEssaRnpOpTextScratch } from "@vatefs/common"
 import { groundstateFromScratch, isGroundstateToken } from "./groundstate.js"
 
 export { groundstateFromScratch, isGroundstateToken }
@@ -154,6 +155,12 @@ export function parseCombinedScratch(scratch: string): {
             remarks: undefined,
             hp: hpOnly[1]!.toUpperCase(),
         }
+    }
+
+    // ESSA OP-TEXT2 RNP markers (LOP) — often entered without a leading "."
+    if (isEssaRnpOpTextScratch(scratch)) {
+        const { remarks, hp } = parseRemarksAndHp(scratch)
+        return { remarks, hp }
     }
 
     return { remarks: undefined, hp: undefined }

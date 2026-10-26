@@ -3,6 +3,11 @@ import { useEfsStore } from '@/store/efs'
 import {
   ESSA_RWY_COMBINATIONS,
   formatEssaRwyPdfName,
+  getEssaRwyCombination,
+  isEssaRnpStar,
+  parseEssaRnpOpText,
+  essaRnpBreakoutRunways,
+  type EssaBreakoutRunway,
 } from '@vatefs/common'
 import {
   essaMapDefaultSectionId,
@@ -399,7 +404,7 @@ export type InfoCatalogFolder = {
   items: InfoStripMenuEntry[]
 }
 
-export type BreakoutRunway = '01L' | '01R' | '19L' | '19R'
+export type BreakoutRunway = EssaBreakoutRunway
 
 export type BreakoutVariant = {
   /** Dismiss id (per runway) */
@@ -466,6 +471,46 @@ export function breakoutForceKey(v: BreakoutVariant): string {
   return v.runway
 }
 
+/**
+ * When any ESSA arrival has an RNP APP STAR or RNP OP-TEXT2, return both
+ * parallel breakout runways (EoR monitor) for the matched / config pair.
+ */
+export function getRnpAutoBreakoutRunways(): BreakoutRunway[] {
+  const store = useEfsStore()
+  if (!store.essaRolesMode && !store.multiAirport) return []
+  // Track strip updates so computed callers re-run
+  void store.stripsVersion
+
+  let hintRunway: string | null = null
+  let found = false
+  for (const strip of store.strips.values()) {
+    const dest = (strip.ades || '').toUpperCase()
+    // Arrivals / locals to ESSA (skip pure deps out of ESSA)
+    if (dest && dest !== 'ESSA' && dest !== 'ZZZZ') continue
+    if (strip.stripType === 'departure' && dest !== 'ESSA') continue
+
+    if (isEssaRnpStar(strip.star)) {
+      found = true
+      hintRunway = hintRunway || strip.runway?.toUpperCase() || null
+    }
+    const op = parseEssaRnpOpText(strip.remarks)
+    if (op) {
+      found = true
+      if (op.runway) hintRunway = hintRunway || op.runway
+    }
+  }
+  if (!found) return []
+
+  const cfg = store.essaRwyConfigIdResolved
+  const combo = cfg ? getEssaRwyCombination(cfg) : undefined
+  const rwys = essaRnpBreakoutRunways({
+    hintRunway,
+    configArr: combo?.arr?.[0] ?? getEssaMapInfo(cfg || '')?.runway,
+    configDep: combo?.dep?.[0],
+  })
+  return rwys.filter((r) => essaCoversInfoRunway(store, r))
+}
+
 /** Active breakout variants (auto + each manually added runway). */
 export function getActiveBreakoutVariants(): BreakoutVariant[] {
   const store = useEfsStore()
@@ -478,6 +523,11 @@ export function getActiveBreakoutVariants(): BreakoutVariant[] {
     seen.add(v.id)
     out.push(v)
   }
+  // RNP / EoR: auto both parallel RWYs when STAR or OP-TEXT2 indicates RNP
+  for (const rwy of getRnpAutoBreakoutRunways()) {
+    add(makeBreakoutVariant(rwy))
+  }
+  // Default: config ARR breakout (when no RNP pair already covering)
   const auto = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
   if (auto && essaCoversInfoRunway(store, auto.runway)) add(auto)
   for (const key of getInfoStripForcedKeys(BREAKOUT_INFO_KIND)) {
@@ -492,9 +542,22 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
 
   const autoVariant = computed<BreakoutVariant | null>(() => {
     if (!store.essaRolesMode && !store.multiAirport) return null
+    const rnp = getRnpAutoBreakoutRunways()
+    if (rnp.length) return makeBreakoutVariant(rnp[0]!)
     const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
     if (v && !essaCoversInfoRunway(store, v.runway)) return null
     return v
+  })
+
+  /** All auto-shown breakout runways (RNP pair and/or config ARR). */
+  const autoRunways = computed<BreakoutRunway[]>(() => {
+    if (!store.essaRolesMode && !store.multiAirport) return []
+    const out: BreakoutRunway[] = [...getRnpAutoBreakoutRunways()]
+    const v = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
+    if (v && essaCoversInfoRunway(store, v.runway) && !out.includes(v.runway)) {
+      out.push(v.runway)
+    }
+    return out
   })
 
   const variant = computed<BreakoutVariant | null>(() => {
@@ -537,6 +600,7 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
   return {
     variant,
     autoVariant,
+    autoRunways,
     visible,
     placement,
     instanceKey,
@@ -1079,6 +1143,9 @@ export function useInfoStripMenu(opts?: {
     const activeMapIds = new Set(getActiveMapVariants().map((v) => v.configId))
     const activeDepIds = new Set(getActiveDepVariants().map((v) => v.configId))
 
+    const autoBreakoutIds = new Set(
+      breakout.autoRunways.value.map((r) => `breakout:${r}`),
+    )
     const breakoutItems: InfoStripMenuEntry[] = BREAKOUT_RUNWAYS.map((rwy) => {
       const v = makeBreakoutVariant(rwy)
       return menuEntry({
@@ -1087,7 +1154,7 @@ export function useInfoStripMenu(opts?: {
         label: `Breakout ${v.runway}`,
         forceKey: rwy,
         available: true,
-        auto: breakout.autoVariant.value?.id === v.id,
+        auto: autoBreakoutIds.has(v.id),
         shown: activeBreakoutIds.has(v.id),
       })
     })
