@@ -1,5 +1,9 @@
 import { ref, onUnmounted } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import {
+  beginSectionLayoutDrag,
+  endSectionLayoutDrag,
+} from '@/composables/useAutoFitStripSize'
 
 export interface ResizeState {
   isResizing: boolean
@@ -85,6 +89,7 @@ export function useSectionResize() {
       onEnd: options?.onEnd,
     }
 
+    beginSectionLayoutDrag()
     document.body.classList.add('section-resizing')
 
     // Add move/end listeners
@@ -146,6 +151,8 @@ export function useSectionResize() {
     document.removeEventListener('touchcancel', onEnd)
 
     endCb?.()
+    // After persist/heights settle — one auto-fit pass (not mid-drag thrash)
+    endSectionLayoutDrag()
   }
 
   // Cleanup on unmount

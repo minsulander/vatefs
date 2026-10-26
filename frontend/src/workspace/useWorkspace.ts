@@ -51,6 +51,12 @@ import {
   type OverflowPackResult,
   type SectionOverflowPlan,
 } from './overflow'
+import {
+  beginSectionLayoutDrag,
+  endSectionLayoutDrag,
+  notifyAutoFitLayoutChanged,
+  sectionLayoutDragging,
+} from '@/composables/useAutoFitStripSize'
 
 /**
  * ESSA flexible workspace state (client-only).
@@ -626,10 +632,24 @@ export function useWorkspace() {
     return overflowPack.value.byHostColumn[col]
   }
 
+  /** True when a repack was skipped mid-header-drag and must run on pointer up. */
+  let overflowRepackDeferred = false
+
   function scheduleOverflowRepack() {
+    // Header drag moves Y every frame; live repack changes primaryCount in
+    // unrelated columns (RUNWAY jumps while dragging CD/TSAT). Freeze pack.
+    if (sectionLayoutDragging.value) {
+      overflowRepackDeferred = true
+      return
+    }
     if (overflowRepackRaf) cancelAnimationFrame(overflowRepackRaf)
     overflowRepackRaf = requestAnimationFrame(() => {
       overflowRepackRaf = 0
+      // Drag may have started after this rAF was queued
+      if (sectionLayoutDragging.value) {
+        overflowRepackDeferred = true
+        return
+      }
       repackOverflow()
     })
   }
@@ -1112,10 +1132,29 @@ export function useWorkspace() {
 
   function beginSectionDrag(instanceId: string) {
     draggingSectionId.value = instanceId
+    const col =
+      activeLayout.value?.sections.find((s) => s.instanceId === instanceId)
+        ?.anchorColumn ?? null
+    // Freeze strip auto-fit + overflow pack while Y churns every pointermove
+    beginSectionLayoutDrag(col)
+    // Drop any already-queued pack so it cannot apply mid-drag
+    if (overflowRepackRaf) {
+      cancelAnimationFrame(overflowRepackRaf)
+      overflowRepackRaf = 0
+    }
+    overflowRepackDeferred = true
   }
 
   function endSectionDrag() {
     draggingSectionId.value = null
+    // Clear drag lock first so scheduleOverflowRepack is not deferred again
+    endSectionLayoutDrag({ notify: false })
+    overflowRepackDeferred = false
+    scheduleOverflowRepack()
+    // After the deferred pack rAF — one auto-fit with final primaryCounts
+    requestAnimationFrame(() => {
+      notifyAutoFitLayoutChanged()
+    })
   }
 
   function cycleStripSize(instanceId: string) {

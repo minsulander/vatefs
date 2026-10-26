@@ -439,6 +439,8 @@ import {
   autoFitLayoutEpoch,
   clearAutoFitState,
   runAutoFitStripSize,
+  sectionLayoutDragColumn,
+  sectionLayoutDragging,
 } from '@/composables/useAutoFitStripSize'
 import {
   collapseStripExpanders,
@@ -2420,9 +2422,19 @@ const sectionOverflowPlan = computed(() => {
   return ws.getSectionOverflow(props.workspaceInstanceId)
 })
 
-const hidePrimaryOverflowScroll = computed(
-  () => !!sectionOverflowPlan.value?.hidePrimaryScroll,
-)
+const hidePrimaryOverflowScroll = computed(() => {
+  if (!sectionOverflowPlan.value?.hidePrimaryScroll) return false
+  // Pack frozen mid-drag: only the dragged column may need a temporary scrollbar
+  // when capacity shrinks under frozen primaryCount. Other columns stay put.
+  if (
+    sectionLayoutDragging.value &&
+    sectionLayoutDragColumn.value != null &&
+    props.workspaceColumnIndex === sectionLayoutDragColumn.value
+  ) {
+    return false
+  }
+  return true
+})
 
 /** Displayed top strips — overflow continuation is painted in following columns. */
 const topStrips = computed(() => {
@@ -2775,6 +2787,9 @@ function scheduleAutoFitRecheck(force = false) {
   if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
+  // Header/height drag: overflow repacks every move — defer fit until drag end
+  // (endSectionLayoutDrag bumps autoFitLayoutEpoch). Avoids cross-column thrash.
+  if (sectionLayoutDragging.value) return
   // During an in-flight fit, queue a follow-up — do not drop resize/list updates
   // (dropping caused stale maximize priority and flicker after section drags).
   if (autoFitApplying.value || autoFitRunning) {
@@ -2794,6 +2809,7 @@ async function runScheduledAutoFit() {
   if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
+  if (sectionLayoutDragging.value) return
   if (autoFitApplying.value) {
     autoFitQueued = true
     return

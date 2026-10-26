@@ -28,8 +28,35 @@ const manualSizeLockById = new Set<string>()
 export const autoFitLayoutEpoch = ref(0)
 export const autoFitApplying = ref(false)
 
+/**
+ * True while a section header is being dragged (workspace free-Y) or a classic
+ * pair-height resize is in progress. Auto-fit must not run mid-drag — every
+ * mousemove repacks overflow and would re-fit unrelated columns (visible thrash).
+ */
+export const sectionLayoutDragging = ref(false)
+/** Workspace column of the header being dragged (null for classic pair-resize). */
+export const sectionLayoutDragColumn = ref<number | null>(null)
+
 export function notifyAutoFitLayoutChanged(): void {
   autoFitLayoutEpoch.value++
+}
+
+/** Begin header/height drag — suppress auto-fit until {@link endSectionLayoutDrag}. */
+export function beginSectionLayoutDrag(columnIndex?: number | null): void {
+  sectionLayoutDragging.value = true
+  sectionLayoutDragColumn.value =
+    columnIndex === undefined ? null : columnIndex
+}
+
+/**
+ * End drag. By default bumps autoFitLayoutEpoch so sections re-fit once.
+ * Pass `{ notify: false }` when the caller will repack overflow first, then notify.
+ */
+export function endSectionLayoutDrag(opts?: { notify?: boolean }): void {
+  if (!sectionLayoutDragging.value) return
+  sectionLayoutDragging.value = false
+  sectionLayoutDragColumn.value = null
+  if (opts?.notify !== false) notifyAutoFitLayoutChanged()
 }
 
 export function clearAutoFitState(stripId: string): void {
