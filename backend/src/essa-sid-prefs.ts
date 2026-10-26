@@ -241,12 +241,16 @@ export function appDepSectorToSi(sector: AppDepSector): string {
     return SECTOR_TO_SI[sector]
 }
 
-/** Fallback freqs when ESE / online resolve is unavailable (VatIRIS TWR strip). */
+/**
+ * Fallback when no overlying ATC (UNICOM). Live resolve in /api/essa-dep-info
+ * prefers online APP/DEP/CTR; otherwise returns this same value.
+ */
+const DEP_INFO_NO_ATC_FREQ = "122.800"
 const DEP_INFO_DEFAULT_FREQ: Record<AppDepSector, string> = {
-    "DEP-W": "124.105",
-    "DEP-E": "130.330",
-    "ARR-W": "123.755",
-    "ARR-E": "126.655",
+    "DEP-W": DEP_INFO_NO_ATC_FREQ,
+    "DEP-E": DEP_INFO_NO_ATC_FREQ,
+    "ARR-W": DEP_INFO_NO_ATC_FREQ,
+    "ARR-E": DEP_INFO_NO_ATC_FREQ,
 }
 
 export type EssaDepInfoRow = {

@@ -602,7 +602,7 @@ function depVariantForConfig(cfg: string): DepInfoVariant | null {
     configId: cfg,
     runway,
     primarySector: 'DEP-W',
-    primaryDefaultFreq: '124.105',
+    primaryDefaultFreq: '122.800',
     holdLines: [
       'HOLD POSITION, CANCEL TAKE-OFF, I SAY AGAIN HOLD',
       'STOP IMMEDIATELY + CS: STOP IMMEDIATELY',
@@ -1179,3 +1179,4 @@ export function useInfoStripMenu(opts?: {
     resetPlacement,
   }
 }
+

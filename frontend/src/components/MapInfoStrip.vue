@@ -55,7 +55,7 @@ const headingLabel = computed(() => {
   return `${String(h).padStart(3, '0')}°`
 })
 
-/** Live freq from backend (ESE OWNER + AFV XC); fallback to static default. */
+/** Live freq from backend (ESE OWNER + AFV XC); fallback UNICOM when offline. */
 const resolvedFreq = ref<string | null>(null)
 const resolvedCallsign = ref<string | null>(null)
 let freqPollTimer: ReturnType<typeof setInterval> | null = null

@@ -18,7 +18,7 @@ export type EssaMapInfo = {
   /** Turn from RWY heading to delivery heading (shortest way) */
   turn: MapTurn | null
   mapNextSector: MapAppSector
-  /** Default APP frequency when offline */
+  /** Frequency when no overlying ATC (UNICOM) */
   defaultFreq: string
   /** TWR box value (DME / IAS limit shorthand, AIP ≈ 4.0) */
   twrDme: string
@@ -49,9 +49,8 @@ export function turnRelativeToRunway(
   return delta > 0 ? 'RIGHT' : 'LEFT'
 }
 
-/** Fallback APP frequencies (ESSA E/W APP). */
-const FREQ_ARR_E = '126.655'
-const FREQ_ARR_W = '123.755'
+/** No overlying ATC — UNICOM (same as backend ESSA_NO_OVERLYING_ATC_FREQ). */
+const FREQ_NO_OVERLYING_ATC = '122.800'
 
 /** AIP-style MAP text keyed by arrival runway (balanced across two rows). */
 const MAP_TEXT_BY_RWY: Record<string, string[]> = {
@@ -117,10 +116,6 @@ const PREFS_BY_CONFIG: Record<string, PrefRow> = {
   '16': { runway: '26', heading: 180, sector: 'ARR-W' },
 }
 
-function defaultFreqFor(sector: MapAppSector): string {
-  return sector === 'ARR-E' ? FREQ_ARR_E : FREQ_ARR_W
-}
-
 export function getEssaMapInfo(configId: string): EssaMapInfo | null {
   const pref = PREFS_BY_CONFIG[configId]
   if (!pref) return null
@@ -136,15 +131,16 @@ export function getEssaMapInfo(configId: string): EssaMapInfo | null {
     heading: pref.heading,
     turn: turnRelativeToRunway(pref.runway, pref.heading),
     mapNextSector: pref.sector,
-    defaultFreq: defaultFreqFor(pref.sector),
+    defaultFreq: FREQ_NO_OVERLYING_ATC,
     twrDme: '4.0',
     highlightProc: highlightProc || undefined,
   }
 }
 
 /**
- * Default host for G/A / MAP (and breakout) info strips: bottom of CTR ARR.
- * `runway` kept for call-site compatibility; placement no longer follows ARR RWY.
+ * Default host for G/A / MAP info strips: bottom of CTR ARR.
+ * Breakout strips use `essaDepDefaultSectionId` (above that runway bay) instead.
+ * `runway` kept for call-site compatibility.
  */
 export function essaMapDefaultSectionId(_runway?: string): string | null {
   return 'ctr_arr'

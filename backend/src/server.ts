@@ -227,10 +227,8 @@ import {
     resolveMapDelivery,
     resolveEssaDepInfoStrip,
     collectSidsForTmaExit,
-    appDepSectorToSi,
     type AppDepSector,
 } from "./essa-sid-prefs.js"
-import { getEsePositionBySi } from "./ese-airspace.js"
 import { resolveEsmsPreferredSid, isEkchRwy30Active, collectEsmsSidsForTmaExit } from "./esms-sid.js"
 import { resolveEsggPreferredSid, collectEsggSidsForTmaExit } from "./esgg-sid.js"
 import { resolveEsggDepApp, resolveEsggMapDelivery, resolveEsggMisapApp } from "./esgg-app.js"
@@ -8361,6 +8359,12 @@ app.get("/api/sidalt", (req, res) => {
  * - ESMS: LOA K/L (or G/H when EKCH RWY 30 active in ES). Query: airport, runway, route?
  */
 /**
+ * ESSA: when no overlying APP/DEP/CTR covers the sector, show UNICOM.
+ * Used by MAP / DEP info strips (not ESGG/OTHER).
+ */
+const ESSA_NO_OVERLYING_ATC_FREQ = "122.800"
+
+/**
  * ESSA G/A · MAP strip frequency for the given runway config.
  * Same APP delivery resolution as strip XFER: ESE OWNER chain + AFV XC / force-ideal.
  * Query: config=<id> (e.g. 1, 15A)
@@ -8385,21 +8389,18 @@ app.get("/api/essa-map-freq", (req, res) => {
         })
         return
     }
-    // Nobody online covering the sector — fall back to ESE published freq for ideal SI
-    const idealSi = appDepSectorToSi(delivery.sector)
-    const eseFreq = getEsePositionBySi(idealSi)?.frequency
+    // Nobody online covering the sector — UNICOM
     res.json({
-        frequency: eseFreq && eseFreq > 0 ? eseFreq.toFixed(3) : null,
+        frequency: ESSA_NO_OVERLYING_ATC_FREQ,
         sector: delivery.sector,
         callsign: null,
         xc: false,
     })
 })
 
-/** Resolve live (or ESE / default) frequency + covering login for an APP/DEP sector. */
+/** Resolve live frequency + covering login for an APP/DEP sector (ESSA DEP info). */
 function resolveSectorDisplay(
-    sector: AppDepSector,
-    fallback: string
+    sector: AppDepSector
 ): { frequency: string; callsign: string | null } {
     const transfer = resolveAppDepTransfer(sector)
     if (transfer && transfer.displayFrequency > 0) {
@@ -8408,9 +8409,8 @@ function resolveSectorDisplay(
             callsign: transfer.transferCallsign || null,
         }
     }
-    const eseFreq = getEsePositionBySi(appDepSectorToSi(sector))?.frequency
     return {
-        frequency: eseFreq && eseFreq > 0 ? eseFreq.toFixed(3) : fallback,
+        frequency: ESSA_NO_OVERLYING_ATC_FREQ,
         callsign: null,
     }
 }
@@ -8434,13 +8434,13 @@ app.get("/api/essa-dep-info", (req, res) => {
         res.status(404).json({ error: `Unknown ESSA config: ${configId}` })
         return
     }
-    const primary = resolveSectorDisplay(info.primarySector, info.primaryDefaultFreq)
+    const primary = resolveSectorDisplay(info.primarySector)
     res.json({
         ...info,
         primaryFreq: primary.frequency,
         primaryCallsign: primary.callsign,
         rows: info.rows.map((row) => {
-            const resolved = resolveSectorDisplay(row.sector, row.defaultFreq)
+            const resolved = resolveSectorDisplay(row.sector)
             return {
                 ...row,
                 frequency: resolved.frequency,
