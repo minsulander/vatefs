@@ -912,6 +912,7 @@ async function fetchFlight() {
 
 function onCancel() {
   applySnapshot(baseline.value)
+  dialogOpen.value = false
 }
 
 function onApply() {
