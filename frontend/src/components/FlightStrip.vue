@@ -6989,9 +6989,9 @@ function onGroundStateClick(action: string) {
   padding: 0 calc(2px * var(--strip-scale));
   cursor: pointer;
 }
-/* ESSA preferred DEP-E / ARR-E — black SID box on paper look */
+/* ESSA preferred DEP-E / ARR-E — black SID box on paper look (scales with strip) */
 .pg-sid.sid-mdi-box:not(.ghost) {
-  box-shadow: inset 0 0 0 3px #111;
+  box-shadow: inset 0 0 0 calc(2px * var(--strip-scale, 1)) #111;
 }
 
 .pg-sid-val {
@@ -9149,7 +9149,7 @@ button.tobt-setby-pm:hover {
   /* Two-thirds of the way from the shared databox inset to the cell edge */
   top: calc(var(--frame-visual-pad-y) / 3);
   bottom: calc((var(--frame-inset-y-outer) + var(--frame-visual-pad-y)) / 3);
-  border: 3px solid #111;
+  border: calc(2px * var(--strip-scale, 1)) solid #111;
   box-sizing: border-box;
   pointer-events: none;
 }
@@ -9159,7 +9159,7 @@ button.tobt-setby-pm:hover {
   right: 0;
   top: calc(var(--frame-visual-pad-y) / 3);
   bottom: calc(var(--frame-visual-pad-y) / 3);
-  border: 3px solid #111;
+  border: calc(2px * var(--strip-scale, 1)) solid #111;
 }
 /* Uncleared XFL/CFL/AHD/SID (value present) — same amber as pending transfer */
 .cell-xfl.clr-pending-hl:not(.ghost),
