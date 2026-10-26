@@ -81,6 +81,11 @@ export interface Flight {
     handoffTargetController?: string  // Controller receiving handoff (if any)
     /** Handoff target sector indicator (EuroScope position ID) */
     handoffTargetControllerId?: string
+    /**
+     * Sticky after any peer assumes our outbound handoff (SAAB all-text amber).
+     * Cleared when we track the flight again or outbound is refused.
+     */
+    transferOutAccepted?: boolean
     nextController?: string       // Next controller callsign
     nextControllerFrequency?: number // Next controller frequency
     squawk?: string

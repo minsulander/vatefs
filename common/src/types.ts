@@ -242,6 +242,11 @@ export interface FlightStrip {
      * - 'out' — I am transferring the strip to someone else
      */
     transferPending?: 'in' | 'out'
+    /**
+     * SAAB: peer assumed our outbound handoff — all strip body text amber
+     * until we track again. Pending-out keeps callsign-only amber.
+     */
+    transferOutAccepted?: boolean
     /** SI of the handoff target (who the strip is being transferred to) */
     transferSi?: string
     /** Full login callsign of the tracking controller (for tooltips) */

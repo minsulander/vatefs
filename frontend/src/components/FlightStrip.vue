@@ -344,6 +344,7 @@
       'is-large-view': isLargeView,
       'strip-compact': isCompactBay,
       'dimmed-data': dimmedData,
+      'transfer-out-accepted': !!strip.transferOutAccepted && !store.isPaperLook,
       'no-drag': !canDragStrip && !isLargeView,
       'rtc-layout': store.multiAirport,
       'klack-left': !klackPulling && strip.klack === 'left',
@@ -3166,6 +3167,8 @@ function onVehicleFieldClick(field: 'hp' | 'std') {
  */
 const dimmedData = computed(() => {
   if (props.strip.transferPending === 'in') return false
+  // SAAB: peer assumed our outbound → all-text amber instead of grey dim
+  if (props.strip.transferOutAccepted) return false
   if (props.strip.ownedByOther) return true
   if (props.strip.dimmed) return true
   const id = (props.sectionId || props.strip.sectionId || '').toLowerCase()
@@ -5567,13 +5570,10 @@ function actionButtonClass(action: string): Record<string, boolean> {
     classes['action-key-amber'] = true
   }
 
-  // ASSUME/ROF: condensed text; pending transfer (in or out) → amber ASSUME text
+  // ASSUME/ROF: condensed text; inbound handoff only → amber ASSUME text
   if (action === 'ASSUME' || action === 'ROF') {
     classes['action-assume'] = true
-    if (
-      action === 'ASSUME' &&
-      (props.strip.transferPending === 'in' || props.strip.transferPending === 'out')
-    ) {
+    if (action === 'ASSUME' && props.strip.transferPending === 'in') {
       classes['action-key-amber'] = true
       classes['action-highlight'] = false
     }
@@ -8272,6 +8272,45 @@ function onGroundStateClick(action: string) {
 /* Pending transfer (in or out): callsign amber — not used for “should TRANS” */
 .strip-main .callsign.callsign-transfer-pending {
   color: var(--strip-amber);
+}
+/*
+ * Outgoing handoff accepted (SAAB): any peer assumed — all strip body text amber.
+ * Pending-out keeps callsign-only amber via callsign-transfer-pending.
+ */
+.flight-strip.transfer-out-accepted .strip-left .ctrl-ident,
+.flight-strip.transfer-out-accepted .strip-left .atyp-box,
+.flight-strip.transfer-out-accepted .strip-left .wtc-box,
+.flight-strip.transfer-out-accepted .strip-time,
+.flight-strip.transfer-out-accepted .strip-time .strip-time-lbl,
+.flight-strip.transfer-out-accepted .strip-time .strip-time-val,
+.flight-strip.transfer-out-accepted .strip-time .time-sts-label,
+.flight-strip.transfer-out-accepted .strip-main .callsign,
+.flight-strip.transfer-out-accepted .strip-main .callsign .comm-suffix,
+.flight-strip.transfer-out-accepted .strip-main .cell,
+.flight-strip.transfer-out-accepted .strip-main .cell .cto-ctot,
+.flight-strip.transfer-out-accepted .strip-expand-top,
+.flight-strip.transfer-out-accepted .strip-expand-bottom,
+.flight-strip.transfer-out-accepted .exp-rmk,
+.flight-strip.transfer-out-accepted .exp-rmk-text,
+.flight-strip.transfer-out-accepted .exp-assr,
+.flight-strip.transfer-out-accepted .exp-ades,
+.flight-strip.transfer-out-accepted .exp-tma-exit {
+  color: var(--strip-amber) !important;
+  -webkit-text-fill-color: var(--strip-amber) !important;
+}
+/* Keep non-standard RWY readable on yellow fill */
+.flight-strip.transfer-out-accepted .strip-main .cell-rwy.rwy-nonstandard,
+.flight-strip.transfer-out-accepted .strip-left .atyp-box.atyp-yellow,
+.flight-strip.transfer-out-accepted .strip-left .wtc-box.wtc-yellow {
+  color: #000 !important;
+  -webkit-text-fill-color: #000 !important;
+}
+/* RTC pink C / ROF cues stay their own colors */
+.flight-strip.transfer-out-accepted .strip-main .cell.proposal,
+.flight-strip.transfer-out-accepted .strip-main .cell.xfl-coord-pink.proposal,
+.flight-strip.transfer-out-accepted .strip-main .cell.coo-coord-pink {
+  color: #dc7cae !important;
+  -webkit-text-fill-color: #dc7cae !important;
 }
 .owner-si.si-transfer-in { color: #0a7a28; }
 .owner-si.si-transfer-out { color: #b05a00; }

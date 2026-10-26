@@ -1485,6 +1485,10 @@ class FlightStore {
         )
         if (sound) result.transferSound = sound
 
+        // SAAB: any peer assumed our outbound → sticky amber until we track again
+        if (sound === 'accept') flight.transferOutAccepted = true
+        else if (sound === 'refuse') flight.transferOutAccepted = undefined
+
         // Handover Assistant: auto-ASSUME inbound HA-marked handoffs when setting is on
         if (
             sound === 'request' &&
@@ -5042,6 +5046,8 @@ class FlightStore {
             if (isHandoffToMe) transferPending = 'in'
             else if (isTrackedByMe) transferPending = 'out'
         }
+        // Reclaim / assume again clears sticky outbound-accepted amber
+        if (isTrackedByMe && flight.transferOutAccepted) flight.transferOutAccepted = undefined
 
         const rawOwnerSi = (flight.controllerId || getControllerPositionId(flight.controller)) || undefined
         const rawTransferSi = hasHandoff
@@ -5565,6 +5571,8 @@ class FlightStore {
             ownerSi,
             // True whenever someone else tracks (by callsign and/or SI)
             ownedByOther: (!isTrackedByMe && !isUntracked) || undefined,
+            transferOutAccepted:
+                !isTrackedByMe && flight.transferOutAccepted ? true : undefined,
             // Dimming: INBOUND dimmed unless assumed / pending transfer;
             // TWR pending+cleared when DEL/GND online.
             dimmed: (() => {
