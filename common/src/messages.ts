@@ -106,6 +106,11 @@ export interface StatusMessage {
     backendVersion?: string
     /** EuroScope plugin version from loaded plugin myselfUpdate (not from disk) */
     pluginVersion?: string
+    /**
+     * CDM.dll plugin version (e.g. "2.31b") detected next to CDM_data_*.txt.
+     * Master claim/release requires ≥ 2.31; older builds are indicator-only.
+     */
+    cdmPluginVersion?: string
     /** Primary frequency from myselfUpdate (MHz) */
     frequency?: number
     isController?: boolean // Whether connected as a controller (false = observer)

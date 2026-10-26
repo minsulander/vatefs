@@ -72,6 +72,29 @@ export const useEfsStore = defineStore("efs", () => {
     const backendVersion = ref<string | undefined>()
     /** Version pushed by the loaded ES plugin (myselfUpdate) */
     const pluginVersion = ref<string | undefined>()
+    /** CDM.dll version (e.g. 2.31b); master click needs ≥ 2.31 */
+    const cdmPluginVersion = ref<string | undefined>()
+    const CDM_MASTER_CLICK_MIN = [2, 31, 0] as const
+
+    function parseCdmVer(raw: string | undefined): number[] | null {
+        if (!raw) return null
+        const m = raw.trim().match(/^(\d+)\.(\d+)(?:\.(\d+))?[a-z]?$/i)
+        if (!m) return null
+        return [Number(m[1]), Number(m[2]), Number(m[3] || 0)]
+    }
+
+    /** True when CDM plugin is new enough for setMaster / removeMaster from EFS. */
+    const cdmMasterClickable = computed(() => {
+        const v = parseCdmVer(cdmPluginVersion.value)
+        if (!v) return false
+        for (let i = 0; i < 3; i++) {
+            const a = v[i] ?? 0
+            const b = CDM_MASTER_CLICK_MIN[i] ?? 0
+            if (a > b) return true
+            if (a < b) return false
+        }
+        return true
+    })
     /** Primary frequency MHz from myselfUpdate */
     const myFrequency = ref<number | undefined>()
     /** Connection + parsing feed health */
@@ -1080,6 +1103,7 @@ export const useEfsStore = defineStore("efs", () => {
             connected.value = false
             pluginConnected.value = false
             pluginVersion.value = undefined
+            cdmPluginVersion.value = undefined
             // keep last feeds/backendVersion for offline display of parse state if needed
         }
         socket.onmessage = (event: MessageEvent) => {
@@ -1563,6 +1587,7 @@ export const useEfsStore = defineStore("efs", () => {
         feeds?: import('@vatefs/common').FeedsStatus
         backendVersion?: string
         pluginVersion?: string
+        cdmPluginVersion?: string
         frequency?: number
         isController?: boolean
         multiAirport?: boolean
@@ -1592,6 +1617,7 @@ export const useEfsStore = defineStore("efs", () => {
         feeds.value = message.feeds ?? null
         backendVersion.value = message.backendVersion
         pluginVersion.value = message.pluginVersion
+        cdmPluginVersion.value = message.cdmPluginVersion
         onMyFrequencyUpdated(
             typeof message.frequency === 'number' ? message.frequency : undefined,
         )
@@ -2670,7 +2696,7 @@ export const useEfsStore = defineStore("efs", () => {
 
     /** Claim or release ESSA CDM master (vIFF setMaster / removeMaster). */
     function cdmMasterToggle() {
-        if (cdmMasterPending.value) return
+        if (!cdmMasterClickable.value || cdmMasterPending.value) return
         cdmMasterPending.value = true
         if (cdmMasterPendingTimer) clearTimeout(cdmMasterPendingTimer)
         cdmMasterPendingTimer = setTimeout(() => {
@@ -3650,6 +3676,8 @@ export const useEfsStore = defineStore("efs", () => {
         pluginConnected,
         backendVersion,
         pluginVersion,
+        cdmPluginVersion,
+        cdmMasterClickable,
         myFrequency,
         feeds,
         reloadFeeds,

@@ -259,6 +259,11 @@ import type { AupR16Status } from "./aup/types.js"
 import type { DclStatus } from "./hoppie-service.js"
 import { ViffService } from "./viff-service.js"
 import type { ViffPollResult } from "./viff-service.js"
+import {
+    detectCdmPluginVersion,
+    cdmPluginVersionAtLeast,
+    CDM_MASTER_CLICK_MIN_VERSION,
+} from "./cdm-plugin-version.js"
 import { loadDclSound, playDclSound, loadTransferSounds, playTransferSound } from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName, getIcaoAirportInfo } from "./icao-airports.js"
 import { loadIcaoAirlines } from "./icao-airlines.js"
@@ -1264,6 +1269,8 @@ let lastPluginUdpAt = 0
 let pluginConnected = false
 /** Version string pushed by the loaded plugin via myselfUpdate (not from disk). */
 let reportedPluginVersion: string | undefined
+/** CDM.dll version from Plugins folder (e.g. 2.31b); refreshed with CDM dir. */
+let reportedCdmPluginVersion: string | undefined
 const PLUGIN_STALE_MS = 15_000
 let lastStatusFeedsFp = ""
 /** Set after services are constructed (avoids TDZ in buildFeedsStatus). */
@@ -1353,6 +1360,7 @@ function maybeBroadcastStatusIfFeedsChanged() {
     const fp = JSON.stringify({
         feeds: buildFeedsStatus(),
         pluginVersion: reportedPluginVersion,
+        cdmPluginVersion: reportedCdmPluginVersion,
         dcl: currentDclStatus,
     })
     if (fp === lastStatusFeedsFp) return
@@ -1363,6 +1371,7 @@ function maybeBroadcastStatusIfFeedsChanged() {
 if (cliArgs.mock) {
     pluginConnected = true
     reportedPluginVersion = "mock"
+    reportedCdmPluginVersion = "2.31"
 }
 setInterval(checkPluginStale, 2000)
 
@@ -1375,6 +1384,7 @@ function buildStatusMessage(): StatusMessage {
     lastStatusFeedsFp = JSON.stringify({
         feeds,
         pluginVersion: reportedPluginVersion,
+        cdmPluginVersion: reportedCdmPluginVersion,
         dcl: currentDclStatus,
     })
     return {
@@ -1387,6 +1397,7 @@ function buildStatusMessage(): StatusMessage {
         feeds,
         backendVersion: constants.version,
         pluginVersion: reportedPluginVersion,
+        cdmPluginVersion: reportedCdmPluginVersion,
         frequency: staticConfig.myFrequency,
         isController: staticConfig.isController,
         multiAirport: isMultiAirportConfig(staticConfig) || undefined,
@@ -4168,10 +4179,18 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         } catch (err) {
             console.warn(`Reload ICAO airlines failed: ${err instanceof Error ? err.message : err}`)
         }
+        const cdmPlugins = findCdmPluginsDir()
+        refreshCdmPluginVersion(cdmPlugins)
         const cdmDir = findCdmDataDir()
+        const ver = reportedCdmPluginVersion ? ` · CDM ${reportedCdmPluginVersion}` : ""
         localFeedState.cdmLocal = cdmDir
-            ? { ok: true, detail: path.resolve(cdmDir) }
-            : { ok: false, detail: "Not found" }
+            ? { ok: true, detail: `${path.resolve(cdmDir)}${ver}` }
+            : {
+                  ok: false,
+                  detail: reportedCdmPluginVersion
+                      ? `No CDM_data_*.txt (CDM ${reportedCdmPluginVersion})`
+                      : "Not found",
+              }
         if (cdmDir) pollLocalCdmDataFiles()
     } else {
         localFeedState.euroscopeDir = { ok: false, detail: "Not found" }
@@ -7479,6 +7498,16 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 sendMessage(socket, buildCdmMasterStatusMessage())
                 break
             }
+            if (!cdmPluginVersionAtLeast(reportedCdmPluginVersion, CDM_MASTER_CLICK_MIN_VERSION)) {
+                console.warn(
+                    `[CDM] setMaster/removeMaster skipped — need CDM plugin ≥ 2.31` +
+                        (reportedCdmPluginVersion
+                            ? ` (have ${reportedCdmPluginVersion})`
+                            : " (CDM.dll version unknown)"),
+                )
+                sendMessage(socket, buildCdmMasterStatusMessage())
+                break
+            }
             const airport = "ESSA"
             const amMaster =
                 !!cdmMasterEssa &&
@@ -9870,18 +9899,44 @@ syncOnlineNetworkServices()
 const CDM_DATA_POLL_MS = 1000
 let lastCdmDataSnapshot = new Map<string, string>()
 
-function findCdmDataDir(): string | undefined {
+/** EuroScope Plugins folder that holds CDM.dll / CDM_data_*.txt. */
+function findCdmPluginsDir(): string | undefined {
     if (!EUROSCOPE_DIR) return undefined
     const plugins =
         resolveEsaaPluginsDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) ??
         path.join(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, "Plugins")
     if (!fs.existsSync(plugins)) return undefined
     try {
+        const names = fs.readdirSync(plugins)
+        const hasData = names.some((f) => /^CDM_data_.*\.txt$/i.test(f))
+        const hasDll = names.some((f) => /^CDM\.dll$/i.test(f))
+        return hasData || hasDll ? plugins : undefined
+    } catch {
+        return undefined
+    }
+}
+
+function findCdmDataDir(): string | undefined {
+    const plugins = findCdmPluginsDir()
+    if (!plugins) return undefined
+    try {
         const has = fs.readdirSync(plugins).some((f) => /^CDM_data_.*\.txt$/i.test(f))
         return has ? plugins : undefined
     } catch {
         return undefined
     }
+}
+
+function refreshCdmPluginVersion(pluginsDir: string | undefined) {
+    const next = detectCdmPluginVersion(pluginsDir)
+    if (next === reportedCdmPluginVersion) return
+    reportedCdmPluginVersion = next
+    if (next) {
+        console.log(`[CDM] Plugin version: ${next}`)
+    } else {
+        console.warn("[CDM] Plugin version: unknown (CDM.dll / version.txt not readable)")
+    }
+    maybeBroadcastStatusIfFeedsChanged()
 }
 
 function readCdmFileStable(filePath: string): string | undefined {
@@ -9976,13 +10031,21 @@ function pollLocalCdmDataFiles() {
     }
 }
 
+const cdmPluginsDir = findCdmPluginsDir()
 const cdmDataDir = findCdmDataDir()
+refreshCdmPluginVersion(cdmPluginsDir)
 if (cdmDataDir) {
     console.log(`CDM_data directory: ${cdmDataDir}`)
-    localFeedState.cdmLocal = { ok: true, detail: path.resolve(cdmDataDir) }
+    const ver = reportedCdmPluginVersion ? ` · CDM ${reportedCdmPluginVersion}` : ""
+    localFeedState.cdmLocal = { ok: true, detail: `${path.resolve(cdmDataDir)}${ver}` }
     setInterval(pollLocalCdmDataFiles, CDM_DATA_POLL_MS)
     pollLocalCdmDataFiles()
 } else {
     console.warn("CDM_data directory not found under EuroScope package Plugins")
-    localFeedState.cdmLocal = { ok: false, detail: "Not found" }
+    localFeedState.cdmLocal = {
+        ok: false,
+        detail: reportedCdmPluginVersion
+            ? `No CDM_data_*.txt (CDM ${reportedCdmPluginVersion})`
+            : "Not found",
+    }
 }
