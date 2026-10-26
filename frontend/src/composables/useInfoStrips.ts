@@ -105,6 +105,7 @@ function placementKind(key: string): string | null {
 /**
  * Breakout / MAP used to stick above ARR RWY (often landing on TAXIWAY ARR).
  * Migrate those pins to CTR ARR bottom.
+ * Also rename legacy breakout force keys `1`/`2` → runway designators.
  */
 function migrateBreakoutMapPlacements(
   raw: Record<string, InfoStripPlacement>,
@@ -112,18 +113,49 @@ function migrateBreakoutMapPlacements(
   let changed = false
   const out: Record<string, InfoStripPlacement> = {}
   for (const [key, p] of Object.entries(raw)) {
-    const kind = placementKind(key)
+    let nextKey = key
+    if (key === `${BREAKOUT_INFO_KIND}:1`) {
+      nextKey = `${BREAKOUT_INFO_KIND}:01R`
+      changed = true
+    } else if (key === `${BREAKOUT_INFO_KIND}:2`) {
+      nextKey = `${BREAKOUT_INFO_KIND}:19L`
+      changed = true
+    }
+    const kind = placementKind(nextKey)
     if (
       (kind === BREAKOUT_INFO_KIND || kind === MAP_INFO_KIND) &&
       isTaxiArrSectionId(p.sectionId)
     ) {
-      out[key] = { ...p, sectionId: 'ctr_arr', bottom: true }
+      out[nextKey] = { ...p, sectionId: 'ctr_arr', bottom: true }
       changed = true
     } else {
-      out[key] = p
+      out[nextKey] = p
     }
   }
   return { placements: out, changed }
+}
+
+/** Normalize legacy breakout forced keys `1`/`2` → runway. */
+function migrateBreakoutForcedKeys(
+  raw: Record<string, string[]>,
+): { forced: Record<string, string[]>; changed: boolean } {
+  const cur = raw[BREAKOUT_INFO_KIND]
+  if (!cur?.length) return { forced: raw, changed: false }
+  let changed = false
+  const next = cur.map((k) => {
+    const n = normalizeBreakoutForceKey(k)
+    if (n && n !== k) {
+      changed = true
+      return n
+    }
+    return k
+  })
+  if (!changed) return { forced: raw, changed: false }
+  const dedup = [...new Set(next)]
+  return {
+    forced: { ...raw, [BREAKOUT_INFO_KIND]: dedup },
+    changed: true,
+  }
 }
 
 function loadPlacements(): Record<string, InfoStripPlacement> {
@@ -173,7 +205,15 @@ function loadForcedKeysByKind(): Record<string, string[]> {
         out[k] = v.filter((x): x is string => typeof x === 'string' && !!x)
       }
     }
-    return out
+    const { forced, changed } = migrateBreakoutForcedKeys(out)
+    if (changed) {
+      try {
+        localStorage.setItem(FORCED_KEY, JSON.stringify(forced))
+      } catch {
+        /* ignore */
+      }
+    }
+    return forced
   } catch {
     return {}
   }
@@ -359,15 +399,36 @@ export type InfoCatalogFolder = {
   items: InfoStripMenuEntry[]
 }
 
+export type BreakoutRunway = '01L' | '01R' | '19L' | '19R'
+
 export type BreakoutVariant = {
   /** Dismiss id (per runway) */
   id: string
-  runway: '01R' | '19L'
+  runway: BreakoutRunway
   turn: 'RIGHT' | 'LEFT'
   heading: string
   climbFt: string
-  /** Mirror plane icons (19L) */
+  /** Mirror plane icons for LEFT breakouts (RIGHT = default graphic) */
   mirror: boolean
+}
+
+const BREAKOUT_RUNWAYS: BreakoutRunway[] = ['01L', '01R', '19L', '19R']
+
+/** Breakout phraseology by ARR runway (TWR briefing). */
+const BREAKOUT_BY_RUNWAY: Record<BreakoutRunway, Omit<BreakoutVariant, 'id' | 'mirror'>> = {
+  '01L': { runway: '01L', turn: 'LEFT', heading: '030', climbFt: 'XXXX' },
+  '01R': { runway: '01R', turn: 'RIGHT', heading: '040', climbFt: 'XXXX' },
+  '19L': { runway: '19L', turn: 'LEFT', heading: '150', climbFt: 'XXXX' },
+  '19R': { runway: '19R', turn: 'RIGHT', heading: '230', climbFt: 'XXXX' },
+}
+
+function makeBreakoutVariant(runway: BreakoutRunway): BreakoutVariant {
+  const base = BREAKOUT_BY_RUNWAY[runway]
+  return {
+    ...base,
+    id: `breakout:${runway}`,
+    mirror: base.turn === 'LEFT',
+  }
 }
 
 /** True when TWR AOR covers this runway (or no AOR split). */
@@ -378,35 +439,34 @@ function essaCoversInfoRunway(store: ReturnType<typeof useEfsStore>, runway: str
   return covered.some((x) => x.toUpperCase() === r)
 }
 
-function breakoutVariantForConfig(cfg: string | null | undefined): BreakoutVariant | null {
-  if (cfg === '1') {
-    return {
-      id: 'breakout:01R',
-      runway: '01R',
-      turn: 'RIGHT',
-      heading: '040',
-      climbFt: 'XXXX',
-      mirror: false,
-    }
-  }
-  if (cfg === '2') {
-    return {
-      id: 'breakout:19L',
-      runway: '19L',
-      turn: 'LEFT',
-      heading: '220',
-      climbFt: 'XXXX',
-      mirror: true,
-    }
-  }
+/** Catalog / placement key = runway; legacy forced keys `1`/`2` still resolve. */
+export function normalizeBreakoutForceKey(key: string | null | undefined): BreakoutRunway | null {
+  if (!key) return null
+  const k = key.trim().toUpperCase()
+  if (k === '1') return '01R'
+  if (k === '2') return '19L'
+  if ((BREAKOUT_RUNWAYS as string[]).includes(k)) return k as BreakoutRunway
   return null
 }
 
-function breakoutForceKey(v: BreakoutVariant): string {
-  return v.runway === '19L' ? '2' : '1'
+function breakoutVariantForKey(key: string | null | undefined): BreakoutVariant | null {
+  const rwy = normalizeBreakoutForceKey(key)
+  return rwy ? makeBreakoutVariant(rwy) : null
 }
 
-/** Active breakout variants (auto + each manually added config). */
+/** Auto breakout from current ESSA RWY config’s ARR runway. */
+function breakoutVariantForConfig(cfg: string | null | undefined): BreakoutVariant | null {
+  if (!cfg) return null
+  const map = getEssaMapInfo(cfg)
+  if (!map) return null
+  return breakoutVariantForKey(map.runway)
+}
+
+export function breakoutForceKey(v: BreakoutVariant): string {
+  return v.runway
+}
+
+/** Active breakout variants (auto + each manually added runway). */
 export function getActiveBreakoutVariants(): BreakoutVariant[] {
   const store = useEfsStore()
   // ESSA roles layout, or RTC with an ESSA column (manual catalog / auto if config known)
@@ -421,12 +481,12 @@ export function getActiveBreakoutVariants(): BreakoutVariant[] {
   const auto = breakoutVariantForConfig(store.essaRwyConfigIdResolved)
   if (auto && essaCoversInfoRunway(store, auto.runway)) add(auto)
   for (const key of getInfoStripForcedKeys(BREAKOUT_INFO_KIND)) {
-    add(breakoutVariantForConfig(key))
+    add(breakoutVariantForKey(key))
   }
   return out
 }
 
-/** Breakout strip — pass `configId` (`1`/`2`) for multi-instance. */
+/** Breakout strip — pass runway (or legacy `1`/`2`) as `configId` for multi-instance. */
 export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | undefined>) {
   const store = useEfsStore()
 
@@ -440,7 +500,8 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
   const variant = computed<BreakoutVariant | null>(() => {
     const cfg = toValue(configIdSource)
     if (cfg) {
-      return getActiveBreakoutVariants().find((v) => breakoutForceKey(v) === cfg) ?? null
+      const want = normalizeBreakoutForceKey(cfg)
+      return getActiveBreakoutVariants().find((v) => v.runway === want) ?? null
     }
     return getActiveBreakoutVariants()[0] ?? null
   })
@@ -464,6 +525,9 @@ export function useBreakoutInfoStrip(configIdSource?: MaybeRefOrGetter<string | 
     if (!v) return
     dismissInfoStrip(v.id)
     removeInfoStripForced(BREAKOUT_INFO_KIND, breakoutForceKey(v))
+    // Drop legacy force keys if still present
+    if (v.runway === '01R') removeInfoStripForced(BREAKOUT_INFO_KIND, '1')
+    if (v.runway === '19L') removeInfoStripForced(BREAKOUT_INFO_KIND, '2')
   }
 
   function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
@@ -1015,13 +1079,13 @@ export function useInfoStripMenu(opts?: {
     const activeMapIds = new Set(getActiveMapVariants().map((v) => v.configId))
     const activeDepIds = new Set(getActiveDepVariants().map((v) => v.configId))
 
-    const breakoutItems: InfoStripMenuEntry[] = (['1', '2'] as const).map((cfg) => {
-      const v = breakoutVariantForConfig(cfg)!
+    const breakoutItems: InfoStripMenuEntry[] = BREAKOUT_RUNWAYS.map((rwy) => {
+      const v = makeBreakoutVariant(rwy)
       return menuEntry({
         kind: BREAKOUT_INFO_KIND,
         id: v.id,
         label: `Breakout ${v.runway}`,
-        forceKey: cfg,
+        forceKey: rwy,
         available: true,
         auto: breakout.autoVariant.value?.id === v.id,
         shown: activeBreakoutIds.has(v.id),
@@ -1151,10 +1215,16 @@ export function useInfoStripMenu(opts?: {
     setInfoStripManual(entry.kind, true)
     // Only clear shared placement for single-instance kinds
     if (!multi) clearInfoStripPlacement(entry.kind)
+    // Breakout: clear pin so it lands above that runway bay (not stale CTR ARR)
+    if (entry.kind === BREAKOUT_INFO_KIND && entry.forceKey) {
+      clearInfoStripPlacement(infoStripInstanceKey(entry.kind, entry.forceKey))
+      // Legacy instance keys from config `1`/`2`
+      if (entry.forceKey === '01R') clearInfoStripPlacement(infoStripInstanceKey(entry.kind, '1'))
+      if (entry.forceKey === '19L') clearInfoStripPlacement(infoStripInstanceKey(entry.kind, '2'))
+    }
     restoreInfoStrip(entry.id)
     if (entry.kind === BREAKOUT_INFO_KIND) {
-      restoreInfoStrip('breakout:01R')
-      restoreInfoStrip('breakout:19L')
+      for (const rwy of BREAKOUT_RUNWAYS) restoreInfoStrip(`breakout:${rwy}`)
     }
     if (entry.kind === R16_INFO_KIND) restoreInfoStrip('r16:manual')
   }
@@ -1179,4 +1249,3 @@ export function useInfoStripMenu(opts?: {
     resetPlacement,
   }
 }
-

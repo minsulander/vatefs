@@ -288,7 +288,7 @@
           <BreakoutInfoStrip
             v-for="v in breakoutsInSlot('beforeTop', index)"
             :key="'bo-t-'+v.id"
-            :config-id="v.runway === '19L' ? '2' : '1'"
+            :config-id="v.runway"
           />
           <MapInfoStrip
             v-for="v in mapsInSlot('beforeTop', index)"
@@ -325,7 +325,7 @@
         <BreakoutInfoStrip
           v-for="v in breakoutsInSlot('endTop')"
           :key="'bo-et-'+v.id"
-          :config-id="v.runway === '19L' ? '2' : '1'"
+          :config-id="v.runway"
         />
         <MapInfoStrip
           v-for="v in mapsInSlot('endTop')"
@@ -375,7 +375,7 @@
           <BreakoutInfoStrip
             v-for="v in breakoutsInSlot('beforeBottom', index)"
             :key="'bo-b-'+v.id"
-            :config-id="v.runway === '19L' ? '2' : '1'"
+            :config-id="v.runway"
           />
           <MapInfoStrip
             v-for="v in mapsInSlot('beforeBottom', index)"
@@ -400,7 +400,7 @@
         <BreakoutInfoStrip
           v-for="v in breakoutsInSlot('endBottom')"
           :key="'bo-eb-'+v.id"
-          :config-id="v.runway === '19L' ? '2' : '1'"
+          :config-id="v.runway"
         />
         <MapInfoStrip
           v-for="v in mapsInSlot('endBottom')"
@@ -511,6 +511,7 @@ import {
   setInfoStripPlacement,
   getInfoStripPlacement,
   getActiveBreakoutVariants,
+  breakoutForceKey,
   getActiveMapVariants,
   getActiveDepVariants,
   infoStripInstanceKey,
@@ -1462,19 +1463,15 @@ function multiInfoSlot(
   return { slot: 'endBottom', index: 0 }
 }
 
-function breakoutForceKey(v: BreakoutVariant): string {
-  return v.runway === '19L' ? '2' : '1'
-}
-
 function breakoutsInSlot(slot: InfoSlot, index?: number): BreakoutVariant[] {
   void activeBreakouts.value
   void ws.activeLayout.value
   return activeBreakouts.value.filter((v) => {
-    // Bottom of CTR ARR (not TAXIWAY ARR / above-RWY heuristic)
+    // Same host as DEP info: divider immediately above that runway bay
     const loc = multiInfoSlot(
       BREAKOUT_INFO_KIND,
       breakoutForceKey(v),
-      'ctr_arr',
+      essaDepDefaultSectionId(v.runway),
     )
     if (!loc || loc.slot !== slot) return false
     if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index

@@ -2,7 +2,7 @@
   <InfoStrip v-if="visible && variant" :strip-id="instanceKey" @close="dismiss">
     <div class="breakout">
       <div class="breakout-icon" aria-hidden="true">
-        <div class="breakout-planes" :class="{ mirrored: variant.mirror }">
+        <div class="breakout-planes" :class="{ mirrored: variant.turn === 'LEFT' }">
           <v-icon class="breakout-plane plane-up" icon="mdi-airplane" />
           <v-icon class="breakout-plane plane-ne" icon="mdi-airplane" />
         </div>
