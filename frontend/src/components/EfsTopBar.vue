@@ -221,20 +221,19 @@
           size="small"
           class="dcl-btn"
           :class="{
-            'text-grey': !dclConnected,
+            'text-grey': !dclConnected && efs.dclStatus !== 'error',
             'text-green': dclConnected,
             'text-red': efs.dclStatus === 'error',
           }"
           :title="dclTooltip"
           @click="onDclClick"
         >
-          {{ dclConnected ? 'DCL' : 'DCL: Voice' }}
+          <template v-if="dclConnected">DCL</template>
+          <template v-else-if="dclAirportTaken">
+            DCL: <span class="dcl-other-label">OTHER</span>
+          </template>
+          <template v-else>DCL: Voice</template>
         </v-btn>
-        <span
-          v-if="dclAirportTaken"
-          class="dcl-other-status text-green"
-          :title="dclOtherTooltip"
-        >OTHER</span>
         <v-menu v-if="dclConnected" location="bottom" offset="4">
           <template v-slot:activator="{ props }">
             <v-btn
@@ -2220,13 +2219,10 @@ span.essa-status-btn.esgg-roles-readonly {
   cursor: default;
 }
 
-.dcl-other-status {
-  font-size: calc(16px * var(--tb, var(--efs-chrome-scale, var(--efs-scale, 1))));
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  line-height: 1;
-  margin-left: calc(2px * var(--efs-chrome-scale, var(--efs-scale, 1)));
-  user-select: none;
+/* Peer already on Hoppie — green OTHER inside grey "DCL: …" button */
+.efs-top-bar :deep(.dcl-btn .dcl-other-label) {
+  color: #4caf50;
+  font-weight: 700;
 }
 
 .dcl-mode-btn {
