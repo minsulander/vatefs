@@ -215,6 +215,7 @@ import {
     isEssaStripVisibleForRoles,
     resolveEssaNextSi,
     resolveAppDepTransfer,
+    resolveDtransTarget,
     resolveEssaXferCallsign,
     setForceIdealAppDepFrequency,
     filterEssaRunwayPlacementsForMyAor,
@@ -2562,6 +2563,24 @@ function clearTopSkyRofFallback(callsign: string) {
         clearTimeout(t)
         topSkyRofFallbackTimers.delete(key)
     }
+}
+
+/** ESSA Direct Transfer workspace divider (frontend `newInstanceId('dtrans')`). */
+function isDtransWorkspaceSectionId(sectionId: string | undefined | null): boolean {
+    return !!sectionId && sectionId.startsWith("dtrans-")
+}
+
+/**
+ * Re-assume / cancel outbound while parked in a D-trans divider → drop manual sticky
+ * so section rules can place the strip again (typically where it sat before the drop).
+ */
+function releaseDtransManualStickyOnAssume(strip: { callsign: string; sectionId?: string }, flight: Flight) {
+    if (!isDtransWorkspaceSectionId(strip.sectionId)) return
+    if (flight.lastSectionRule !== "manual" && !flight.placementStickyKey) return
+    flightStore.clearManualPlacement(strip.callsign, flight)
+    console.log(
+        `[D-TRANS] ${strip.callsign}: ASSUME released sticky park in ${strip.sectionId}`,
+    )
 }
 
 /**
@@ -5712,6 +5731,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.controllerId = staticConfig.myPositionId
                             flight.handoffTargetController = ""
                             flight.ownershipOptimisticUntil = Date.now() + 5000
+                            releaseDtransManualStickyOnAssume(strip, flight)
                             if (
                                 staticConfig.look === "paper" &&
                                 flightStore.isGndTaxiPinned(strip.callsign) &&
@@ -5852,6 +5872,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetController = ""
                         flight.handoffOptimisticUntil = undefined
                         flight.ownershipOptimisticUntil = Date.now() + 5000
+                        releaseDtransManualStickyOnAssume(strip, flight)
                         maybeAutoPrepOnAssume(flight.callsign)
                         // ESGG paper: ASSUME while above-push CD→GND pinned → unpin
                         if (
@@ -6471,6 +6492,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 // APP/DEP handoff: clear HS/HP text (frontend clears matching scribbles)
                 if (isAppOrDepCallsign(message.targetCallsign)) {
                     clearHsHpForAppDepTransfer(flight, strip.callsign)
+                }
+                // Keep manual park (e.g. D-trans) sticky through pending-out reevaluate
+                if (flight.lastSectionRule === 'manual') {
+                    flightStore.markManualPlacement(strip.callsign, flight)
                 }
                 reevaluateAndBroadcast(strip.callsign)
             }
@@ -8487,6 +8512,35 @@ function resolveSectorDisplay(
         callsign: null,
     }
 }
+
+/**
+ * ESSA D-trans strip target: covering callsign + AFV XC display frequency.
+ * Query: id=GND-E|GND-W|GND-N|TWR-E|TWR-W|CD|ARR-W|DEP-W|DEP-E|ARR-E
+ * Optional: ids=GND-E,GND-W,… (batch)
+ */
+app.get("/api/essa-dtrans-target", (req, res) => {
+    const batch = String(req.query.ids || "").trim()
+    if (batch) {
+        const ids = batch.split(/[,;\s]+/).filter(Boolean)
+        const targets = ids.map((id) => resolveDtransTarget(id)).filter((t) => !!t)
+        res.json({ targets })
+        return
+    }
+    const id = String(req.query.id || "").trim()
+    if (!id) {
+        res.status(400).json({
+            error: "Missing parameters",
+            usage: "/api/essa-dtrans-target?id=GND-E or ?ids=GND-E,GND-W",
+        })
+        return
+    }
+    const target = resolveDtransTarget(id)
+    if (!target) {
+        res.status(404).json({ error: `Unknown D-trans target: ${id}` })
+        return
+    }
+    res.json(target)
+})
 
 /**
  * ESSA DEP RWY info strip (VatIRIS-style): runway, turn, hold phraseology,

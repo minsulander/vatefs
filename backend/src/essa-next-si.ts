@@ -1174,6 +1174,164 @@ export function resolveAppDepTransfer(
 
 const APP_DEP_OWNER_SIS = new Set(["DW", "DE", "W", "E", "A", "AW"])
 
+/** D-trans strip segment ids (catalog + drop targets). */
+export type DtransTargetId =
+    | "GND-E"
+    | "GND-W"
+    | "GND-N"
+    | "TWR-E"
+    | "TWR-W"
+    | "CD"
+    | "ARR-W"
+    | "DEP-W"
+    | "DEP-E"
+    | "ARR-E"
+
+const DTRANS_TARGET_IDS = new Set<string>([
+    "GND-E",
+    "GND-W",
+    "GND-N",
+    "TWR-E",
+    "TWR-W",
+    "CD",
+    "ARR-W",
+    "DEP-W",
+    "DEP-E",
+    "ARR-E",
+])
+
+export function isDtransTargetId(id: string): id is DtransTargetId {
+    return DTRANS_TARGET_IDS.has(id.toUpperCase())
+}
+
+export type DtransTargetResolve = {
+    id: DtransTargetId
+    /** Covering login callsign when online */
+    callsign: string | null
+    /** Display frequency MHz (AFV XC / ideal SI when applicable) */
+    frequency: string | null
+    online: boolean
+    xc: boolean
+    displaySi: string | null
+}
+
+function formatMhz(freq: number | undefined): string | null {
+    if (freq == null || !(freq > 0) || !(freq < 199)) return null
+    return freq.toFixed(3)
+}
+
+/**
+ * Resolve who covers a D-trans role/sector and which frequency to show
+ * (same AFV XC / force-ideal rules as XFER and MAP/DEP info strips).
+ */
+export function resolveDtransTarget(rawId: string): DtransTargetResolve | undefined {
+    const id = rawId.trim().toUpperCase()
+    if (!isDtransTargetId(id)) return undefined
+
+    // APP/DEP sectors
+    if (id === "ARR-W" || id === "DEP-W" || id === "DEP-E" || id === "ARR-E") {
+        const sector = id as AppDepSector
+        const idealSi = appDepSectorToSi(sector)
+        const transfer = resolveAppDepTransfer(sector)
+        if (transfer && transfer.displayFrequency > 0) {
+            return {
+                id,
+                callsign: transfer.transferCallsign,
+                frequency: formatMhz(transfer.displayFrequency),
+                online: true,
+                xc: transfer.xc,
+                displaySi: transfer.displaySi,
+            }
+        }
+        const pub = getEsePositionBySi(idealSi)?.frequency
+        return {
+            id,
+            callsign: null,
+            frequency: formatMhz(pub),
+            online: false,
+            xc: false,
+            displaySi: idealSi,
+        }
+    }
+
+    // CD
+    if (id === "CD") {
+        const idealSi = "SAD"
+        const online = isOnlineSi(idealSi)
+        if (online) {
+            const xc = applyIdealXcDisplay(idealSi, online)
+            return {
+                id,
+                callsign: online.callsign,
+                frequency: formatMhz(xc.displayFrequency),
+                online: true,
+                xc: xc.xc,
+                displaySi: xc.displaySi,
+            }
+        }
+        return {
+            id,
+            callsign: null,
+            frequency: formatMhz(getEsePositionBySi(idealSi)?.frequency),
+            online: false,
+            xc: false,
+            displaySi: idealSi,
+        }
+    }
+
+    // GND / TWR — walk ESE OWNER chain for that family
+    let family: EssaGndFamily | EssaCtrFamily
+    let kind: "gnd" | "twr"
+    if (id === "GND-E") {
+        family = "GE"
+        kind = "gnd"
+    } else if (id === "GND-W") {
+        family = "GW"
+        kind = "gnd"
+    } else if (id === "GND-N") {
+        family = "GN"
+        kind = "gnd"
+    } else if (id === "TWR-E") {
+        family = "TE"
+        kind = "twr"
+    } else {
+        family = "TW"
+        kind = "twr"
+    }
+
+    const idealSi =
+        kind === "gnd"
+            ? gndFamilyPrimarySi(family as EssaGndFamily)
+            : twFamilyPrimarySi(family as EssaCtrFamily)
+    const sis =
+        kind === "gnd"
+            ? getGndOwnerChain(family as EssaGndFamily)
+            : getTwrOwnerChain(family as EssaCtrFamily)
+
+    for (const si of sis) {
+        const online = isOnlineSi(si)
+        if (!online) continue
+        const xc = applyIdealXcDisplay(idealSi, online)
+        return {
+            id,
+            callsign: online.callsign,
+            frequency: formatMhz(xc.displayFrequency),
+            online: true,
+            xc: xc.xc,
+            displaySi: xc.displaySi,
+        }
+    }
+
+    return {
+        id,
+        callsign: null,
+        frequency: formatMhz(getEsePositionBySi(idealSi)?.frequency),
+        online: false,
+        xc: false,
+        displaySi: idealSi,
+    }
+}
+
 function skipCurrentGnd(hops: EssaHop[], current: EssaGndFamily, role: ControllerRole | undefined): EssaHop[] {
     if (role !== "GND") return hops
     // Drop leading hops that are our current family until we find a different next

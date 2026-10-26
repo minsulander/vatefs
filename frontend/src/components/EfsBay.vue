@@ -204,7 +204,7 @@ import {
   rtcExtrasVersion,
   setRtcBayBodyHeight,
 } from '@/composables/rtcColumnExtras'
-import { getWorkspace } from '@/workspace'
+import { getWorkspace, type DtransVariantId } from '@/workspace'
 import EfsSection from './EfsSection.vue'
 import WsOverflowHost from './WsOverflowHost.vue'
 import TrashDialog from './TrashDialog.vue'
@@ -262,19 +262,36 @@ function onWorkspaceBayDragOver(e: DragEvent) {
   if (!types) return
   const ok =
     types.includes('application/x-efs-section') ||
-    types.includes('application/x-vatefs-catalog-section')
+    types.includes('application/x-vatefs-catalog-section') ||
+    types.includes('application/x-vatefs-catalog-dtrans')
   if (!ok) return
   e.preventDefault()
   e.stopPropagation()
   if (e.dataTransfer) {
-    e.dataTransfer.dropEffect = types.includes('application/x-vatefs-catalog-section')
-      ? 'copy'
-      : 'move'
+    e.dataTransfer.dropEffect =
+      types.includes('application/x-vatefs-catalog-section') ||
+      types.includes('application/x-vatefs-catalog-dtrans')
+        ? 'copy'
+        : 'move'
   }
 }
 
 function onWorkspaceBayDrop(e: DragEvent) {
   if (!props.workspaceMode) return
+  const dtransRaw = e.dataTransfer?.getData('application/x-vatefs-catalog-dtrans')
+  if (dtransRaw) {
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      const data = JSON.parse(dtransRaw) as { variant?: string }
+      if (data.variant) {
+        ws.addDtransDivider(data.variant as DtransVariantId, props.columnIndex ?? 0)
+      }
+    } catch {
+      /* ignore */
+    }
+    return
+  }
   const catalogRaw = e.dataTransfer?.getData('application/x-vatefs-catalog-section')
   if (catalogRaw) {
     e.preventDefault()

@@ -8,6 +8,7 @@ import {
 } from '@vatefs/common'
 import { useEfsStore } from '@/store/efs'
 import type {
+  DtransVariantId,
   SectionStripSize,
   SortFlow,
   WorkspaceLayout,
@@ -1284,6 +1285,26 @@ export function useWorkspace() {
     persistActiveLayout(activeLayout.value)
   }
 
+  /** ESSA Direct Transfer divider (green segmented header). Multiple instances allowed. */
+  function addDtransDivider(variant: DtransVariantId, column: number) {
+    const layout = activeLayout.value
+    if (!layout) return
+    const col = Math.min(layout.columnCount - 1, Math.max(0, column))
+    const sec: WorkspaceSection = {
+      instanceId: newInstanceId('dtrans'),
+      sectionId: null,
+      anchorColumn: col,
+      stripSize: 'normal',
+      sortFlow: getDefaultSortFlow(),
+      dtrans: variant,
+    }
+    activeLayout.value = {
+      ...layout,
+      sections: insertSectionWithoutOverlap(sec, layout.sections),
+    }
+    persistActiveLayout(activeLayout.value)
+  }
+
   function addSectionFromCatalog(
     sectionId: string,
     title: string,
@@ -1874,6 +1895,7 @@ export function useWorkspace() {
     tryMergeDrop,
     closeSection,
     addEmptyHeader,
+    addDtransDivider,
     addSectionFromCatalog,
     syncRunwaySectionsFromServer,
     buildDisplayBays,

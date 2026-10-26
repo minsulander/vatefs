@@ -1136,13 +1136,14 @@ class FlightStore {
 
     /**
      * ES-facing state that should release a manual/sync bay sticky when it changes.
+     * Intentionally omits handoffTargetController — pending-out (incl. D-trans park)
+     * must keep the strip in place until peer accept changes controller / ownership.
      */
     placementStickyFingerprint(flight: Flight): string {
         return [
             flight.groundstate ?? '',
             flight.controller ?? '',
             flight.controllerId ?? '',
-            flight.handoffTargetController ?? '',
             flight.airborne ? '1' : '0',
             flight.clearance ? '1' : '0',
             flight.clearedToLand ? '1' : '0',
@@ -1162,6 +1163,17 @@ class FlightStore {
         if (!f) return
         f.lastSectionRule = 'manual'
         f.placementStickyKey = this.placementStickyFingerprint(f)
+    }
+
+    /** Release manual/sync bay sticky so section rules can place again. */
+    clearManualPlacement(stripId: string, flight?: Flight) {
+        const f =
+            flight ??
+            this.flights.get(stripId) ??
+            this.flights.get(stripId.split('@')[0] ?? '')
+        if (!f) return
+        f.placementStickyKey = undefined
+        if (f.lastSectionRule === 'manual') f.lastSectionRule = undefined
     }
 
     /**

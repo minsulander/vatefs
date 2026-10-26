@@ -745,6 +745,32 @@
                   >{{ row.label }}</button>
                 </template>
               </template>
+              <template v-if="efs.essaRolesMode">
+                <button
+                  type="button"
+                  class="efs-popup-section efs-popup-folder"
+                  :aria-expanded="catalogDtransOpen"
+                  @click.stop="catalogDtransOpen = !catalogDtransOpen"
+                >
+                  <span>Direct Transfer</span>
+                  <span
+                    class="efs-popup-folder-chevron"
+                    :class="{ 'is-open': catalogDtransOpen }"
+                    aria-hidden="true"
+                  />
+                </button>
+                <template v-if="catalogDtransOpen">
+                  <button
+                    v-for="entry in dtransCatalog"
+                    :key="entry.variant"
+                    type="button"
+                    class="efs-popup-item"
+                    :draggable="true"
+                    @click="onAddDtransDivider(entry.variant)"
+                    @dragstart="onCatalogDtransDragStart($event, entry.variant)"
+                  >{{ entry.label }}</button>
+                </template>
+              </template>
               <button
                 type="button"
                 class="efs-popup-section efs-popup-folder"
@@ -812,7 +838,7 @@ import {
   resolveEssaRwyConfigId,
   essaRwyQuickrefImageUrl,
 } from "@vatefs/common"
-import { getWorkspace } from "@/workspace"
+import { getWorkspace, DTRANS_CATALOG, type DtransVariantId } from "@/workspace"
 import { useInfoStripMenu } from "@/composables/useInfoStrips"
 import {
   useRwyFlagMenu,
@@ -830,7 +856,9 @@ const trashDragOver = ref(false)
 const rightMenuOpen = ref(false)
 /** Info strip / RWY / Sections folders — closed each time the catalog opens. */
 const catalogSectionsOpen = ref(false)
+const catalogDtransOpen = ref(false)
 const catalogInfoFolderOpen = ref<Record<string, boolean>>({})
+const dtransCatalog = DTRANS_CATALOG
 /** Max height for top-right catalog = bay body height; scrollbar only if content overflows. */
 const catalogMaxHPx = ref(0)
 const catalogMaxHStyle = computed(() =>
@@ -871,6 +899,7 @@ function refreshCatalogMaxHeight() {
 watch(rightMenuOpen, async (open) => {
   if (!open) return
   catalogSectionsOpen.value = false
+  catalogDtransOpen.value = false
   catalogInfoFolderOpen.value = {}
   await nextTick()
   refreshCatalogMaxHeight()
@@ -915,6 +944,18 @@ function onShowInfoStrip(entry: Parameters<typeof infoMenu.showEntry>[0]) {
 function onAddEmptyHeader() {
   ws.addEmptyHeader(Math.max(0, ws.columnCount.value - 1))
   rightMenuOpen.value = false
+}
+function onAddDtransDivider(variant: DtransVariantId) {
+  ws.addDtransDivider(variant, Math.max(0, ws.columnCount.value - 1))
+  rightMenuOpen.value = false
+}
+function onCatalogDtransDragStart(e: DragEvent, variant: DtransVariantId) {
+  if (!e.dataTransfer) return
+  e.dataTransfer.setData(
+    'application/x-vatefs-catalog-dtrans',
+    JSON.stringify({ variant }),
+  )
+  e.dataTransfer.effectAllowed = 'copy'
 }
 function onAddSection(sec: { sectionId: string; title: string; present?: boolean }) {
   if (sec.present) return

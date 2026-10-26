@@ -22,6 +22,7 @@
         (workspaceMode && ws.draggingSectionId.value === workspaceInstanceId) ||
         (store.multiAirport && rtcDraggingSectionId === section.id),
       'efs-section--workspace-blocker': isEmptyWorkspaceHeader,
+      'efs-section--dtrans': isDtransDivider,
     }"
     :data-section-id="section.id"
     :data-efs-bay-id="effectiveBayId"
@@ -29,6 +30,7 @@
     :data-efs-drop-section-id="effectiveSectionId"
     :data-efs-match-sections="sectionIdsForStripMatch().join(',')"
     :data-ws-instance="workspaceInstanceId || undefined"
+    :data-dtrans="isDtransDivider ? dtransVariant : undefined"
     :style="sectionStyle"
   >
     <div
@@ -40,9 +42,10 @@
         { 'section-header--paper': store.isPaperLook },
         { 'section-header--rtc': store.multiAirport && !store.isPaperLook },
         { 'section-header--rtc-rwy': !!rtcHeaderRwy },
-        { 'header-drop-active': headerDropActive },
+        { 'header-drop-active': headerDropActive && !isDtransDivider },
         { 'section-header--workspace-draggable': workspaceMode || store.multiAirport },
         { 'section-header--empty-blocker': isEmptyWorkspaceHeader },
+        { 'section-header--dtrans': isDtransDivider },
       ]"
       :title="
         workspaceMode || store.multiAirport
@@ -61,7 +64,28 @@
       @dragleave="onHeaderDragLeave"
       @drop.prevent="onSectionHeaderDrop($event)"
     >
-      <template v-if="!store.isPaperLook">
+      <template v-if="isDtransDivider && dtransVariant">
+        <DtransDividerHeader
+          class="dtrans-hdr-fill"
+          :variant="dtransVariant"
+        />
+        <div class="section-header-right">
+          <button
+            type="button"
+            class="section-hdr-btn section-hdr-close"
+            title="Close"
+            @pointerdown.stop
+            @mousedown.stop
+            @touchstart.stop
+            @click.stop="onWorkspaceClose"
+          >
+            <svg class="section-hdr-close-icon" viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M1 1 L11 11 M11 1 L1 11" />
+            </svg>
+          </button>
+        </div>
+      </template>
+      <template v-else-if="!store.isPaperLook">
         <div class="section-header-left">
           <button
             v-if="(workspaceMode || store.multiAirport) && !isEmptyWorkspaceHeader"
@@ -182,11 +206,11 @@
         >{{ paperRwyId }}</button>
       </template>
       <span
-        v-else
+        v-else-if="!isDtransDivider"
         class="section-title"
         :class="{ 'section-title--paper-lg': store.isPaperLook && paperLargeTitle }"
       >{{ section.title }}</span>
-      <template v-if="!store.isPaperLook">
+      <template v-if="!store.isPaperLook && !isDtransDivider">
         <div class="section-header-right">
           <span
             v-if="rtcHeaderRwy"
@@ -250,7 +274,10 @@
     </div>
     <div
       class="section-content"
-      :class="{ 'section-content--stick-bottom': stickBottomZone }"
+      :class="{
+        'section-content--stick-bottom': stickBottomZone,
+        'section-content--dtrans': isDtransDivider,
+      }"
     >
       <!--
         Main list (scrollable). Stick-bottom zones: spacer pushes strips against the
@@ -348,8 +375,10 @@
         />
       </div>
 
-      <!-- Stick-to tray: bottom of normal sections; top of stick-bottom sections (CSS order) -->
+      <!-- Stick-to tray: bottom of normal sections; top of stick-bottom sections (CSS order).
+           D-trans dividers: no pin tray. -->
       <div
+        v-if="!isDtransDivider"
         class="bottom-drop-zone"
         :class="{
           'drop-active': isBottomDragOver,
@@ -364,7 +393,7 @@
 
       <!-- Pinned strips: bottom of normal sections; top of stick-bottom sections (CSS order) -->
       <div
-        v-if="hasPinnedZoneContent"
+        v-if="hasPinnedZoneContent && !isDtransDivider"
         ref="bottomContainer"
         class="bottom-strips-container"
         :class="{ 'bottom-strips-container--stick-top': stickBottomZone }"
@@ -503,6 +532,9 @@ import Sid19LInfoStrip from './Sid19LInfoStrip.vue'
 import R16InfoStrip from './R16InfoStrip.vue'
 import RwyFlagStrip from './RwyFlagStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
+import DtransDividerHeader from './DtransDividerHeader.vue'
+import { isDtransVariantId, type DtransVariantId } from '@/workspace/dtrans'
+import { tryApplyDtransStripDrop } from '@/workspace/dtransDrop'
 import {
   BREAKOUT_INFO_KIND,
   MAP_INFO_KIND,
@@ -689,9 +721,20 @@ const store = useEfsStore()
 const { startResize } = useSectionResize()
 const ws = getWorkspace()
 
+const workspaceSection = computed(() =>
+  props.workspaceInstanceId ? ws.getWorkspaceSection(props.workspaceInstanceId) : undefined,
+)
+
+const dtransVariant = computed((): DtransVariantId | undefined => {
+  const v = workspaceSection.value?.dtrans
+  return isDtransVariantId(v) ? v : undefined
+})
+const isDtransDivider = computed(() => !!dtransVariant.value)
+
 const isEmptyWorkspaceHeader = computed(() => {
   // RTC client empty dividers (catalog → Empty divider)
   if (store.multiAirport && props.section.id.startsWith('rtc_empty_')) return true
+  if (isDtransDivider.value) return false
   return (
     props.workspaceMode &&
     (!props.section.title || props.section.title.trim() === '') &&
@@ -700,9 +743,29 @@ const isEmptyWorkspaceHeader = computed(() => {
   )
 })
 
-const workspaceSection = computed(() =>
-  props.workspaceInstanceId ? ws.getWorkspaceSection(props.workspaceInstanceId) : undefined,
-)
+const dtransLastClientX = ref(0)
+
+/** Remember pointer X for zone resolve on drop (no visual highlight). */
+function noteDtransPointerX(clientX: number) {
+  if (!isDtransDivider.value) return
+  dtransLastClientX.value = clientX
+}
+
+/**
+ * Park strip in this D-trans section and start manualTransfer to the zone's controller.
+ * Offline zone → no-op (strip stays where it was).
+ */
+function acceptDtransStripDrop(stripId: string, clientX?: number): boolean {
+  if (!isDtransDivider.value || !sectionRoot.value) return false
+  const x = clientX ?? dtransLastClientX.value
+  return tryApplyDtransStripDrop({
+    stripId,
+    bayId: effectiveBayId.value,
+    sectionId: props.section.id,
+    sectionEl: sectionRoot.value,
+    clientX: x,
+  })
+}
 
 const workspaceStripSize = computed(() => workspaceSection.value?.stripSize ?? 'normal')
 const workspaceStripSizeLabel = computed(() => workspaceStripSize.value)
@@ -1703,6 +1766,15 @@ watch(touchDropPlacement, (p) => {
   touchOwnedHighlight = true
   // Touch owns the single global marker — clear any stale HTML5 claim elsewhere
   claimHtml5DropHighlight()
+  // Flight strips use pointer/touch drag (HTML5 off on SAAB/ESSA cock edges).
+  if (isDtransDivider.value) {
+    dropInsertIndex.value = null
+    isBottomDragOver.value = false
+    headerDropActive.value = false
+    clearDropPlacementLine()
+    noteDtransPointerX(p!.clientX)
+    return
+  }
   if (p!.isBottom) {
     dropInsertIndex.value = null
     isBottomDragOver.value = true
@@ -2088,8 +2160,10 @@ function stripMatchesThisSection(strip: FlightStripData): boolean {
 
 function collectTopStrips(): FlightStripData[] {
   const list: FlightStripData[] = []
+  // D-trans: no pin tray — show all matching strips in the main list
+  const allowPinned = !isDtransDivider.value
   store.strips.forEach((strip) => {
-    if (stripMatchesThisSection(strip) && !strip.bottom) {
+    if (stripMatchesThisSection(strip) && (allowPinned ? !strip.bottom : true)) {
       list.push(strip)
     }
   })
@@ -2587,6 +2661,12 @@ function membershipSectionForDrop(stripId: string): string {
  * freeze visual order as MAN — including merged DEP spanning pending+cleared.
  */
 function placeStripInTop(stripId: string, insertAmongVisible: number) {
+  // Touch / generic place into a D-trans divider → transfer via last hover X
+  if (isDtransDivider.value) {
+    acceptDtransStripDrop(stripId)
+    return
+  }
+
   const bay = effectiveBayId.value
   const modeSec = effectiveSectionId.value
   const matchIds = sectionIdsForStripMatch()
@@ -2616,6 +2696,25 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
   )
   store.moveStripToSection(stripId, bay, membershipSec, insertAmongVisible)
 }
+
+/** D-trans: when peer accepts the handoff, clear strip from this bay. */
+watch(
+  () => {
+    void store.stripsVersion
+    if (!isDtransDivider.value) return ''
+    const parts: string[] = []
+    store.strips.forEach((s) => {
+      if (stripMatchesThisSection(s) && s.transferOutAccepted) parts.push(s.id)
+    })
+    return parts.join(',')
+  },
+  (ids) => {
+    if (!ids || !isDtransDivider.value) return
+    for (const id of ids.split(',')) {
+      if (id) store.deleteStrip(id)
+    }
+  },
+)
 
 /** Last preferred HHMM per strip — RTC dep sticky-manual clears when times change */
 const lastSortTimes = ref<Map<string, string>>(new Map())
@@ -2648,6 +2747,7 @@ watch(
 
 const bottomStrips = computed(() => {
   void store.stripsVersion
+  if (isDtransDivider.value) return []
   if (props.workspaceMode) {
     const list: FlightStripData[] = []
     store.strips.forEach((strip) => {
@@ -3323,6 +3423,14 @@ function onHeaderDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  if (isDtransDivider.value) {
+    claimHtml5DropHighlight()
+    headerDropActive.value = false
+    isBottomDragOver.value = false
+    clearDropPlacementLine()
+    noteDtransPointerX(event.clientX)
+    return
+  }
   claimHtml5DropHighlight()
   headerDropActive.value = true
   isBottomDragOver.value = false
@@ -3336,6 +3444,14 @@ function onHeaderDragEnter(event: DragEvent) {
     return
   }
   event.preventDefault()
+  if (isDtransDivider.value) {
+    claimHtml5DropHighlight()
+    headerDropActive.value = false
+    isBottomDragOver.value = false
+    clearDropPlacementLine()
+    noteDtransPointerX(event.clientX)
+    return
+  }
   claimHtml5DropHighlight()
   headerDropActive.value = true
   isBottomDragOver.value = false
@@ -3358,6 +3474,16 @@ function onHeaderDrop(event: DragEvent) {
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
+
+  if (isDtransDivider.value) {
+    try {
+      const data = JSON.parse(event.dataTransfer.getData('application/json') || '{}')
+      if (data?.stripId) acceptDtransStripDrop(data.stripId, event.clientX)
+    } catch (error) {
+      console.error('Error handling D-trans header drop:', error)
+    }
+    return
+  }
 
   const createType = event.dataTransfer.getData('application/efs-create')
   if (createType) {
@@ -3398,6 +3524,14 @@ function onTopDragOver(event: DragEvent) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
   }
+  if (isDtransDivider.value) {
+    claimHtml5DropHighlight()
+    headerDropActive.value = false
+    isBottomDragOver.value = false
+    clearDropPlacementLine()
+    noteDtransPointerX(event.clientX)
+    return
+  }
   claimHtml5DropHighlight()
   headerDropActive.value = false
   isBottomDragOver.value = false
@@ -3407,6 +3541,14 @@ function onTopDragOver(event: DragEvent) {
 function onTopDragEnter(event: DragEvent) {
   if (isWorkspaceHeaderDragActive(event)) {
     clearDragHighlights()
+    return
+  }
+  if (isDtransDivider.value) {
+    claimHtml5DropHighlight()
+    headerDropActive.value = false
+    isBottomDragOver.value = false
+    clearDropPlacementLine()
+    noteDtransPointerX(event.clientX)
     return
   }
   claimHtml5DropHighlight()
@@ -3432,6 +3574,16 @@ function onTopDrop(event: DragEvent) {
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
+
+  if (isDtransDivider.value) {
+    try {
+      const data = JSON.parse(event.dataTransfer.getData('application/json') || '{}')
+      if (data?.stripId) acceptDtransStripDrop(data.stripId, event.clientX)
+    } catch (error) {
+      console.error('Error handling D-trans body drop:', error)
+    }
+    return
+  }
 
   // Handle create-strip drops from bottom bar
   const createType = event.dataTransfer.getData('application/efs-create')
@@ -3659,6 +3811,11 @@ function onTopDrop(event: DragEvent) {
 
 // Bottom drop zone handling
 function onBottomDragOver(event: DragEvent) {
+  if (isDtransDivider.value) {
+    event.preventDefault()
+    clearDragHighlights()
+    return
+  }
   if (isWorkspaceHeaderDragActive(event)) {
     event.preventDefault()
     clearDragHighlights()
@@ -3675,6 +3832,10 @@ function onBottomDragOver(event: DragEvent) {
 }
 
 function onBottomDragEnter(event?: DragEvent) {
+  if (isDtransDivider.value) {
+    clearDragHighlights()
+    return
+  }
   if (isWorkspaceHeaderDragActive(event)) {
     clearDragHighlights()
     return
@@ -3697,6 +3858,18 @@ function onBottomDrop(event: DragEvent) {
 
   event.preventDefault()
   isBottomDragOver.value = false
+
+  // D-trans: no pin — treat as normal transfer drop into the section
+  if (isDtransDivider.value) {
+    if (!event.dataTransfer) return
+    try {
+      const data = JSON.parse(event.dataTransfer.getData('application/json') || '{}')
+      if (data?.stripId) acceptDtransStripDrop(data.stripId, event.clientX)
+    } catch (error) {
+      console.error('Error handling D-trans bottom drop:', error)
+    }
+    return
+  }
 
   if (!event.dataTransfer) return
 
@@ -4283,6 +4456,33 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 
 .section-header--empty-blocker .section-title {
   visibility: hidden;
+}
+
+/* ESSA Direct Transfer divider — same height/chrome as other headers; green fill */
+.section-header--dtrans {
+  background: #096a2e;
+  border-bottom-color: #065022;
+  justify-content: stretch;
+  padding: 0;
+}
+.section-header--dtrans .dtrans-hdr-fill {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+.section-header--dtrans .section-header-right {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+}
+.efs-section--dtrans {
+  min-height: 0;
+}
+
+.section-content--dtrans {
+  position: relative;
 }
 
 /* Text key — same chrome as size/flow; wider for TOBT/TSAT/MAN label */

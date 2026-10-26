@@ -7,6 +7,7 @@ import type {
 } from './types'
 import { WORKSPACE_STORAGE_KEY, newInstanceId } from './types'
 import { formatEssaRolesLabel } from './roleLabel'
+import { isDtransVariantId } from './dtrans'
 
 function emptyStore(): WorkspaceStoreFile {
   return { version: 1, userDefaults: {}, layouts: [], defaultSortFlow: 'newestBottom' }
@@ -33,6 +34,7 @@ export function sanitizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayou
     if (s.y != null) out.y = s.y
     if (s.yRatio != null) out.yRatio = s.yRatio
     if (s.height != null) out.height = s.height
+    if (s.dtrans != null && isDtransVariantId(s.dtrans)) out.dtrans = s.dtrans
     return out
   })
 

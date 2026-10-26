@@ -1,7 +1,11 @@
 /** ESSA flexible workspace — local-only continuous-flow layout (#51). */
 
+import type { DtransVariantId } from './dtrans'
+
 export type SortFlow = 'newestBottom' | 'newestTop'
 export type SectionStripSize = 'compact' | 'normal' | 'expanded'
+
+export type { DtransVariantId }
 
 /** Split/merge family ids (ESSA + OTHER; RTC will reuse OTHER groups) */
 export type SplitGroupId =
@@ -66,6 +70,11 @@ export interface WorkspaceSection {
   height?: number
   stripSize: SectionStripSize
   sortFlow: SortFlow
+  /**
+   * ESSA Direct Transfer divider (sectionId stays null).
+   * Green segmented header + body zones → manualTransfer; strips park until accept.
+   */
+  dtrans?: DtransVariantId
 }
 
 /** Resolve header top Y (px) from yRatio and/or absolute y. */

@@ -19,6 +19,7 @@ export interface TouchDropPlacement {
   /** Index among non-dragging top strips (length = append at end). Null when bottom / trash. */
   insertIndex: number | null
   isBottom: boolean
+  clientX: number
   clientY: number
 }
 
@@ -50,7 +51,11 @@ function clearTouchDropPlacement() {
 /** Update insert-line / bottom-slot from a hit-test element (no full-bay highlight).
  *  Bottom-slot styling is driven by EfsSection via touchDropPlacement → isBottomDragOver.
  */
-function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) {
+function applyTouchDropPlacement(
+  elementUnder: Element | null,
+  clientY: number,
+  clientX = 0,
+) {
   const bottomZone = elementUnder?.closest('.bottom-drop-zone') as HTMLElement | null
   const bottomStripsContainer = elementUnder?.closest('.bottom-strips-container') as HTMLElement | null
   const headerEl = elementUnder?.closest('.section-header') as HTMLElement | null
@@ -71,7 +76,14 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
   }
 
   if (isOverBottom) {
-    touchDropPlacement.value = { sectionId, bayId, insertIndex: null, isBottom: true, clientY }
+    touchDropPlacement.value = {
+      sectionId,
+      bayId,
+      insertIndex: null,
+      isBottom: true,
+      clientX,
+      clientY,
+    }
     const dropTarget =
       (bottomZone || bottomStripsContainer)?.closest('.section-content') as HTMLElement | null
     return { dropTarget, isOverBottom: true }
@@ -79,7 +91,14 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
 
   // Drop on section header → insert at top of that section
   if (headerEl && sectionEl?.contains(headerEl)) {
-    touchDropPlacement.value = { sectionId, bayId, insertIndex: 0, isBottom: false, clientY }
+    touchDropPlacement.value = {
+      sectionId,
+      bayId,
+      insertIndex: 0,
+      isBottom: false,
+      clientX,
+      clientY,
+    }
     const topContainer = sectionEl.querySelector('.top-strips-container') as HTMLElement | null
     const dropTarget =
       (sectionEl.querySelector('.section-content') as HTMLElement | null) || topContainer
@@ -90,7 +109,14 @@ function applyTouchDropPlacement(elementUnder: Element | null, clientY: number) 
     (elementUnder?.closest('.top-strips-container') as HTMLElement | null) ||
     (sectionEl?.querySelector('.top-strips-container') as HTMLElement | null)
   const insertIndex = topContainer ? computeTopInsertIndex(topContainer, clientY) : 0
-  touchDropPlacement.value = { sectionId, bayId, insertIndex, isBottom: false, clientY }
+  touchDropPlacement.value = {
+    sectionId,
+    bayId,
+    insertIndex,
+    isBottom: false,
+    clientX,
+    clientY,
+  }
 
   const dropTarget =
     (elementUnder?.closest('.section-content') as HTMLElement | null) ||
@@ -200,7 +226,11 @@ export function useTouchDrag() {
       return
     }
 
-    const { dropTarget, isOverBottom } = applyTouchDropPlacement(elementUnder, touch.clientY)
+    const { dropTarget, isOverBottom } = applyTouchDropPlacement(
+      elementUnder,
+      touch.clientY,
+      touch.clientX,
+    )
     isOverBottomZone.value = isOverBottom
     currentDropTarget.value = dropTarget
   }
@@ -404,7 +434,7 @@ export function setTouchDropPlacementFromPoint(clientX: number, clientY: number,
   if (hideEl) hideEl.style.display = 'none'
   const elementUnder = document.elementFromPoint(clientX, clientY)
   if (hideEl) hideEl.style.display = ''
-  applyTouchDropPlacement(elementUnder, clientY)
+  applyTouchDropPlacement(elementUnder, clientY, clientX)
 }
 
 export function clearTouchDropPlacementIndicators() {

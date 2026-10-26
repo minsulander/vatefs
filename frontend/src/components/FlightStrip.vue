@@ -1689,6 +1689,7 @@ import {
   releaseStripContextMenu,
 } from '@/composables/stripContextMenuShared'
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
+import { tryApplyDtransStripDrop } from '@/workspace/dtransDrop'
 import { paperKlackPullBayIds } from '@/composables/paperKlack'
 import { insertIndexAtClientY } from '@/composables/dropPlacement'
 import {
@@ -2314,7 +2315,19 @@ function finishPaperBayDrop() {
         ? stripForDrop.sectionId
         : modeSectionId
     if (modeSectionId && targetBayId && membershipSec) {
-      if (result.isBottomDrop) {
+      // D-trans divider: pointer/touch path never hits section @drop — transfer here
+      if (
+        sectionEl &&
+        tryApplyDtransStripDrop({
+          stripId: result.data.stripId,
+          bayId: targetBayId,
+          sectionId: modeSectionId,
+          sectionEl,
+          clientX: dragLastClientX,
+        })
+      ) {
+        // handled (transfer or offline no-op)
+      } else if (result.isBottomDrop) {
         store.moveStripToBottom(
           result.data.stripId,
           targetBayId,
