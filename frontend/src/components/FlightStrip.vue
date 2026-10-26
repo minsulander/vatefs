@@ -2170,10 +2170,21 @@ function readKlackAmtPx(): number {
   return KLACK_BASE_PX * (bay || stripSc || 1)
 }
 
-function klackSnapTarget(x: number): 'left' | 'right' | null {
+/** Paper: fraction of cock travel to snap. SAAB uses SAAB_KLACK_SNAP_MULT × full travel. */
+const PAPER_KLACK_SNAP_THRESHOLD = 0.45
+/** SAAB: sideways px must reach this × cock distance before left/right snaps. */
+const SAAB_KLACK_SNAP_MULT = 5
+
+function klackSnapThresholdPx(): number {
   const amt = klackAmtPx.value
-  if (x <= -amt * 0.45) return 'left'
-  if (x >= amt * 0.45) return 'right'
+  if (!store.isPaperLook && showSaabCockEdges.value) return amt * SAAB_KLACK_SNAP_MULT
+  return amt * PAPER_KLACK_SNAP_THRESHOLD
+}
+
+function klackSnapTarget(x: number): 'left' | 'right' | null {
+  const th = klackSnapThresholdPx()
+  if (x <= -th) return 'left'
+  if (x >= th) return 'right'
   return null
 }
 
@@ -2193,7 +2204,10 @@ function captureDragOrigin() {
 /** Offset from flush (start cock + pointer delta); range allows left↔right in one drag. */
 function klackOffsetFromPointer(): number {
   const dx = dragLastClientX - paperStartX
-  const max = klackAmtPx.value * 2.2
+  // SAAB needs headroom past 5× cock distance so the snap threshold is reachable
+  const max = !store.isPaperLook && showSaabCockEdges.value
+    ? klackAmtPx.value * (SAAB_KLACK_SNAP_MULT + 0.5)
+    : klackAmtPx.value * 2.2
   return Math.max(-max, Math.min(max, klackBaseX + dx))
 }
 
