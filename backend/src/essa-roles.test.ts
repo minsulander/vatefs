@@ -10,6 +10,8 @@ import {
     collectEssaRunwayPairs,
     computeAutoEssaRoles,
     filterEssaLayout,
+    isEssaAppCallsign,
+    parseEssaLoginId,
     resolveGndRolesFromOwnerCoverage,
     type EssaFamily,
 } from "./essa-roles.js"
@@ -214,6 +216,90 @@ check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
         out.bays[0]!.sections.map((s) => s.id),
         ["taxi_dep"]
     )
+})
+
+check("computeAutoEssaRoles APP login selects APP family", () => {
+    const roles = computeAutoEssaRoles("ESSA_APP", ["APP"], ["ESSA_APP", "ESSA_E_TWR"])
+    assert.ok(roles.includes("APP"))
+})
+
+check("ESSA*APP allows flexible underscores", () => {
+    for (const cs of [
+        "ESSA_APP",
+        "ESSA__APP",
+        "ESSA_E_APP",
+        "ESSA__E_APP",
+        "ESSA_E__APP",
+        "ESSAAPP",
+        "ESSA___E___APP",
+    ]) {
+        assert.equal(parseEssaLoginId(cs), "APP", cs)
+        assert.equal(isEssaAppCallsign(cs), true, cs)
+    }
+    assert.equal(isEssaAppCallsign("ESSA_R_APP"), false)
+    assert.equal(parseEssaLoginId("ESSA_R_APP"), undefined)
+})
+
+check("computeAutoEssaRoles CTR covering approach selects APP", () => {
+    const roles = computeAutoEssaRoles("ESAA_CTR", ["APP", "CTR"], ["ESAA_CTR"])
+    assert.ok(roles.includes("APP"))
+})
+
+check("APP+TWR hides INBOUND APP and titles ctr as TMA", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay1",
+                sections: [
+                    { id: "inbound_acc", title: "INBOUND ACC" },
+                    { id: "inbound", title: "INBOUND" },
+                    { id: "ctr_arr", title: "CTR ARR" },
+                    { id: "ctr_dep", title: "CTR DEP" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["inbound_acc", ["APP"]],
+        ["inbound", ["GND", "TWR"]],
+        ["ctr_arr", ["TWR", "APP"]],
+        ["ctr_dep", ["TWR", "APP"]],
+    ])
+    const out = filterEssaLayout(
+        layout,
+        ["APP", "TWR-E", "TWR-W"],
+        visibleFor,
+        ["TWR-E", "TWR-W"],
+        []
+    )
+    const secs = out.bays[0]!.sections
+    assert.deepEqual(
+        secs.map((s) => s.id),
+        ["inbound_acc", "ctr_arr", "ctr_dep"]
+    )
+    assert.equal(secs.find((s) => s.id === "ctr_arr")!.title, "TMA ARR")
+    assert.equal(secs.find((s) => s.id === "ctr_dep")!.title, "TMA DEP")
+})
+
+check("TWR without APP keeps CTR ARR title and INBOUND APP", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay1",
+                sections: [
+                    { id: "inbound", title: "INBOUND" },
+                    { id: "ctr_arr", title: "CTR ARR" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["inbound", ["GND", "TWR"]],
+        ["ctr_arr", ["TWR", "APP"]],
+    ])
+    const out = filterEssaLayout(layout, ["TWR-E"], visibleFor, ["TWR-E"], [])
+    assert.equal(out.bays[0]!.sections[0]!.title, "INBOUND APP")
+    assert.equal(out.bays[0]!.sections[1]!.title, "CTR ARR")
 })
 
 console.log(`\n${passed} passed`)

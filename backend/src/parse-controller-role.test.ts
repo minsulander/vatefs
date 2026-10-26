@@ -39,4 +39,13 @@ check("GND / APP / CTR suffixes", () => {
     assert.equal(parseControllerRole("ESGG_R_APP", []), "TWR")
 })
 
+check("ESSA APP with flexible underscores → APP", () => {
+    assert.equal(parseControllerRole("ESSA_APP", []), "APP")
+    assert.equal(parseControllerRole("ESSA__APP", []), "APP")
+    assert.equal(parseControllerRole("ESSA_E_APP", []), "APP")
+    assert.equal(parseControllerRole("ESSA__E_APP", []), "APP")
+    assert.equal(parseControllerRole("ESSA_E__APP", []), "APP")
+    assert.equal(parseControllerRole("ESSA_R_APP", []), "TWR")
+})
+
 console.log(`${passed} passed`)

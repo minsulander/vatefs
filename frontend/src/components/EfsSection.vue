@@ -582,12 +582,18 @@ function isInboundSectionId(sectionId: string, title?: string): boolean {
 }
 
 /**
- * INBOUND APP only — ETA auto-sort (earliest at bottom).
- * Plain "INBOUND" (ESGG) and "INBOUND APP" (ESSA TWR). Not INBOUND TWR-* / GND-*.
+ * INBOUND / INBOUND APP / INBOUND ACC — time auto-sort (never sticky).
+ * Plain "INBOUND" (ESGG) uses ETA; "INBOUND APP" / "INBOUND ACC" use ETN.
+ * Not INBOUND TWR-* / GND-*.
  */
 function isInboundAppSectionTitle(title?: string): boolean {
   const t = (title || '').toUpperCase().trim()
-  return t === 'INBOUND' || t === 'INBOUND APP'
+  return t === 'INBOUND' || t === 'INBOUND APP' || t === 'INBOUND ACC'
+}
+
+function isInboundEtnSortTitle(title?: string): boolean {
+  const t = (title || '').toUpperCase().trim()
+  return t === 'INBOUND APP' || t === 'INBOUND ACC'
 }
 
 function isCtrDepSectionId(sectionId: string): boolean {
@@ -2147,7 +2153,7 @@ function sortByDepTime(
   })
 }
 
-/** ETA sort for SAAB INBOUND APP — earliest = first in sequence at bottom (toward CTR ARR); missing at top. */
+/** ETA sort for ESGG INBOUND — earliest = first in sequence at bottom; missing at top. */
 function sortByEta(list: FlightStripData[]): FlightStripData[] {
   const nowMin = utcNowMinutes()
   return [...list].sort((a, b) => {
@@ -2159,6 +2165,26 @@ function sortByEta(list: FlightStripData[]): FlightStripData[] {
     if (aMiss !== bMiss) return aMiss ? -1 : 1
     // Later ETAs toward the top; earliest (first in sequence) at bottom
     const d = kb - ka
+    if (d !== 0) return d
+    const cs = a.callsign.localeCompare(b.callsign)
+    if (cs !== 0) return cs
+    return a.position - b.position
+  })
+}
+
+/**
+ * ETN sort for ESSA INBOUND APP / INBOUND ACC — already inside (0) at bottom,
+ * soonest entry above that; missing ETN at top.
+ */
+function sortBySectorEntry(list: FlightStripData[]): FlightStripData[] {
+  return [...list].sort((a, b) => {
+    const ka = a.sectorEntryMin
+    const kb = b.sectorEntryMin
+    const aMiss = ka == null || ka < 0
+    const bMiss = kb == null || kb < 0
+    if (aMiss !== bMiss) return aMiss ? -1 : 1
+    // Larger ETN toward the top; 0 (inside) at bottom
+    const d = (kb as number) - (ka as number)
     if (d !== 0) return d
     const cs = a.callsign.localeCompare(b.callsign)
     if (cs !== 0) return cs
@@ -2329,12 +2355,23 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
   // Workspace sort-flow flips direction: newestBottom = earliest at bottom (default);
   // newestTop = earliest at top. Position reverse alone is undone by ETA re-sort.
   if (etaSortEnabled.value) {
+    const useEtn = isInboundEtnSortTitle(props.section.title)
     if (props.workspaceMode) {
+      if (useEtn) {
+        return workspaceSortFlow.value === 'newestTop'
+          ? [...sortBySectorEntry(list)].reverse()
+          : sortBySectorEntry(list)
+      }
       return workspaceSortFlow.value === 'newestTop'
         ? sortByEtaEarliestTop(list)
         : sortByEta(list)
     }
     // Paper stick-bottom: earliest at top of bottom-justified stack
+    if (useEtn) {
+      return stickBottomZone.value
+        ? [...sortBySectorEntry(list)].reverse()
+        : sortBySectorEntry(list)
+    }
     return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
   }
 

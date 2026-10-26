@@ -6,7 +6,7 @@
 const ALL_GND = ['GND-E', 'GND-N', 'GND-W'] as const
 const ALL_TWR = ['TWR-E', 'TWR-W'] as const
 
-const ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W'] as const
+const ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W', 'APP'] as const
 
 export function sortEssaRoleList(roles: string[]): string[] {
   const order = new Map(ROLE_ORDER.map((r, i) => [r, i]))
@@ -22,7 +22,7 @@ export function essaRoleKey(roles: string[]): string {
 
 /**
  * Collapse full GND / TWR families to short labels.
- * e.g. CD + all GND + TWR-W → "CD, GND, TWR-W"
+ * e.g. CD + all GND + TWR-W + APP → "CD, GND, TWR-W, APP"
  */
 export function formatEssaRolesLabel(roles: string[]): string {
   const sorted = sortEssaRoleList(roles)
@@ -51,9 +51,11 @@ export function formatEssaRolesLabel(roles: string[]): string {
     }
   }
 
+  if (set.has('APP')) parts.push('APP')
+
   // Any unexpected roles (e.g. TWR-S if ever present)
   for (const r of sorted) {
-    if (r === 'CD' || r.startsWith('GND-') || r.startsWith('TWR-')) continue
+    if (r === 'CD' || r === 'APP' || r.startsWith('GND-') || r.startsWith('TWR-')) continue
     parts.push(r)
   }
 
@@ -68,7 +70,7 @@ export type EssaRoleCombination = {
 
 /**
  * Layout-folder order (most complete first):
- * CD, GND, TWR → GND, TWR → CD, GND → TWR → GND → CD
+ * CD, GND, TWR, APP → … → single families
  * Full families before partial splits that share the same families.
  */
 export function compareEssaRoleFolderOrder(
@@ -82,13 +84,14 @@ export function compareEssaRoleFolderOrder(
     const cd = set.has('CD') ? 1 : 0
     const gndN = ALL_GND.filter((r) => set.has(r)).length
     const twrN = ALL_TWR.filter((r) => set.has(r)).length
+    const app = set.has('APP') ? 1 : 0
     const gnd = gndN > 0 ? 1 : 0
     const twr = twrN > 0 ? 1 : 0
-    const familyCount = cd + gnd + twr
-    // Lower = more TWR-weighted (TWR before GND before CD within a tier)
-    const fingerprint = (cd << 2) | (gnd << 1) | twr
+    const familyCount = cd + gnd + twr + app
+    // Lower = more APP/TWR-weighted within a tier
+    const fingerprint = (cd << 3) | (gnd << 2) | (twr << 1) | app
     // Full GND/TWR families score above E/N/W splits
-    const completeness = cd + gndN / ALL_GND.length + twrN / ALL_TWR.length
+    const completeness = cd + gndN / ALL_GND.length + twrN / ALL_TWR.length + app
     return { familyCount, fingerprint, completeness }
   }
   const a = score(aRoles)
@@ -100,24 +103,25 @@ export function compareEssaRoleFolderOrder(
 }
 
 /**
- * Layout-menu folders: every CD / GND / TWR family combo (full families only —
+ * Layout-menu folders: every CD / GND / TWR / APP family combo (full families only —
  * no separate E/N/W or E/W split folders). Partial splits from saved layouts are
  * merged in by the dialog.
  *
- * Omits CD+TWR without GND — VATSIM top-down: GND covers CD, so that combo
- * is never a real staffing profile.
+ * Omits CD+TWR without GND and CD+APP without GND — VATSIM top-down: GND covers CD.
  */
 export function essaFamilyRoleCombinations(): EssaRoleCombination[] {
   const out: EssaRoleCombination[] = []
-  for (let mask = 1; mask < 8; mask++) {
+  for (let mask = 1; mask < 16; mask++) {
     const hasCd = !!(mask & 1)
     const hasGnd = !!(mask & 2)
     const hasTwr = !!(mask & 4)
-    if (hasCd && hasTwr && !hasGnd) continue
+    const hasApp = !!(mask & 8)
+    if (hasCd && (hasTwr || hasApp) && !hasGnd) continue
     const roles: string[] = []
     if (hasCd) roles.push('CD')
     if (hasGnd) roles.push(...ALL_GND)
     if (hasTwr) roles.push(...ALL_TWR)
+    if (hasApp) roles.push('APP')
     out.push({
       roles,
       roleKey: essaRoleKey(roles),

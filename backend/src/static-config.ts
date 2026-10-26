@@ -16,6 +16,7 @@ import {
     computeAutoEssaRoles,
     normalizeEssaRoles,
     isEssaRolesConfig,
+    isEssaAppCallsign,
     type EssaPositionRole
 } from "./essa-roles.js"
 import {
@@ -406,6 +407,8 @@ export function parseControllerRole(
     if (!upper.endsWith('_R_APP') && !upper.endsWith('_R_CTR')) {
         if (upper.endsWith('_CTR')) return 'CTR'
         if (upper.endsWith('_APP')) return 'APP'
+        // ESSA*APP with flexible underscores (ESSA__APP, ESSA_E__APP, …)
+        if (isEssaAppCallsign(upper)) return 'APP'
     }
     return 'TWR'
 }

@@ -156,13 +156,13 @@ export interface SectionRule {
      * ESSA role-picker families that must be selected (at least one).
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * ESSA role-picker families that must NOT be selected.
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /** Whether the flight is on a missed approach (scratchpad MISAP_) */
     missedApproach?: boolean
@@ -192,6 +192,24 @@ export interface SectionRule {
      * Past ETAs (overdue) still match when within the wrap window.
      */
     maxEtaMinutes?: number
+
+    /**
+     * Maximum minutes until sector entry (EuroScope GetSectorEntryMinutes / TopSky ETN).
+     * Match when sectorEntryMin is present and 0 <= sectorEntryMin <= N.
+     * Missing ETN or -1 (never enters) → rule fails.
+     */
+    maxSectorEntryMinutes?: number
+
+    /**
+     * Whether this login covers the flight's airport TMA (ESE OWNER first-online).
+     * Only matches when airport coverage is known.
+     */
+    coversTma?: boolean
+
+    /**
+     * Whether this login covers the flight's airport CTR (ESE OWNER first-online).
+     */
+    coversCtr?: boolean
 
     /**
      * None of these roles may be online covering our airports (self excluded from online list).
@@ -280,13 +298,13 @@ export interface ActionRule {
      * ESSA role-picker families that must be selected (at least one).
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * ESSA role-picker families that must NOT be selected.
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * The flight's next controller (from the plugin) must have one of these roles.
@@ -384,13 +402,13 @@ export interface DeleteRule {
      * ESSA role-picker families that must be selected (at least one).
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    essaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    essaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * ESSA role-picker families that must NOT be selected.
      * Only applies in layoutMode essaRoles; otherwise the condition fails.
      */
-    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR'>
+    notEssaFamilies?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * Tracking controller's role (from callsign) must be one of these.
@@ -573,22 +591,22 @@ export interface EfsStaticConfig {
      * Per-section visibility families for essaRoles mode (sectionId → CD/GND/TWR).
      * Built from YAML `visibleFor` at load time.
      */
-    sectionVisibleFor?: Map<string, Array<'CD' | 'GND' | 'TWR'>>
+    sectionVisibleFor?: Map<string, Array<'CD' | 'GND' | 'TWR' | 'APP'>>
 
     /** Selected ESSA positions for layout filtering (physical roles only) */
-    essaRoles?: Array<'CD' | 'GND-E' | 'GND-N' | 'GND-W' | 'TWR-E' | 'TWR-W'>
+    essaRoles?: Array<'CD' | 'GND-E' | 'GND-N' | 'GND-W' | 'TWR-E' | 'TWR-W' | 'APP'>
 
     /** True when essaRoles were set manually (skip auto-detect until cleared) */
     essaRolesManual?: boolean
 
     /** ESGG covering roles (CD / GND / TWR) — what you act as */
-    esggRoles?: Array<'CD' | 'GND' | 'TWR'>
+    esggRoles?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /**
      * ESGG staffed positions for bay layout (your login + online DEL/GND/TWR).
      * KLARERING → bay5 only when GND or CD is staffed — not solo TWR covering.
      */
-    esggLayoutRoles?: Array<'CD' | 'GND' | 'TWR'>
+    esggLayoutRoles?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 
     /** True when esggRoles were set manually (skip auto-detect until cleared) */
     esggRolesManual?: boolean

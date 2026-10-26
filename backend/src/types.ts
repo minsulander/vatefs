@@ -59,6 +59,8 @@ export interface Flight {
     /** Pilot-in-command name (item 19 C/ or EuroScope GetPilotName) */
     pilotName?: string
     ete?: number               // ES prediction points ≈ minutes (ETB approx)
+    /** Minutes until entry into my sectors (ES GetSectorEntryMinutes); 0 = inside */
+    sectorEntryMin?: number
     /** Flight plan item 18 remarks (from EuroScope GetRemarks) */
     fplRemarks?: string
     /** Previous assigned SSR before last change (PSSR) */
@@ -339,6 +341,8 @@ export interface FlightPlanDataUpdateMessage {
     /** Pilot name from GetPilotName */
     pilotName?: string
     ete?: number               // ES prediction points ≈ minutes to destination
+    /** Minutes until entry into my sectors (0 = inside); omit when -1 / never */
+    sectorEntryMin?: number
     /** Filed cruise altitude from FPL (feet) — used when RFL/CAD final is unset */
     altitude?: number
     rfl?: number              // Requested flight level (feet)
@@ -481,6 +485,8 @@ export interface RadarTargetPositionUpdateMessage {
     nextController?: string
     nextControllerFrequency?: number // Next controller frequency
     ete?: number
+    /** Minutes until entry into my sectors (0 = inside); omit when -1 / never */
+    sectorEntryMin?: number
     altitude: number      // Current altitude in feet
     groundSpeed?: number  // Ground speed in knots (optional)
     heading?: number      // Track heading in degrees (optional)

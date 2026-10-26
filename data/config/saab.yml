@@ -59,6 +59,10 @@ layouts:
               title: INBOUND
             ctr_arr:
               title: CTR ARR
+            # Declared for sectionRules / catalog (TMA-only coverage default).
+            # Not shown in the CTR-only builtin column plan until added.
+            ctr_inbound:
+              title: CTR INBOUND
         bay2:
           sections:
             ctr_dep:

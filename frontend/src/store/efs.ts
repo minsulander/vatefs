@@ -42,6 +42,7 @@ import {
     isStripPrintSound,
 } from "@/composables/useStripPrintSound"
 import { driveAnimationWallClock } from "@/composables/wallClockAnimation"
+import { applyRtcCoverageDefaults } from "@/composables/rtcColumnExtras"
 import {
     clearStripScribbles,
     pushRisingDiagonalLeftCol,
@@ -164,13 +165,13 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     /**
-     * INBOUND APP only — always ETA auto-sort; never sticky manual.
-     * Titles: plain "INBOUND" (ESGG) or "INBOUND APP" (ESSA TWR).
+     * INBOUND / INBOUND APP / INBOUND ACC — always time auto-sort; never sticky manual.
+     * ESGG plain INBOUND uses ETA; ESSA INBOUND APP / INBOUND ACC use ETN.
      * INBOUND TWR-* / INBOUND GND-* use appearing order + sticky like taxi.
      */
     function isInboundAppSection(sectionId: string): boolean {
         const t = (sectionTitleFromLayout(sectionId) || '').toUpperCase().trim()
-        return t === 'INBOUND' || t === 'INBOUND APP'
+        return t === 'INBOUND' || t === 'INBOUND APP' || t === 'INBOUND ACC'
     }
 
     /** CTR DEP — always ATD auto-sort (earliest at top); never sticky manual */
@@ -416,6 +417,8 @@ export const useEfsStore = defineStore("efs", () => {
     const saabRunwayCatalog = ref<Array<{ sectionId: string; title: string }>>([])
     /** ESSA roles or OTHER layouts — workspace catalog + bay rearrange */
     const workspaceMode = computed(() => essaRolesMode.value || saabLayoutsMode.value)
+    /** Per-airport TMA/CTR ownership (ESE OWNER first-online) */
+    const airportCoverage = ref<Record<string, { tma: boolean; ctr: boolean }>>({})
 
     // ESGG paper role picker (CD / GND / TWR)
     const esggRolesMode = ref(false)
@@ -1544,6 +1547,7 @@ export const useEfsStore = defineStore("efs", () => {
         saabLayoutId?: string | null
         saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
         saabRunwayCatalog?: Array<{ sectionId: string; title: string }>
+        airportCoverage?: Record<string, { tma: boolean; ctr: boolean }>
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
@@ -1600,6 +1604,17 @@ export const useEfsStore = defineStore("efs", () => {
         }
         if (message.saabRunwayCatalog) {
             saabRunwayCatalog.value = message.saabRunwayCatalog
+        }
+        if (message.airportCoverage) {
+            airportCoverage.value = message.airportCoverage
+            // Fresh RTC columns: apply coverage defaults without rewriting customized extras
+            if (message.multiAirport && message.columnAirports) {
+                message.columnAirports.forEach((icao, idx) => {
+                    if (!icao) return
+                    const bayId = `bay${idx + 1}`
+                    applyRtcCoverageDefaults(bayId, message.airportCoverage![icao.toUpperCase()])
+                })
+            }
         }
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
@@ -3582,6 +3597,7 @@ export const useEfsStore = defineStore("efs", () => {
         saabLayouts,
         saabRunwayCatalog,
         workspaceMode,
+        airportCoverage,
         setEssaRoles,
         esggRolesMode,
         esggRoles,

@@ -22,16 +22,21 @@ layout:
     # Max 4 columns: if CD+GND+TWR would show 5, CD stacks above TSAT in one bay.
     bay1:
       sections:
+        inbound_acc:
+          # APP / top-down covering approach: unassumed ACC-owned arrivals at ETN ≤ 15.
+          # Hidden from TWR-only boards. Sorted by sector-entry minutes.
+          title: INBOUND ACC
+          visibleFor: [APP]
         inbound:
-          # TWR → titled INBOUND APP; ETA≤15 gate + ETA sort (common-rules myRole TWR/APP/CTR).
-          # ETA order: earliest (first in sequence) at bottom toward CTR ARR; auto-fit
-          # keeps that bottom strip maximised (preferTop:false on ESSA INBOUND APP).
-          # GND → INBOUND TWR-* (near/tower-bound rules, no ETA gate; appearance order).
+          # TWR → titled INBOUND APP; ETN≤15 gate (ESSA override) + ETN sort.
+          # Hidden when APP family is also selected (inbound-from-yourself).
+          # GND → INBOUND TWR-* (near/tower-bound rules, no ETN gate; appearance order).
           title: INBOUND
           visibleFor: [GND, TWR]
         ctr_arr:
+          # TWR without APP → CTR ARR; APP board retitles to TMA ARR (same strip home).
           title: CTR ARR
-          visibleFor: [TWR]
+          visibleFor: [TWR, APP]
         arr_runway:
           # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
           title: RUNWAY
@@ -47,9 +52,10 @@ layout:
     bay2:
       sections:
         ctr_dep:
+          # TWR without APP → CTR DEP; APP board retitles to TMA DEP (same strip home).
           title: CTR DEP
           addFromTop: false
-          visibleFor: [TWR]
+          visibleFor: [TWR, APP]
         dep_runway:
           # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
           title: RUNWAY
@@ -132,17 +138,63 @@ sectionRules:
     groundstates: [TXIN]
     priority: 92
 
-  # ESSA: CA/VA/CAT/OS alone stay in INBOUND APP (same as common-rules / ESGG).
-  # CTR ARR only via assume (90) or inbound transfer (95) — not APP-set approach clearance.
-  # RTC keeps a separate app_arr_approach_clearance pull; do not mirror that here.
+  # ESSA: CA/VA/CAT/OS → CTR ARR (skips TMA). Outer bay is unassumed-only;
+  # approach clearance moves even outside the zone. ESGG keeps CA on INBOUND.
   ctr_arr_approach_clearance_other:
-    sectionId: inbound
+    sectionId: ctr_arr
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]
     controller: not_myself
     approachClearance: true
     priority: 85
+
+  # Disable common-rules within-CTR / pending-handoff pulls — unassumed stay on
+  # INBOUND / INBOUND ACC until assume or approach clearance.
+  ctr_arr_within_ctr:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 76
+
+  ctr_arr_within_ctr_no_app:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 101
+
+  ctr_arr_pending_inbound_transfer:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 95
+
+  # INBOUND APP (TWR): ETN ≤ 15 instead of airport ETA (ESGG keeps ETA).
+  inbound_arr_groundstate:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    myRole: [TWR, APP, CTR]
+    maxSectorEntryMinutes: 15
+    priority: 70
+
+  fallback_arrival:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    myRole: [TWR, APP, CTR]
+    maxSectorEntryMinutes: 15
+    priority: 5
+
+  # INBOUND ACC: unassumed ACC-owned arrivals at ETN ≤ 15
+  inbound_acc_arr:
+    sectionId: inbound_acc
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    ownerRole: [CTR]
+    maxSectorEntryMinutes: 15
+    priority: 72
 
   # TWR + separate GND: pending inbound handoff → TAXI DEP (like CTR ARR pending transfer)
   taxi_dep_pending_inbound_transfer:
@@ -516,6 +568,38 @@ actionRules:
     withinRangeAirports: [ESSA]
     priority: 120
 
+  # INBOUND ACC: ROF while ACC owns it; ASSUME once handoff initiated
+  rof_inbound_acc:
+    action: ROF
+    sectionId: inbound_acc
+    direction: arrival
+    airborne: true
+    controller: not_myself
+    ownerRole: [CTR]
+    handoffInitiated: false
+    myRole: [APP, CTR]
+    priority: 120
+
+  assume_inbound_acc:
+    action: ASSUME
+    sectionId: inbound_acc
+    direction: arrival
+    controller: not_myself
+    handoffInitiated: true
+    myRole: [APP, CTR]
+    priority: 100
+
+  # Pure APP (not covering TWR): XFER departures to ACC
+  xfer_ctr_dep_app:
+    action: XFER
+    sectionId: ctr_dep
+    direction: departure
+    controller: myself
+    airborne: true
+    handoffInitiated: false
+    myRole: [APP]
+    priority: 95
+
   # Ground ROF (TWR↔GND): backend uses custom EFS /EFSROF/ (not TopSky).
   # Override common-rules rof_taxi_dep_twr (sectionId: taxi).
   # Separate GND online → ROF on INBOUND GND-*; alone covering GND → TAXI DEP.
@@ -546,6 +630,14 @@ actionRules:
     priority: 40
 
 deleteRules:
+  # Do not show redundant: IFR dep leaves when next position has assumed,
+  # even while still inside the sector (no altitude gate).
+  delete_dep_high_transferred:
+    direction: departure
+    controller: not_myself
+    airborne: true
+    priority: 110
+
   # TWR with separate GND online (not covering GND, GND family not selected):
   # hide arrival once GND has assumed and taxi-in is set (TXIN / TAXI).
   # Solo TWR covering GND, or combined GND+TWR picker, does not match.

@@ -1,5 +1,6 @@
 /**
- * Parse EuroScope .ese [POSITIONS] + [AIRSPACE] for ESSA GND/CTR sector volumes.
+ * Parse EuroScope .ese [POSITIONS] + [AIRSPACE] for ESSA GND/CTR sector volumes,
+ * plus TMA/CTR OWNER chains for any Swedish airport (OTHER / RTC coverage).
  * Used for custom position-sequence (next SI) and role-based strip visibility.
  */
 
@@ -47,6 +48,12 @@ let appDepOwnerChains: Map<string, string[]> = new Map()
 let gndOwnerChains: Map<EssaGndFamily, string[]> = new Map()
 /** TWR OWNER chains keyed by family (from main ESSA CTRx volume) */
 let twrOwnerChains: Map<EssaCtrFamily, string[]> = new Map()
+/** Primary TMA OWNER chain per airport ICAO (longest / preferred volume) */
+let tmaOwnerChains: Map<string, string[]> = new Map()
+/** Primary CTR OWNER chain per airport ICAO */
+let ctrOwnerChains: Map<string, string[]> = new Map()
+/** TMA lateral polygons per airport (floor ignored — for VFR below-TMA test) */
+let tmaPolygons: Map<string, EseCoord[][]> = new Map()
 let loaded = false
 
 export type AppDepOwnerSi = "DW" | "DE" | "W" | "E"
@@ -249,6 +256,135 @@ function isEssaGroundOrCtr(shortName: string): boolean {
     )
 }
 
+/** Extract ICAO from a sector short name like "ESPA TMA" / "ESOW CTR" / "ESGG TMA A". */
+function icaoFromVolumeShortName(shortName: string, kind: "TMA" | "CTR"): string | undefined {
+    const u = shortName.toUpperCase().replace(/\s+/g, " ").trim()
+    const re = kind === "TMA" ? /^([A-Z]{4})\s+TMA\b/ : /^([A-Z]{4})\s+CTR\b/
+    const m = u.match(re)
+    if (m) return m[1]
+    return undefined
+}
+
+/**
+ * Resolve airport ICAO for a TMA/CTR volume from short name, DEPAPT/ARRAPT,
+ * or owner SI whose position airport matches.
+ */
+function airportIcaoForVolume(
+    shortName: string,
+    depApts: string[],
+    arrApts: string[],
+    kind: "TMA" | "CTR"
+): string | undefined {
+    const fromName = icaoFromVolumeShortName(shortName, kind)
+    if (fromName) return fromName
+    const apts = [...depApts, ...arrApts]
+    if (apts.length === 1) return apts[0]
+    // Prefer a unique ES* airport among dep/arr
+    const unique = [...new Set(apts.filter((a) => a.startsWith("ES")))]
+    if (unique.length === 1) return unique[0]
+    return undefined
+}
+
+function considerAirportVolumeOwnerChain(
+    shortName: string,
+    owners: string[],
+    depApts: string[],
+    arrApts: string[],
+    kind: "TMA" | "CTR"
+): void {
+    if (!icaoFromVolumeShortName(shortName, kind) && depApts.length === 0 && arrApts.length === 0) {
+        // Require name or apt tags so random sectors don't pollute maps
+        if (!shortName.toUpperCase().includes(kind)) return
+    }
+    const icao = airportIcaoForVolume(shortName, depApts, arrApts, kind)
+    if (!icao || owners.length === 0) return
+    // Skip guest-only / non-matching kind in name when we already keyed by apt
+    const u = shortName.toUpperCase()
+    if (kind === "TMA" && !u.includes("TMA")) return
+    if (kind === "CTR" && !/\bCTR\b/.test(u)) return
+
+    const next = owners.map((o) => o.toUpperCase())
+    const map = kind === "TMA" ? tmaOwnerChains : ctrOwnerChains
+    const existing = map.get(icao)
+    const tech = isTechSectorName(shortName)
+    if (!existing || next.length > existing.length || (next.length === existing.length && tech)) {
+        map.set(icao, next)
+    }
+}
+
+/** OWNER chain for an airport's TMA (empty if unknown). */
+export function getTmaOwnerChain(airport: string): string[] {
+    const chain = tmaOwnerChains.get(airport.toUpperCase())
+    return chain && chain.length > 0 ? [...chain] : []
+}
+
+/** OWNER chain for an airport's CTR (empty if unknown). */
+export function getCtrOwnerChain(airport: string): string[] {
+    const chain = ctrOwnerChains.get(airport.toUpperCase())
+    return chain && chain.length > 0 ? [...chain] : []
+}
+
+/** First online SI in an OWNER chain, or undefined. */
+export function firstOnlineInOwnerChain(
+    chain: string[],
+    onlineSis: ReadonlySet<string>
+): string | undefined {
+    for (const si of chain) {
+        const u = si.toUpperCase()
+        if (onlineSis.has(u)) return u
+    }
+    return undefined
+}
+
+/**
+ * True when mySi is the first online SI on the airport's TMA OWNER chain
+ * (combined-service tower covers TMA when APP is offline).
+ */
+export function coversTma(
+    airport: string,
+    mySi: string | undefined,
+    onlineSis: ReadonlySet<string>
+): boolean {
+    if (!mySi) return false
+    const chain = getTmaOwnerChain(airport)
+    if (chain.length === 0) return false
+    return firstOnlineInOwnerChain(chain, onlineSis) === mySi.toUpperCase()
+}
+
+/** True when mySi is the first online SI on the airport's CTR OWNER chain. */
+export function coversCtr(
+    airport: string,
+    mySi: string | undefined,
+    onlineSis: ReadonlySet<string>
+): boolean {
+    if (!mySi) return false
+    const chain = getCtrOwnerChain(airport)
+    if (chain.length === 0) return false
+    return firstOnlineInOwnerChain(chain, onlineSis) === mySi.toUpperCase()
+}
+
+/** Point inside any TMA polygon for this airport (floor ignored). */
+export function isWithinTmaLateral(
+    airport: string,
+    lat: number,
+    lon: number
+): boolean {
+    const polys = tmaPolygons.get(airport.toUpperCase())
+    if (!polys || polys.length === 0) return false
+    return polys.some((p) => pointInPolygon(lat, lon, p))
+}
+
+/** Test injectors */
+export function __setTmaOwnerChainForTest(airport: string, chain: string[]): void {
+    tmaOwnerChains.set(airport.toUpperCase(), chain.map((s) => s.toUpperCase()))
+    loaded = true
+}
+
+export function __setCtrOwnerChainForTest(airport: string, chain: string[]): void {
+    ctrOwnerChains.set(airport.toUpperCase(), chain.map((s) => s.toUpperCase()))
+    loaded = true
+}
+
 /** Map STO APP/DEP sector short name → primary SI for OWNER chain storage */
 function appDepPrimarySiFromShortName(shortName: string): AppDepOwnerSi | undefined {
     const u = shortName.toUpperCase().replace(/\s+/g, " ")
@@ -302,6 +438,9 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
     appDepOwnerChains = new Map()
     gndOwnerChains = new Map()
     twrOwnerChains = new Map()
+    tmaOwnerChains = new Map()
+    ctrOwnerChains = new Map()
+    tmaPolygons = new Map()
     loaded = false
 
     if (!eseFile) {
@@ -324,6 +463,8 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
     let curOwners: string[] = []
     let curBorder: number[] = []
     let curActive: { airport: string; runway: string } | undefined
+    let curDepApts: string[] = []
+    let curArrApts: string[] = []
 
     const flushSector = () => {
         if (!curName) return
@@ -332,11 +473,30 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
         if (curOwners.length > 0) {
             considerAppDepOwnerChain(shortName, curOwners)
         }
+        // TMA / CTR OWNER chains for any airport (coverage defaults)
+        if (curOwners.length > 0) {
+            considerAirportVolumeOwnerChain(shortName, curOwners, curDepApts, curArrApts, "TMA")
+            considerAirportVolumeOwnerChain(shortName, curOwners, curDepApts, curArrApts, "CTR")
+        }
+        // Store TMA polygons (any airport) for lateral membership tests
+        {
+            const tmaIcao = airportIcaoForVolume(shortName, curDepApts, curArrApts, "TMA")
+            if (tmaIcao) {
+                const poly = chainBorderPolygon(curBorder, sectorLines)
+                if (poly.length >= 3) {
+                    const list = tmaPolygons.get(tmaIcao) ?? []
+                    list.push(poly)
+                    tmaPolygons.set(tmaIcao, list)
+                }
+            }
+        }
         if (!isEssaGroundOrCtr(shortName)) {
             curName = ""
             curOwners = []
             curBorder = []
             curActive = undefined
+            curDepApts = []
+            curArrApts = []
             return
         }
         const poly = chainBorderPolygon(curBorder, sectorLines)
@@ -345,6 +505,8 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
             curOwners = []
             curBorder = []
             curActive = undefined
+            curDepApts = []
+            curArrApts = []
             return
         }
         const { family, isSpecific } = classifySector(shortName)
@@ -387,6 +549,8 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
         curOwners = []
         curBorder = []
         curActive = undefined
+        curDepApts = []
+        curArrApts = []
     }
 
     const flushLine = () => {
@@ -416,7 +580,8 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
             const parts = line.split(":")
             if (parts.length < 7) continue
             const callsign = parts[0]!
-            if (!callsign.startsWith("ESSA_")) continue
+            // Keep Swedish positions (ES*) for TMA/CTR coverage; ESSA still used for families
+            if (!callsign.startsWith("ES")) continue
             const freq = parseFloat(parts[2]!)
             const si = parts[3]!
             const airport = parts[5]!
@@ -460,6 +625,8 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
                 curOwners = []
                 curBorder = []
                 curActive = undefined
+                curDepApts = []
+                curArrApts = []
                 continue
             }
             if (line.startsWith("OWNER:")) {
@@ -485,12 +652,23 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
                 }
                 continue
             }
-            if (
-                line.startsWith("ALTOWNER:") ||
-                line.startsWith("DEPAPT:") ||
-                line.startsWith("ARRAPT:") ||
-                line.startsWith("GUEST:")
-            ) {
+            if (line.startsWith("DEPAPT:")) {
+                curDepApts = line
+                    .substring(7)
+                    .split(":")
+                    .map((s) => s.trim().toUpperCase())
+                    .filter((s) => /^ES[A-Z]{2}$/.test(s))
+                continue
+            }
+            if (line.startsWith("ARRAPT:")) {
+                curArrApts = line
+                    .substring(7)
+                    .split(":")
+                    .map((s) => s.trim().toUpperCase())
+                    .filter((s) => /^ES[A-Z]{2}$/.test(s))
+                continue
+            }
+            if (line.startsWith("ALTOWNER:") || line.startsWith("GUEST:")) {
                 continue
             }
         }
@@ -499,14 +677,20 @@ export function loadEseAirspace(euroscopeDir: string, packageFilter?: string): {
     flushSector()
     synthesizeDepeOwnerChain()
 
-    loaded = sectors.length > 0 || positionsBySi.size > 0
+    loaded = sectors.length > 0 || positionsBySi.size > 0 || tmaOwnerChains.size > 0
     console.log(
-        `Loaded ${positionsBySi.size} ESSA positions and ${sectors.length} ESSA airspace sectors from ${eseFile}` +
+        `Loaded ${positionsBySi.size} positions and ${sectors.length} ESSA airspace sectors from ${eseFile}` +
             (appDepOwnerChains.size
                 ? `; APP/DEP OWNER chains: ${[...appDepOwnerChains.entries()].map(([k, v]) => `${k}=[${v.join(":")}]`).join(" ")}`
                 : "") +
             (twrOwnerChains.size
                 ? `; TWR OWNER chains: ${[...twrOwnerChains.entries()].map(([k, v]) => `${k}=[${v.join(":")}]`).join(" ")}`
+                : "") +
+            (tmaOwnerChains.size
+                ? `; TMA OWNER airports: ${tmaOwnerChains.size}`
+                : "") +
+            (ctrOwnerChains.size
+                ? `; CTR OWNER airports: ${ctrOwnerChains.size}`
                 : "")
     )
     return { positionCount: positionsBySi.size, sectorCount: sectors.length }

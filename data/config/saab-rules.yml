@@ -3,15 +3,105 @@
 # Dynamic runway_* headers (catalog-added) are remapped at evaluation like ESSA.
 
 sectionRules:
-  # CA/VA alone → stay INBOUND (2RWY / when inbound exists)
+  # CA/VA/CAT/OS → CTR ARR (skips TMA). Outer bay is unassumed-only.
+  # ESGG paper keeps CA on INBOUND via its own override.
   ctr_arr_approach_clearance_other:
-    sectionId: inbound
+    sectionId: ctr_arr
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]
     controller: not_myself
     approachClearance: true
     priority: 85
+
+  # Unassumed stay on INBOUND until assume or approach clearance
+  ctr_arr_within_ctr:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 76
+
+  ctr_arr_within_ctr_no_app:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 101
+
+  ctr_arr_pending_inbound_transfer:
+    sectionId: ctr_arr
+    myRole: []
+    priority: 95
+
+  # OTHER: INBOUND at ETN ≤ 15
+  inbound_arr_groundstate:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    controller: not_myself
+    myRole: [TWR, APP, CTR]
+    maxSectorEntryMinutes: 15
+    priority: 70
+
+  fallback_arrival:
+    sectionId: inbound
+    direction: arrival
+    airborne: true
+    myRole: [TWR, APP, CTR]
+    maxSectorEntryMinutes: 15
+    priority: 5
+
+  # Assumed arrivals: TMA ARR when covering TMA and outside CTR; CTR ARR inside CTR / no TMA
+  ctr_arr_assumed_tma:
+    sectionId: tma
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: false
+    coversTma: true
+    myRole: [TWR, APP, CTR]
+    priority: 92
+
+  # TMA-only: departures from taxi out → CTR INBOUND; cleared for takeoff → CTR DEP
+  ctr_inbound_taxi_out:
+    sectionId: ctr_inbound
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, LINEUP]
+    coversTma: true
+    coversCtr: false
+    myRole: [TWR, APP, CTR]
+    priority: 55
+
+  ctr_inbound_taxi_out_local:
+    sectionId: ctr_inbound
+    direction: local
+    airborne: false
+    groundstates: [TAXI, LINEUP]
+    coversTma: true
+    coversCtr: false
+    myRole: [TWR, APP, CTR]
+    priority: 55
+
+  # Airborne IFR deps leave CTR → TMA when covering TMA
+  tma_dep_left_ctr:
+    sectionId: tma
+    direction: departure
+    airborne: true
+    controller: myself
+    withinCtr: false
+    coversTma: true
+    myRole: [TWR, APP, CTR]
+    priority: 102
+
+  tma_dep_left_ctr_local:
+    sectionId: tma
+    direction: local
+    airborne: true
+    controller: myself
+    withinCtr: false
+    coversTma: true
+    myRole: [TWR, APP, CTR]
+    priority: 102
 
   # === 1RWY: single RUNWAY section ===
   on_runway_geographic:
@@ -292,3 +382,11 @@ moveRules:
     command:
       type: setGroundstate
       value: TXIN
+
+deleteRules:
+  # Do not show redundant — drop when next position assumes (no altitude gate)
+  delete_dep_high_transferred:
+    direction: departure
+    controller: not_myself
+    airborne: true
+    priority: 110

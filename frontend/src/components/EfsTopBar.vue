@@ -109,6 +109,18 @@
       <v-dialog v-model="essaRolesDialog" max-width="360" scrim content-class="essa-roles-dialog-wrap">
         <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
           <div class="efs-popup-header">Roles</div>
+          <div class="efs-popup-section">APP</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in essaAppRoles"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftEssaRoles.includes(role) }"
+            >
+              <input v-model="draftEssaRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ role }}</span>
+            </label>
+          </div>
           <div class="efs-popup-section">TWR</div>
           <div class="efs-popup-list">
             <label
@@ -1028,10 +1040,11 @@ const isStandalone = ('standalone' in navigator && (navigator as any).standalone
 const configMenuOpen = ref(false)
 
 /** Display / picker order: CD → GND-* → TWR-E, TWR-W */
-const ESSA_ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W'] as const
+const ESSA_ROLE_ORDER = ['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W', 'APP'] as const
 const essaCdRoles = ['CD'] as const
 const essaGndRoles = ['GND-E', 'GND-N', 'GND-W'] as const
 const essaTwrRoles = ['TWR-E', 'TWR-W'] as const
+const essaAppRoles = ['APP'] as const
 const essaRolesDialog = ref(false)
 const draftEssaRoles = ref<string[]>([])
 

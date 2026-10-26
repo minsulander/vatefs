@@ -13,13 +13,14 @@ import {
 
 export type { WorkspaceCatalogMode }
 
-type EssaFamily = 'CD' | 'GND' | 'TWR'
+type EssaFamily = 'CD' | 'GND' | 'TWR' | 'APP'
 
 function roleFamilies(roles: string[]): Set<EssaFamily> {
   const out = new Set<EssaFamily>()
   for (const r of roles) {
     const u = r.toUpperCase()
     if (u === 'CD') out.add('CD')
+    else if (u === 'APP') out.add('APP')
     else if (u.startsWith('GND')) out.add('GND')
     else if (u.startsWith('TWR')) out.add('TWR')
   }
@@ -30,17 +31,24 @@ function roleFamilies(roles: string[]): Set<EssaFamily> {
 export function sectionVisibleForRoles(sectionId: string, roles: string[]): boolean {
   if (sectionId === 'req_push' || sectionId.endsWith('_req_push')) return false
   const families = roleFamilies(roles)
-  if (sectionId === 'inbound_gnd') return families.has('TWR') && !families.has('GND')
+  if (sectionId === 'inbound_gnd') return families.has('TWR') && !families.has('GND') && !families.has('APP')
   if (isEssaDynamicRunwaySectionId(sectionId)) return families.has('TWR')
   if (sectionId === 'cleared_tsat' || sectionId === 'cleared_eobt') {
-    return families.has('CD') && !families.has('GND') && !families.has('TWR')
+    return families.has('CD') && !families.has('GND') && !families.has('TWR') && !families.has('APP')
   }
   // Family presence gates (matches delivered DEFAULT profiles)
   if (sectionId === 'pending_dep') return families.has('CD')
   if (sectionId === 'cleared') return families.has('CD') || families.has('GND')
   if (sectionId === 'push_start') return families.has('GND')
-  if (sectionId === 'ctr_arr' || sectionId === 'ctr_dep') return families.has('TWR')
-  if (sectionId === 'inbound') return families.has('GND') || families.has('TWR')
+  if (sectionId === 'ctr_arr' || sectionId === 'ctr_dep') {
+    return families.has('TWR') || families.has('APP')
+  }
+  if (sectionId === 'inbound_acc') return families.has('APP')
+  // INBOUND APP hidden when APP is selected (inbound-from-yourself)
+  if (sectionId === 'inbound') {
+    if (families.has('APP')) return false
+    return families.has('GND') || families.has('TWR')
+  }
   if (sectionId === 'taxi_arr' || sectionId === 'taxi_dep') {
     return families.has('GND') || families.has('TWR')
   }
@@ -139,10 +147,83 @@ function essaDefaultColumnPlan(
   const hasCd = families.has('CD')
   const hasGnd = families.has('GND')
   const hasTwr = families.has('TWR')
+  const hasApp = families.has('APP')
+
+  // APP only (tower/ground staffed elsewhere): INBOUND ACC | TMA ARR | TMA DEP | empty
+  if (hasApp && !hasTwr && !hasGnd && !hasCd) {
+    return {
+      columnCount: 4,
+      columns: [
+        [{ sectionId: 'inbound_acc', title: 'INBOUND ACC' }],
+        [{ sectionId: 'ctr_arr', title: 'TMA ARR' }],
+        [{ sectionId: 'ctr_dep', title: 'TMA DEP', addFromTop: false }],
+        [],
+      ],
+    }
+  }
+
+  // APP + TWR (+ optional GND/CD): same ground columns as TWR combos, but
+  // INBOUND ACC and TMA ARR / TMA DEP instead of INBOUND APP / CTR ARR / CTR DEP.
+  if (hasApp && hasTwr) {
+    const inboundAcc: SecDraft = { sectionId: 'inbound_acc', title: 'INBOUND ACC' }
+    const tmaArr: SecDraft = { sectionId: 'ctr_arr', title: 'TMA ARR' }
+    const tmaDep: SecDraft = { sectionId: 'ctr_dep', title: 'TMA DEP', addFromTop: false }
+
+    if (hasGnd && hasCd) {
+      return {
+        columnCount: 4,
+        columns: [
+          [inboundAcc, tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
+          [tmaDep, ...runwayDrafts(runways.dep)],
+          [
+            { sectionId: 'taxi_dep', addFromTop: false },
+            { sectionId: 'push_start', addFromTop: true },
+          ],
+          [
+            {
+              sectionId: 'pending_dep',
+              title: 'CD',
+              groupId: 'cd_all',
+              member: 'pending',
+              addFromTop: true,
+            },
+            { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true },
+          ],
+        ],
+      }
+    }
+    if (hasGnd) {
+      return {
+        columnCount: 4,
+        columns: [
+          [inboundAcc, tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
+          [tmaDep, ...runwayDrafts(runways.dep)],
+          [
+            { sectionId: 'taxi_dep', addFromTop: false },
+            { sectionId: 'push_start', addFromTop: true },
+          ],
+          [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }],
+        ],
+      }
+    }
+    // APP + TWR (no GND)
+    return {
+      columnCount: 4,
+      columns: [
+        [inboundAcc],
+        [tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
+        [tmaDep, ...runwayDrafts(runways.dep)],
+        [
+          { sectionId: 'inbound_gnd' },
+          { sectionId: 'taxi_dep', addFromTop: false },
+        ],
+      ],
+    }
+  }
 
   // CD alone — real TSAT/EOBT split; EOBT at bottom quarter (TSAT overflow above);
   // empty 4th column for CD overflow.
-  if (hasCd && !hasGnd && !hasTwr) {
+  if (hasCd && !hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
       columns: [
@@ -520,6 +601,8 @@ export function buildWorkspaceLayoutFromServer(
   for (const bay of serverLayout.bays) {
     const anchor = Math.min(col, WORKSPACE_MAX_COLUMNS - 1)
     for (const sec of bay.sections) {
+      // CTR INBOUND is catalog / TMA-only — keep off the CTR-only builtin board
+      if (sec.id === 'ctr_inbound') continue
       const anno = annotateCatalogSection(sec.id, sec.title, 'saab')
       sections.push({
         instanceId: sec.id,

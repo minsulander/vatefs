@@ -1,10 +1,12 @@
 /**
  * ESSA position roles for role-based bay/section visibility.
  * Physical/working positions (role picker + headers) from ESAA .ese / AOR:
- *   ESSA_DEL, ESSA_E_GND, ESSA_N_GND, ESSA_W_GND, ESSA_E_TWR, ESSA_W_TWR
+ *   ESSA_DEL, ESSA_E_GND, ESSA_N_GND, ESSA_W_GND, ESSA_E_TWR, ESSA_W_TWR, ESSA*APP
  *
  * ESSA_S_TWR is a pseudo-position in the sector file: IRL only two TWR working
  * positions exist (E/W). Logging as S inherits TWR-E and/or TWR-W per AOR staffing.
+ * APP is a single family (not E/W); selected when effective roles include APP
+ * (any ESSA…APP login, or *_CTR while covering approach).
  */
 
 import type { ControllerRole } from "./config-types.js"
@@ -28,8 +30,9 @@ export type EssaPositionRole =
     | 'CD'
     | 'GND-E' | 'GND-N' | 'GND-W'
     | 'TWR-E' | 'TWR-W'
+    | 'APP'
 
-export type EssaFamily = 'CD' | 'GND' | 'TWR'
+export type EssaFamily = 'CD' | 'GND' | 'TWR' | 'APP'
 
 export function isEssaRolesConfig(config: { layoutMode?: string }): boolean {
     return config.layoutMode === 'essaRoles'
@@ -57,6 +60,7 @@ export const ALL_ESSA_POSITIONS: EssaPositionRole[] = [
     'CD',
     'GND-E', 'GND-N', 'GND-W',
     'TWR-E', 'TWR-W',
+    'APP',
 ]
 
 export const ALL_GND_POSITIONS: EssaPositionRole[] = ['GND-E', 'GND-N', 'GND-W']
@@ -69,7 +73,7 @@ export function isEssaPositionRole(value: string): value is EssaPositionRole {
     return (ALL_ESSA_POSITIONS as string[]).includes(value)
 }
 
-/** Canonical display/storage order: CD, GND-*, TWR-E, TWR-W */
+/** Canonical display/storage order: CD, GND-*, TWR-E, TWR-W, APP */
 export function sortEssaRoles(roles: EssaPositionRole[]): EssaPositionRole[] {
     const order = new Map(ALL_ESSA_POSITIONS.map((r, i) => [r, i]))
     return [...new Set(roles)].sort(
@@ -79,6 +83,7 @@ export function sortEssaRoles(roles: EssaPositionRole[]): EssaPositionRole[] {
 
 export function familyOf(role: EssaPositionRole): EssaFamily {
     if (role === 'CD') return 'CD'
+    if (role === 'APP') return 'APP'
     if (role.startsWith('GND-')) return 'GND'
     return 'TWR'
 }
@@ -87,6 +92,17 @@ export function familiesFromRoles(roles: EssaPositionRole[]): Set<EssaFamily> {
     const families = new Set<EssaFamily>()
     for (const role of roles) families.add(familyOf(role))
     return families
+}
+
+/**
+ * ESSA approach login with flexible underscores / optional letter token:
+ * ESSA_APP, ESSA__APP, ESSA_E_APP, ESSA__E_APP, ESSA_E__APP, ESSAAPP, …
+ * Underscores are ignored for matching. Remote ESSA_R_APP is not approach.
+ */
+export function isEssaAppCallsign(callsign: string): boolean {
+    const compact = callsign.toUpperCase().replace(/_/g, '')
+    if (compact === 'ESSARAPP') return false
+    return /^ESSA[A-Z0-9]*APP$/.test(compact)
 }
 
 /**
@@ -102,6 +118,9 @@ export function parseEssaLoginId(callsign: string): EssaLoginId | undefined {
     if (upper === 'ESSA_S_TWR') return 'TWR-S'
     const twr = upper.match(/^ESSA_([EW])_TWR$/)
     if (twr) return `TWR-${twr[1]}` as EssaPositionRole
+    if (isEssaAppCallsign(upper)) {
+        return 'APP'
+    }
     return undefined
 }
 
@@ -269,6 +288,13 @@ export function computeAutoEssaRoles(
 
     if (effectiveRoles.includes('TWR')) {
         result.push(...resolvePhysicalTwrsForLogin(mine, onlineUnique))
+    }
+
+    // APP board when covering approach (ESSA_*_APP, or *_CTR with no APP online).
+    // Solo APP with nobody below already expands to CD+GND+TWR via ROLE_ORDER;
+    // this adds the APP family on top of those.
+    if (effectiveRoles.includes('APP')) {
+        result.push('APP')
     }
 
     return sortEssaRoles(result)
@@ -443,6 +469,10 @@ export function filterEssaLayout(
                         if (section.id === 'inbound_gnd') {
                             return shouldShowInboundGnd(roles, activeGndPeers)
                         }
+                        // APP covering approach: hide INBOUND APP (inbound-from-yourself)
+                        if (section.id === 'inbound' && families.has('APP')) {
+                            return false
+                        }
                         const visibleFor = sectionVisibleFor.get(section.id)
                         if (!visibleFor || visibleFor.length === 0) return true
                         return visibleFor.some(f => families.has(f))
@@ -459,6 +489,13 @@ export function filterEssaLayout(
                                 ...section,
                                 title: resolveInboundGndTitle(roles, section.title, activeGndPeers),
                             }
+                        }
+                        // APP builtin air dividers use TMA titles over ctr_arr / ctr_dep
+                        if (families.has('APP') && section.id === 'ctr_arr') {
+                            return { ...section, title: 'TMA ARR' }
+                        }
+                        if (families.has('APP') && section.id === 'ctr_dep') {
+                            return { ...section, title: 'TMA DEP' }
                         }
                         return section
                     })

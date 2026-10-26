@@ -150,6 +150,11 @@ export interface StatusMessage {
     saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
     /** Addable RUNWAY headers (active airports / physical strips) for OTHER catalog */
     saabRunwayCatalog?: Array<{ sectionId: string; title: string }>
+    /**
+     * Per-airport TMA/CTR ownership from ESE OWNER chains (this login first online).
+     * Drives OTHER / RTC builtin defaults; does not move strips by itself.
+     */
+    airportCoverage?: Record<string, { tma: boolean; ctr: boolean }>
 }
 
 export interface DclStatusMessage {

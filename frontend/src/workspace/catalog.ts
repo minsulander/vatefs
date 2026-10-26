@@ -11,9 +11,12 @@
 
 /** Full ESSA placeable-section catalog (role-independent). */
 export const ESSA_CATALOG_SECTIONS: readonly { sectionId: string; title: string }[] = [
+  { sectionId: 'inbound_acc', title: 'INBOUND ACC' },
   { sectionId: 'inbound', title: 'INBOUND' },
   { sectionId: 'inbound_twr_e', title: 'INBOUND TWR-E' },
   { sectionId: 'inbound_twr_w', title: 'INBOUND TWR-W' },
+  { sectionId: 'ctr_arr', title: 'TMA ARR' },
+  { sectionId: 'ctr_dep', title: 'TMA DEP' },
   { sectionId: 'ctr_arr', title: 'CTR ARR' },
   { sectionId: 'ctr_dep', title: 'CTR DEP' },
   { sectionId: 'inbound_gnd', title: 'INBOUND GND-E, GND-N, GND-W' },
@@ -52,6 +55,7 @@ export const SAAB_CATALOG_SECTIONS: readonly SaabCatalogEntry[] = [
   { sectionId: 'tma', title: 'TMA', flow: 'arrival' },
   // Synthetic id — unions ctr_arr + ctr_dep strips (see saab_ctr_tma)
   { sectionId: 'ctr', title: 'CTR', flow: 'arrival' },
+  { sectionId: 'ctr_inbound', title: 'CTR INBOUND', flow: 'departure' },
   { sectionId: 'runway', title: 'RUNWAY', flow: 'arrival' },
   // physical runway_* inserted after RUNWAY by catalogSections()
   { sectionId: 'taxi', title: 'TAXIWAY', flow: 'arrival' },

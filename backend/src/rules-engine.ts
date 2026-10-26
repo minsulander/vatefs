@@ -37,6 +37,11 @@ import {
     isSaabRunwayFamilySectionId,
     resolveSaabDynamicRunwaySection,
 } from "./saab-runways.js"
+import {
+    coverageForAirport,
+    flightCoverageAirport,
+    isAreaCtrLogin,
+} from "./airport-coverage.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -638,6 +643,28 @@ function evaluateSectionRule(flight: Flight, rule: SectionRule, config: EfsStati
         if (mins == null || mins > rule.maxEtaMinutes) {
             return false
         }
+    }
+
+    // Sector-entry minutes (TopSky ETN / ES GetSectorEntryMinutes): 0 = inside
+    if (rule.maxSectorEntryMinutes !== undefined) {
+        const etn = flight.sectorEntryMin
+        if (etn == null || etn < 0 || etn > rule.maxSectorEntryMinutes) {
+            return false
+        }
+        // Area CTR: ETN 0 means already in the FIR — not TMA entry. Fail closed
+        // unless the track is still outside ESSA APP volumes (handled by caller rules).
+        if (etn === 0 && isAreaCtrLogin(config.myCallsign)) {
+            return false
+        }
+    }
+
+    // ESE OWNER coverage for this flight's airport
+    if (rule.coversTma !== undefined || rule.coversCtr !== undefined) {
+        const apt = flightCoverageAirport(flight, config.myAirports)
+        if (!apt) return false
+        const cov = coverageForAirport(apt)
+        if (rule.coversTma !== undefined && cov.tma !== rule.coversTma) return false
+        if (rule.coversCtr !== undefined && cov.ctr !== rule.coversCtr) return false
     }
 
     return true

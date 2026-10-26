@@ -3107,6 +3107,7 @@ class FlightStore {
         if (message.endurance !== undefined) flight.endurance = message.endurance || undefined
         if (message.pilotName !== undefined) flight.pilotName = message.pilotName || undefined
         if (message.ete !== undefined) flight.ete = message.ete
+        if (message.sectorEntryMin !== undefined) flight.sectorEntryMin = message.sectorEntryMin
         // Filed FPL cruise altitude → RFL; explicit positive RFL (CAD) wins if present
         if (message.altitude !== undefined && message.altitude > 0) {
             flight.rfl = message.altitude
@@ -3756,6 +3757,7 @@ class FlightStore {
         // Update radar data (ownership intentionally ignored — polled via ownershipUpdate)
         flight.currentAltitude = message.altitude
         if (message.ete !== undefined) flight.ete = message.ete
+        if (message.sectorEntryMin !== undefined) flight.sectorEntryMin = message.sectorEntryMin
         if (message.nextController !== undefined) flight.nextController = message.nextController
         if (message.nextControllerFrequency !== undefined) flight.nextControllerFrequency = message.nextControllerFrequency
         if (message.latitude !== undefined) flight.latitude = message.latitude
@@ -5451,6 +5453,7 @@ class FlightStore {
                     : undefined,
             eobt: flight.eobt,
             eta: flight.ete ? moment(flight.lastUpdate).utc().add(flight.ete, 'minutes').format('HHmm') : undefined,
+            sectorEntryMin: flight.sectorEntryMin,
             sid: displaySid,
             tmaExit,
             star: flight.star,

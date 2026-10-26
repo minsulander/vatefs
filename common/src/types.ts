@@ -58,6 +58,8 @@ export interface FlightStrip {
     // Times
     eobt?: string              // Estimated Off Block Time (HHmm)
     eta?: string               // Estimated Time of Arrival (HHmm)
+    /** Minutes until entry into my sectors (ES ETN); 0 = already inside */
+    sectorEntryMin?: number
     /** Actual Time of Departure (HHmm) — shown in dep triangle after airborne */
     atd?: string
     /** Actual Time of Arrival (HHmm) — shown in arr triangle after landing */

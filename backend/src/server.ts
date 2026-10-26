@@ -167,6 +167,7 @@ import {
 import { configForLoginCallsign } from "./config-autoselect.js"
 import type { ConfigFileInfo } from "./config-loader.js"
 import { buildSaabRunwayCatalog, ensureSaabSectionInLayout } from "./saab-runways.js"
+import { buildAirportCoverageMap } from "./airport-coverage.js"
 import {
     isMultiAirportConfig,
     normalizeColumnAirports,
@@ -1403,6 +1404,14 @@ function buildStatusMessage(): StatusMessage {
         saabRunwayCatalog: saabMode
             ? buildSaabRunwayCatalog(staticConfig.myAirports ?? [])
             : undefined,
+        airportCoverage:
+            saabMode || isMultiAirportConfig(staticConfig)
+                ? buildAirportCoverageMap(
+                      isMultiAirportConfig(staticConfig)
+                          ? (staticConfig.activeAirports ?? staticConfig.myAirports)
+                          : staticConfig.myAirports
+                  )
+                : undefined,
     }
 }
 

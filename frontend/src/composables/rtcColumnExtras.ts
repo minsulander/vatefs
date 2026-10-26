@@ -23,7 +23,7 @@ const RTC_STRIP_SIZE_ORDER: RtcStripSize[] = ['normal', 'compact', 'expanded']
 
 export type RtcBayExtras = {
   emptyDividers: RtcEmptyDivider[]
-  /** Logical ids: arr | app | rwy | twy | dep */
+  /** Logical ids: arr | tma | app | rwy | twy | dep */
   hiddenLogical: string[]
   /** Display order of section ids (template + empty). Missing ids append in server order. */
   sectionOrder: string[]
@@ -31,8 +31,15 @@ export type RtcBayExtras = {
   sectionYs: Record<string, number>
   /** ARR + CTR combined into one "ARR / CTR" header */
   arrAppMerged: boolean
+  /** CTR + TMA combined into one "CTR/TMA" (or "TMA/CTR") header */
+  ctrTmaMerged: boolean
   /** DEP split into CLR + PUSH&START (push/start leave TAXIWAY visually) */
   depSplit: boolean
+  /**
+   * When covering TMA without CTR, DEP split yields RUNWAY + TAXIWAY + CLR
+   * instead of CLR + PUSH&START.
+   */
+  depSplitTmaOnly: boolean
   /** Per display-section strip size (normal → compact → expanded), like workspace */
   stripSizes: Record<string, RtcStripSize>
 }
@@ -68,9 +75,16 @@ export function isRtcPushStartGroundstate(gs: string | undefined | null): boolea
 export function isRtcBasicSectionId(sectionId: string): boolean {
   if (isRtcEmptyDividerId(sectionId)) return false
   if (isRtcClrId(sectionId) || isRtcPushStartId(sectionId)) return false
-  if (isRtcArrAppMergedId(sectionId)) return true
+  if (isRtcArrAppMergedId(sectionId) || isRtcCtrTmaMergedId(sectionId)) return true
   const log = logicalSectionIdFromRtc(sectionId)
-  return log === 'arr' || log === 'app' || log === 'rwy' || log === 'twy' || log === 'dep'
+  return (
+    log === 'arr' ||
+    log === 'tma' ||
+    log === 'app' ||
+    log === 'rwy' ||
+    log === 'twy' ||
+    log === 'dep'
+  )
 }
 
 /** All RTC dividers can show X (close hides via catalog / removes empty / merges DEP halves). */
@@ -79,7 +93,11 @@ export function rtcCanCloseSection(_sectionId: string): boolean {
 }
 
 export function rtcCanSplitSection(sectionId: string): boolean {
-  return isRtcArrAppMergedId(sectionId) || logicalSectionIdFromRtc(sectionId) === 'dep'
+  return (
+    isRtcArrAppMergedId(sectionId) ||
+    isRtcCtrTmaMergedId(sectionId) ||
+    logicalSectionIdFromRtc(sectionId) === 'dep'
+  )
 }
 
 export function getRtcStripSize(bayId: string, sectionId: string): RtcStripSize {
@@ -118,19 +136,39 @@ export function closeRtcSection(bayId: string, sectionId: string) {
     return
   }
   const log = logicalSectionIdFromRtc(sectionId)
-  if (log === 'arr' || log === 'app' || log === 'rwy' || log === 'twy' || log === 'dep') {
+  if (
+    log === 'arr' ||
+    log === 'tma' ||
+    log === 'app' ||
+    log === 'rwy' ||
+    log === 'twy' ||
+    log === 'dep'
+  ) {
     hideRtcLogicalSection(bayId, log)
+  }
+  if (isRtcCtrTmaMergedId(sectionId)) {
+    hideRtcLogicalSection(bayId, 'app')
+    hideRtcLogicalSection(bayId, 'tma')
   }
 }
 
 /** RTC bay template logical section ids (catalog). */
 export const RTC_CATALOG_SECTIONS: readonly { logical: string; title: string }[] = [
   { logical: 'arr', title: 'ARR' },
+  { logical: 'tma', title: 'TMA' },
   { logical: 'app', title: 'CTR' },
   { logical: 'rwy', title: 'RUNWAY' },
   { logical: 'twy', title: 'TAXIWAY' },
   { logical: 'dep', title: 'DEP' },
 ] as const
+
+export function rtcCtrTmaMergedId(bayId: string): string {
+  return `${bayId}_ctr_tma`
+}
+
+export function isRtcCtrTmaMergedId(sectionId: string): boolean {
+  return /^(?:bay\d+|idle)_ctr_tma$/i.test(sectionId)
+}
 
 const extrasByBay = ref<Record<string, RtcBayExtras>>(loadExtras())
 /** Bumps when extras change so Vue computeds re-run */
@@ -183,7 +221,9 @@ function loadExtras(): Record<string, RtcBayExtras> {
         sectionOrder: order,
         sectionYs: ys,
         arrAppMerged: !!v.arrAppMerged,
+        ctrTmaMerged: !!(v as { ctrTmaMerged?: boolean }).ctrTmaMerged,
         depSplit: !!v.depSplit,
+        depSplitTmaOnly: !!(v as { depSplitTmaOnly?: boolean }).depSplitTmaOnly,
         stripSizes,
       }
     }
@@ -216,7 +256,9 @@ function normalizeExtras(bayId: string): RtcBayExtras {
       sectionOrder: [],
       sectionYs: {},
       arrAppMerged: false,
+      ctrTmaMerged: false,
       depSplit: false,
+      depSplitTmaOnly: false,
       stripSizes: {},
     }
   }
@@ -226,7 +268,9 @@ function normalizeExtras(bayId: string): RtcBayExtras {
     sectionOrder: cur.sectionOrder ?? [],
     sectionYs: cur.sectionYs ?? {},
     arrAppMerged: !!cur.arrAppMerged,
+    ctrTmaMerged: !!cur.ctrTmaMerged,
     depSplit: !!cur.depSplit,
+    depSplitTmaOnly: !!cur.depSplitTmaOnly,
     stripSizes: cur.stripSizes ?? {},
   }
 }
@@ -372,6 +416,7 @@ export function isRtcLogicalPresent(bay: Bay, logical: string): boolean {
   const extras = getRtcBayExtras(bay.id)
   if (extras.hiddenLogical.includes(logical)) return false
   if (extras.arrAppMerged && (logical === 'arr' || logical === 'app')) return true
+  if (extras.ctrTmaMerged && (logical === 'app' || logical === 'tma')) return true
   if (extras.depSplit && logical === 'dep') return true
   const full = fullRtcSectionId(bay.id, logical)
   return bay.sections.some((s) => s.id === full || logicalSectionIdFromRtc(s.id) === logical)
@@ -519,9 +564,64 @@ export function tryRtcMergeArrApp(bayId: string, aId: string, bId: string): bool
   return true
 }
 
+/** Split CTR/TMA → CTR + TMA. */
+export function splitRtcCtrTma(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (!cur.ctrTmaMerged) return
+  const appId = fullRtcSectionId(bayId, 'app')
+  const tmaId = fullRtcSectionId(bayId, 'tma')
+  const mergedId = rtcCtrTmaMergedId(bayId)
+  const y0 = cur.sectionYs[mergedId]
+  const addYs: Record<string, number> = {}
+  if (y0 != null) {
+    addYs[appId] = y0
+    addYs[tmaId] = y0 + RTC_HEADER_H
+  }
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      ctrTmaMerged: false,
+      sectionOrder: replaceOrderIds(cur.sectionOrder, mergedId, [appId, tmaId]),
+      sectionYs: rewriteYs(cur.sectionYs, [mergedId], addYs),
+    },
+  }
+  bump()
+}
+
+export function mergeRtcCtrTma(bayId: string) {
+  const cur = normalizeExtras(bayId)
+  if (cur.ctrTmaMerged) return
+  const appId = fullRtcSectionId(bayId, 'app')
+  const tmaId = fullRtcSectionId(bayId, 'tma')
+  const mergedId = rtcCtrTmaMergedId(bayId)
+  const yApp = cur.sectionYs[appId]
+  const yTma = cur.sectionYs[tmaId]
+  const yMerged =
+    yApp != null && yTma != null ? Math.min(yApp, yTma) : (yApp ?? yTma ?? undefined)
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...cur,
+      ctrTmaMerged: true,
+      hiddenLogical: cur.hiddenLogical.filter((l) => l !== 'app' && l !== 'tma'),
+      sectionOrder: replaceOrderIds(cur.sectionOrder, [appId, tmaId], [mergedId]),
+      sectionYs:
+        yMerged != null
+          ? rewriteYs(cur.sectionYs, [appId, tmaId], { [mergedId]: yMerged })
+          : rewriteYs(cur.sectionYs, [appId, tmaId], {}),
+    },
+  }
+  bump()
+}
+
 export function splitRtcSection(bayId: string, sectionId: string) {
   if (isRtcArrAppMergedId(sectionId)) {
     splitRtcArrApp(bayId)
+    return
+  }
+  if (isRtcCtrTmaMergedId(sectionId)) {
+    splitRtcCtrTma(bayId)
     return
   }
   if (logicalSectionIdFromRtc(sectionId) === 'dep') {
@@ -537,6 +637,9 @@ export function rtcStripMatchIds(bayId: string, displaySectionId: string): strin
   if (isRtcArrAppMergedId(displaySectionId)) {
     return [fullRtcSectionId(bayId, 'arr'), fullRtcSectionId(bayId, 'app')]
   }
+  if (isRtcCtrTmaMergedId(displaySectionId)) {
+    return [fullRtcSectionId(bayId, 'app'), fullRtcSectionId(bayId, 'tma')]
+  }
   if (isRtcClrId(displaySectionId)) {
     return [fullRtcSectionId(bayId, 'dep')]
   }
@@ -551,12 +654,13 @@ export function rtcStripMatchIds(bayId: string, displaySectionId: string): strin
  */
 export function rtcDropSectionId(bayId: string, displaySectionId: string): string {
   if (isRtcArrAppMergedId(displaySectionId)) return fullRtcSectionId(bayId, 'arr')
+  if (isRtcCtrTmaMergedId(displaySectionId)) return fullRtcSectionId(bayId, 'app')
   if (isRtcClrId(displaySectionId)) return fullRtcSectionId(bayId, 'dep')
   if (isRtcPushStartId(displaySectionId)) return fullRtcSectionId(bayId, 'twy')
   return displaySectionId
 }
 
-/** Apply ARR/CTR merge and DEP split to the ordered section list. */
+/** Apply ARR/CTR merge, CTR/TMA merge, and DEP split to the ordered section list. */
 function applyRtcSplitViews(bayId: string, sections: Section[], extras: RtcBayExtras): Section[] {
   let list = [...sections]
   if (extras.arrAppMerged) {
@@ -571,16 +675,82 @@ function applyRtcSplitViews(bayId: string, sections: Section[], extras: RtcBayEx
       list.splice(Math.max(0, firstIdx), 0, { id: mergedId, title: 'ARR / CTR' })
     }
   }
+  if (extras.ctrTmaMerged) {
+    const appId = fullRtcSectionId(bayId, 'app')
+    const tmaId = fullRtcSectionId(bayId, 'tma')
+    const mergedId = rtcCtrTmaMergedId(bayId)
+    const hasApp = list.some((s) => s.id === appId)
+    const hasTma = list.some((s) => s.id === tmaId)
+    if (hasApp || hasTma) {
+      const firstIdx = list.findIndex((s) => s.id === appId || s.id === tmaId)
+      list = list.filter((s) => s.id !== appId && s.id !== tmaId)
+      list.splice(Math.max(0, firstIdx), 0, { id: mergedId, title: 'CTR/TMA' })
+    }
+  }
   if (extras.depSplit) {
     const depId = fullRtcSectionId(bayId, 'dep')
     const clrId = rtcClrId(bayId)
     const pushId = rtcPushStartId(bayId)
     const depIdx = list.findIndex((s) => s.id === depId)
     if (depIdx >= 0) {
-      list.splice(depIdx, 1, { id: clrId, title: 'CLR' }, { id: pushId, title: 'PUSH&START' })
+      if (extras.depSplitTmaOnly) {
+        // TMA-only coverage: CLR → TAXIWAY → RUNWAY (not CLR + PUSH&START)
+        const rwyId = fullRtcSectionId(bayId, 'rwy')
+        const twyId = fullRtcSectionId(bayId, 'twy')
+        list.splice(
+          depIdx,
+          1,
+          { id: clrId, title: 'CLR' },
+          { id: twyId, title: 'TAXIWAY' },
+          { id: rwyId, title: 'RUNWAY' },
+        )
+      } else {
+        list.splice(depIdx, 1, { id: clrId, title: 'CLR' }, { id: pushId, title: 'PUSH&START' })
+      }
     }
   }
   return list
+}
+
+/**
+ * Apply coverage-based builtin defaults for a fresh RTC column.
+ * Only fills empty extras (does not rewrite a layout the controller already changed).
+ */
+export function applyRtcCoverageDefaults(
+  bayId: string,
+  coverage: { tma: boolean; ctr: boolean } | undefined,
+): void {
+  if (!coverage) return
+  const cur = extrasByBay.value[bayId]
+  // Already customized — leave alone
+  if (cur && (cur.sectionOrder?.length || cur.hiddenLogical?.length || cur.arrAppMerged || cur.ctrTmaMerged || cur.depSplit)) {
+    return
+  }
+  const hidden: string[] = []
+  let ctrTmaMerged = false
+  let depSplitTmaOnly = false
+  if (coverage.tma && coverage.ctr) {
+    ctrTmaMerged = true
+  } else if (coverage.tma && !coverage.ctr) {
+    // ARR, TMA, CTR, DEP — hide runway/taxiway as separate headers on fresh default
+    hidden.push('rwy', 'twy')
+    depSplitTmaOnly = true
+  } else if (!coverage.tma && coverage.ctr) {
+    hidden.push('tma')
+  } else {
+    // Neither — hide TMA
+    hidden.push('tma')
+  }
+  extrasByBay.value = {
+    ...extrasByBay.value,
+    [bayId]: {
+      ...normalizeExtras(bayId),
+      hiddenLogical: hidden,
+      ctrTmaMerged,
+      depSplitTmaOnly,
+    },
+  }
+  bump()
 }
 
 /**

@@ -13,6 +13,9 @@ bayTemplate:
     arr:
       title: ARR
       addFromTop: true
+    tma:
+      title: TMA
+      addFromTop: true
     app:
       title: CTR
       addFromTop: true
@@ -52,17 +55,19 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 95
 
-  # === ARR (inbound arrivals still outside CTR) ===
+  # === ARR (unassumed inbounds only, ETN ≤ 15) ===
   arr_inbound_not_myself:
     sectionId: arr
     direction: arrival
     airborne: true
     groundstates: ['', NSTS, ARR]
     controller: not_myself
+    maxSectorEntryMinutes: 15
     priority: 70
 
+  # Assumed arrivals go to CTR (app), not ARR
   arr_assumed:
-    sectionId: arr
+    sectionId: app
     direction: arrival
     controller: myself
     airborne: true
@@ -71,21 +76,20 @@ sectionRules:
 
   arr_low_altitude:
     sectionId: arr
-    direction: arrival
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    maxAltitudeAboveField: 1500
+    myRole: []
     priority: 75
 
+  # Do not list arrivals with missing / late ETN
   arr_fallback:
     sectionId: arr
     direction: arrival
     airborne: true
+    maxSectorEntryMinutes: 15
+    controller: not_myself
     priority: 5
 
-  # === CTR (inside CTR arrivals + airborne dep / local / missed) ===
-  # RTC-only: CA/VA/CAT/OS pull into APP (CTR) even outside withinCtr.
-  # ESSA/ESGG intentionally do NOT — there only assume / inbound transfer → CTR ARR.
+  # === CTR (arrivals + airborne dep / local / missed) ===
+  # CA/VA/CAT/OS → CTR even outside the zone (skips TMA when split).
   app_arr_approach_clearance:
     sectionId: app
     direction: arrival
@@ -94,12 +98,10 @@ sectionRules:
     approachClearance: true
     priority: 91
 
+  # Disabled: inside-CTR alone must not pull unassumed off ARR
   app_arr_within_ctr:
     sectionId: app
-    direction: arrival
-    airborne: true
-    groundstates: ['', NSTS, ARR]
-    withinCtr: true
+    myRole: []
     priority: 90
 
   app_missed_approach:
@@ -109,17 +111,54 @@ sectionRules:
     airborne: true
     priority: 105
 
+  # Assumed arrivals outside CTR → TMA when covering TMA
+  tma_arr_assumed:
+    sectionId: tma
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: ['', NSTS, ARR]
+    withinCtr: false
+    coversTma: true
+    priority: 92
+
+  # Airborne deps inside CTR stay on CTR (app); leave CTR → TMA when covering TMA
   app_airborne_dep:
     sectionId: app
     direction: departure
     airborne: true
+    withinCtr: true
     priority: 100
+
+  app_airborne_dep_no_tma:
+    sectionId: app
+    direction: departure
+    airborne: true
+    coversTma: false
+    priority: 99
+
+  tma_airborne_dep:
+    sectionId: tma
+    direction: departure
+    airborne: true
+    withinCtr: false
+    coversTma: true
+    priority: 101
 
   app_airborne_local:
     sectionId: app
     direction: local
     airborne: true
+    withinCtr: true
     priority: 100
+
+  tma_airborne_local:
+    sectionId: tma
+    direction: local
+    airborne: true
+    withinCtr: false
+    coversTma: true
+    priority: 101
 
   # === TWY (only start/push or taxi — CLR alone stays in DEP) ===
   twy_push_start:
@@ -521,11 +560,12 @@ actionRules:
     priority: 10
 
 deleteRules:
+  # Do not show redundant — drop when next position assumes (no altitude gate)
   delete_dep_high_transferred:
     direction: departure
     controller: not_myself
-    minAltitudeAboveField: 2500
-    priority: 100
+    airborne: true
+    priority: 110
 
   # Arrivals only — never departures (PARK at gate must not hide dep strips)
   delete_parked:

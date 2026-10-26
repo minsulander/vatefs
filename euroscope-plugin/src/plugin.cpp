@@ -404,6 +404,13 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
             message["ete"] = ete;
         }
 
+        // Minutes until entry into my sectors (0 = inside, -1 = never) — TopSky ETN
+        int sectorEntryMin = FlightPlan.GetSectorEntryMinutes();
+        if (sectorEntryMin >= 0) {
+            out << " etn " << sectorEntryMin;
+            message["sectorEntryMin"] = sectorEntryMin;
+        }
+
         // SID/route changes can recalculate COPX / XFL without a CAD callback
         AppendXfl(message, FlightPlan, &out);
 
@@ -854,6 +861,10 @@ void VatEFSPlugin::OnRadarTargetPositionUpdate(EuroScopePlugIn::CRadarTarget Rad
         int ete = fp.GetPositionPredictions().GetPointsNumber();
         if (ete >= 0 && ete <= 3600) { // Reasonable ETE range
             message["ete"] = ete;
+        }
+        int sectorEntryMin = fp.GetSectorEntryMinutes();
+        if (sectorEntryMin >= 0) {
+            message["sectorEntryMin"] = sectorEntryMin;
         }
         // Dense poll while an outbound Initiate cycle is open — REFUSED can last <1s.
         const char *csRaw = RadarTarget.GetCallsign();
