@@ -8,11 +8,17 @@
     :close-on-content-click="false"
     @update:model-value="onModelUpdate"
   >
-    <div class="xfl-menu" @click.stop>
+    <div
+      class="xfl-menu"
+      :class="{ 'xfl-menu--no-target': !canCoordinate }"
+      :title="noTargetTitle"
+      @click.stop
+    >
       <button type="button" class="xfl-menu-top" title="Close" @click="closeMenu">
         <div class="xfl-menu-header">XFL</div>
         <div class="xfl-menu-callsign">{{ strip.callsign }}</div>
       </button>
+      <div v-if="!canCoordinate" class="xfl-menu-hint">No ACC online</div>
       <div ref="listEl" class="xfl-menu-list">
         <button
           v-for="opt in xflOptions"
@@ -21,6 +27,7 @@
           class="xfl-menu-item"
           :class="{ selected: isLevelSelected(opt) }"
           :data-xfl="opt.value"
+          :disabled="!canCoordinate"
           @click="onSelectLevel(opt.value)"
         >{{ opt.label }}</button>
       </div>
@@ -35,6 +42,7 @@
           placeholder=""
           spellcheck="false"
           autocomplete="off"
+          :disabled="!canCoordinate"
           @input="onManualInput"
           @keydown.enter.prevent="submitManual"
           @keydown.escape.prevent="closeMenu"
@@ -83,6 +91,11 @@ const manualText = ref('')
 const transitionAltitudeFt = ref(DEFAULT_TRANSITION_ALTITUDE_FT)
 let ignoreCloseUntil = 0
 
+const canCoordinate = computed(() => store.canInitiateSystemCoordination)
+const noTargetTitle = computed(() =>
+  canCoordinate.value ? undefined : 'No ACC/APP online to receive coordination',
+)
+
 const manualValid = computed(() => parseManualCfl(manualText.value) != null)
 
 /** Same level ladder as CFL (TA-aware). */
@@ -99,6 +112,7 @@ watch(
       scrollToSelected()
       requestAnimationFrame(() => {
         scrollToSelected()
+        if (!canCoordinate.value) return
         const el = manualInput.value
         if (!el) return
         el.focus()
@@ -141,6 +155,7 @@ function onManualInput() {
 }
 
 function submitManual() {
+  if (!canCoordinate.value) return
   const feet = parseManualCfl(manualText.value)
   if (feet == null) return
   sendXflCoordination(feet)
@@ -233,7 +248,7 @@ function lopFallbackPoint(): string | undefined {
  * Does NOT set clearance or DepC.
  */
 function sendXflCoordination(altitudeFeet: number) {
-  if (altitudeFeet <= 0) return
+  if (!canCoordinate.value || altitudeFeet <= 0) return
   store.initiateXflCoordination(props.strip.id, {
     altitudeFeet,
     point: lopFallbackPoint(),
@@ -241,6 +256,7 @@ function sendXflCoordination(altitudeFeet: number) {
 }
 
 function onSelectLevel(value: string) {
+  if (!canCoordinate.value) return
   const feet = parseInt(value, 10)
   if (!Number.isFinite(feet) || feet <= 0) return
   sendXflCoordination(feet)
@@ -392,11 +408,40 @@ function onSelectLevel(value: string) {
   box-shadow: inset 0 0 0 2px #1a3a6e;
 }
 
-.xfl-menu-item:hover {
+.xfl-menu-item:hover:not(:disabled) {
   background: #1a3a6e;
   color: var(--xfl-strip-white);
   box-shadow: inset 0 0 0 2px #000;
   position: relative;
   z-index: 1;
+}
+
+.xfl-menu-hint {
+  padding: calc(4px * var(--s)) calc(6px * var(--s));
+  font-size: calc(8px * var(--s));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+  color: #666;
+  background: #c8c8c8;
+  border-bottom: 1px solid #888;
+}
+
+.xfl-menu--no-target .xfl-menu-list {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.xfl-menu-item:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.xfl-menu-manual-input:disabled {
+  background: #d0d0d0;
+  color: #666;
+  cursor: default;
+  opacity: 0.85;
 }
 </style>

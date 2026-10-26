@@ -3583,22 +3583,42 @@ void VatEFSPlugin::ReceiveUdpMessages()
                         DisplayMessage("assignDirect: Flight plan not found: " + callsign);
                     } else {
                         auto cad = fp.GetControllerAssignedData();
-                        // Setting a DCT point clears AHD. Clearing DCT leaves AHD alone.
+                        // Setting a DCT point clears AHD. Clearing DCT leaves AHD alone
+                        // unless empty SetDirectToPointName fails (common) — then pulse AHD
+                        // so ES drops DCT via the same mutual exclusion as assignHeading.
                         if (!point.empty()) {
                             cad.SetAssignedHeading(0);
                         }
                         bool ok = cad.SetDirectToPointName(point.c_str());
-                        if (!ok) {
-                            // Empty clear often returns false when already cleared — not fatal
+                        if (point.empty()) {
                             const char *cur = cad.GetDirectToPointName();
-                            const bool alreadyClear =
-                                point.empty() && (!cur || cur[0] == '\0');
-                            if (!alreadyClear) {
+                            bool cleared = !cur || cur[0] == '\0';
+                            if (!cleared) {
+                                // Empty DirectTo clear rejected while DCT is set — AHD pulse
+                                const int prevHdg = cad.GetAssignedHeading();
+                                const int pulse = prevHdg > 0 ? prevHdg : 360;
+                                if (cad.SetAssignedHeading(pulse)) {
+                                    cad.SetDirectToPointName("");
+                                    cad.SetAssignedHeading(prevHdg > 0 ? prevHdg : 0);
+                                    cur = cad.GetDirectToPointName();
+                                    cleared = !cur || cur[0] == '\0';
+                                    if (cleared) {
+                                        DebugMessage("assignDirect: clear via AHD pulse for " +
+                                                     callsign);
+                                        ok = true;
+                                    }
+                                }
+                            } else if (!ok) {
+                                DebugMessage("assignDirect: clear — already empty in ES");
+                                ok = true;
+                            }
+                            if (!cleared) {
                                 DisplayMessage("assignDirect: SetDirectToPointName failed for " +
                                                callsign);
-                            } else {
-                                DebugMessage("assignDirect: clear — already empty in ES");
                             }
+                        } else if (!ok) {
+                            DisplayMessage("assignDirect: SetDirectToPointName failed for " +
+                                           callsign);
                         }
                         // Scratch flash: waypoint for set, empty for clear (ES clear-direct)
                         const std::string flash = point;

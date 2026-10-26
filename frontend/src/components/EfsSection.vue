@@ -483,6 +483,7 @@ import {
   cycleRtcStripSize,
   getRtcStripSize,
   tryRtcMergeArrApp,
+  tryRtcMergeCtrTma,
   rtcStripMatchIds,
   rtcDropSectionId,
   isRtcPushStartId,
@@ -923,7 +924,7 @@ function onRtcHeaderPointerDown(e: PointerEvent) {
     wsHeaderDragging = false
     wsHeaderPointerId = null
     const hit = rtcBayBodyAtPoint(ev.clientX, ev.clientY)
-    // ARR ↔ CTR: drop one header onto the other to merge into ARR / CTR
+    // ARR ↔ CTR → ARR / CTR; CTR ↔ TMA → CTR/TMA
     const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
     const underSec = under?.closest?.('.efs-section') as HTMLElement | null
     const underId =
@@ -933,7 +934,8 @@ function onRtcHeaderPointerDown(e: PointerEvent) {
       underId &&
       underId !== sectionId &&
       (hit?.bayId ?? fromBayId) === fromBayId &&
-      tryRtcMergeArrApp(fromBayId, sectionId, underId)
+      (tryRtcMergeArrApp(fromBayId, sectionId, underId) ||
+        tryRtcMergeCtrTma(fromBayId, sectionId, underId))
     ) {
       endRtcSectionDrag()
       clearDragHighlights()

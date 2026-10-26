@@ -713,9 +713,12 @@ function onSelect(sid: string) {
 }
 
 function onClear() {
-  // Clear SID and DCT (same as FPR/DCT CLEAR for directs)
+  // DCT in SID cell: clear DCT + restore preferred SID (same as FPR/DCT CLEAR).
+  // Do not also send assignSid '' — that wipes the restored preferred SID.
   if (props.strip.direct) {
     store.applyAssignedDirect(props.strip.id, '')
+    close()
+    return
   }
   store.sendAssignment(props.strip.id, 'assignSid', '')
   close()

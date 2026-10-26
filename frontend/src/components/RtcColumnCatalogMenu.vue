@@ -17,6 +17,10 @@
       @click.stop
     >
       <div class="efs-popup-list">
+        <button type="button" class="efs-popup-item" @click="onResetLayout">
+          Reset layout
+        </button>
+
         <!-- ESSA info strips when this column is ESSA -->
         <template v-if="isEssaColumn">
           <template v-for="folder in infoCatalogFolders" :key="folder.id">
@@ -143,14 +147,17 @@ import {
   addRtcEmptyDivider,
   ensureRtcLogicalSection,
   isRtcLogicalPresent,
+  resetRtcBayLayout,
   rtcExtrasVersion,
 } from '@/composables/rtcColumnExtras'
+import { useEfsStore } from '@/store/efs'
 
 const props = defineProps<{
   bay: Bay
   airport: string | null
 }>()
 
+const efs = useEfsStore()
 const open = ref(false)
 const sectionsOpen = ref(true)
 const folderOpen = reactive<Record<string, boolean>>({})
@@ -215,6 +222,13 @@ function onAddEmpty() {
 
 function onAddSection(logical: string) {
   ensureRtcLogicalSection(props.bay.id, logical)
+  open.value = false
+}
+
+function onResetLayout() {
+  const icao = (props.airport || '').toUpperCase()
+  const coverage = icao ? efs.airportCoverage[icao] : undefined
+  resetRtcBayLayout(props.bay.id, coverage)
   open.value = false
 }
 </script>

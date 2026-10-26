@@ -6085,17 +6085,19 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 restoreScratch = true
                             }
                             // SID was wiped when AHD/VECT started — restore ESE preferred for strip
+                            // (sidDisplayOverride sticks through empty GetSid echoes after clear)
                             if (vectCapable) {
-                                flightForAssign.sidDisplayOverride = undefined
                                 const preferred =
                                     resolvePreferredSidForFlight(flightForAssign) ||
                                     resolveEseSidForFlight(flightForAssign)
                                 if (preferred) {
+                                    flightForAssign.sidDisplayOverride = preferred
                                     flightForAssign.sid = preferred
                                     console.log(
                                         `[ASSIGN] AHD cleared — restore ESE SID ${preferred} for ${strip.callsign}`,
                                     )
                                 } else {
+                                    flightForAssign.sidDisplayOverride = undefined
                                     flightForAssign.sid = undefined
                                 }
                             }
@@ -6172,16 +6174,19 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     } else {
                         // Cleared DCT — restore ESE SID for strip display (not forced into FPL).
                         // ESSA/ESMS/ESGG use preferred tables; other ES airports use ESE exit match
-                        // (e.g. ESNU/32 + DEDIT → DEDIT2L).
-                        flightForAssign.sidDisplayOverride = undefined
+                        // (e.g. ESNU/32 + DEDIT → DEDIT2L). Keep sidDisplayOverride so empty
+                        // GetSid echoes after clear do not fall back to the first FPL fix.
                         const preferred =
                             resolvePreferredSidForFlight(flightForAssign) ||
                             resolveEseSidForFlight(flightForAssign)
                         if (preferred) {
+                            flightForAssign.sidDisplayOverride = preferred
                             flightForAssign.sid = preferred
                             console.log(
                                 `[ASSIGN] DCT cleared — restore ESE SID ${preferred} for ${strip.callsign}`,
                             )
+                        } else {
+                            flightForAssign.sidDisplayOverride = undefined
                         }
                     }
                 }
@@ -6214,11 +6219,15 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     flight.sidDisplayOverride = undefined
                                     flight.ahdg = 0
                                 } else {
-                                    flight.sidDisplayOverride = undefined
                                     const preferred =
                                         resolvePreferredSidForFlight(flight) ||
                                         resolveEseSidForFlight(flight)
-                                    if (preferred) flight.sid = preferred
+                                    if (preferred) {
+                                        flight.sidDisplayOverride = preferred
+                                        flight.sid = preferred
+                                    } else {
+                                        flight.sidDisplayOverride = undefined
+                                    }
                                 }
                                 break
                             case "assignCfl": {

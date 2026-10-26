@@ -3135,12 +3135,18 @@ class FlightStore {
         // Always-sent from plugin ("" when cleared) — keep FPR gate in sync with ES
         if (message.depRwy !== undefined) flight.depRwy = message.depRwy || undefined
         if (message.sid !== undefined) flight.sid = message.sid || undefined
-        // FPL/SID edit in ES: drop sticky override when FPL no longer forces that SID
+        // FPL/SID edit in ES: drop sticky override when FPL no longer forces that SID.
+        // GetSid-only flicker with no forced SID/rwy keeps display-only restores
+        // (DCT/AHD clear → preferred SID) so empty GetSid does not fall back to first FPL fix.
         const sidChanged =
             message.sid !== undefined && (message.sid || undefined) !== prevSid
         if (flight.sidDisplayOverride && (routeChanged || sidChanged)) {
             const forcedPrefix = routeForcedSidPrefix(flight.route)
-            if (!forcedPrefix || !sidMatchesRoutePrefix(flight.sidDisplayOverride, forcedPrefix)) {
+            if (forcedPrefix) {
+                if (!sidMatchesRoutePrefix(flight.sidDisplayOverride, forcedPrefix)) {
+                    flight.sidDisplayOverride = undefined
+                }
+            } else if (routeChanged) {
                 flight.sidDisplayOverride = undefined
             }
         }

@@ -42,7 +42,11 @@ import {
     isStripPrintSound,
 } from "@/composables/useStripPrintSound"
 import { driveAnimationWallClock } from "@/composables/wallClockAnimation"
-import { applyRtcCoverageDefaults } from "@/composables/rtcColumnExtras"
+import {
+    applyRtcCoverageDefaults,
+    resetRtcBayLayout,
+    swapRtcBayExtras,
+} from "@/composables/rtcColumnExtras"
 import {
     clearStripScribbles,
     pushRisingDiagonalLeftCol,
@@ -1666,15 +1670,29 @@ export const useEfsStore = defineStore("efs", () => {
         // Optimistic local update
         const next = [...columnAirports.value]
         while (next.length <= columnIndex) next.push(null)
+        // Airport already open in another column → swap airports + their CTR/TMA extras.
+        // Newly selected airport (idle / picker) → apply coverage CTR/TMA defaults for this bay.
+        let swapFromIndex: number | null = null
         if (airport) {
             const previous = next[columnIndex] ?? null
-            // Already in another column → swap with this column's current airport
             for (let i = 0; i < next.length; i++) {
-                if (i !== columnIndex && next[i] === airport) next[i] = previous
+                if (i !== columnIndex && next[i] === airport) {
+                    next[i] = previous
+                    swapFromIndex = i
+                }
             }
         }
         next[columnIndex] = airport
         columnAirports.value = next
+
+        if (airport && swapFromIndex != null) {
+            swapRtcBayExtras(`bay${columnIndex + 1}`, `bay${swapFromIndex + 1}`)
+        } else if (airport) {
+            resetRtcBayLayout(
+                `bay${columnIndex + 1}`,
+                airportCoverage.value[airport.toUpperCase()],
+            )
+        }
 
         // Drop user-picked airports that are no longer relevant (not ES, not in a column, no traffic)
         const es = new Set(esAirports.value)
@@ -2561,15 +2579,10 @@ export const useEfsStore = defineStore("efs", () => {
         const clearing = !fix
 
         if (clearing) {
-            sendAssignment(stripId, 'assignDirect', '')
-            strips.value.set(stripId, {
-                ...strips.value.get(stripId)!,
-                direct: undefined,
-            })
-            stripsVersion.value++
-            // Re-show ESE preferred SID (backend restores flight.sid; refresh amber preview)
-            void refreshEssaPreferredSids()
-            void restorePreferredSidDisplayAfterDctClear(stripId)
+            // ES rejects SetDirectToPointName("") while DCT is set. Setting then
+            // clearing AHD drops DCT (mutual exclusion) and restores preferred SID.
+            applyAssignedHeading(stripId, '360')
+            applyAssignedHeading(stripId, '')
             return
         }
 
@@ -3401,6 +3414,27 @@ export const useEfsStore = defineStore("efs", () => {
 
     /** Departure Coordination flag → strip annotation 6 ("DepC") */
     /**
+     * Online peer suitable as EuroScope InitiateCoordination target.
+     * Mirrors plugin fallback (CTR/FSS) plus APP (e.g. ÖKC) — not remote-tower R_APP/R_CTR.
+     */
+    function isSystemCoordinationTarget(ctrl: {
+        callsign: string
+        positionId?: string
+    }): boolean {
+        const cs = (ctrl.callsign || '').toUpperCase()
+        const pos = (ctrl.positionId || '').toUpperCase()
+        if (cs.includes('_R_APP') || cs.includes('_R_CTR')) return false
+        if (cs.includes('_CTR') || cs.includes('_FSS') || cs.includes('_APP')) return true
+        if (pos.includes('CTR') || pos.includes('FSS')) return true
+        return false
+    }
+
+    /** True when at least one ACC/APP peer is online to receive XFL / DEP COORD. */
+    const canInitiateSystemCoordination = computed(() =>
+        controllers.value.some((c) => isSystemCoordinationTarget(c)),
+    )
+
+    /**
      * EuroScope COPX/XFL exit coordination request (not clearance / DepC flag).
      * Plugin calls InitiateCoordination toward next/ACC.
      */
@@ -3408,6 +3442,7 @@ export const useEfsStore = defineStore("efs", () => {
         stripId: string,
         opts?: { altitudeFeet?: number; point?: string; targetController?: string },
     ) {
+        if (!canInitiateSystemCoordination.value && !opts?.targetController) return
         sendMessage({
             type: 'initiateXflCoordination',
             stripId,
@@ -3724,6 +3759,7 @@ export const useEfsStore = defineStore("efs", () => {
         updateHp,
         setCoo,
         initiateXflCoordination,
+        canInitiateSystemCoordination,
         acceptCoordination,
         refuseCoordination,
         updateHs,

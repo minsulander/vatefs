@@ -16,26 +16,36 @@
         </span>
       </div>
 
-      <div v-if="esmsAutoCoordHint" class="dep-coord-hint">{{ esmsAutoCoordHint }}</div>
+      <div v-if="!canCoordinate" class="dep-coord-hint dep-coord-hint--muted">
+        No ACC online to receive coordination
+      </div>
+      <div v-else-if="esmsAutoCoordHint" class="dep-coord-hint">{{ esmsAutoCoordHint }}</div>
 
-      <div class="efs-popup-list dep-coord-fields">
+      <div
+        class="efs-popup-list dep-coord-fields"
+        :class="{ 'dep-coord-fields--no-target': !canCoordinate }"
+      >
         <div
           class="efs-popup-item clnc-field-row dep-coord-field"
-          :class="{ 'is-disabled': esmsAutoCoordEligible }"
+          :class="{ 'is-disabled': esmsAutoCoordEligible || !canCoordinate }"
         >
           <span class="clnc-field-label">XFL</span>
           <input
             v-model="xflEdit"
             class="dep-coord-input"
-            :class="{ 'dep-coord-input--locked': esmsAutoCoordEligible }"
+            :class="{
+              'dep-coord-input--locked': esmsAutoCoordEligible || !canCoordinate,
+            }"
             maxlength="5"
             spellcheck="false"
-            :disabled="esmsAutoCoordEligible"
-            :readonly="esmsAutoCoordEligible"
+            :disabled="esmsAutoCoordEligible || !canCoordinate"
+            :readonly="esmsAutoCoordEligible || !canCoordinate"
             :title="
-              esmsAutoCoordEligible
-                ? 'ESMS auto-coord: XFL fixed at 1000 (pink) — ACC returns 4000'
-                : 'Exit coordination level (not ES clearance)'
+              !canCoordinate
+                ? 'No ACC/APP online to receive coordination'
+                : esmsAutoCoordEligible
+                  ? 'ESMS auto-coord: XFL fixed at 1000 (pink) — ACC returns 4000'
+                  : 'Exit coordination level (not ES clearance)'
             "
             @keydown.enter.prevent="onOk"
           />
@@ -56,7 +66,13 @@
 
       <div class="clnc-actions clnc-actions-2">
         <button type="button" class="efs-popup-footer clnc-action" @click="onCancel">Cancel</button>
-        <button type="button" class="efs-popup-footer clnc-action" @click="onOk">OK</button>
+        <button
+          type="button"
+          class="efs-popup-footer clnc-action"
+          :disabled="!canCoordinate"
+          :title="!canCoordinate ? 'No ACC/APP online to receive coordination' : undefined"
+          @click="onOk"
+        >OK</button>
       </div>
     </div>
   </v-dialog>
@@ -98,6 +114,8 @@ const dialogOpen = computed({
 const xflEdit = ref('')
 /** After force-assume open: re-sync local XFL once when strip.xfl arrives/changes. */
 const pendingAssumeXflSync = ref(false)
+
+const canCoordinate = computed(() => store.canInitiateSystemCoordination)
 
 const assrDisplay = computed(() => store.displayAssrForStrip(props.strip) || '')
 
@@ -212,6 +230,7 @@ function lopFallbackPoint(): string | undefined {
 }
 
 function onOk() {
+  if (!canCoordinate.value) return
   // ESMS eligible auto-coord: always send handshake 1000 (input is locked)
   const altitudeFeet = esmsAutoCoordEligible.value
     ? ESMS_AUTO_COORD_INIT_XFL_FT
@@ -282,8 +301,22 @@ function onCancel() {
   border-bottom: 1px solid #ccc;
 }
 
+.dep-coord-hint--muted {
+  color: #666;
+}
+
 .dep-coord-fields {
   max-height: none;
+}
+
+.dep-coord-fields--no-target {
+  opacity: 0.55;
+}
+
+.dep-coord-dialog .clnc-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+  color: #666;
 }
 
 .dep-coord-field {

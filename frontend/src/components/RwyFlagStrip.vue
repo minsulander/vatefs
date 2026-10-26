@@ -19,7 +19,7 @@
         <div class="rwy-flag-icon">
           <RwyFlagTypeIcon :kind="kind" />
         </div>
-        <div class="rwy-flag-raster">
+        <div v-if="showEssaRaster" class="rwy-flag-raster">
           <EssaRwyRaster
             :section-id="sectionId"
             :label="label"
@@ -36,7 +36,7 @@
         class="rwy-flag-graphics rwy-flag-graphics-end"
         aria-hidden="true"
       >
-        <div class="rwy-flag-raster">
+        <div v-if="showEssaRaster" class="rwy-flag-raster">
           <EssaRwyRaster
             :section-id="sectionId"
             :label="label"
@@ -64,6 +64,7 @@ import {
   type RwyFlagKind,
   useRwyFlagStrip,
 } from '@/composables/useRunwayFlagStrips'
+import { useEfsStore } from '@/store/efs'
 
 const props = defineProps<{
   kind: RwyFlagKind
@@ -71,6 +72,7 @@ const props = defineProps<{
   sectionTitle?: string
 }>()
 
+const efs = useEfsStore()
 const homeSectionId = toRef(props, 'sectionId')
 const sectionTitleRef = toRef(props, 'sectionTitle')
 const { id, label, active, dismiss, kind } = useRwyFlagStrip(
@@ -78,6 +80,9 @@ const { id, label, active, dismiss, kind } = useRwyFlagStrip(
   homeSectionId,
   sectionTitleRef,
 )
+
+/** ESSA physical RWY diagram — not on RTC (multi-airport) columns. */
+const showEssaRaster = computed(() => !efs.multiAirport)
 
 /** 01R/19L and 08/26: mirror of 01L — text then raster then vehicle/cone. */
 const graphicsAfterText = computed(() => {
