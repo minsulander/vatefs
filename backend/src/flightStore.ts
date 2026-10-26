@@ -2544,6 +2544,7 @@ class FlightStore {
         if (flight.tsac !== undefined) { flight.tsac = undefined; changed = true }
         if (flight.ctoc !== undefined) { flight.ctoc = undefined; changed = true }
         if (flight.cdmSts !== undefined) { flight.cdmSts = undefined; changed = true }
+        if (flight.cdmInformed !== undefined) { flight.cdmInformed = undefined; changed = true }
         if (flight.localCdmTobt !== undefined) { flight.localCdmTobt = undefined; changed = true }
         if (flight.localCdmTsat !== undefined) { flight.localCdmTsat = undefined; changed = true }
         if (flight.localCdmTtot !== undefined) { flight.localCdmTtot = undefined; changed = true }
@@ -5530,6 +5531,7 @@ class FlightStore {
             atisGiven: flight.atisGiven,
             weatherGiven: flight.weatherGiven || undefined,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
+            cdmInformed: cdmEligible && flight.cdmInformed ? true : undefined,
             ctot: ifrDeparture ? flight.ctot : undefined,
             ctotCancelled: ifrDeparture && flight.ctotCancelled ? true : undefined,
             ctotReason: ifrDeparture ? flight.ctotReason : undefined,

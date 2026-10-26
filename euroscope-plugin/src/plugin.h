@@ -63,6 +63,11 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
      */
     bool SendContactMe(const std::string &targetCallsign);
     /**
+     * Brittle CDM flow PM (same as CDM plugin): OEM_PLUS + ESC, type `.msg CS text`, Enter.
+     * Text from CDMconfig.xml PrivateMessage (backend supplies it). Needs ES focus.
+     */
+    bool SendCdmPrivateMessage(const std::string &targetCallsign, const std::string &messageText);
+    /**
      * EuroScope XFL exit coordination (InitiateCoordination).
      * Tries empty point + altitude first; falls back to LOP DCT point + altitude.
      * Same-level re-request (requested == live exit XFL): send ±1 ft nudge; store nudged

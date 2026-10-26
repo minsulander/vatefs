@@ -42,6 +42,14 @@
           class="tobt-menu-item tobt-menu-ready"
           @click="onReady"
         >{{ readyLabel }}</button>
+        <button
+          v-if="kind === 'tobt'"
+          type="button"
+          class="tobt-menu-item"
+          :class="{ 'tobt-menu-pm-sent': strip.cdmInformed }"
+          :title="cdmPmTitle"
+          @click="onSendCdmPm"
+        >{{ cdmPmLabel }}</button>
       </div>
     </div>
   </v-menu>
@@ -80,6 +88,14 @@ let ignoreCloseUntil = 0
 const kindLabel = computed(() => (props.kind === 'eobt' ? 'EOBT' : 'TOBT'))
 const setLabel = computed(() => (props.kind === 'eobt' ? 'Set EOBT' : 'Set TOBT'))
 const readyLabel = computed(() => (props.kind === 'eobt' ? 'Ready EOBT' : 'Ready TOBT'))
+const cdmPmLabel = computed(() =>
+  props.strip.cdmInformed ? 'Resend CDM PM ✓' : 'Send CDM PM',
+)
+const cdmPmTitle = computed(() =>
+  props.strip.cdmInformed
+    ? 'vIFF CDM PM already sent — click to resend (needs ES window focus)'
+    : 'EuroScope .msg CDM flow PM (needs ES window focus)',
+)
 
 function utcNowHhmm(): string {
   const d = new Date()
@@ -181,6 +197,12 @@ function onReady() {
     return
   }
   store.viffReadyTobt(props.strip.id)
+}
+
+/** Brittle: plugin types `.msg CS <CDMconfig PrivateMessage>` + DPI INFORMED/1 */
+function onSendCdmPm() {
+  closeMenu()
+  store.sendStripAction(props.strip.id, 'CDM_PM')
 }
 </script>
 
@@ -333,6 +355,16 @@ function onReady() {
 }
 
 .tobt-menu-ready:hover:not(:disabled) {
+  background: #1a6e3a;
+  color: #fff;
+}
+
+.tobt-menu-pm-sent:not(:disabled) {
+  background: #c8e6c8;
+  color: #0a2a0a;
+}
+
+.tobt-menu-pm-sent:hover:not(:disabled) {
   background: #1a6e3a;
   color: #fff;
 }

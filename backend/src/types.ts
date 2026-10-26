@@ -169,6 +169,8 @@ export interface Flight {
     /** Epoch ms: CTOT cleared recently; allow SLC on a later poll to latch cancel */
     ctotClearedAt?: number
     cdmSts?: string               // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
+    /** vIFF depAirport `informed` / DPI INFORMED/1 — CDM SEND/PM green + hide red P */
+    cdmInformed?: boolean
     ctotReason?: string           // mostPenalisingRegulation
     /** Last TOBT from local CDM_data_*.txt (EuroScope) — preferred over lagging HTTP */
     localCdmTobt?: string

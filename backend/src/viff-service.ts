@@ -36,6 +36,8 @@ export interface ViffCdmEntry {
     ttot?: string
     ctot?: string
     cdmSts?: string
+    /** depAirport `informed` — CDM PM already sent */
+    informed?: boolean
     taxiMinutes?: number
     tobtSetBy?: 'P' | 'A'
 }
@@ -188,6 +190,11 @@ export class ViffService {
         return this.sendDpi(callsign, set ? "REA/1" : "REA/0")
     }
 
+    /** CDM SEND/PM informed flag — turns CDM plugin PM column green after poll. */
+    async setInformed(callsign: string): Promise<boolean> {
+        return this.sendDpi(callsign, "INFORMED/1")
+    }
+
     async updateEobt(callsign: string, eobt: string): Promise<boolean> {
         return this.sendDpi(callsign, `EOBT/${eobt}`)
     }
@@ -285,6 +292,12 @@ export class ViffService {
                 const ttot = normalizeHhmm((item as any).ttot) ?? normalizeHhmm(cdmData.ttot)
                 const ctot = normalizeHhmm((item as any).ctot) ?? normalizeHhmm(cdmData.ctot)
                 const cdmSts = String((item as any).cdmSts ?? "").trim() || undefined
+                const informedRaw = (item as any).informed ?? cdmData.informed
+                const informed =
+                    informedRaw === true ||
+                    informedRaw === 1 ||
+                    informedRaw === "1" ||
+                    informedRaw === "true"
                 const taxiRaw = (item as any).taxi
                 const taxiMinutes = typeof taxiRaw === "number" && taxiRaw > 0
                     ? taxiRaw
@@ -298,6 +311,7 @@ export class ViffService {
                     ttot,
                     ctot,
                     cdmSts,
+                    informed: informed || undefined,
                     taxiMinutes,
                     tobtSetBy,
                 })

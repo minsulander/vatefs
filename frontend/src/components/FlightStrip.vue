@@ -79,6 +79,14 @@
           class="efs-popup-item"
           @click="openTobtMenuFromContext"
         >Ready TOBT…</button>
+        <button
+          v-if="canSendCdmPm"
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: strip.cdmInformed }"
+          :title="cdmPmMenuTitle"
+          @click="onSendCdmPmClick"
+        >{{ cdmPmMenuLabel }}</button>
         <button v-if="canSendRea" type="button" class="efs-popup-item" @click="onSendReaClick">Set REA</button>
         <button v-if="canClearRea" type="button" class="efs-popup-item" @click="onClearReaClick">Remove REA</button>
         <button
@@ -220,16 +228,27 @@
     </div>
   </v-menu>
 
-  <!-- CTOT menu (reason + CTOC + REA) -->
+  <!-- CTOT menu (reason + CTOC + REA + CDM PM) -->
   <v-menu v-model="ctotMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
     <div class="efs-popup-menu" @click.stop>
       <div class="efs-popup-header">CTOT</div>
       <div class="efs-popup-subheader">{{ strip.ctotReason || 'No regulation reason' }}</div>
-      <div v-if="canEditCtoc || canClearCtoc || canSendRea || canClearRea" class="efs-popup-list">
+      <div
+        v-if="canEditCtoc || canClearCtoc || canSendRea || canClearRea || canSendCdmPm"
+        class="efs-popup-list"
+      >
         <button v-if="canEditCtoc" type="button" class="efs-popup-item" @click="onSetCtocMenuClick">Set CTOC</button>
         <button v-if="canClearCtoc" type="button" class="efs-popup-item" @click="onClearCtocMenuClick">Remove CTOC</button>
         <button v-if="canSendRea" type="button" class="efs-popup-item" @click="onSendReaClick">Set REA</button>
         <button v-if="canClearRea" type="button" class="efs-popup-item" @click="onClearReaClick">Remove REA</button>
+        <button
+          v-if="canSendCdmPm"
+          type="button"
+          class="efs-popup-item"
+          :class="{ selected: strip.cdmInformed }"
+          :title="cdmPmMenuTitle"
+          @click="onSendCdmPmClick"
+        >{{ cdmPmMenuLabel }}</button>
       </div>
     </div>
   </v-menu>
@@ -1114,13 +1133,20 @@
             :title="topArrowTitle"
             @click.stop="onExpandTopExpander"
           ><span class="arrow-glyph">▲</span></button>
-          <!-- P/A between FRUL and top expander ▲ when expanded (tobtSetBy) -->
+          <!-- P/A (tobtSetBy) or red S (CDM PM pending) between FRUL and ▲ when expanded -->
           <span
             v-else-if="showTobtSetBy"
             class="tobt-setby strip-left-up"
             :class="{ 'tobt-setby-p': strip.tobtSetBy === 'P' }"
             :title="tobtSetByTitle"
           >{{ strip.tobtSetBy }}</span>
+          <button
+            v-else-if="showCdmPmPending"
+            type="button"
+            class="tobt-setby tobt-setby-pm strip-left-up"
+            title="Send CDM flow PM (needs ES window focus)"
+            @click.stop="onSendCdmPmClick"
+          >S</button>
           <div
             v-if="showPrimaryTime"
             class="strip-time strip-time-top fit-font"
@@ -4895,6 +4921,38 @@ const canOpenReadyTobt = computed(
     primaryTimeKind.value === 'tobt',
 )
 
+/** Send CDM flow PM (same eligibility as Ready TOBT) */
+const canSendCdmPm = computed(
+  () =>
+    canEditAssignedData.value &&
+    showCdm.value &&
+    !isLocalOnlyStrip.value &&
+    !isPaperEmptyFlightHolder.value,
+)
+
+const cdmPmMenuLabel = computed(() =>
+  props.strip.cdmInformed ? 'Resend CDM PM ✓' : 'Send CDM PM',
+)
+const cdmPmMenuTitle = computed(() =>
+  props.strip.cdmInformed
+    ? 'vIFF CDM PM already sent — click to resend (needs ES window focus)'
+    : 'EuroScope .msg CDM flow PM (needs ES window focus)',
+)
+
+/**
+ * Red S in TOBT setBy slot (top expander open only — see template v-else-if).
+ * Hidden when: informed; TOBT not shown; ATC/Ready TOBT (setBy A); pilot setBy P (green P wins).
+ */
+const showCdmPmPending = computed(
+  () =>
+    showCdm.value &&
+    showPrimaryTime.value &&
+    primaryTimeKind.value === 'tobt' &&
+    !props.strip.cdmInformed &&
+    props.strip.tobtSetBy !== 'A' &&
+    props.strip.tobtSetBy !== 'P',
+)
+
 /** SAAB only — EOBT click menu (Set / Ready EOBT); not paper */
 const canOpenEobtMenu = computed(
   () =>
@@ -4918,6 +4976,13 @@ function openTobtMenu(event?: MouseEvent) {
 
 function openTobtMenuFromContext() {
   openTobtMenu()
+}
+
+function onSendCdmPmClick() {
+  menuOpen.value = false
+  ctotMenuOpen.value = false
+  if (!canSendCdmPm.value) return
+  store.sendStripAction(props.strip.id, 'CDM_PM')
 }
 
 function openEobtMenu(event?: MouseEvent) {
@@ -8546,6 +8611,30 @@ function onGroundStateClick(action: string) {
 }
 .tobt-setby-p {
   color: #12b33a;
+}
+/* Red S — CDM flow PM not sent; fill ▲ cell so it is clickable */
+button.tobt-setby-pm {
+  width: calc(100% - 2px);
+  height: var(--ctrl-arrow-h);
+  max-height: var(--ctrl-arrow-h);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  box-shadow: none;
+  color: #c00000;
+  font: inherit;
+  font-size: var(--fs-time);
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+button.tobt-setby-pm:hover {
+  background: rgba(192, 0, 0, 0.08);
 }
 .time-sts-label { font-size: 0.7em; font-weight: 700; color: #d97706; }
 

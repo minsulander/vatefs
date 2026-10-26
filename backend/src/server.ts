@@ -245,6 +245,7 @@ import {
     fillDclTemplate,
     fillDclTemplateWithMarkers,
 } from "./hoppie-config.js"
+import { loadCdmConfig, getCdmPrivateMessageText } from "./cdm-config.js"
 import {
     loadTopSkyAirspace,
     getAppClrTypes,
@@ -496,6 +497,11 @@ if (EUROSCOPE_DIR) {
     }
     // Load Hoppie config (logon code + DCL templates)
     updateHoppieConfigFeedState(EUROSCOPE_DIR)
+    try {
+        loadCdmConfig(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    } catch (err) {
+        console.warn(`Failed to load CDMconfig: ${err instanceof Error ? err.message : err}`)
+    }
     try {
         loadTopSkyAirspace(EUROSCOPE_DIR)
     } catch (err) {
@@ -884,6 +890,8 @@ type OutboundPluginCommand =
     | { type: "efsRof"; callsign: string }
     /** Brittle ES .contactme — plugin SetASEL + HOME inject */
     | { type: "contactme"; callsign: string }
+    /** Brittle CDM flow PM — plugin types `.msg CS text` + Enter */
+    | { type: "cdmPm"; callsign: string; text: string }
     | { type: "clearScratchpad"; callsign: string }
     | { type: "setScratch"; callsign: string; value: string }
     /** Set scratch then restore previous (TopSky tokens like /APPTYPE/CAT3/) */
@@ -4134,6 +4142,11 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
             console.warn(`Reload Hoppie config failed: ${err instanceof Error ? err.message : err}`)
             localFeedState.hoppieConfig = { ok: false, detail: "Reload failed" }
         }
+        try {
+            loadCdmConfig(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+        } catch (err) {
+            console.warn(`Reload CDMconfig failed: ${err instanceof Error ? err.message : err}`)
+        }
         try { loadTopSkyAirspace(EUROSCOPE_DIR) } catch (err) {
             console.warn(`Reload TopSkyAirspace failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -5521,6 +5534,34 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             console.log(`[ACTION] WEATHER on ${strip.callsign} (WX_)`)
                         }
                         reevaluateAndBroadcast(strip.callsign)
+                    }
+                } else if (message.action === "CDM_PM") {
+                    // CDM flow PM: type `.msg CS text` in ES + DPI INFORMED/1 (green SEND/PM)
+                    const text = getCdmPrivateMessageText()
+                    sendUdp(
+                        JSON.stringify({
+                            type: "cdmPm",
+                            callsign: strip.callsign,
+                            text,
+                        } satisfies OutboundPluginCommand),
+                    )
+                    console.log(`[CDM] PM via ES ${strip.callsign}`)
+                    if (flight && !flight.cdmInformed) {
+                        flight.cdmInformed = true
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
+                    try {
+                        const ok = await viffService.setInformed(strip.callsign)
+                        if (ok) {
+                            viffService.pollSoon()
+                        } else {
+                            console.warn(`[VIFF] INFORMED/1 failed for ${strip.callsign} (PM still sent)`)
+                        }
+                    } catch (err) {
+                        console.warn(
+                            `[VIFF] INFORMED/1 error for ${strip.callsign}:`,
+                            err instanceof Error ? err.message : err,
+                        )
                     }
                 } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
@@ -9711,10 +9752,16 @@ function applyViffPoll(result: ViffPollResult) {
                 flight.taxiMinutes = newTaxi
                 changed = true
             }
+            // Sticky informed: once true (DPI or poll), keep until CDM fields cleared
+            if (cdmEntry?.informed && !flight.cdmInformed) {
+                flight.cdmInformed = true
+                changed = true
+            }
         } else if (
             flight.ctot ||
             flight.ctotCancelled ||
             flight.cdmSts ||
+            flight.cdmInformed ||
             flight.ctotReason ||
             flight.tobt ||
             flight.tsat ||
@@ -9725,6 +9772,7 @@ function applyViffPoll(result: ViffPollResult) {
             flight.ctotCancelled = undefined
             flight.ctotClearedAt = undefined
             flight.cdmSts = undefined
+            flight.cdmInformed = undefined
             flight.ctotReason = undefined
             flight.tobt = undefined
             flight.tsat = undefined

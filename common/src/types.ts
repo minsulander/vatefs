@@ -89,6 +89,11 @@ export interface FlightStrip {
     /** CTOT was cancelled (network SLC) — show SCL in the CTOT slot */
     ctotCancelled?: boolean
     cdmSts?: string            // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
+    /**
+     * CDM flow PM sent / vIFF `informed` — when false/undefined, strip may show red P
+     * left of TOBT (hidden once informed, ATC/Ready TOBT, pilot setBy, or TOBT not shown).
+     */
+    cdmInformed?: boolean
     ctotReason?: string        // mostPenalisingRegulation (optional tooltip)
 
     // Additional info

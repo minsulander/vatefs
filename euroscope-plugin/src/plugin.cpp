@@ -2319,6 +2319,87 @@ bool VatEFSPlugin::SendContactMe(const std::string &targetCallsign)
     return false;
 }
 
+/** Type UTF-8 as UNICODE key events (CDM PM text has URL / brackets). */
+static bool SendUnicodeText(const std::string &utf8)
+{
+    if (utf8.empty())
+        return true;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    if (wlen <= 1)
+        return false;
+    std::vector<wchar_t> wbuf(static_cast<size_t>(wlen));
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, wbuf.data(), wlen);
+    for (int i = 0; i < wlen - 1; ++i) {
+        INPUT in[2] = {};
+        in[0].type = INPUT_KEYBOARD;
+        in[0].ki.wScan = wbuf[static_cast<size_t>(i)];
+        in[0].ki.dwFlags = KEYEVENTF_UNICODE;
+        in[1] = in[0];
+        in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        if (SendInput(2, in, sizeof(INPUT)) != 2)
+            return false;
+    }
+    return true;
+}
+
+bool VatEFSPlugin::SendCdmPrivateMessage(const std::string &targetCallsign,
+                                         const std::string &messageText)
+{
+    try {
+        std::string target = targetCallsign;
+        for (auto &c : target)
+            c = (char)std::toupper((unsigned char)c);
+        if (target.empty()) {
+            DisplayMessage("cdmPm: Invalid callsign");
+            return false;
+        }
+        if (messageText.empty()) {
+            DisplayMessage("cdmPm: Empty message text");
+            return false;
+        }
+
+        auto fp = FlightPlanSelect(target.c_str());
+        auto rt = RadarTargetSelect(target.c_str());
+        if (!fp.IsValid() && !rt.IsValid()) {
+            DisplayMessage("cdmPm: No flight plan or radar target for " + target);
+            return false;
+        }
+
+        FocusEuroScopeWindow();
+
+        // Match CDM plugin: OEM_PLUS + ESC clears cmdline, then `.msg CS text` + Enter
+        if (!SendVkTap(VK_OEM_PLUS)) {
+            DisplayMessage("cdmPm: SendInput(OEM_PLUS) failed for " + target);
+            return false;
+        }
+        Sleep(40);
+        if (!SendVkTap(VK_ESCAPE)) {
+            DisplayMessage("cdmPm: SendInput(ESC) failed for " + target);
+            return false;
+        }
+        Sleep(60);
+
+        const std::string cmdline = ".msg " + target + " " + messageText;
+        if (!SendUnicodeText(cmdline)) {
+            DisplayMessage("cdmPm: SendInput(text) failed for " + target);
+            return false;
+        }
+        Sleep(40);
+        if (!SendVkTap(VK_RETURN)) {
+            DisplayMessage("cdmPm: SendInput(ENTER) failed for " + target);
+            return false;
+        }
+
+        DebugMessage("cdmPm: .msg " + target + " (+" + std::to_string(messageText.size()) + " chars)");
+        return true;
+    } catch (const std::exception &e) {
+        DisplayMessage(std::string("cdmPm exception: ") + e.what());
+    } catch (...) {
+        DisplayMessage("cdmPm: Unknown exception");
+    }
+    return false;
+}
+
 bool VatEFSPlugin::SendInitiateCoordination(const std::string &callsign, int altitudeFeet,
                                             const std::string &point,
                                             const std::string &targetController)
@@ -3028,6 +3109,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     auto callsign = message["callsign"].get<std::string>();
                     if (!SendContactMe(callsign)) {
                         // SendContactMe already displayed a specific error
+                    }
+                } else if (message["type"] == "cdmPm") {
+                    // Brittle CDM flow PM — see SendCdmPrivateMessage()
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto text = message.value("text", std::string());
+                    if (!SendCdmPrivateMessage(callsign, text)) {
+                        // SendCdmPrivateMessage already displayed a specific error
                     }
                 } else if (message["type"] == "clearScratchpad") {
                     auto callsign = message["callsign"].get<std::string>();

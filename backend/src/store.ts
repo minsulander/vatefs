@@ -151,6 +151,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "atisGiven",
     "weatherGiven",
     "cdmSts",
+    "cdmInformed",
     "ctot",
     "ctotCancelled",
     "ctotReason",
