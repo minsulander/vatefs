@@ -109,6 +109,16 @@ export function isIfrSidEligible(flightRules: string | undefined | null): boolea
 }
 
 /**
+ * Route has a standalone VFR/IFR rules-change word: whitespace before it (not
+ * the first word) and whitespace or end after. Rejects SID-like "VFR·FJUG/…"
+ * and slash-joined "ESSA/IFR".
+ */
+function routeHasStandaloneRulesChange(route: string, token: 'VFR' | 'IFR'): boolean {
+    const re = token === 'VFR' ? /\sVFR(?:\s|$)/ : /\sIFR(?:\s|$)/
+    return re.test(route.trim().toUpperCase())
+}
+
+/**
  * Display FRUL on strips: Y = IFR→VFR, Z = VFR→IFR.
  * When FPL rules are I/V but the route contains the opposite rules token
  * (standalone IFR / VFR), upgrade to Y/Z. Already Y/Z are left unchanged.
@@ -123,12 +133,9 @@ export function resolveDisplayFlightRules(
             : 'I'
     if (base === 'Y' || base === 'Z') return base
 
-    const tokens = (route ?? '')
-        .toUpperCase()
-        .split(/[^A-Z0-9]+/)
-        .filter(Boolean)
-    const hasIfr = tokens.includes('IFR')
-    const hasVfr = tokens.includes('VFR')
+    const r = route ?? ''
+    const hasIfr = routeHasStandaloneRulesChange(r, 'IFR')
+    const hasVfr = routeHasStandaloneRulesChange(r, 'VFR')
 
     if (base === 'V' && hasIfr) return 'Z'
     if (base === 'I' && hasVfr) return 'Y'
