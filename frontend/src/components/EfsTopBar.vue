@@ -77,8 +77,13 @@
           />
         </div>
       </Teleport>
-      <v-dialog v-model="essaRwyDialog" max-width="440" scrim content-class="essa-rwy-dialog-wrap">
-        <div class="essa-rwy-menu" @click.stop>
+      <v-dialog
+        v-model="essaRwyDialog"
+        :max-width="essaRwyDialogMaxWidth"
+        scrim
+        content-class="essa-rwy-dialog-wrap"
+      >
+        <div class="essa-rwy-menu" :style="essaRwyMenuScaleStyle" @click.stop>
           <div class="essa-rwy-header">RWY CONFIG</div>
           <div v-if="essaRwyEsHint" class="essa-rwy-es">ES: {{ essaRwyEsHint }}</div>
           <div class="essa-rwy-list essa-rwy-list-cols">
@@ -1057,6 +1062,14 @@ const draftEssaRoles = ref<string[]>([])
 
 const essaRwyDialog = ref(false)
 const draftEssaRwyId = ref<string | null>(null)
+/** Dialog width tracks chrome scale so two-column labels stay readable. */
+const essaRwyDialogMaxWidth = computed(() =>
+  Math.round(640 * Math.max(0.85, chromeScale.value)),
+)
+const essaRwyMenuScaleStyle = computed(() => ({
+  '--efs-scale': String(chromeScale.value),
+  '--efs-chrome-scale': String(chromeScale.value),
+}))
 /** Minute tick so night/day letter auto-switch updates without ES change */
 const essaRwyNowTick = ref(Date.now())
 let essaRwyTickTimer: ReturnType<typeof setInterval> | null = null
@@ -2291,9 +2304,10 @@ span.essa-status-btn.esgg-roles-readonly {
   background: #1a1a1a;
 }
 
-/* RWY config — same visual language as DEP ROUTE */
+/* RWY config — same visual language as DEP ROUTE; type ~ top-bar scale */
 .essa-rwy-menu {
   --rwy-strip-white: #ebebeb;
+  --rwy: var(--efs-chrome-scale, var(--efs-scale, 1));
   width: 100%;
   background: #d8d8d8;
   border: 1px solid #888;
@@ -2301,12 +2315,12 @@ span.essa-status-btn.esgg-roles-readonly {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   color: #000;
   font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .essa-rwy-header {
-  padding: calc(6px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1)) calc(2px * var(--efs-scale, 1));
-  font-size: calc(9px * var(--efs-scale, 1));
+  padding: calc(8px * var(--rwy)) calc(10px * var(--rwy)) calc(3px * var(--rwy));
+  font-size: calc(12px * var(--rwy));
   font-weight: 800;
   letter-spacing: 0.12em;
   color: #000;
@@ -2316,8 +2330,8 @@ span.essa-status-btn.esgg-roles-readonly {
 }
 
 .essa-rwy-es {
-  padding: 0 calc(8px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
-  font-size: calc(11px * var(--efs-scale, 1));
+  padding: 0 calc(10px * var(--rwy)) calc(8px * var(--rwy));
+  font-size: calc(14px * var(--rwy));
   font-weight: 800;
   letter-spacing: 0.3px;
   color: #000;
@@ -2337,17 +2351,17 @@ span.essa-status-btn.esgg-roles-readonly {
 
 .essa-rwy-list-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .essa-rwy-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
-  gap: calc(6px * var(--efs-scale, 1));
+  gap: calc(8px * var(--rwy));
   width: 100%;
   margin: 0;
-  padding: calc(5px * var(--efs-scale, 1)) calc(8px * var(--efs-scale, 1));
+  padding: calc(7px * var(--rwy)) calc(10px * var(--rwy));
   border: none;
   border-radius: 0;
   border-bottom: 1px solid #888;
@@ -2355,26 +2369,28 @@ span.essa-status-btn.esgg-roles-readonly {
   -webkit-appearance: none;
   background: #d8d8d8;
   color: #000;
-  font-size: calc(10px * var(--efs-scale, 1));
+  font-size: calc(13px * var(--rwy));
   font-weight: 700;
   letter-spacing: 0.2px;
   text-transform: uppercase;
   text-align: left;
   cursor: pointer;
-  line-height: 1.15;
-  min-height: calc(28px * var(--efs-scale, 1));
+  line-height: 1.25;
+  min-height: calc(34px * var(--rwy));
+  box-sizing: border-box;
 }
 
 .essa-rwy-auto-tag {
   margin-left: auto;
+  align-self: center;
   flex-shrink: 0;
-  font-size: calc(8px * var(--efs-scale, 1));
+  font-size: calc(10px * var(--rwy));
   font-weight: 800;
   letter-spacing: 0.08em;
   color: #1a3a6e;
   background: rgba(26, 58, 110, 0.12);
   border: 1px solid #1a3a6e;
-  padding: calc(1px * var(--efs-scale, 1)) calc(4px * var(--efs-scale, 1));
+  padding: calc(2px * var(--rwy)) calc(5px * var(--rwy));
   line-height: 1.2;
 }
 
@@ -2402,6 +2418,7 @@ span.essa-status-btn.esgg-roles-readonly {
   font-weight: 800;
   min-width: 2.2em;
   flex-shrink: 0;
+  padding-top: 0.05em;
 }
 
 .essa-rwy-detail {
@@ -2409,9 +2426,10 @@ span.essa-status-btn.esgg-roles-readonly {
   min-width: 0;
   font-weight: 600;
   opacity: 0.9;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .essa-rwy-item.es-match {
@@ -2452,7 +2470,7 @@ span.essa-status-btn.esgg-roles-readonly {
   align-items: center;
   justify-content: center;
   margin: 0;
-  padding: calc(10px * var(--efs-scale, 1)) calc(6px * var(--efs-scale, 1));
+  padding: calc(12px * var(--rwy)) calc(8px * var(--rwy));
   border: none;
   border-right: 1px solid #777;
   border-radius: 0;
@@ -2460,14 +2478,14 @@ span.essa-status-btn.esgg-roles-readonly {
   -webkit-appearance: none;
   background: #a8a8a8;
   color: #000;
-  font-size: calc(11px * var(--efs-scale, 1));
+  font-size: calc(13px * var(--rwy));
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
   line-height: 1.1;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  min-height: calc(32px * var(--efs-scale, 1));
+  min-height: calc(38px * var(--rwy));
 }
 
 .essa-rwy-action:last-child {
