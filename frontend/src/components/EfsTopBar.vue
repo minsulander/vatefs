@@ -450,15 +450,16 @@
             type="button"
             class="top-conn-btn"
             :class="{
-              'is-ok': connOk,
-              'is-off': !connOk,
+              'is-ok': connLevel === 'ok',
+              'is-warn': connLevel === 'warn',
+              'is-off': connLevel === 'err',
               'is-icon': showConnReloadIcon,
             }"
             :title="connTitle"
             @click="onConnReload"
           >
             <v-icon v-if="showConnReloadIcon" :size="connIconSize" aria-hidden="true">mdi-autorenew</v-icon>
-            <span v-else class="top-conn-label">{{ connOk ? 'OK' : 'ERR' }}</span>
+            <span v-else class="top-conn-label">{{ connLabel }}</span>
           </button>
         </div>
         <Teleport to="body">
@@ -541,7 +542,10 @@
                     class="efs-popup-item-sub"
                     :class="{
                       'conn-err': !row.ok,
-                      'conn-path': row.key === 'euroscopeDir' || row.key === 'cdmLocal',
+                      'conn-path':
+                        row.key === 'euroscopeDir' ||
+                        row.key === 'esaaPackage' ||
+                        row.key === 'cdmLocal',
                     }"
                   >{{ row.detail }}</span>
                 </div>
@@ -1027,14 +1031,59 @@ function catalogSectionTintClass(sec: { sectionId: string; title: string }): str
   return undefined
 }
 const connIconSize = computed(() => Math.max(16, Math.round(18 * chromeScale.value)))
-/** OK only when backend WS + EuroScope plugin are both live */
-const connOk = computed(() => efs.connected && efs.pluginConnected)
+
+/**
+ * Badge level (#64): worst wins.
+ * ERR — WS down, plugin down, EuroScope dir missing, ESAA package missing
+ * WARN — Hoppie / stands / ESE / TopSky / CDM local / UDP aging
+ * OK — otherwise (black label, no coloured background)
+ */
+type ConnLevel = 'ok' | 'warn' | 'err'
+const CONN_WARN_FEED_KEYS = [
+  'hoppie',
+  'hoppieConfig',
+  'stands',
+  'eseSid',
+  'eseAirspace',
+  'topskyAirspace',
+  'cdmLocal',
+] as const
+
+const connLevel = computed((): ConnLevel => {
+  if (!efs.connected || !efs.pluginConnected) return 'err'
+  const f = efs.feeds
+  if (f?.euroscopeDir && !f.euroscopeDir.ok) return 'err'
+  if (f?.esaaPackage && !f.esaaPackage.ok) return 'err'
+
+  const pluginDetail = f?.plugin?.detail ?? ''
+  if (/UDP aging|UDP stale/i.test(pluginDetail)) return 'warn'
+  for (const key of CONN_WARN_FEED_KEYS) {
+    const item = f?.[key]
+    if (item && !item.ok) return 'warn'
+  }
+  return 'ok'
+})
+const connLabel = computed(() => {
+  if (connLevel.value === 'err') return 'ERR'
+  if (connLevel.value === 'warn') return 'WARN'
+  return 'OK'
+})
 /** Prefer UDP bind conflict detail when plugin feed reports it */
 const connTitle = computed(() => {
-  if (connOk.value) return 'Connected - click to reload'
+  if (connLevel.value === 'ok') return 'Connected - click to reload'
+  if (connLevel.value === 'warn') {
+    const plugin = efs.feeds?.plugin
+    if (plugin?.detail && /UDP/i.test(plugin.detail)) {
+      return `${plugin.detail} - click to reload`
+    }
+    return 'Degraded feeds - click to reload'
+  }
   const plugin = efs.feeds?.plugin
   if (plugin && !plugin.ok && plugin.detail?.includes('UDP')) {
     return `${plugin.detail} - click to reload`
+  }
+  if (efs.feeds?.esaaPackage && !efs.feeds.esaaPackage.ok) {
+    return 'ESAA package not found - click to reload'
   }
   return 'Not fully connected - click to reload'
 })
@@ -1085,6 +1134,7 @@ const parsingFeedRows = computed((): FeedRow[] => {
   const miss = { ok: false, detail: '-' }
   const rows: { key: keyof NonNullable<typeof f>; title: string }[] = [
     { key: 'euroscopeDir', title: 'ES directory' },
+    { key: 'esaaPackage', title: 'ESAA package' },
     { key: 'hoppieConfig', title: 'Hoppie config files' },
     { key: 'cdmLocal', title: 'Local CDM data files' },
     { key: 'stands', title: 'GRP stands' },
@@ -2191,9 +2241,9 @@ span.essa-status-btn.esgg-roles-readonly {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Near-square; fixed so icon swap doesn’t resize */
-  width: calc(32px * var(--tb));
-  min-width: calc(32px * var(--tb));
+  /* Wide enough for WARN; fixed so icon swap doesn’t resize */
+  width: calc(44px * var(--tb));
+  min-width: calc(44px * var(--tb));
   height: calc(28px * var(--tb));
   margin: 0;
   padding: 0;
@@ -2208,8 +2258,8 @@ span.essa-status-btn.esgg-roles-readonly {
 }
 
 .top-conn-label {
-  font-size: calc(14px * var(--tb));
-  font-weight: 500;
+  font-size: calc(12px * var(--tb));
+  font-weight: 600;
   letter-spacing: 0.04em;
   line-height: 1;
 }
@@ -2223,6 +2273,21 @@ span.essa-status-btn.esgg-roles-readonly {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* WARN — yellow background, dark text for contrast (#64) */
+.top-conn-btn.is-warn {
+  border-color: #ca8a04;
+  background: #eab308;
+  color: #1c1917;
+}
+
+.top-conn-btn.is-warn:hover,
+.top-conn-btn.is-warn.is-icon {
+  background: #facc15;
+  border-color: #ca8a04;
+  color: #1c1917;
+}
+
+/* ERR — red background, white text */
 .top-conn-btn.is-off {
   border-color: #b91c1c;
   background: #b91c1c;
@@ -2233,6 +2298,7 @@ span.essa-status-btn.esgg-roles-readonly {
 .top-conn-btn.is-off.is-icon {
   background: #dc2626;
   border-color: #dc2626;
+  color: #fff;
 }
 
 .efs-top-bar :deep(.dcl-btn.v-btn) {

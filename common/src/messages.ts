@@ -80,6 +80,8 @@ export interface FeedsStatus {
     irisSync: FeedStatusItem
     // Local / parsing
     euroscopeDir: FeedStatusItem
+    /** Resolved ESAA sector package (Plugins / TopSky / GRP) */
+    esaaPackage: FeedStatusItem
     hoppieConfig: FeedStatusItem
     cdmLocal: FeedStatusItem
     stands: FeedStatusItem
