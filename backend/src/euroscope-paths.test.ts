@@ -8,10 +8,15 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import {
+    discoverEsaaPackageDir,
+    extractAbsolutePathsFromPrf,
+    extractSectorPathsFromLogs,
     resolveEsaaPackageDir,
     resolveEsaaPluginsDir,
     resolveEsaaPluginFile,
     resolveIcaoAirlinesFile,
+    resolvePackageDirFromPathHint,
+    setEsaaPackageDirOverride,
 } from "./euroscope-paths.js"
 
 let passed = 0
@@ -91,6 +96,75 @@ check("returns undefined plugin file when missing", () => {
         assert.equal(resolveEsaaPluginFile(root, "TopSkyCPDLChoppieCode.txt"), undefined)
     } finally {
         fs.rmSync(root, { recursive: true, force: true })
+    }
+})
+
+check("resolvePackageDirFromPathHint walks up from SCT to ESAA", () => {
+    const root = mkTmp()
+    try {
+        const pkg = path.join(root, "EuroScope_Sweden", "ESAA")
+        writeFile(path.join(pkg, "Plugins", "TopSkyCPDLC.txt"), "[DCL]")
+        writeFile(path.join(pkg, "Plugins", "GRpluginStands.txt"), "stands")
+        const sct = path.join(root, "EuroScope_Sweden", "ES_OwnConf", "3_ESSA", "sector.sct")
+        writeFile(sct, "sector")
+        // Put package as sibling-ish: walk finds ESAA under EuroScope_Sweden
+        const found = resolvePackageDirFromPathHint(sct)
+        assert.equal(found, pkg)
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+    }
+})
+
+check("extractAbsolutePathsFromPrf reads absolute plugin/sector lines", () => {
+    const content = [
+        "Settings\tsector\tD:\\VATSIM\\ESAA\\sector.sct",
+        "Plugins\tPlugin0\tD:\\VATSIM\\ESAA\\Plugins\\TopSky.dll",
+        "Settings\talias\t\\ESAA\\Alias\\alias.txt",
+    ].join("\n")
+    const paths = extractAbsolutePathsFromPrf(content)
+    assert.ok(paths.some((p) => p.includes("sector.sct")))
+    assert.ok(paths.some((p) => p.includes("TopSky.dll")))
+})
+
+check("discover finds package outside euroscope dir via PRF absolute path", () => {
+    const tmp = mkTmp()
+    try {
+        const esDir = path.join(tmp, "AppDataEuroScope")
+        const external = path.join(tmp, "DesktopPackage", "ESAA")
+        fs.mkdirSync(esDir, { recursive: true })
+        writeFile(path.join(esDir, "dummy.prf"), "Settings\tsector\tx.sct\n")
+        writeFile(path.join(external, "Plugins", "TopSkyCPDLChoppieCode.txt"), "CODE")
+        writeFile(path.join(external, "Plugins", "TopSkyCPDLC.txt"), "[DCL]")
+        writeFile(
+            path.join(esDir, "ESAA TWR.prf"),
+            `Settings\tsector\t${external}\\sector.sct\nPlugins\tPlugin0\t${external}\\Plugins\\TopSky.dll\n`,
+        )
+        writeFile(path.join(external, "sector.sct"), "s")
+
+        setEsaaPackageDirOverride(undefined)
+        const found = discoverEsaaPackageDir(esDir)
+        assert.equal(found, external)
+    } finally {
+        setEsaaPackageDirOverride(undefined)
+        fs.rmSync(tmp, { recursive: true, force: true })
+    }
+})
+
+check("extractSectorPathsFromLogs finds .ese in EuroScope log", () => {
+    const tmp = mkTmp()
+    try {
+        const log = path.join(tmp, "EuroScope20261026.txt")
+        writeFile(
+            log,
+            `Noise\nSectorfile loaded: C:\\Users\\perha\\Desktop\\Dokument\\VATSIM\\EuroScope_Sweden\\ESAA\\Sweden.sct\n` +
+                `ESE: C:\\Users\\perha\\Desktop\\Dokument\\VATSIM\\EuroScope_Sweden\\ESAA\\Sweden.ese\n`,
+        )
+        const paths = extractSectorPathsFromLogs([tmp])
+        assert.equal(paths.length, 2)
+        assert.ok(paths.some((p) => p.endsWith(".sct")))
+        assert.ok(paths.some((p) => p.endsWith(".ese")))
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true })
     }
 })
 

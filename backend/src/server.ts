@@ -138,6 +138,8 @@ import {
     type ExternalPrintBody,
 } from "./fsp-api.js"
 import {
+    discoverEsaaPackageDir,
+    findEuroscopeDir,
     resolveEsaaPackageDir,
     resolveEsaaPluginsDir,
     resolveIcaoAirlinesFile,
@@ -392,47 +394,24 @@ if (fs.existsSync(slowAircraftFile)) {
 const essaSidPrefsFile = path.join(dataDir, "essa-sid-prefs.json")
 loadEssaSidPrefs(essaSidPrefsFile)
 
-/**
- * Validate that a directory is a EuroScope install: must contain *.prf file.
- */
-function isValidEuroscopeDir(dir: string): boolean {
-    try {
-        const entries = fs.readdirSync(dir)
-        const hasPrf = entries.some((name) => name.endsWith(".prf"))
-        return hasPrf
-    } catch {
-        return false
-    }
-}
-
-/**
- * Find EuroScope directory by trying multiple locations in sequence.
- */
-function findEuroscopeDir(): string | undefined {
-    const home = process.env.HOME || process.env.USERPROFILE || ""
-    const candidates = [
-        path.join(process.env.APPDATA || "", "EuroScope"),
-        path.join("C:", "Program Files (x86)", "EuroScope"),
-        path.join(home, "VATSIM", "drive_c", "EUROSCOPE"),
-    ]
-    for (const candidate of candidates) {
-        if (candidate && fs.existsSync(candidate) && isValidEuroscopeDir(candidate)) {
-            return candidate
-        }
-    }
-    return undefined
-}
-
 // Load EuroScope data (stands, SIDs)
 // TODO: make configurable — only load data files from this EuroScope package directory
 const EUROSCOPE_PACKAGE = 'ESAA'
 const EUROSCOPE_DIR = findEuroscopeDir()
+/** Resolved ESAA sector package (may live outside AppData — Documents / PRF / log hints). */
+const ESAA_PACKAGE_DIR = discoverEsaaPackageDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
 
 /** Startup parse results for status popup (updated as files load) */
 const localFeedState = {
     euroscopeDir: {
         ok: !!EUROSCOPE_DIR,
         detail: EUROSCOPE_DIR ? path.resolve(EUROSCOPE_DIR) : "Not found",
+    } as FeedStatusItem,
+    esaaPackage: {
+        ok: !!(ESAA_PACKAGE_DIR && fs.existsSync(path.join(ESAA_PACKAGE_DIR, "Plugins"))),
+        detail: ESAA_PACKAGE_DIR
+            ? path.resolve(ESAA_PACKAGE_DIR)
+            : "Not found",
     } as FeedStatusItem,
     hoppieConfig: { ok: false, detail: "Not loaded" } as FeedStatusItem,
     cdmLocal: { ok: false, detail: "Not found" } as FeedStatusItem,
@@ -470,11 +449,15 @@ function updateHoppieConfigFeedState(euroscopeDir: string) {
 
 if (EUROSCOPE_DIR) {
     console.log(`EuroScope directory: ${EUROSCOPE_DIR}`)
-    const esaaPkg = resolveEsaaPackageDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    const esaaPkg = ESAA_PACKAGE_DIR ?? resolveEsaaPackageDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
     if (esaaPkg) {
         console.log(`ESAA package directory: ${esaaPkg}`)
+        localFeedState.esaaPackage = { ok: true, detail: path.resolve(esaaPkg) }
     } else {
-        console.warn(`ESAA package directory not found under ${EUROSCOPE_DIR}`)
+        console.warn(
+            `ESAA package directory not found (searched under EuroScope dir, Documents\\EuroScope, PRF paths, ES logs)`,
+        )
+        localFeedState.esaaPackage = { ok: false, detail: "Not found" }
     }
     try {
         const n = loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
@@ -620,7 +603,15 @@ if (EUROSCOPE_DIR) {
         }
     }
 } else {
-    console.warn("EuroScope directory not found (tried APPDATA, Program Files (x86), VATSIM/drive_c)")
+    console.warn(
+        "EuroScope directory not found (tried APPDATA, Documents\\EuroScope, Program Files (x86), VATSIM/drive_c)",
+    )
+    if (ESAA_PACKAGE_DIR) {
+        console.log(`ESAA package directory (without ES settings dir): ${ESAA_PACKAGE_DIR}`)
+        localFeedState.esaaPackage = { ok: true, detail: path.resolve(ESAA_PACKAGE_DIR) }
+    } else {
+        localFeedState.esaaPackage = { ok: false, detail: "Not found" }
+    }
     // Still persist UI settings under %APPDATA%\EuroScope when possible (mock/dev)
     const appdata = process.env.APPDATA
     if (appdata) {
@@ -1319,7 +1310,13 @@ function pluginFeedStatus(): FeedStatusItem {
     if (udpBindError) {
         return { ok: false, detail: udpBindError }
     }
-    if (cliArgs.mock || pluginConnected) {
+    if (cliArgs.mock) {
+        return { ok: true, detail: "Connected" }
+    }
+    if (pluginConnected) {
+        if (isPluginUdpStaleWarning()) {
+            return { ok: true, detail: "UDP aging" }
+        }
         return { ok: true, detail: "Connected" }
     }
     return { ok: false, detail: "Not connected" }
@@ -1336,6 +1333,7 @@ function buildFeedsStatus(): FeedsStatus {
         irisSync: getIrisSyncHealth(),
         ctr: getCtrHealth(),
         euroscopeDir: localFeedState.euroscopeDir,
+        esaaPackage: localFeedState.esaaPackage,
         hoppieConfig: localFeedState.hoppieConfig,
         cdmLocal: localFeedState.cdmLocal,
         stands: standsFeedStatus(),
@@ -1343,6 +1341,16 @@ function buildFeedsStatus(): FeedsStatus {
         eseAirspace: getEseAirspaceHealth(),
         topskyAirspace: getTopSkyAirspaceHealth(),
     }
+}
+
+/** Soft UDP-stale warn window before hard plugin disconnect (15s). */
+const PLUGIN_UDP_WARN_MS = 8_000
+
+function isPluginUdpStaleWarning(): boolean {
+    if (cliArgs.mock || !pluginConnected || udpBindError) return false
+    if (!lastPluginUdpAt) return false
+    const age = Date.now() - lastPluginUdpAt
+    return age >= PLUGIN_UDP_WARN_MS && age < PLUGIN_STALE_MS
 }
 
 function checkPluginStale() {
@@ -4243,6 +4251,10 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
 
     if (EUROSCOPE_DIR) {
         localFeedState.euroscopeDir = { ok: true, detail: path.resolve(EUROSCOPE_DIR) }
+        const esaaPkg = discoverEsaaPackageDir(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+        localFeedState.esaaPackage = esaaPkg
+            ? { ok: true, detail: path.resolve(esaaPkg) }
+            : { ok: false, detail: "Not found" }
         try { loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
             console.warn(`Reload stands failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -4289,6 +4301,10 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         if (cdmDir) pollLocalCdmDataFiles()
     } else {
         localFeedState.euroscopeDir = { ok: false, detail: "Not found" }
+        const esaaPkg = discoverEsaaPackageDir(undefined, EUROSCOPE_PACKAGE)
+        localFeedState.esaaPackage = esaaPkg
+            ? { ok: true, detail: path.resolve(esaaPkg) }
+            : { ok: false, detail: "Not found" }
         localFeedState.hoppieConfig = { ok: false, detail: "Not loaded" }
         localFeedState.cdmLocal = { ok: false, detail: "Not found" }
     }

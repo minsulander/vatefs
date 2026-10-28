@@ -6,6 +6,7 @@
 
 import fs from "fs"
 import path from "path"
+import { resolveEsaaPackageDir } from "./euroscope-paths.js"
 
 export interface EseCoord {
     lat: number
@@ -92,6 +93,17 @@ function findEseFile(euroscopeDir: string, packageFilter?: string): string | und
         }
     } catch {
         /* ignore */
+    }
+    const pkg = resolveEsaaPackageDir(euroscopeDir, packageFilter || "ESAA")
+    if (pkg) {
+        scanDir(pkg)
+        try {
+            for (const entry of fs.readdirSync(pkg, { withFileTypes: true })) {
+                if (entry.isDirectory()) scanDir(path.join(pkg, entry.name))
+            }
+        } catch {
+            /* ignore */
+        }
     }
     return latestFile
 }

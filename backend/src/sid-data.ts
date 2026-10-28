@@ -7,6 +7,7 @@
 
 import fs from "fs"
 import path from "path"
+import { resolveEsaaPackageDir } from "./euroscope-paths.js"
 
 export interface SidInfo {
     name: string
@@ -47,7 +48,7 @@ function findEseFile(euroscopeDir: string, packageFilter?: string): string | und
         }
     }
 
-    // Scan root and subdirectories
+    // Scan root, immediate children, and resolved ESAA package (nested ESAA/ESAA)
     scanDir(euroscopeDir)
     try {
         const entries = fs.readdirSync(euroscopeDir, { withFileTypes: true })
@@ -58,6 +59,17 @@ function findEseFile(euroscopeDir: string, packageFilter?: string): string | und
         }
     } catch {
         // Can't read euroscope dir
+    }
+    const pkg = resolveEsaaPackageDir(euroscopeDir, packageFilter || "ESAA")
+    if (pkg) {
+        scanDir(pkg)
+        try {
+            for (const entry of fs.readdirSync(pkg, { withFileTypes: true })) {
+                if (entry.isDirectory()) scanDir(path.join(pkg, entry.name))
+            }
+        } catch {
+            /* ignore */
+        }
     }
 
     return latestFile
