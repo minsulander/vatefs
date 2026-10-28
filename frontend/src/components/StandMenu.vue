@@ -49,13 +49,13 @@
             <button
               v-else
               type="button"
-              class="sid-route-item stand-menu-item stand-menu-item-compact"
+              class="sid-route-item stand-menu-item stand-menu-key"
               :class="standItemClass(row.stand)"
               :disabled="!row.stand.selectable"
               :title="standTitle(row.stand)"
               @click="onSelect(row.stand)"
             >
-              <span class="stand-compact-icon" aria-hidden="true">
+              <span class="stand-key-icon" aria-hidden="true">
                 <v-icon
                   v-if="occupiedStatusIcon(row.stand)"
                   class="stand-occ-icon"
@@ -63,15 +63,23 @@
                   size="15"
                 />
               </span>
-              <span class="stand-compact-name">{{ row.stand.name }}</span>
-              <span class="stand-compact-right">
+              <span class="stand-key-name">{{ row.stand.name }}</span>
+              <span class="stand-key-right">
                 <template v-if="row.stand.assignedCount && row.stand.assignedCount > 0">
-                  <span class="stand-compact-cs">{{ row.stand.assignedCount }} assigned</span>
-                  <span class="stand-compact-time"></span>
+                  <span class="stand-key-cs">{{ row.stand.assignedCount }} assigned</span>
+                  <span class="stand-key-time"></span>
                 </template>
                 <template v-else-if="row.stand.occupied">
-                  <span class="stand-compact-cs">{{ row.stand.occupied.label }}</span>
-                  <span class="stand-compact-time">{{ depTimeText(row.stand) }}</span>
+                  <span class="stand-key-cs">{{ row.stand.occupied.label }}</span>
+                  <span class="stand-key-time">
+                    <v-icon
+                      v-if="showBlockedByIcon(row.stand)"
+                      class="stand-key-block-icon"
+                      icon="mdi-cancel"
+                      size="11"
+                    />
+                    <span v-if="standKeySubText(row.stand)">{{ standKeySubText(row.stand) }}</span>
+                  </span>
                 </template>
               </span>
             </button>
@@ -106,33 +114,38 @@
                       v-for="stand in sec.stands"
                       :key="stand.name"
                       type="button"
-                      class="sid-route-item stand-menu-item"
+                      class="sid-route-item stand-menu-item stand-menu-key"
                       :class="standItemClass(stand)"
                       :disabled="!stand.selectable"
                       :title="standTitle(stand)"
                       @click="onSelect(stand)"
                     >
-                      <span class="stand-name">{{ stand.name }}</span>
-                      <span
-                        v-if="stand.assignedCount && stand.assignedCount > 0"
-                        class="stand-occ stand-occ-count"
-                      >{{ stand.assignedCount }} assigned</span>
-                      <span v-else-if="stand.occupied" class="stand-occ">
+                      <span class="stand-key-icon" aria-hidden="true">
                         <v-icon
                           v-if="occupiedStatusIcon(stand)"
                           class="stand-occ-icon"
                           :icon="occupiedStatusIcon(stand)!"
-                          size="14"
+                          size="15"
                         />
-                        <span
-                          v-if="stand.occupied.relatedStand"
-                          class="stand-occ-rel"
-                        >{{ stand.occupied.relatedStand }}</span>
-                        <span class="stand-occ-cs">{{ stand.occupied.label }}</span>
-                        <span
-                          v-if="depTimeText(stand)"
-                          class="stand-occ-time"
-                        >{{ depTimeText(stand) }}</span>
+                      </span>
+                      <span class="stand-key-name">{{ stand.name }}</span>
+                      <span class="stand-key-right">
+                        <template v-if="stand.assignedCount && stand.assignedCount > 0">
+                          <span class="stand-key-cs">{{ stand.assignedCount }} assigned</span>
+                          <span class="stand-key-time"></span>
+                        </template>
+                        <template v-else-if="stand.occupied">
+                          <span class="stand-key-cs">{{ stand.occupied.label }}</span>
+                          <span class="stand-key-time">
+                            <v-icon
+                              v-if="showBlockedByIcon(stand)"
+                              class="stand-key-block-icon"
+                              icon="mdi-cancel"
+                              size="11"
+                            />
+                            <span v-if="standKeySubText(stand)">{{ standKeySubText(stand) }}</span>
+                          </span>
+                        </template>
                       </span>
                     </button>
                   </div>
@@ -159,33 +172,38 @@
                   v-for="stand in sec.stands"
                   :key="stand.name"
                   type="button"
-                  class="sid-route-item stand-menu-item"
+                  class="sid-route-item stand-menu-item stand-menu-key"
                   :class="standItemClass(stand)"
                   :disabled="!stand.selectable"
                   :title="standTitle(stand)"
                   @click="onSelect(stand)"
                 >
-                  <span class="stand-name">{{ stand.name }}</span>
-                  <span
-                    v-if="stand.assignedCount && stand.assignedCount > 0"
-                    class="stand-occ stand-occ-count"
-                  >{{ stand.assignedCount }} assigned</span>
-                  <span v-else-if="stand.occupied" class="stand-occ">
+                  <span class="stand-key-icon" aria-hidden="true">
                     <v-icon
                       v-if="occupiedStatusIcon(stand)"
                       class="stand-occ-icon"
                       :icon="occupiedStatusIcon(stand)!"
-                      size="14"
+                      size="15"
                     />
-                    <span
-                      v-if="stand.occupied.relatedStand"
-                      class="stand-occ-rel"
-                    >{{ stand.occupied.relatedStand }}</span>
-                    <span class="stand-occ-cs">{{ stand.occupied.label }}</span>
-                    <span
-                      v-if="depTimeText(stand)"
-                      class="stand-occ-time"
-                    >{{ depTimeText(stand) }}</span>
+                  </span>
+                  <span class="stand-key-name">{{ stand.name }}</span>
+                  <span class="stand-key-right">
+                    <template v-if="stand.assignedCount && stand.assignedCount > 0">
+                      <span class="stand-key-cs">{{ stand.assignedCount }} assigned</span>
+                      <span class="stand-key-time"></span>
+                    </template>
+                    <template v-else-if="stand.occupied">
+                      <span class="stand-key-cs">{{ stand.occupied.label }}</span>
+                      <span class="stand-key-time">
+                        <v-icon
+                          v-if="showBlockedByIcon(stand)"
+                          class="stand-key-block-icon"
+                          icon="mdi-cancel"
+                          size="11"
+                        />
+                        <span v-if="standKeySubText(stand)">{{ standKeySubText(stand) }}</span>
+                      </span>
+                    </template>
                   </span>
                 </button>
               </div>
@@ -251,7 +269,8 @@ const isCompact = computed(() => store.standMenuLayout === 'compact')
 
 const VIEW_MARGIN = 16
 const CHROME_FALLBACK = 120
-const COL_MIN_PX = 112
+/** Full apron columns need room for icon | stand | C/S (same key layout as compact). */
+const COL_MIN_PX = 180
 const COMPACT_COL_PX = 220
 const menuMaxPx = ref(320)
 const menuMaxWidthPx = ref(480)
@@ -382,14 +401,14 @@ function standItemClass(stand: StandMenuStand) {
   const occ = stand.occupied
   const occKind = occ?.kind
   const notAllowed = stand.fit === 'notAllowed'
-  // Blocked text always; red if related stand occupied, amber if only planned
+  // Blocked: red if related stand occupied, amber if only planned
   const blockedAsOccupied = occKind === 'blocked' && occ?.blockFrom !== 'assigned'
   const blockedAsPlanned = occKind === 'blocked' && occ?.blockFrom === 'assigned'
   const planned = occKind === 'assigned' || blockedAsPlanned
-  // notAllowed grey wins over occupied/planned/inbound colors (icon + C/S still shown)
+  // Fill = availability (amber/red/grey/default). Green left edge = preferred (exit-match).
   return {
     selected: !!currentStand.value && currentStand.value.toUpperCase() === stand.name.toUpperCase(),
-    'exit-match': stand.fit === 'preferred',
+    'exit-match': stand.fit === 'preferred' && !notAllowed,
     'stand-occupied': !notAllowed && (occKind === 'occupied' || blockedAsOccupied),
     'stand-planned': !notAllowed && planned,
     'stand-planned-air': !notAllowed && planned && !!occ?.airborne,
@@ -440,18 +459,29 @@ function formatHhMm(raw: string | undefined): string {
 
 /**
  * Prefer TS → TB → EB. Only for departures Occupied on stand
- * (or hard-Blocked by such an occupied departure).
+ * (not blocked — those show the related stand name).
  */
 function depTimeText(stand: StandMenuStand): string {
   const occ = stand.occupied
-  if (!occ) return ''
-  const showTime =
-    occ.kind === 'occupied' || (occ.kind === 'blocked' && occ.blockFrom === 'occupied')
-  if (!showTime) return ''
+  if (!occ || occ.kind !== 'occupied') return ''
   if (occ.tsat) return `TS ${formatHhMm(occ.tsat)}`
   if (occ.tobt) return `TB ${formatHhMm(occ.tobt)}`
   if (occ.eobt) return `EB ${formatHhMm(occ.eobt)}`
   return ''
+}
+
+/** Bottom-right key line: related stand when blocked, else dep time. */
+function standKeySubText(stand: StandMenuStand): string {
+  const occ = stand.occupied
+  if (!occ) return ''
+  if (occ.kind === 'blocked') return occ.relatedStand ?? ''
+  return depTimeText(stand)
+}
+
+/** Soft block (inbound/planned neighbour) — show cancel next to related stand. */
+function showBlockedByIcon(stand: StandMenuStand): boolean {
+  const occ = stand.occupied
+  return occ?.kind === 'blocked' && occ.blockFrom === 'assigned'
 }
 
 function occupiedText(stand: StandMenuStand): string {
@@ -659,15 +689,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.stand-menu-item:not(.stand-menu-item-compact) {
-  flex-direction: column;
-  gap: 1px;
-  white-space: normal;
-}
-
-.stand-menu-item-compact {
+/* Shared stand key: icon | centred name | C/S + time (full + compact) */
+.stand-menu-key {
   display: grid;
-  /* Equal side rails → stand stays visually centered; C/S keeps a real column */
   grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
   align-items: center;
   column-gap: calc(4px * var(--s, 1));
@@ -679,7 +703,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.stand-compact-icon {
+.stand-key-icon {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -688,18 +712,18 @@ onBeforeUnmount(() => {
   height: calc(16px * var(--s, 1));
 }
 
-.stand-compact-icon .stand-occ-icon {
+.stand-key-icon .stand-occ-icon {
   margin-right: 0;
 }
 
-.stand-compact-name {
+.stand-key-name {
   font-weight: 800;
   white-space: nowrap;
   text-align: center;
   padding: 0 2px;
 }
 
-.stand-compact-right {
+.stand-key-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -710,22 +734,26 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-.stand-compact-cs,
-.stand-compact-time {
-  display: block;
+.stand-key-cs,
+.stand-key-time {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.stand-compact-cs {
+.stand-key-cs {
+  display: block;
   font-size: calc(9px * var(--s, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.stand-compact-time {
+.stand-key-time {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
   font-size: calc(8px * var(--s, 1));
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -733,53 +761,26 @@ onBeforeUnmount(() => {
   min-height: 1em;
 }
 
-.stand-name {
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stand-occ {
-  display: block;
-  font-size: calc(8px * var(--s, 1));
-  letter-spacing: 0.04em;
-  opacity: 0.85;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stand-occ-kind {
-  font-weight: 700;
-}
-
-.stand-occ-rel {
-  font-weight: 700;
-  margin-left: 0.35em;
-}
-
-.stand-occ-cs {
-  font-weight: 400;
-  margin-left: 0.35em;
-}
-
-.stand-occ-time {
-  font-weight: 700;
-  margin-left: 0.35em;
-  letter-spacing: 0.02em;
-}
-
-.stand-occ-icon {
-  margin-right: 0.2em;
-  vertical-align: -0.1em;
+.stand-key-block-icon {
+  flex-shrink: 0;
   opacity: 0.9;
 }
 
-/* Multi-assign apron areas — info only, no Occ/Plan colour */
-.stand-occ-count {
-  font-weight: 400;
-  opacity: 0.75;
+.stand-occ-icon {
+  opacity: 0.9;
+}
+
+/* Amber scale: inbound (light) → planned (darker). Red: occupied / hard block. */
+.sid-route-item.stand-planned.stand-planned-air {
+  background: #e4e0d4;
+  color: #4a463c;
+  box-shadow: inset 0 0 0 1px #c0b8a8;
+}
+
+.sid-route-item.stand-planned {
+  background: #ddd2c0;
+  color: #4a4438;
+  box-shadow: inset 0 0 0 1px #b8a898;
 }
 
 .sid-route-item.stand-occupied,
@@ -789,44 +790,23 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
-.sid-route-item.stand-occupied.exit-match,
-.sid-route-item.stand-blocked.exit-match {
-  background: #d4a8a0;
-  color: #2a1010;
+/* Preferred = green left edge only (fill stays availability colour) */
+.sid-route-item.exit-match {
+  box-shadow: inset 8px 0 0 #5a9a4a;
 }
 
-/* Ground Planned — muted warm peach (on the apron) */
-.sid-route-item.stand-planned {
-  background: #e0c4a0;
-  color: #4a3820;
-  opacity: 0.88;
-  box-shadow: inset 0 0 0 1px #b89870;
+.sid-route-item.exit-match.stand-planned.stand-planned-air {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #c0b8a8;
 }
 
-/* Preferred + ground Planned — between original olive and warm peach */
-.sid-route-item.stand-planned.exit-match {
-  background: #d4cea0;
-  color: #3a3c28;
-  opacity: 0.9;
-  box-shadow: inset 0 0 0 1px #a0a070;
+.sid-route-item.exit-match.stand-planned {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b8a898;
 }
 
-/* Airborne Inbound — cooler muted sage (still aloft) */
-.sid-route-item.stand-planned.stand-planned-air {
-  background: #d0d8c0;
-  color: #384430;
-  opacity: 0.82;
-  box-shadow: inset 0 0 0 1px #98a888;
+.sid-route-item.exit-match.stand-occupied,
+.sid-route-item.exit-match.stand-blocked {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b07070;
 }
-
-/* Preferred + airborne — cool teal-mint (cooler than planned; away from free green) */
-.sid-route-item.stand-planned.stand-planned-air.exit-match {
-  background: #b0d0c4;
-  color: #284038;
-  opacity: 0.88;
-  box-shadow: inset 0 0 0 1px #78a090;
-}
-
 
 .sid-route-item.stand-not-allowed {
   background: #c8c8c8;
@@ -859,12 +839,7 @@ onBeforeUnmount(() => {
 .sid-route-item.stand-occupied:not(:disabled):hover,
 .sid-route-item.stand-blocked:not(:disabled):hover,
 .sid-route-item.stand-planned:not(:disabled):hover,
-/* Preferred + inbound resting rules are more specific than stand-planned:hover alone */
-.sid-route-item.stand-planned.exit-match:not(:disabled):hover,
-.sid-route-item.stand-planned.stand-planned-air:not(:disabled):hover,
-.sid-route-item.stand-planned.stand-planned-air.exit-match:not(:disabled):hover,
-.sid-route-item.stand-occupied.exit-match:not(:disabled):hover,
-.sid-route-item.stand-blocked.exit-match:not(:disabled):hover {
+.sid-route-item.stand-planned.stand-planned-air:not(:disabled):hover {
   background: #1a3a6e;
   color: #ebebeb;
   opacity: 1;
@@ -1025,7 +1000,7 @@ onBeforeUnmount(() => {
   font-size: calc(8px * var(--s, 1));
 }
 
-.sid-route-overlay .sid-route-item.stand-menu-item-compact {
+.sid-route-overlay .sid-route-item.stand-menu-key {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
   align-items: center;
@@ -1041,7 +1016,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
-.sid-route-overlay .stand-compact-icon {
+.sid-route-overlay .stand-key-icon {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -1050,18 +1025,18 @@ onBeforeUnmount(() => {
   height: calc(16px * var(--s, 1));
 }
 
-.sid-route-overlay .stand-compact-icon .stand-occ-icon {
+.sid-route-overlay .stand-key-icon .stand-occ-icon {
   margin-right: 0;
 }
 
-.sid-route-overlay .stand-compact-name {
+.sid-route-overlay .stand-key-name {
   font-weight: 800;
   white-space: nowrap;
   text-align: center;
   padding: 0 2px;
 }
 
-.sid-route-overlay .stand-compact-right {
+.sid-route-overlay .stand-key-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1072,26 +1047,35 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-.sid-route-overlay .stand-compact-cs,
-.sid-route-overlay .stand-compact-time {
+.sid-route-overlay .stand-key-cs,
+.sid-route-overlay .stand-key-time {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sid-route-overlay .stand-compact-cs {
+.sid-route-overlay .stand-key-cs {
   font-size: calc(9px * var(--s, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.sid-route-overlay .stand-compact-time {
+.sid-route-overlay .stand-key-time {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
   font-size: calc(8px * var(--s, 1));
   font-weight: 700;
   letter-spacing: 0.02em;
   opacity: 0.9;
   min-height: 1em;
+}
+
+.sid-route-overlay .stand-key-block-icon {
+  flex-shrink: 0;
+  opacity: 0.9;
 }
 
 .sid-route-overlay .sid-route-top {
@@ -1208,23 +1192,21 @@ onBeforeUnmount(() => {
   min-height: max(28px, calc(28px * var(--s, 1)));
 }
 
-/* Compact must win over .sid-route-item { display:flex } — three columns, not stacked rows */
-.sid-route-overlay .sid-route-item.stand-menu-item-compact {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
-  align-items: center;
-  column-gap: calc(4px * var(--s, 1));
-  text-align: left;
-  overflow: hidden;
-  text-overflow: clip;
-  width: 100%;
-  box-sizing: border-box;
+/* Fill = availability; preferred = green left edge only */
+.sid-route-overlay .sid-route-item.exit-match {
+  box-shadow: inset 8px 0 0 #5a9a4a;
 }
 
-.sid-route-overlay .sid-route-item.exit-match {
-  background: #b8d4a8;
-  color: #000;
-  box-shadow: inset 0 0 0 1px #7a9a6a;
+.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air {
+  background: #e4e0d4;
+  color: #4a463c;
+  box-shadow: inset 0 0 0 1px #c0b8a8;
+}
+
+.sid-route-overlay .sid-route-item.stand-planned {
+  background: #ddd2c0;
+  color: #4a4438;
+  box-shadow: inset 0 0 0 1px #b8a898;
 }
 
 .sid-route-overlay .sid-route-item.stand-occupied,
@@ -1234,56 +1216,17 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
-.sid-route-overlay .sid-route-item.stand-occupied.exit-match,
-.sid-route-overlay .sid-route-item.stand-blocked.exit-match {
-  background: #d4a8a0;
-  color: #2a1010;
+.sid-route-overlay .sid-route-item.exit-match.stand-planned.stand-planned-air {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #c0b8a8;
 }
 
-/* Ground Planned — muted warm peach (on the apron) */
-.sid-route-overlay .sid-route-item.stand-planned {
-  background: #e0c4a0;
-  color: #4a3820;
-  opacity: 0.88;
-  box-shadow: inset 0 0 0 1px #b89870;
+.sid-route-overlay .sid-route-item.exit-match.stand-planned {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b8a898;
 }
 
-.sid-route-overlay .sid-route-item.stand-planned.exit-match {
-  background: #d4cea0;
-  color: #3a3c28;
-  opacity: 0.9;
-  box-shadow: inset 0 0 0 1px #a0a070;
-}
-
-/* Airborne Inbound — cooler muted sage (still aloft) */
-.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air {
-  background: #d0d8c0;
-  color: #384430;
-  opacity: 0.82;
-  box-shadow: inset 0 0 0 1px #98a888;
-}
-
-.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air.exit-match {
-  background: #b0d0c4;
-  color: #284038;
-  opacity: 0.88;
-  box-shadow: inset 0 0 0 1px #78a090;
-}
-
-.sid-route-overlay .stand-occ-icon {
-  margin-right: 0.2em;
-  vertical-align: -0.15em;
-  opacity: 0.9;
-}
-
-.sid-route-overlay .stand-occ-time {
-  font-weight: 700;
-  margin-left: 0.35em;
-  letter-spacing: 0.02em;
-}
-
-.sid-route-overlay .stand-menu-item-compact .stand-occ-icon {
-  margin-right: 0.25em;
+.sid-route-overlay .sid-route-item.exit-match.stand-occupied,
+.sid-route-overlay .sid-route-item.exit-match.stand-blocked {
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b07070;
 }
 
 .sid-route-overlay .sid-route-item.stand-not-allowed {
@@ -1315,18 +1258,11 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.exit-match.selected {
-  background: #b8d4a8;
-  color: #1a3a6e;
-  box-shadow: inset 0 0 0 2px #1a3a6e;
+  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 2px #1a3a6e;
 }
 
 .sid-route-overlay .sid-route-item:hover:not(:disabled),
-/* Preferred + inbound resting selectors outrank generic :hover — match them */
-.sid-route-overlay .sid-route-item.stand-planned.exit-match:hover:not(:disabled),
-.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air:hover:not(:disabled),
-.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air.exit-match:hover:not(:disabled),
-.sid-route-overlay .sid-route-item.stand-occupied.exit-match:hover:not(:disabled),
-.sid-route-overlay .sid-route-item.stand-blocked.exit-match:hover:not(:disabled) {
+.sid-route-overlay .sid-route-item.stand-planned.stand-planned-air:hover:not(:disabled) {
   background: #1a3a6e;
   color: #ebebeb;
   opacity: 1;
