@@ -46,7 +46,10 @@
           v-if="kind === 'tobt'"
           type="button"
           class="tobt-menu-item"
-          :class="{ 'tobt-menu-pm-sent': strip.cdmInformed }"
+          :class="{
+            'tobt-menu-pm-sent': strip.cdmInformed,
+            'tobt-menu-pm-blink': store.isPmBlinking('cdmPm', strip.callsign),
+          }"
           :title="cdmPmTitle"
           @click="onSendCdmPm"
         >{{ cdmPmLabel }}</button>
@@ -202,6 +205,7 @@ function onReady() {
 /** Brittle: plugin types `.msg CS <CDMconfig PrivateMessage>` + DPI INFORMED/1 */
 function onSendCdmPm() {
   closeMenu()
+  if (store.isPmOnCooldown('cdmPm', props.strip.callsign)) return
   store.sendStripAction(props.strip.id, 'CDM_PM')
 }
 </script>
@@ -367,5 +371,24 @@ function onSendCdmPm() {
 .tobt-menu-pm-sent:hover:not(:disabled) {
   background: #1a6e3a;
   color: #fff;
+}
+
+/* CDM PM success: orange flash on the label only */
+.tobt-menu-pm-blink:not(:disabled) {
+  background: inherit !important;
+  animation: tobt-pm-text-flash 0.4s ease-in-out 5;
+  color: #e67e00 !important;
+}
+
+@keyframes tobt-pm-text-flash {
+  0%,
+  100% {
+    color: #e67e00;
+    opacity: 1;
+  }
+  50% {
+    color: #ffb347;
+    opacity: 0.85;
+  }
 }
 </style>

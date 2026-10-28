@@ -209,6 +209,7 @@ export type {
     ControllersMessage,
     UserSettingsMessage,
     NotifyMessage,
+    PmResultMessage,
     ServerMessage,
     RequestMessage,
     ReloadFeedsMessage,

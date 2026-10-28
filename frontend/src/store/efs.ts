@@ -543,6 +543,45 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    /** contactme / cdmPm success blink + 2s click cooldown (`kind:CALLSIGN`) */
+    const PM_FEEDBACK_MS = 2000
+    const pmBlinkKeys = ref<Record<string, true>>({})
+    const pmCooldownKeys = ref<Record<string, true>>({})
+    const pmFeedbackTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+    function pmFeedbackKey(kind: 'contactme' | 'cdmPm', callsign: string): string {
+        return `${kind}:${(callsign || '').toUpperCase()}`
+    }
+
+    function isPmBlinking(kind: 'contactme' | 'cdmPm', callsign: string): boolean {
+        return !!pmBlinkKeys.value[pmFeedbackKey(kind, callsign)]
+    }
+
+    function isPmOnCooldown(kind: 'contactme' | 'cdmPm', callsign: string): boolean {
+        return !!pmCooldownKeys.value[pmFeedbackKey(kind, callsign)]
+    }
+
+    function notePmResult(kind: 'contactme' | 'cdmPm', callsign: string, ok: boolean) {
+        if (!ok) return
+        const key = pmFeedbackKey(kind, callsign)
+        const prev = pmFeedbackTimers.get(key)
+        if (prev) clearTimeout(prev)
+        pmBlinkKeys.value = { ...pmBlinkKeys.value, [key]: true }
+        pmCooldownKeys.value = { ...pmCooldownKeys.value, [key]: true }
+        pmFeedbackTimers.set(
+            key,
+            setTimeout(() => {
+                pmFeedbackTimers.delete(key)
+                const nextBlink = { ...pmBlinkKeys.value }
+                delete nextBlink[key]
+                pmBlinkKeys.value = nextBlink
+                const nextCd = { ...pmCooldownKeys.value }
+                delete nextCd[key]
+                pmCooldownKeys.value = nextCd
+            }, PM_FEEDBACK_MS),
+        )
+    }
+
     // ATIS info per airport
     const atisInfo = ref<AirportAtisInfo[]>([])
 
@@ -1218,6 +1257,9 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'notify':
                         showNotify(message.text, message.level)
+                        break
+                    case 'pmResult':
+                        notePmResult(message.kind, message.callsign, message.ok)
                         break
                     case 'handoverAssistantResult': {
                         const transferred = message.transferred?.length ?? 0
@@ -3687,6 +3729,9 @@ export const useEfsStore = defineStore("efs", () => {
         notifyVisible,
         showNotify,
         dismissNotify,
+        isPmBlinking,
+        isPmOnCooldown,
+        notePmResult,
         getBays,
         layout,
         strips,

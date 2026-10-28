@@ -296,6 +296,14 @@ export interface NotifyMessage {
     text: string
 }
 
+/** Plugin confirmed contactme / CDM (VDGS) PM send — or focus failure */
+export interface PmResultMessage {
+    type: 'pmResult'
+    kind: 'contactme' | 'cdmPm'
+    callsign: string
+    ok: boolean
+}
+
 /** Soft-deleted strip summary for trash recovery UI */
 export interface DeletedStripInfo {
     stripId: string
@@ -371,7 +379,7 @@ export interface OpenVatIrisSignInMessage {
     detail?: string
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | CdmMasterStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | CdmMasterStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | NotifyMessage | PmResultMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage
 
 // Client -> Server messages
 
@@ -844,7 +852,7 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' || type === 'cdmMasterStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'essaSepIndicators' || type === 'configList' ||
-           type === 'controllers' || type === 'userSettings' || type === 'notify' ||
+           type === 'controllers' || type === 'userSettings' || type === 'notify' || type === 'pmResult' ||
            type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags' ||
            type === 'scribbleUpdate' || type === 'openCidDialog' || type === 'cidSuggest' ||
            type === 'openVatIrisSignIn' || type === 'handoverAssistantResult'
