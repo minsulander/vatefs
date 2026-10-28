@@ -23,6 +23,7 @@ import {
     type IrisOrderPayload,
     type StripEfsFields,
 } from "./iris-efs-order.js"
+import { stripMetaWithoutPlacement } from "./essa-sync-placement.js"
 
 export type ScribbleRealm = "live" | "sweatbox" | "playback" | "local"
 
@@ -608,7 +609,7 @@ export async function pushStripToRemote(stripId: string): Promise<boolean> {
     return ok
 }
 
-/** Zoom-close / stroke push. */
+/** Zoom-close / stroke push — ink + flags only (no bay/section; peers keep their column). */
 export async function pushScribbleToRemote(stripId: string): Promise<boolean> {
     const settings = getSettings()
     if (!settings.syncEnabled) return false
@@ -616,7 +617,7 @@ export async function pushScribbleToRemote(stripId: string): Promise<boolean> {
     if (!strip) return false
     const body: PutBody = {
         strokes: scribbleStore.getScribbles(stripId),
-        strip: stripMeta(strip),
+        strip: stripMetaWithoutPlacement(stripMeta(strip)),
     }
     return putRemote(stripId, body)
 }

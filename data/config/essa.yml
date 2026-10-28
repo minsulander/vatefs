@@ -276,6 +276,25 @@ sectionRules:
     groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
 
+  # EoR / DEP RWY arrival vacated → TAXIWAY ARR (not INBOUND APP)
+  taxi_arr_vacated_dep_rwy:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    onRunway: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    depRunway: true
+    priority: 108
+
+  taxi_arr_vacated_dep_rwy_local:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    onRunway: false
+    groundstates: [ARR, TXIN]
+    depRunway: true
+    priority: 108
+
   # GND: pending inbound transfer from TWR → hop to TAXI ARR (before assume)
   taxi_arr_pending_inbound_transfer:
     sectionId: taxi_arr
