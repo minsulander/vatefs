@@ -250,6 +250,25 @@
                 (requires GRP stand data). In paper strip mode, Auto PARK also removes the strip.
             </p>
 
+            <div v-if="efs.autoParkAvailable" class="scribble-mode-option mb-4 mt-2">
+                <div class="ui-scale-label">Stand assignment menu</div>
+                <v-btn-toggle
+                    :model-value="efs.standMenuLayout"
+                    mandatory
+                    density="comfortable"
+                    color="amber-darken-2"
+                    class="scribble-mode-toggle"
+                    @update:model-value="onStandMenuLayout"
+                >
+                    <v-btn value="full" class="text-none" size="small">Full</v-btn>
+                    <v-btn value="compact" class="text-none" size="small">Compact</v-btn>
+                </v-btn-toggle>
+                <p class="text-caption text-grey mt-1">
+                    Full: multi-column apron map with occupancy labels.
+                    Compact: single scrollable list of stand names with colour highlights only.
+                </p>
+            </div>
+
             <div class="scribble-mode-option mb-4 mt-2">
                 <div class="ui-scale-label">Auto LOP+SSR</div>
                 <v-btn-toggle
@@ -464,7 +483,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
 import { useEfsStore } from "@/store/efs"
-import { isAutoFitStripSizeMode, isAutoLopSsrMode, isValidHoppieLogonCode } from "@vatefs/common"
+import { isAutoFitStripSizeMode, isAutoLopSsrMode, isStandMenuLayout, isValidHoppieLogonCode } from "@vatefs/common"
 import {
     useUiScalePercent,
     setUiScalePercent,
@@ -650,6 +669,11 @@ function onShowAppDepXcFrequency(value: boolean | null) {
 function onAutoParkEnabled(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ autoParkEnabled: value })
+}
+
+function onStandMenuLayout(value: unknown) {
+    if (!isStandMenuLayout(value)) return
+    efs.updateUserSettings({ standMenuLayout: value })
 }
 
 function onAutoLopSsr(value: unknown) {

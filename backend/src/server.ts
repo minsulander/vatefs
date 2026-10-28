@@ -180,6 +180,13 @@ import {
 } from "./multi-airport.js"
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import {
+    loadEssaStandAssign,
+    buildEssaStandMenu,
+    resolveAircraftDims,
+    hasEssaStandAssignData,
+    type OccupierInfo,
+} from "./essa-stand-assign.js"
+import {
     loadSidData,
     getSidDataHealth,
     getSidsForRunway,
@@ -466,6 +473,11 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
     }
     try {
+        loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+    } catch (err) {
+        console.warn(`Failed to load ESSA stand assign data: ${err instanceof Error ? err.message : err}`)
+    }
+    try {
         loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
     } catch (err) {
         console.warn(`Failed to load SID data: ${err instanceof Error ? err.message : err}`)
@@ -588,7 +600,7 @@ if (EUROSCOPE_DIR) {
             `Restoring column airports: ${restored.map((a) => a ?? "-").join(", ")}`,
         )
     }
-    if (isEssaRolesConfig(staticConfig)) {
+    if (isEssaRolesConfig(staticConfig) && !cliArgs.mock) {
         const roles = normalizeEssaRoles(savedSettings.essaRoles)
         restoreEssaRolesFromSettings(roles, savedSettings.essaRolesManual)
         if (savedSettings.essaRolesManual) {
@@ -898,6 +910,8 @@ type OutboundPluginCommand =
     | { type: "setScratch"; callsign: string; value: string }
     /** Set scratch then restore previous (TopSky tokens like /APPTYPE/CAT3/) */
     | { type: "setScratchTmp"; callsign: string; value: string }
+    /** Ground Radar stand assign/clear — scratch GRP/S/<stand> then restore */
+    | { type: "grpStand"; callsign: string; stand: string }
     /** VCH hold short — strip annotation 4 (max 5 chars; empty clears) */
     | { type: "setHs"; callsign: string; value: string }
     /** Departure Coordination — strip annotation 6 ("DepC" or empty) */
@@ -1119,6 +1133,12 @@ if (cliArgs.mock) {
     console.log(
         `Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${staticConfig.myAirports.join(", ")})`,
     )
+
+    // ESSA role boards: show TWR+GND+CD so mock arrivals/deps are visible for STD testing
+    if (isEssaRolesConfig(staticConfig)) {
+        setEssaRoles(["CD", "GND-E", "GND-N", "GND-W", "TWR-E", "TWR-W"], true)
+        console.log(`Mock ESSA roles: ${(staticConfig.essaRoles ?? []).join(", ")}`)
+    }
 
     // Start ATIS polling for mock mode
     startAtisService()
@@ -4258,6 +4278,9 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         try { loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
             console.warn(`Reload stands failed: ${err instanceof Error ? err.message : err}`)
         }
+        try { loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
+            console.warn(`Reload ESSA stand assign failed: ${err instanceof Error ? err.message : err}`)
+        }
         try { loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
             console.warn(`Reload SID data failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -6809,6 +6832,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.handoverAssistantAutoAssume = incoming.handoverAssistantAutoAssume
                 update.handoverAssistantAutoAssume = incoming.handoverAssistantAutoAssume
             }
+            if (incoming.standMenuLayout === "full" || incoming.standMenuLayout === "compact") {
+                currentUiSettings.standMenuLayout = incoming.standMenuLayout
+                update.standMenuLayout = incoming.standMenuLayout
+            }
             if (isAutoLopSsrMode(incoming.autoLopSsr)) {
                 currentUiSettings.autoLopSsr = incoming.autoLopSsr
                 update.autoLopSsr = incoming.autoLopSsr
@@ -7574,6 +7601,98 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         case "requestCidSuggest": {
             const suggested = suggestCidFromEsPrf(EUROSCOPE_DIR)
             sendMessage(socket, { type: "cidSuggest", suggestedCid: suggested })
+            break
+        }
+
+        case "requestStandMenu": {
+            const strip = store.getStrip(message.stripId)
+            if (!strip || !hasEssaStandAssignData()) break
+            if ((strip.ades || "").toUpperCase() !== "ESSA") break
+            const flight = flightStore.getFlight(strip.callsign)
+            const traffic: OccupierInfo[] = []
+            for (const f of flightStore.getAllFlights()) {
+                if (!f.callsign) continue
+                const origin = (f.origin || "").toUpperCase()
+                const destination = (f.destination || "").toUpperCase()
+                const atEssa = origin === "ESSA" || destination === "ESSA"
+                traffic.push({
+                    callsign: f.callsign,
+                    stand: f.stand,
+                    latitude: f.latitude,
+                    longitude: f.longitude,
+                    groundstate: f.groundstate,
+                    airborne: !!f.airborne,
+                    departure: origin === "ESSA",
+                    tsat: f.tsat,
+                    tobt: f.tobt,
+                    eobt: f.eobt,
+                    dims: resolveAircraftDims(
+                        f.aircraftType,
+                        f.wakeTurbulence,
+                        f.callsign,
+                        f.fplRemarks,
+                    ),
+                    // Arrivals and departures with a stand both occupy/block neighbours
+                    assigned: !!(f.stand && atEssa),
+                })
+            }
+            const menu = buildEssaStandMenu({
+                stripId: strip.id,
+                callsign: strip.callsign,
+                origin: flight?.origin ?? strip.adep,
+                destination: flight?.destination ?? strip.ades,
+                aircraftType: flight?.aircraftType ?? strip.aircraftType,
+                wakeTurbulence: flight?.wakeTurbulence ?? strip.wakeTurbulence,
+                fplRemarks: flight?.fplRemarks,
+                currentStand: flight?.stand ?? strip.stand,
+                traffic,
+            })
+            if (menu) {
+                sendMessage(socket, {
+                    type: "standMenu",
+                    stripId: menu.stripId,
+                    currentStand: menu.currentStand,
+                    aprons: menu.aprons,
+                })
+            }
+            break
+        }
+
+        case "grpStand": {
+            if (!staticConfig.isController) break
+            const strip = store.getStrip(message.stripId)
+            if (!strip) break
+            if (strip.ownedByOther) {
+                console.warn(`[STAND] grpStand refused — ${strip.callsign} owned by other`)
+                break
+            }
+            let stand = (message.stand || "").trim().toUpperCase()
+            if (message.action === "clear") {
+                stand = ""
+            } else if (message.action === "publish") {
+                const flight = flightStore.getFlight(strip.callsign)
+                stand = (flight?.stand || strip.stand || "").trim().toUpperCase()
+                if (!stand) break
+            } else if (message.action === "assign") {
+                if (!stand) break
+            }
+            sendUdp(
+                JSON.stringify({
+                    type: "grpStand",
+                    callsign: strip.callsign,
+                    stand,
+                } satisfies OutboundPluginCommand),
+            )
+            // Optimistic local stand so the strip updates before GRP echo
+            const flight = flightStore.getFlight(strip.callsign)
+            if (flight) {
+                const prev = flight.stand
+                flight.stand = stand || undefined
+                if (prev !== flight.stand) {
+                    console.log(`[STAND] ${strip.callsign}: ${prev ?? "-"} -> ${flight.stand ?? "-"} (EFS menu)`)
+                    reevaluateAndBroadcast(strip.callsign)
+                }
+            }
             break
         }
 
@@ -8923,6 +9042,10 @@ udpIn.on("message", (msg, rinfo) => {
 
     // Record the message if recording is enabled
     recordMessage(text)
+
+    // --mock owns the strip store; ignore EuroScope UDP so live plugin cannot wipe traffic
+    if (cliArgs.mock) return
+
     try {
         const data = JSON.parse(text)
         // connectionType 0 = logged off — do not treat as plugin-alive heartbeat

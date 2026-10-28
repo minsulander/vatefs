@@ -8,6 +8,7 @@ import type {
     AutoFitStripSizeMode,
     AutoLopSsrMode,
     DclMode,
+    StandMenuLayout,
     StripPrintMode,
     StripPrintSound,
     UiSettings,
@@ -16,6 +17,7 @@ import {
     DEFAULT_UI_SETTINGS,
     isAutoFitStripSizeMode,
     isAutoLopSsrMode,
+    isStandMenuLayout,
     isValidHoppieLogonCode,
 } from "@vatefs/common"
 
@@ -102,6 +104,8 @@ export interface UserSettings {
     autoFitStripSizeGrowBack?: boolean
     /** Handover Assistant: auto-ASSUME inbound transfers */
     handoverAssistantAutoAssume?: boolean
+    /** ESSA stand menu: full apron columns vs compact list */
+    standMenuLayout?: StandMenuLayout
 }
 
 let settingsPath: string | undefined
@@ -235,6 +239,9 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.handoverAssistantAutoAssume === "boolean"
                 ? saved.handoverAssistantAutoAssume
                 : DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume,
+        standMenuLayout: isStandMenuLayout(saved.standMenuLayout)
+            ? saved.standMenuLayout
+            : DEFAULT_UI_SETTINGS.standMenuLayout,
     }
 }
 

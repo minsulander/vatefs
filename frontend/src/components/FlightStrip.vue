@@ -271,6 +271,7 @@
   </v-menu>
 
   <SidRouteMenu v-model="sidRouteMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <StandMenu v-model="standMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <RwyMenu v-model="rwyMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <CflMenu v-model="cflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <XflMenu v-model="xflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
@@ -1420,7 +1421,13 @@
               title="Cleared flight level"
               @click.stop="onCflClick"
             >{{ displayCfl || 'CFL' }}</div>
-            <div v-else class="cell cell-std fit-font" :class="{ ghost: !strip.stand }">{{ strip.stand || 'STD' }}</div>
+            <div
+              v-else
+              class="cell cell-std fit-font"
+              :class="{ ghost: !strip.stand, editable: canOpenStandMenu }"
+              :title="canOpenStandMenu ? 'Stand' : undefined"
+              @click.stop="onStandClick"
+            >{{ strip.stand || 'STD' }}</div>
           </template>
           <template v-else>
             <!-- Compact: CFTO/ATD △ replaces STD (CTOT stays in ASSR slot) -->
@@ -1729,6 +1736,7 @@ import TsacDialog from './TsacDialog.vue'
 import CoordProposalDialog from './CoordProposalDialog.vue'
 import FlightplanDialog from './FlightplanDialog.vue'
 import SidRouteMenu from './SidRouteMenu.vue'
+import StandMenu from './StandMenu.vue'
 import RwyMenu from './RwyMenu.vue'
 import CflMenu from './CflMenu.vue'
 import XflMenu from './XflMenu.vue'
@@ -2058,6 +2066,7 @@ const menuPosition = ref<[number, number]>([0, 0])
 /** Above StripZoomOverlay (2400) when this strip is the zoomed instance */
 const overlayMenuZ = computed(() => (props.isLargeView ? 2600 : 2000))
 const sidRouteMenuOpen = ref(false)
+const standMenuOpen = ref(false)
 const rwyMenuOpen = ref(false)
 const cflMenuOpen = ref(false)
 const xflMenuOpen = ref(false)
@@ -6225,6 +6234,7 @@ function closeAssignmentMenus() {
   groundStateMenuOpen.value = false
   transferMenuOpen.value = false
   sidRouteMenuOpen.value = false
+  standMenuOpen.value = false
   rwyMenuOpen.value = false
   cflMenuOpen.value = false
   xflMenuOpen.value = false
@@ -6236,6 +6246,23 @@ function onSidClick(event: MouseEvent) {
   menuPosition.value = menuCoordsFromEvent(event)
   closeAssignmentMenus()
   sidRouteMenuOpen.value = true
+}
+
+/** ESSA arrival STD — open Ground Radar stand menu (roles mode only). */
+const canOpenStandMenu = computed(
+  () =>
+    store.essaRolesMode &&
+    isArrLayout.value &&
+    canEditAssignedData.value &&
+    !isPaperEmptyFlightHolder.value &&
+    (props.strip.ades || '').toUpperCase() === 'ESSA',
+)
+
+function onStandClick(event: MouseEvent) {
+  if (!canOpenStandMenu.value) return
+  menuPosition.value = menuCoordsFromEvent(event)
+  closeAssignmentMenus()
+  standMenuOpen.value = true
 }
 
 function onRwyClick(event: MouseEvent) {

@@ -3250,6 +3250,50 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     } else {
                         DisplayMessage("setScratchTmp: Invalid callsign");
                     }
+                } else if (message["type"] == "grpStand") {
+                    // Ground Radar stand assign/clear — GRP/S/<stand> broadcast then restore scratch
+                    auto callsign = message["callsign"].get<std::string>();
+                    auto stand = message.value("stand", std::string());
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
+                    for (auto &c : stand)
+                        c = (char)std::toupper((unsigned char)c);
+                    if (callsign.empty()) {
+                        DisplayMessage("grpStand: Invalid callsign");
+                    } else {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        if (!fp.IsValid()) {
+                            DisplayMessage("grpStand: Flight plan not found: " + callsign);
+                        } else {
+                            const char *trackingCs = fp.GetTrackingControllerCallsign();
+                            const char *trackingId = fp.GetTrackingControllerId();
+                            const bool untracked =
+                                (!trackingCs || trackingCs[0] == '\0') &&
+                                (!trackingId || trackingId[0] == '\0');
+                            if (!untracked && !fp.GetTrackingControllerIsMe()) {
+                                DisplayMessage("grpStand: Tracked by another controller");
+                            } else if (!EnsureTrackingIfUntracked(fp, callsign)) {
+                                DisplayMessage("grpStand: Failed for " + callsign);
+                            } else {
+                                const std::string scratch = std::string("GRP/S/") + stand;
+                                if (!UpdateScratchPad(callsign, scratch, true)) {
+                                    DisplayMessage("grpStand: Scratch broadcast failed for " + callsign);
+                                } else {
+                                    DebugMessage("grpStand: " + callsign + " -> " + scratch);
+                                    nlohmann::json echo = nlohmann::json::object();
+                                    echo["type"] = "controllerAssignedDataUpdate";
+                                    echo["callsign"] = callsign;
+                                    if (stand.empty()) {
+                                        // Clear: leave stand empty so backend can wipe
+                                        echo["stand"] = "";
+                                    } else {
+                                        echo["stand"] = stand;
+                                    }
+                                    PostJson(echo, "grpStand");
+                                }
+                            }
+                        }
+                    }
                 } else if (message["type"] == "setHs") {
                     // VCH hold short — strip annotation 4 (max 5 chars)
                     auto callsign = message["callsign"].get<std::string>();

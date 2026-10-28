@@ -14,6 +14,7 @@ export type {
     UiSettings,
     AutoLopSsrMode,
     AutoFitStripSizeMode,
+    StandMenuLayout,
     StripPrintSound,
     StripPrintMode,
     StripLook,
@@ -28,6 +29,7 @@ export {
     isPaperInfoKind,
     isAutoLopSsrMode,
     isAutoFitStripSizeMode,
+    isStandMenuLayout,
     isValidHoppieLogonCode,
 } from "./types.js"
 
@@ -256,6 +258,11 @@ export type {
     ScribbleSyncPushMessage,
     SetVatsimCidMessage,
     RequestCidSuggestMessage,
+    RequestStandMenuMessage,
+    GrpStandMessage,
+    StandMenuStand,
+    StandMenuApron,
+    StandMenuMessage,
     InitiateXflCoordinationMessage,
     AcceptCoordinationMessage,
     RefuseCoordinationMessage,

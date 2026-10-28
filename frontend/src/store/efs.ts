@@ -1,6 +1,6 @@
 import { defineStore } from "pinia"
 import { ref, computed, watch } from "vue"
-import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, AutoFitStripSizeMode, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind, EssaSepIndicators, EssaSepOverrides, EssaSepField } from "@vatefs/common"
+import type { FlightStrip, EfsLayout, Gap, Section, ClientMessage, AssignmentType, AirportAtisInfo, ConfigInfo, DclMode, ControllerInfo, UiSettings, AutoLopSsrMode, AutoFitStripSizeMode, StandMenuLayout, DeletedStripInfo, AupR16Status, StripPrintSound, StripPrintMode, PendingPrintFlightInfo, StripLook, PaperInfoKind, EssaSepIndicators, EssaSepOverrides, EssaSepField, StandMenuMessage } from "@vatefs/common"
 import {
     isServerMessage,
     GAP_BUFFER,
@@ -8,6 +8,7 @@ import {
     DEFAULT_UI_SETTINGS,
     isAutoFitStripSizeMode,
     isAutoLopSsrMode,
+    isStandMenuLayout,
     resolveEssaRwyConfigId,
     computeEssaSepIndicators,
     mergeEssaSepIndicators,
@@ -830,6 +831,8 @@ export const useEfsStore = defineStore("efs", () => {
     const autoFitStripSizeGrowBack = ref(DEFAULT_UI_SETTINGS.autoFitStripSizeGrowBack)
     /** Handover Assistant: auto-ASSUME inbound HA transfers (default on) */
     const handoverAssistantAutoAssume = ref(DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume)
+    /** ESSA stand menu: full apron columns vs compact highlighted list */
+    const standMenuLayout = ref<StandMenuLayout>(DEFAULT_UI_SETTINGS.standMenuLayout)
     /** Handover Assistant dialog open */
     const handoverAssistantOpen = ref(false)
     /** Last primed primary freq (MHz) — used to prefer matching targets after unprime */
@@ -941,6 +944,9 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.handoverAssistantAutoAssume === 'boolean'
                 ? settings.handoverAssistantAutoAssume
                 : DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume
+        standMenuLayout.value = isStandMenuLayout(settings.standMenuLayout)
+            ? settings.standMenuLayout
+            : DEFAULT_UI_SETTINGS.standMenuLayout
         if (typeof fileCodePresent === 'boolean') hoppieFileCodePresent.value = fileCodePresent
         if (typeof available === 'boolean') autoParkAvailable.value = available
         userSettingsLoaded.value = true
@@ -975,6 +981,9 @@ export const useEfsStore = defineStore("efs", () => {
         }
         if (typeof partial.handoverAssistantAutoAssume === 'boolean') {
             handoverAssistantAutoAssume.value = partial.handoverAssistantAutoAssume
+        }
+        if (isStandMenuLayout(partial.standMenuLayout)) {
+            standMenuLayout.value = partial.standMenuLayout
         }
         if (
             partial.scribbleSyncRealm === 'auto' ||
@@ -1157,6 +1166,32 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    /** Pending requestStandMenu waiters (stripId → resolve) */
+    const standMenuWaiters = new Map<string, (msg: StandMenuMessage | null) => void>()
+
+    function requestStandMenu(stripId: string): Promise<StandMenuMessage | null> {
+        return new Promise((resolve) => {
+            const prev = standMenuWaiters.get(stripId)
+            if (prev) prev(null)
+            standMenuWaiters.set(stripId, resolve)
+            sendMessage({ type: 'requestStandMenu', stripId })
+            window.setTimeout(() => {
+                if (standMenuWaiters.get(stripId) === resolve) {
+                    standMenuWaiters.delete(stripId)
+                    resolve(null)
+                }
+            }, 5000)
+        })
+    }
+
+    function sendGrpStand(
+        stripId: string,
+        action: 'assign' | 'publish' | 'clear',
+        stand?: string,
+    ) {
+        sendMessage({ type: 'grpStand', stripId, action, stand })
+    }
+
     // Send a typed request to the server
     function sendRequest(request: 'layout' | 'strips' | 'refresh') {
         sendMessage({ type: 'request', request })
@@ -1306,6 +1341,14 @@ export const useEfsStore = defineStore("efs", () => {
                                 : undefined,
                         )
                         break
+                    case 'standMenu': {
+                        const waiter = standMenuWaiters.get(message.stripId)
+                        if (waiter) {
+                            standMenuWaiters.delete(message.stripId)
+                            waiter(message)
+                        }
+                        break
+                    }
                     default:
                         console.log(`received ${(message as { type?: string }).type ?? 'unknown'} server message:`, message)
                 }
@@ -3788,6 +3831,8 @@ export const useEfsStore = defineStore("efs", () => {
         essaRwyAutoPreferId,
         essaPreferredSids,
         essaPreferredCfls,
+        requestStandMenu,
+        sendGrpStand,
         getEssaPreferredSid,
         getEssaPreferredCfl,
         isPreferredSidPending,
@@ -3916,6 +3961,7 @@ export const useEfsStore = defineStore("efs", () => {
         handoverAssistantOpen,
         handoverAssistantPreferredFreq,
         handoverAssistantAutoAssume,
+        standMenuLayout,
         openHandoverAssistant,
         closeHandoverAssistant,
         dclSoundEnabled,

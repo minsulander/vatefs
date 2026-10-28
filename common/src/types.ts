@@ -375,6 +375,17 @@ export function isAutoFitStripSizeMode(value: unknown): value is AutoFitStripSiz
 }
 
 /**
+ * ESSA stand assignment menu layout:
+ * - full — multi-column apron map with occupancy labels
+ * - compact — single scrollable list of stand names with colour highlights only
+ */
+export type StandMenuLayout = 'full' | 'compact'
+
+export function isStandMenuLayout(value: unknown): value is StandMenuLayout {
+    return value === 'full' || value === 'compact'
+}
+
+/**
  * Hoppie ACARS logon code (same rule as TopSkyCPDLChoppieCode.txt):
  * letters and digits only, shorter than 40 characters.
  */
@@ -474,6 +485,11 @@ export interface UiSettings {
      * (including bulk handover transfers). Default on.
      */
     handoverAssistantAutoAssume: boolean
+    /**
+     * ESSA stand assignment menu: full apron columns vs compact highlighted list.
+     * Default: full.
+     */
+    standMenuLayout: StandMenuLayout
 }
 
 /** Stroke payload for local + remote scribble sync */
@@ -511,6 +527,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     autoFitStripSizeMode: 'standard',
     autoFitStripSizeGrowBack: true,
     handoverAssistantAutoAssume: true,
+    standMenuLayout: 'full',
 }
 
 export interface AirportAtisInfo {

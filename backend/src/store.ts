@@ -296,12 +296,16 @@ class EfsStore {
                 }
             }
 
-            // Apply backend state updates (clearedToLand, airborne flags)
+            // Apply backend state updates (clearedToLand, airborne, mock TSAT)
             for (const update of mockBackendStateUpdates) {
                 const result = flightStore.setBackendFlags(update.callsign, {
                     clearedToLand: update.clearedToLand,
                     airborne: update.airborne
                 })
+                if (update.tsat) {
+                    const flight = flightStore.getFlight(update.callsign)
+                    if (flight) flight.tsat = update.tsat
+                }
                 if (result.strip) {
                     this.strips.set(result.strip.id, result.strip)
                 }
