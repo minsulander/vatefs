@@ -2310,7 +2310,7 @@ void VatEFSPlugin::PostPmResult(const std::string &kind, const std::string &call
     result["ok"] = ok;
     if (!ok && !error.empty())
         result["error"] = error;
-    PostJson(result, kind);
+    PostJson(result, kind.c_str());
 }
 
 bool VatEFSPlugin::SendContactMe(const std::string &targetCallsign)
