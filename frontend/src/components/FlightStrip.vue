@@ -50,6 +50,7 @@
           v-if="canShowContactMe"
           type="button"
           class="efs-popup-item"
+          :class="{ 'efs-popup-item-pm-blink': store.isPmBlinking('contactme', strip.callsign) }"
           @click="onContactMeClick"
           title="EuroScope .contactme (needs ES window focus)"
         >Contact me</button>
@@ -83,7 +84,10 @@
           v-if="canSendCdmPm"
           type="button"
           class="efs-popup-item"
-          :class="{ selected: strip.cdmInformed }"
+          :class="{
+            selected: strip.cdmInformed,
+            'efs-popup-item-pm-blink': store.isPmBlinking('cdmPm', strip.callsign),
+          }"
           :title="cdmPmMenuTitle"
           @click="onSendCdmPmClick"
         >{{ cdmPmMenuLabel }}</button>
@@ -245,7 +249,10 @@
           v-if="canSendCdmPm"
           type="button"
           class="efs-popup-item"
-          :class="{ selected: strip.cdmInformed }"
+          :class="{
+            selected: strip.cdmInformed,
+            'efs-popup-item-pm-blink': store.isPmBlinking('cdmPm', strip.callsign),
+          }"
           :title="cdmPmMenuTitle"
           @click="onSendCdmPmClick"
         >{{ cdmPmMenuLabel }}</button>
@@ -1538,6 +1545,7 @@
                 'fit-font': isCompactBay,
                 'action-ack-clr': isCompactBay && action === 'CLNC' && showAckClrLabel,
                 'action-start-up': action === 'STUP' && store.essaRolesMode,
+                'action-pm-blink': action === 'CONTACTME' && store.isPmBlinking('contactme', strip.callsign),
               },
             ]"
             :title="action === 'CONTACTME' ? 'EuroScope .contactme (needs ES window focus)' : undefined"
@@ -4334,12 +4342,9 @@ function onVehicleTerm() {
 }
 
 function onNoteTouch(event: TouchEvent) {
-  if (isDragging.value) return // Let the strip's touchend handler clean up the drag
-  // Cancel any pending drag timer that touchstart may have started
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
+  if (isDragging.value || paperBayDragging) return // Let the strip's touchend handler clean up the drag
+  if (longClickArmed) return // Strip touchend synthesizes left click
+  clearLongClickArm()
   touchStarted = false
   event.stopPropagation()
   event.preventDefault()
@@ -4405,10 +4410,15 @@ function onRemarksCancel() {
   remarksEditing.value = false
 }
 
-// Touch drag state
+// Touch drag / long-click state (#33)
+// Movement ≥ PAPER_ARM_PX → bay drag. Stationary hold → left click / context menu on release.
 let touchStarted = false
 let longPressTimer: number | null = null
-const LONG_PRESS_DELAY = 150 // ms before drag starts
+/** Finger held still long enough; release (still) → long click, not drag. */
+let longClickArmed = false
+/** Suppress the synthetic click that follows a handled long-click touchend. */
+let suppressNextClick = false
+const LONG_CLICK_MS = 600
 
 const touchDrag = getTouchDragInstance()
 
@@ -5019,6 +5029,7 @@ function onSendCdmPmClick() {
   menuOpen.value = false
   ctotMenuOpen.value = false
   if (!canSendCdmPm.value) return
+  if (store.isPmOnCooldown('cdmPm', props.strip.callsign)) return
   store.sendStripAction(props.strip.id, 'CDM_PM')
 }
 
@@ -5667,6 +5678,59 @@ function onDragEnd() {
   markStripDragEnded()
 }
 
+/** Elements under the finger that already have a real left-click action. */
+function touchLongClickHasLeftAction(el: Element | null): boolean {
+  if (!el || !(el instanceof Element)) return false
+  return !!(
+    el.closest('.callsign') ||
+    el.closest('.callsign-box') ||
+    el.closest('.pg-cs') ||
+    el.closest('.note-text') ||
+    el.closest('.vehicle-cs') ||
+    el.closest('[data-left-click]')
+  )
+}
+
+function clearLongClickArm() {
+  longClickArmed = false
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+/**
+ * Stationary long-click release: left-click the element under the finger when it
+ * has a click action; otherwise open the right-click strip menu (iPad path).
+ */
+function handleStationaryLongClick(clientX: number, clientY: number) {
+  const under = document.elementFromPoint(clientX, clientY)
+  if (touchLongClickHasLeftAction(under)) {
+    const clickable =
+      (under instanceof Element &&
+        (under.closest('.callsign') ||
+          under.closest('.callsign-box') ||
+          under.closest('.pg-cs') ||
+          under.closest('.note-text') ||
+          under.closest('.vehicle-cs') ||
+          under.closest('[data-left-click]'))) ||
+      under
+    if (clickable instanceof HTMLElement) {
+      clickable.click()
+      return
+    }
+  }
+  // Strip body — same menu as right-click
+  onContextMenu(
+    new MouseEvent('contextmenu', {
+      clientX,
+      clientY,
+      bubbles: true,
+      cancelable: true,
+    }),
+  )
+}
+
 // Touch drag handlers for drag areas (strip-left)
 function onDragAreaTouchStart(event: TouchEvent) {
   if (!canDragStrip.value) return
@@ -5703,6 +5767,8 @@ function onDragAreaTouchStart(event: TouchEvent) {
   ) return
 
   touchStarted = true
+  longClickArmed = false
+  suppressNextClick = false
 
   const touch = event.touches[0]
   if (touch) {
@@ -5715,12 +5781,12 @@ function onDragAreaTouchStart(event: TouchEvent) {
     klackPullTarget.value = props.strip.klack ?? null
   }
 
+  // Arm long-click only — do not start a drag while the finger is still
   longPressTimer = window.setTimeout(() => {
-    if (touchStarted && stripElement.value && touch && !isDragging.value) {
-      event.preventDefault()
-      beginUnifiedBayDrag(touch)
+    if (touchStarted && !isDragging.value && !paperBayDragging) {
+      longClickArmed = true
     }
-  }, LONG_PRESS_DELAY)
+  }, LONG_CLICK_MS)
 }
 
 function onDragAreaTouchMove(event: TouchEvent) {
@@ -5732,15 +5798,12 @@ function onDragAreaTouchMove(event: TouchEvent) {
   dragLastClientY = touch.clientY
   klackPullTarget.value = cockTargetFromDragDx()
 
-  // Early arm (before long-press) → same unified bay drag as pointer
-  if (usesCombinedStripPointer.value && !isDragging.value && !paperBayDragging) {
+  // Movement always wins → bay drag (cancels pending long-click)
+  if (!isDragging.value && !paperBayDragging) {
     const dx = touch.clientX - paperStartX
     const dy = touch.clientY - paperStartY
     if (Math.abs(dx) >= PAPER_ARM_PX || Math.abs(dy) >= PAPER_ARM_PX) {
-      if (longPressTimer) {
-        clearTimeout(longPressTimer)
-        longPressTimer = null
-      }
+      clearLongClickArm()
       beginUnifiedBayDrag(touch)
       return
     }
@@ -5752,10 +5815,8 @@ function onDragAreaTouchMove(event: TouchEvent) {
 }
 
 function onDragAreaTouchEnd(event: TouchEvent) {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
+  const wasLongClick = longClickArmed && !isDragging.value && !paperBayDragging
+  clearLongClickArm()
 
   const touch = event.changedTouches[0]
   if (touch) {
@@ -5766,6 +5827,22 @@ function onDragAreaTouchEnd(event: TouchEvent) {
   if (isDragging.value || paperBayDragging) {
     finishPaperBayDrop()
     klackGestureActive.value = false
+    touchStarted = false
+    return
+  }
+
+  if (wasLongClick && touch) {
+    const dx = touch.clientX - paperStartX
+    const dy = touch.clientY - paperStartY
+    if (Math.abs(dx) < PAPER_ARM_PX && Math.abs(dy) < PAPER_ARM_PX) {
+      event.preventDefault()
+      // Synthesize left click / menu first; then block the browser's delayed ghost click
+      handleStationaryLongClick(touch.clientX, touch.clientY)
+      suppressNextClick = true
+      window.setTimeout(() => {
+        suppressNextClick = false
+      }, 400)
+    }
   }
 
   touchStarted = false
@@ -6007,10 +6084,7 @@ function handleTouchDropWithGaps(
 }
 
 function onDragAreaTouchCancel() {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
+  clearLongClickArm()
 
   if (isDragging.value || paperBayDragging) {
     const stripId = props.strip.id
@@ -6026,6 +6100,11 @@ function onDragAreaTouchCancel() {
 
 // Action button handlers
 function onActionClick(action: string) {
+  if (action === 'CONTACTME') {
+    if (store.isPmOnCooldown('contactme', props.strip.callsign)) return
+    store.sendStripAction(props.strip.id, 'CONTACTME')
+    return
+  }
   if (action === 'CLNC') {
     if (!canEditAssignedData.value) return
     // Auto-prep mode: always ACK CLR (voice ack → clearance flag), never open CLR dialog
@@ -6050,6 +6129,11 @@ function onActionClick(action: string) {
 
 function onActionTouch(event: TouchEvent, action: string) {
   event.preventDefault()
+  if (action === 'CONTACTME') {
+    if (store.isPmOnCooldown('contactme', props.strip.callsign)) return
+    store.sendStripAction(props.strip.id, 'CONTACTME')
+    return
+  }
   if (action === 'CLNC') {
     if (!canEditAssignedData.value) return
     if (showAckClrLabel.value) {
@@ -6083,7 +6167,11 @@ function onResetSquawk() {
 }
 
 function onStripClick() {
-  // Future: open strip detail/edit modal
+  // Swallow ghost click after a handled long-click (menu / synthetic left click)
+  if (suppressNextClick) {
+    suppressNextClick = false
+    return
+  }
 }
 
 function onContextMenu(event: MouseEvent) {
@@ -6102,6 +6190,10 @@ function onContextMenu(event: MouseEvent) {
 function onCallsignClick(event: MouseEvent) {
   // Left click only — right click uses contextmenu → classic menu
   if (event.button !== 0) return
+  if (suppressNextClick) {
+    suppressNextClick = false
+    return
+  }
   if (props.isLargeView) {
     emit('close-large-view')
     return
@@ -6192,12 +6284,11 @@ function onAhdClick(event: MouseEvent) {
 
 function onCallsignTouch(event: TouchEvent) {
   // Drag in progress — let strip touchend handle drop (do not stopPropagation)
-  if (isDragging.value) return
-  // Cancel pending long-press drag; this was a tap → zoom
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
+  if (isDragging.value || paperBayDragging) return
+  // Long-click armed: leave it to strip touchend (synthesizes left click → zoom)
+  if (longClickArmed) return
+  // Short tap → zoom
+  clearLongClickArm()
   touchStarted = false
   event.stopPropagation()
   event.preventDefault()
@@ -6217,6 +6308,7 @@ function onFplClick() {
 function onContactMeClick() {
   menuOpen.value = false
   if (isLocalOnlyStrip.value) return
+  if (store.isPmOnCooldown('contactme', props.strip.callsign)) return
   store.sendStripAction(props.strip.id, 'CONTACTME')
 }
 
@@ -9459,6 +9551,27 @@ button.tobt-setby-pm:hover {
 .action-button.action-highlight,
 .action-button.action-clnc-highlight {
   background: var(--strip-amber) !important;
+}
+/* C ME / PM success: orange flash on the label only (not the button fill) */
+.action-button.action-pm-blink .action-text {
+  animation: efs-pm-text-flash 0.4s ease-in-out 5;
+  color: #e67e00 !important;
+}
+.efs-popup-item.efs-popup-item-pm-blink {
+  animation: efs-pm-text-flash 0.4s ease-in-out 5;
+  color: #e67e00 !important;
+  background: transparent !important;
+}
+@keyframes efs-pm-text-flash {
+  0%,
+  100% {
+    color: #e67e00;
+    opacity: 1;
+  }
+  50% {
+    color: #ffb347;
+    opacity: 0.85;
+  }
 }
 /* Amber action-key text (inbound ASSUME / highlighted TRANS) — strip-bg fill, amber label */
 .action-button.action-key-amber {
