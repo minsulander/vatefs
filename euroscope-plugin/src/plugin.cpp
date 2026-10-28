@@ -2036,6 +2036,32 @@ void VatEFSPlugin::UpdateMyself()
     }
 }
 
+/**
+ * StartTracking when the FP is untracked so scratch / CLR writes stick.
+ * Does not steal another controller's track. Returns false only when
+ * StartTracking was needed and failed.
+ */
+bool VatEFSPlugin::EnsureTrackingIfUntracked(EuroScopePlugIn::CFlightPlan &fp,
+                                             const std::string &callsign)
+{
+    if (!fp.IsValid())
+        return false;
+    const char *trackingCallsign = fp.GetTrackingControllerCallsign();
+    const char *trackingId = fp.GetTrackingControllerId();
+    bool untracked =
+        (!trackingCallsign || trackingCallsign[0] == '\0') &&
+        (!trackingId || trackingId[0] == '\0');
+    if (!untracked)
+        return true;
+    bool ok = fp.StartTracking();
+    if (!ok) {
+        DisplayMessage("EnsureTracking: Failed to start tracking " + callsign);
+        return false;
+    }
+    DebugMessage("EnsureTracking: Started tracking " + callsign);
+    return true;
+}
+
 bool VatEFSPlugin::UpdateScratchPad(const std::string &inCallsign, const std::string &content, const bool resetAfterSet)
 {
     try {
@@ -2263,14 +2289,40 @@ static void FocusEuroScopeWindow()
     Sleep(80);
 }
 
+/** True when the foreground window title contains "EuroScope". */
+static bool IsEuroScopeForeground()
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg)
+        return false;
+    char title[512] = {};
+    GetWindowTextA(fg, title, sizeof(title) - 1);
+    return title[0] && strstr(title, "EuroScope") != nullptr;
+}
+
+void VatEFSPlugin::PostPmResult(const std::string &kind, const std::string &callsign, bool ok,
+                                const std::string &error)
+{
+    nlohmann::json result = nlohmann::json::object();
+    result["type"] = "pmResult";
+    result["kind"] = kind;
+    result["callsign"] = callsign;
+    result["ok"] = ok;
+    if (!ok && !error.empty())
+        result["error"] = error;
+    PostJson(result, kind);
+}
+
 bool VatEFSPlugin::SendContactMe(const std::string &targetCallsign)
 {
+    const char *kind = "contactme";
     try {
         std::string target = targetCallsign;
         for (auto &c : target)
             c = (char)std::toupper((unsigned char)c);
         if (target.empty()) {
             DisplayMessage("contactme: Invalid callsign");
+            PostPmResult(kind, target, false, "Invalid callsign");
             return false;
         }
 
@@ -2278,43 +2330,66 @@ bool VatEFSPlugin::SendContactMe(const std::string &targetCallsign)
         auto rt = RadarTargetSelect(target.c_str());
         if (!fp.IsValid() && !rt.IsValid()) {
             DisplayMessage("contactme: No flight plan or radar target for " + target);
+            PostPmResult(kind, target, false, "No flight plan or radar target");
             return false;
         }
 
         FocusEuroScopeWindow();
+        if (!IsEuroScopeForeground()) {
+            const std::string err = "EuroScope must be in focus";
+            DisplayMessage("contactme: " + err + " for " + target);
+            PostPmResult(kind, target, false, err);
+            return false;
+        }
 
         // ESC (clear cmdline) → callsign → ASEL (numpad +) → HOME → ASEL
         if (!SendVkTap(VK_ESCAPE)) {
             DisplayMessage("contactme: SendInput(ESC) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(ESC) failed");
             return false;
         }
         Sleep(60);
         if (!SendAsciiText(target)) {
             DisplayMessage("contactme: SendInput(callsign) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(callsign) failed");
             return false;
         }
         Sleep(60);
         if (!SendVkTap(VK_ADD)) { // default ASEL = numpad +
             DisplayMessage("contactme: SendInput(ASEL) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(ASEL) failed");
             return false;
         }
         Sleep(60);
         if (!SendVkTap(VK_HOME, true)) {
             DisplayMessage("contactme: SendInput(HOME) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(HOME) failed");
             return false;
         }
         Sleep(60);
         if (!SendVkTap(VK_ADD)) {
             DisplayMessage("contactme: SendInput(ASEL#2) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(ASEL#2) failed");
+            return false;
+        }
+
+        // Re-check focus after typing — keys may have gone elsewhere
+        if (!IsEuroScopeForeground()) {
+            const std::string err = "EuroScope must be in focus";
+            DisplayMessage("contactme: " + err + " for " + target);
+            PostPmResult(kind, target, false, err);
             return false;
         }
 
         DebugMessage("contactme: ESC + " + target + " + ASEL + HOME + ASEL");
+        PostPmResult(kind, target, true);
         return true;
     } catch (const std::exception &e) {
         DisplayMessage(std::string("contactme exception: ") + e.what());
+        PostPmResult(kind, targetCallsign, false, e.what());
     } catch (...) {
         DisplayMessage("contactme: Unknown exception");
+        PostPmResult(kind, targetCallsign, false, "Unknown exception");
     }
     return false;
 }
@@ -2345,16 +2420,19 @@ static bool SendUnicodeText(const std::string &utf8)
 bool VatEFSPlugin::SendCdmPrivateMessage(const std::string &targetCallsign,
                                          const std::string &messageText)
 {
+    const char *kind = "cdmPm";
     try {
         std::string target = targetCallsign;
         for (auto &c : target)
             c = (char)std::toupper((unsigned char)c);
         if (target.empty()) {
             DisplayMessage("cdmPm: Invalid callsign");
+            PostPmResult(kind, target, false, "Invalid callsign");
             return false;
         }
         if (messageText.empty()) {
             DisplayMessage("cdmPm: Empty message text");
+            PostPmResult(kind, target, false, "Empty message text");
             return false;
         }
 
@@ -2362,19 +2440,28 @@ bool VatEFSPlugin::SendCdmPrivateMessage(const std::string &targetCallsign,
         auto rt = RadarTargetSelect(target.c_str());
         if (!fp.IsValid() && !rt.IsValid()) {
             DisplayMessage("cdmPm: No flight plan or radar target for " + target);
+            PostPmResult(kind, target, false, "No flight plan or radar target");
             return false;
         }
 
         FocusEuroScopeWindow();
+        if (!IsEuroScopeForeground()) {
+            const std::string err = "EuroScope must be in focus";
+            DisplayMessage("cdmPm: " + err + " for " + target);
+            PostPmResult(kind, target, false, err);
+            return false;
+        }
 
         // Match CDM plugin: OEM_PLUS + ESC clears cmdline, then `.msg CS text` + Enter
         if (!SendVkTap(VK_OEM_PLUS)) {
             DisplayMessage("cdmPm: SendInput(OEM_PLUS) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(OEM_PLUS) failed");
             return false;
         }
         Sleep(40);
         if (!SendVkTap(VK_ESCAPE)) {
             DisplayMessage("cdmPm: SendInput(ESC) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(ESC) failed");
             return false;
         }
         Sleep(60);
@@ -2382,20 +2469,32 @@ bool VatEFSPlugin::SendCdmPrivateMessage(const std::string &targetCallsign,
         const std::string cmdline = ".msg " + target + " " + messageText;
         if (!SendUnicodeText(cmdline)) {
             DisplayMessage("cdmPm: SendInput(text) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(text) failed");
             return false;
         }
         Sleep(40);
         if (!SendVkTap(VK_RETURN)) {
             DisplayMessage("cdmPm: SendInput(ENTER) failed for " + target);
+            PostPmResult(kind, target, false, "SendInput(ENTER) failed");
+            return false;
+        }
+
+        if (!IsEuroScopeForeground()) {
+            const std::string err = "EuroScope must be in focus";
+            DisplayMessage("cdmPm: " + err + " for " + target);
+            PostPmResult(kind, target, false, err);
             return false;
         }
 
         DebugMessage("cdmPm: .msg " + target + " (+" + std::to_string(messageText.size()) + " chars)");
+        PostPmResult(kind, target, true);
         return true;
     } catch (const std::exception &e) {
         DisplayMessage(std::string("cdmPm exception: ") + e.what());
+        PostPmResult(kind, targetCallsign, false, e.what());
     } catch (...) {
         DisplayMessage("cdmPm: Unknown exception");
+        PostPmResult(kind, targetCallsign, false, "Unknown exception");
     }
     return false;
 }
@@ -2984,6 +3083,8 @@ void VatEFSPlugin::ReceiveUdpMessages()
                 nlohmann::json message = nlohmann::json::parse(buffer);
                 if (message["type"] == "setGroundState") {
                     auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
                     auto state = message["state"].get<std::string>();
                     // Empty / NOSTATE clears ground state via scratch (ES rejects empty GS)
                     const bool clearGs = state.empty() || state == "NOSTATE";
@@ -2994,15 +3095,21 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                  (clearGs ? "(clear)" : scratchState));
                     if (callsign.empty()) {
                         DisplayMessage("setGroundState: Invalid callsign");
-                    } else if (UpdateScratchPad(callsign, scratchState, true)) {
-                        // Echo immediately — CAD often lags after scratch flash
-                        nlohmann::json echo = nlohmann::json::object();
-                        echo["type"] = "controllerAssignedDataUpdate";
-                        echo["callsign"] = callsign;
-                        echo["groundstate"] = clearGs ? "" : scratchState;
-                        PostJson(echo, "setGroundState");
                     } else {
-                        DisplayMessage("setGroundState: Failed for " + callsign);
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        // Untracked: StartTracking first so PUSH/TAXI scratch sticks
+                        if (fp.IsValid() && !EnsureTrackingIfUntracked(fp, callsign)) {
+                            DisplayMessage("setGroundState: Failed for " + callsign);
+                        } else if (UpdateScratchPad(callsign, scratchState, true)) {
+                            // Echo immediately — CAD often lags after scratch flash
+                            nlohmann::json echo = nlohmann::json::object();
+                            echo["type"] = "controllerAssignedDataUpdate";
+                            echo["callsign"] = callsign;
+                            echo["groundstate"] = clearGs ? "" : scratchState;
+                            PostJson(echo, "setGroundState");
+                        } else {
+                            DisplayMessage("setGroundState: Failed for " + callsign);
+                        }
                     }
                 } else if (message["type"] == "setClearedToLand") {
                     // VCH CTL — strip annotation 3
@@ -3397,7 +3504,13 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     }
                 } else if (message["type"] == "toggleClearanceFlag") {
                     auto callsign = message["callsign"].get<std::string>();
+                    for (auto &c : callsign)
+                        c = (char)std::toupper((unsigned char)c);
                     if (dummyRadarScreens.size() > 0) {
+                        auto fp = FlightPlanSelect(callsign.c_str());
+                        // Untracked: StartTracking first so CLR flag sticks
+                        if (fp.IsValid())
+                            EnsureTrackingIfUntracked(fp, callsign);
                         // Honor desired when present — bare toggle flips even when already correct
                         if (message.contains("desired") && !message["desired"].is_null()) {
                             bool desired = message["desired"].get<bool>();

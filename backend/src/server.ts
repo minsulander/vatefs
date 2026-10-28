@@ -77,6 +77,7 @@ import type {
     ControllerInfo,
     UserSettingsMessage,
     NotifyMessage,
+    PmResultMessage,
     DeletedStripsMessage,
     RwyFlagsMessage,
     ServerMessage,
@@ -115,6 +116,7 @@ import {
 } from "./vatefs-sync.js"
 import { stripNmSuffix, isAppOrDepCallsign } from "./iris-efs-order.js"
 import { isIrisStripviewPlacement } from "./iris-efs-order.js"
+import { mapEssaRemotePlacement } from "./essa-sync-placement.js"
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -728,6 +730,10 @@ function executeMoveCommand(
     flight: Flight,
     opts?: { forceGroundstate?: boolean },
 ) {
+    // ESGG paper TWR top-down: assume untracked DEP/local before CLR / GS writes
+    const stripForAssume = findStripForCallsign(callsign)
+    assumeBeforePaperGroundWrite(flight, stripForAssume?.stripType, command)
+
     switch (command.type) {
         case "setGroundstate": {
             let state = command.value
@@ -2622,16 +2628,16 @@ function assumePendingAppInboundOnCtl(strip: {
 }
 
 /**
- * ESGG paper CD/DEL: assume an unowned DEP/local when entering KLARERING
- * (CLR read / CLR correct / drag to cleared). Never called on undo — no RELEASE.
+ * ESGG paper: assume an unowned DEP/local before a ground-flow EuroScope write
+ * (clearance / PUSH / TAXI / strip buttons). Any covering role (incl. TWR top-down).
+ * Never called on undo — no RELEASE. Does not steal another controller's track.
  */
-function assumeCdDelKlareringDep(
+function assumeUntrackedPaperDepLocal(
     flight: Flight,
     stripType: string | undefined,
     reason: string,
 ): boolean {
     if (staticConfig.look !== "paper") return false
-    if (!isCdOrDelRole()) return false
     if (stripType !== "departure" && stripType !== "local") return false
 
     const myCs = (staticConfig.myCallsign || "").toUpperCase()
@@ -2656,10 +2662,60 @@ function assumeCdDelKlareringDep(
     flight.handoffTargetControllerId = undefined
     flight.handoffOptimisticUntil = undefined
     flight.ownershipOptimisticUntil = Date.now() + 5000
-    console.log(`[KLARERING] ${flight.callsign}: ASSUME (CD/DEL, ${reason})`)
+    console.log(`[GROUND WRITE] ${flight.callsign}: ASSUME (${reason})`)
     maybeAutoPrepOnAssume(flight.callsign)
     return true
 }
+
+/**
+ * ESGG paper CD/DEL: assume an unowned DEP/local when entering KLARERING
+ * (CLR read / CLR correct / drag to cleared). Never called on undo — no RELEASE.
+ */
+function assumeCdDelKlareringDep(
+    flight: Flight,
+    stripType: string | undefined,
+    reason: string,
+): boolean {
+    if (!isCdOrDelRole()) return false
+    return assumeUntrackedPaperDepLocal(flight, stripType, `KLARERING CD/DEL, ${reason}`)
+}
+
+/** Forward ground-flow writes that need ownership for EuroScope scratch / CLR to stick. */
+function isForwardGroundFlowWrite(command: EuroscopeCommand): boolean {
+    if (command.type === "setClearance") return !!command.value
+    if (command.type === "setGroundstate") {
+        const gs = String(command.value || "").toUpperCase()
+        return !!gs && gs !== "NOSTATE"
+    }
+    return false
+}
+
+function assumeBeforePaperGroundWrite(
+    flight: Flight,
+    stripType: string | undefined,
+    command: EuroscopeCommand,
+): void {
+    if (!isForwardGroundFlowWrite(command)) return
+    const reason =
+        command.type === "setClearance"
+            ? "setClearance"
+            : `setGroundstate(${command.value})`
+    assumeUntrackedPaperDepLocal(flight, stripType, reason)
+}
+
+/** Ground-flow strip actions that write CLR / GS to EuroScope (not undo / release). */
+const PAPER_GROUND_FLOW_ASSUME_ACTIONS = new Set([
+    "PUSH",
+    "TXO",
+    "TXI",
+    "STUP",
+    "FRQ",
+    "DEICE",
+    "LU",
+    "CTO",
+    "ARR",
+    "READY",
+])
 
 /** DEL / GND / TWR — ESSA ground chain (not APP/CTR airborne TopSky ROF). */
 const ESSA_GROUND_ROF_ROLES: ControllerRole[] = ["DEL", "GND", "TWR"]
@@ -3774,24 +3830,44 @@ function applyRemoteScribble(
         // Shared bay placement (all strip types). Flight strips are never invented — only moved if present.
         // IRIS Stripview coords (TWR-W/TAXI, …) are not EFS bays. Applying them
         // pulls a TAXIWAY DEP strip off the layout and out of the IRIS order.
+        // Scribble pushes omit bay/section — ink-only, no relocate.
         const irisPlacement = isIrisStripviewPlacement(meta?.bayId, meta?.sectionId)
         let holdSyncedPlacement = false
+        const syncFlightForMap =
+            strip &&
+            (flightStore.getFlight(strip.callsign) || flightStore.getFlight(strip.id))
+        const mappedPlace =
+            strip && meta?.bayId && meta?.sectionId
+                ? mapEssaRemotePlacement(
+                      staticConfig,
+                      meta.bayId,
+                      meta.sectionId,
+                      strip,
+                      syncFlightForMap,
+                      {
+                          assumedByMe: syncFlightForMap
+                              ? isTrackedByMeFlight(syncFlightForMap)
+                              : false,
+                      },
+                  )
+                : meta?.bayId && meta?.sectionId
+                  ? { bayId: meta.bayId, sectionId: meta.sectionId }
+                  : null
         if (
             strip &&
             !irisPlacement &&
-            meta?.bayId &&
-            meta?.sectionId &&
-            (strip.bayId !== meta.bayId ||
-                strip.sectionId !== meta.sectionId ||
-                !!strip.bottom !== !!meta.bottom ||
-                (typeof meta.position === "number" && strip.position !== meta.position))
+            mappedPlace &&
+            (strip.bayId !== mappedPlace.bayId ||
+                strip.sectionId !== mappedPlace.sectionId ||
+                !!strip.bottom !== !!meta?.bottom ||
+                (typeof meta?.position === "number" && strip.position !== meta.position))
         ) {
             const moved = store.moveStrip(
                 strip.id,
-                meta.bayId,
-                meta.sectionId,
-                meta.position,
-                !!meta.bottom,
+                mappedPlace.bayId,
+                mappedPlace.sectionId,
+                meta?.position,
+                !!meta?.bottom,
                 { fromSync: true },
             )
             if (moved) {
@@ -5263,6 +5339,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 // READY is a compound action: set DE-ICE groundstate + transfer
                 if (message.action === "READY") {
+                    if (flight) {
+                        assumeUntrackedPaperDepLocal(flight, strip.stripType, "READY")
+                    }
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
@@ -5393,13 +5472,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "toggleClearanceFlag") {
                     const clrFlight = flightStore.getFlight(strip.callsign)
                     const desired = !(clrFlight?.clearance ?? false)
+                    // Paper: assume untracked DEP/local before CLR on (TWR top-down + CD/DEL)
+                    if (desired && clrFlight) {
+                        assumeUntrackedPaperDepLocal(clrFlight, strip.stripType, "voice CLR")
+                    }
                     sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
                     if (clrFlight) {
                         flightStore.applyOptimisticClearance(strip.callsign, desired)
-                        // CD/DEL: voice CLR on → ASSUME (undo does not RELEASE)
-                        if (desired) {
-                            assumeCdDelKlareringDep(clrFlight, strip.stripType, "voice CLR")
-                        }
                     }
                 } else if (message.action === "toggleClearanceRead") {
                     // Paper FPS col 4 (CLR read).
@@ -5584,7 +5663,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         reevaluateAndBroadcast(strip.callsign)
                     }
                 } else if (message.action === "CDM_PM") {
-                    // CDM flow PM: type `.msg CS text` in ES + DPI INFORMED/1 (green SEND/PM)
+                    // CDM flow PM: type `.msg CS text` in ES; mark informed only after pmResult ok
                     const text = getCdmPrivateMessageText()
                     sendUdp(
                         JSON.stringify({
@@ -5593,25 +5672,19 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             text,
                         } satisfies OutboundPluginCommand),
                     )
-                    console.log(`[CDM] PM via ES ${strip.callsign}`)
-                    if (flight && !flight.cdmInformed) {
-                        flight.cdmInformed = true
-                        reevaluateAndBroadcast(strip.callsign)
-                    }
-                    try {
-                        const ok = await viffService.setInformed(strip.callsign)
-                        if (ok) {
-                            viffService.pollSoon()
-                        } else {
-                            console.warn(`[VIFF] INFORMED/1 failed for ${strip.callsign} (PM still sent)`)
-                        }
-                    } catch (err) {
-                        console.warn(
-                            `[VIFF] INFORMED/1 error for ${strip.callsign}:`,
-                            err instanceof Error ? err.message : err,
+                    console.log(`[CDM] PM via ES requested ${strip.callsign}`)
+                } else {
+                    // ESGG paper: assume untracked DEP/local before ground-flow GS buttons
+                    if (
+                        flight &&
+                        PAPER_GROUND_FLOW_ASSUME_ACTIONS.has(message.action)
+                    ) {
+                        assumeUntrackedPaperDepLocal(
+                            flight,
+                            strip.stripType,
+                            `action ${message.action}`,
                         )
                     }
-                } else {
                     const pluginCommand = mapStripActionToPluginCommand(message.action, strip.callsign)
                     if (pluginCommand) {
                         sendUdp(JSON.stringify(pluginCommand))
@@ -8839,6 +8912,62 @@ udpIn.on("message", (msg, rinfo) => {
         // connectionType 0 = logged off — do not treat as plugin-alive heartbeat
         if (!(data.type === "connectionTypeUpdate" && data.connectionType === 0)) {
             notePluginUdp()
+        }
+
+        // Plugin PM send result (contactme / cdmPm) — confirm ES focus + key inject
+        if (data.type === "pmResult") {
+            const callsign = typeof data.callsign === "string" ? data.callsign.toUpperCase() : ""
+            const kind = data.kind === "cdmPm" ? "cdmPm" : "contactme"
+            const ok = data.ok === true
+            if (!callsign) return
+            if (ok) {
+                console.log(`[PM] ${kind} ok for ${callsign}`)
+                if (kind === "cdmPm") {
+                    const flight = flightStore.getFlight(callsign)
+                    if (flight && !flight.cdmInformed) {
+                        flight.cdmInformed = true
+                        reevaluateAndBroadcast(callsign)
+                    }
+                    void (async () => {
+                        try {
+                            const vOk = await viffService.setInformed(callsign)
+                            if (vOk) {
+                                viffService.pollSoon()
+                            } else {
+                                console.warn(`[VIFF] INFORMED/1 failed for ${callsign} (PM sent)`)
+                            }
+                        } catch (err) {
+                            console.warn(
+                                `[VIFF] INFORMED/1 error for ${callsign}:`,
+                                err instanceof Error ? err.message : err,
+                            )
+                        }
+                    })()
+                }
+                const pmOk: PmResultMessage = {
+                    type: "pmResult",
+                    kind,
+                    callsign,
+                    ok: true,
+                }
+                broadcast(pmOk)
+                return
+            }
+            console.log(`[PM] ${kind} failed for ${callsign}`)
+            const notify: NotifyMessage = {
+                type: "notify",
+                level: "error",
+                text: `No PM sent to ${callsign}. EuroScope must be in focus.`,
+            }
+            broadcast(notify)
+            const pmFail: PmResultMessage = {
+                type: "pmResult",
+                kind,
+                callsign,
+                ok: false,
+            }
+            broadcast(pmFail)
+            return
         }
 
         // Plugin ROF send result — success clears fallback; failure → EFS-native ROF

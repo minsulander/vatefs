@@ -50,6 +50,8 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void DebugMessage(const std::string &message, const std::string &sender = "EFS");
     void DisplayMessage(const std::string &message, const std::string &sender = "EFS");
     bool UpdateScratchPad(const std::string &callsign, const std::string &content, const bool resetAfterSet = false);
+    /** StartTracking when FP is untracked (scratch / CLR need ownership). */
+    bool EnsureTrackingIfUntracked(EuroScopePlugIn::CFlightPlan &fp, const std::string &callsign);
     /**
      * Send ROF for target callsign on a writable FP scratchpad.
      * efsNative=false → TopSky `/ROF/TARGET/MYSELF` (sector-sequence validated).
@@ -67,6 +69,9 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
      * Text from CDMconfig.xml PrivateMessage (backend supplies it). Needs ES focus.
      */
     bool SendCdmPrivateMessage(const std::string &targetCallsign, const std::string &messageText);
+    /** UDP pmResult for contactme / cdmPm (ok + optional error). */
+    void PostPmResult(const std::string &kind, const std::string &callsign, bool ok,
+                      const std::string &error = "");
     /**
      * EuroScope XFL exit coordination (InitiateCoordination).
      * Tries empty point + altitude first; falls back to LOP DCT point + altitude.
