@@ -497,7 +497,7 @@ import {
     type StripScribbleMode,
 } from "@/composables/useStripScribbleMode"
 import { isStripPrintSound } from "@/composables/useStripPrintSound"
-import { getDefaultSortFlow, setDefaultSortFlow, type SortFlow } from "@/workspace"
+import { getDefaultSortFlow, setDefaultSortFlow, workspaceSharedRevision, type SortFlow } from "@/workspace"
 import SortFlowIcon from "@/components/SortFlowIcon.vue"
 
 function isStripPrintMode(value: unknown): value is "auto" | "manual" {
@@ -508,6 +508,10 @@ const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
 const scribbleMode = useStripScribbleMode()
 const defaultSortFlow = ref<SortFlow>(getDefaultSortFlow())
+
+watch(workspaceSharedRevision, () => {
+    defaultSortFlow.value = getDefaultSortFlow()
+})
 
 function onDefaultSortFlow(value: unknown) {
     if (value !== "newestTop" && value !== "newestBottom") return

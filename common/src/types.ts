@@ -539,3 +539,36 @@ export interface AirportAtisInfo {
     arrRunways: string[]   // Active arrival runways
     depRunways: string[]   // Active departure runways
 }
+
+/** Sort/flow for new workspace sections (shared Catalog default). */
+export type WorkspaceSortFlow = 'newestBottom' | 'newestTop'
+
+/**
+ * Named Catalog layout entry persisted in VatEFSworkspace.json.
+ * `layout` is frontend WorkspaceLayout JSON (validated loosely on the backend).
+ */
+export interface SharedSavedWorkspaceLayout {
+    id: string
+    name: string
+    savedAt: number
+    layout: Record<string, unknown>
+    isUserDefault?: boolean
+}
+
+/**
+ * Install-shared workspace Catalog (named saves + role defaults).
+ * Live working boards stay per-browser localStorage.
+ */
+export interface SharedWorkspaceStore {
+    version: 1
+    userDefaults: Record<string, string>
+    layouts: SharedSavedWorkspaceLayout[]
+    defaultSortFlow?: WorkspaceSortFlow
+}
+
+export const EMPTY_SHARED_WORKSPACE_STORE: SharedWorkspaceStore = {
+    version: 1,
+    userDefaults: {},
+    layouts: [],
+    defaultSortFlow: 'newestBottom',
+}

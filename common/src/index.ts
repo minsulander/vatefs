@@ -21,10 +21,14 @@ export type {
     PaperInfoKind,
     AirportAtisInfo,
     ScribbleStrokePayload,
+    WorkspaceSortFlow,
+    SharedSavedWorkspaceLayout,
+    SharedWorkspaceStore,
 } from "./types.js"
 
 export {
     DEFAULT_UI_SETTINGS,
+    EMPTY_SHARED_WORKSPACE_STORE,
     PAPER_INFO_KINDS,
     isPaperInfoKind,
     isAutoLopSsrMode,
@@ -212,6 +216,7 @@ export type {
     ControllerInfo,
     ControllersMessage,
     UserSettingsMessage,
+    WorkspaceStoreMessage,
     NotifyMessage,
     PmResultMessage,
     ServerMessage,
@@ -248,6 +253,7 @@ export type {
     RemoveActiveAirportMessage,
     SetColumnCountMessage,
     UpdateUserSettingsMessage,
+    UpdateWorkspaceStoreMessage,
     SetEssaRolesMessage,
     SetEsggRolesMessage,
     SetRwyFlagMessage,

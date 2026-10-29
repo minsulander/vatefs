@@ -76,6 +76,7 @@ import type {
     ControllersMessage,
     ControllerInfo,
     UserSettingsMessage,
+    WorkspaceStoreMessage,
     NotifyMessage,
     PmResultMessage,
     DeletedStripsMessage,
@@ -92,7 +93,14 @@ import {
     isPaperInfoKind,
     isValidHoppieLogonCode,
 } from "@vatefs/common"
-import type { AutoLopSsrMode, FlightStrip, Gap, Section, ScribbleStrokePayload } from "@vatefs/common"
+import type {
+    AutoLopSsrMode,
+    FlightStrip,
+    Gap,
+    Section,
+    ScribbleStrokePayload,
+    SharedWorkspaceStore,
+} from "@vatefs/common"
 import { store } from "./store.js"
 import * as scribbleStore from "./scribble-store.js"
 import {
@@ -282,6 +290,11 @@ import { loadIcaoAirports, getIcaoAirportName, getIcaoAirportInfo } from "./icao
 import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
 import { initUserSettings, loadUserSettings, saveUserSettings, resolveUiSettings } from "./user-settings.js"
+import {
+    initWorkspaceStore,
+    loadWorkspaceStore,
+    saveWorkspaceStore,
+} from "./workspace-store.js"
 import { buildCombinedScratch } from "./scratchpad.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
@@ -513,8 +526,9 @@ if (EUROSCOPE_DIR) {
     // Load DCL notification sound
     loadDclSound(EUROSCOPE_DIR)
     loadTransferSounds(EUROSCOPE_DIR)
-    // Initialize user settings persistence
+    // Initialize user settings + shared workspace Catalog persistence
     initUserSettings(EUROSCOPE_DIR)
+    initWorkspaceStore(EUROSCOPE_DIR)
     const savedSettings = loadUserSettings()
     // Explicit `--config` wins over last-used layout (dev / forced RTC etc.)
     if (savedSettings.activeConfig && !cliArgs.config) {
@@ -630,6 +644,7 @@ if (EUROSCOPE_DIR) {
     if (appdata) {
         const fallbackDir = path.join(appdata, "EuroScope")
         initUserSettings(fallbackDir)
+        initWorkspaceStore(fallbackDir)
         console.log(`User settings fallback directory: ${fallbackDir}`)
     }
 }
@@ -2211,6 +2226,24 @@ function sendUserSettings(socket: WebSocket) {
 
 function broadcastUserSettings() {
     broadcast(userSettingsMessage())
+}
+
+/** In-memory shared Catalog (named layouts); live boards stay per-browser. */
+let currentWorkspaceStore: SharedWorkspaceStore = loadWorkspaceStore()
+
+function workspaceStoreMessage(): WorkspaceStoreMessage {
+    return {
+        type: "workspaceStore",
+        store: currentWorkspaceStore,
+    }
+}
+
+function sendWorkspaceStore(socket: WebSocket) {
+    sendMessage(socket, workspaceStoreMessage())
+}
+
+function broadcastWorkspaceStore() {
+    broadcast(workspaceStoreMessage())
 }
 
 /**
@@ -4716,22 +4749,31 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                       flight.engineType,
                                   )
                                 : undefined
-                        let appliedEssaPushGs = false
+                        // RTC: bayN_push_start is a DEP split view — set PUSH, store under DEP
+                        const rtcPushDrop =
+                            isMultiAirportConfig(staticConfig) &&
+                            /^(?:bay\d+|idle)_push_start$/i.test(dropSectionId)
+                        const pushDropGs: "PUSH" | "STUP" | undefined = essaPushGs
+                            ? essaPushGs
+                            : rtcPushDrop
+                              ? "PUSH"
+                              : undefined
+                        let appliedPushDropGs = false
                         if (
-                            essaPushGs &&
-                            (flight.groundstate || "").toUpperCase() !== essaPushGs
+                            pushDropGs &&
+                            (flight.groundstate || "").toUpperCase() !== pushDropGs
                         ) {
                             executeMoveCommand(
-                                { type: "setGroundstate", value: essaPushGs },
+                                { type: "setGroundstate", value: pushDropGs },
                                 result.strip.callsign,
                                 flight,
                                 // PUSH BACK header must not be remapped to STUP
                                 { forceGroundstate: dropSectionId === "push_back" },
                             )
-                            appliedEssaPushGs = true
+                            appliedPushDropGs = true
                             stateChanged = true
                             console.log(
-                                `[MOVE] ${result.strip.callsign}: ${essaPushGs} (drop ${dropSectionId})`,
+                                `[MOVE] ${result.strip.callsign}: ${pushDropGs} (drop ${dropSectionId})`,
                             )
                         }
 
@@ -4746,8 +4788,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 willXferDepToGnd || willCdXferToGnd
                                     ? moveAction.commands.filter((c) => c.type !== "setGroundstate")
                                     : moveAction.commands
-                            // Already set via ESSA push-drop logic (avoid double / override)
-                            if (appliedEssaPushGs) {
+                            // Already set via push-drop logic (avoid double / override)
+                            if (appliedPushDropGs) {
                                 cmds = cmds.filter((c) => c.type !== "setGroundstate")
                             }
                             if (skipDepaForSoftGoa) {
@@ -7000,6 +7042,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "updateWorkspaceStore": {
+            currentWorkspaceStore = saveWorkspaceStore(message.store)
+            broadcastWorkspaceStore()
+            break
+        }
+
         case "listPendingPrint": {
             sendMessage(socket, {
                 type: "pendingPrintList",
@@ -8164,6 +8212,7 @@ wsServer.on("connection", (socket) => {
     sendDclStatus(socket)
     sendCdmMasterStatus(socket)
     sendUserSettings(socket)
+    sendWorkspaceStore(socket)
     sendAtisUpdate(socket)
     sendEssaSepIndicators(socket)
     sendConfigList(socket)

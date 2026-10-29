@@ -35,10 +35,6 @@ import {
     essaRnpIndicatorLabel,
 } from "@vatefs/common"
 import {
-    collapseExpandersOnLeaveCdAllOrTsat,
-    collapseTopExpanderOnCdAllToTsatIfNoCtot,
-} from "@/composables/useStripExpanders"
-import {
     playStripPrintSound,
     getStripPrintDurationMs,
     isStripPrintSound,
@@ -56,7 +52,11 @@ import {
     getStripScribbles,
     type ScribbleStroke,
 } from "@/composables/useStripScribbles"
-import type { ScribbleStrokePayload } from "@vatefs/common"
+import type { ScribbleStrokePayload, SharedWorkspaceStore } from "@vatefs/common"
+import {
+    applyServerWorkspaceStore,
+    bindWorkspaceSharedPush,
+} from "@/workspace/storage"
 
 function isStripPrintMode(value: unknown): value is StripPrintMode {
     return value === 'auto' || value === 'manual'
@@ -1166,6 +1166,10 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    bindWorkspaceSharedPush((store: SharedWorkspaceStore) => {
+        sendMessage({ type: 'updateWorkspaceStore', store })
+    })
+
     /** Pending requestStandMenu waiters (stripId → resolve) */
     const standMenuWaiters = new Map<string, (msg: StandMenuMessage | null) => void>()
 
@@ -1286,6 +1290,9 @@ export const useEfsStore = defineStore("efs", () => {
                             message.autoParkAvailable,
                             message.hoppieFileCodePresent,
                         )
+                        break
+                    case 'workspaceStore':
+                        applyServerWorkspaceStore(message.store)
                         break
                     case 'hoppieMessage':
                         console.log(`[HOPPIE] ${message.from} (${message.messageType}): ${message.packet}`)
@@ -1481,17 +1488,6 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Collapse before remount: leaving CD ALL/TSAT destroys the old FlightStrip
         // instance, so its sectionId watcher never sees the transition.
-        if (prev) {
-            collapseExpandersOnLeaveCdAllOrTsat(strip.id, prev.sectionId, strip.sectionId)
-            // CD ALL → TSAT: close top expander when unregulated (no CTOT)
-            collapseTopExpanderOnCdAllToTsatIfNoCtot(
-                strip.id,
-                prev.sectionId,
-                strip.sectionId,
-                strip.ctot ?? prev.ctot,
-            )
-        }
-
         const isNew = !prev
         // Clear pending Print-dialog callsign mark (manual queue / printStrip)
         const csKey = strip.callsign?.trim().toUpperCase()
@@ -2254,9 +2250,6 @@ export const useEfsStore = defineStore("efs", () => {
             adjustGapsForMove(targetBayId, storeSectionId, oldPosition, targetPosition)
         }
 
-        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, storeSectionId)
-        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, storeSectionId, strip.ctot)
-
         // Update strip location
         strip.bayId = targetBayId
         strip.sectionId = storeSectionId
@@ -2326,9 +2319,6 @@ export const useEfsStore = defineStore("efs", () => {
         // Get target bottom strips count (excluding the moving strip)
         const targetStrips = getBottomStrips(targetBayId, storeSectionId).filter(s => s.id !== stripId)
         const targetPosition = resolveTargetPosition(position, targetStrips.length)
-
-        collapseExpandersOnLeaveCdAllOrTsat(stripId, oldSectionId, storeSectionId)
-        collapseTopExpanderOnCdAllToTsatIfNoCtot(stripId, oldSectionId, storeSectionId, strip.ctot)
 
         // Update strip location
         strip.bayId = targetBayId
