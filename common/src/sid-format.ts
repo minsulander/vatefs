@@ -100,6 +100,19 @@ export function isTrackSidName(sid: string | undefined | null): boolean {
     return TRACK_SID_RE.test(raw)
 }
 
+/** Named HAPZI SLOW SIDs (HAPZI1G, HAPZI 1G, …). */
+export function isHapziSid(sid: string | undefined | null): boolean {
+    if (!sid) return false
+    return /^HAPZI/i.test(sid.trim().replace(/\s+/g, ""))
+}
+
+/**
+ * SLOW departure routes: track/heading SIDs or HAPZI (not radar-vector ·exit).
+ */
+export function isSlowSid(sid: string | undefined | null): boolean {
+    return isTrackSidName(sid) || isHapziSid(sid)
+}
+
 /**
  * IFR / IFR→VFR only — preferred SID + auto-SLOW rules apply.
  * V (VFR) and Z (VFR→IFR) never auto-assign SLOW SIDs or the SLOW flag.

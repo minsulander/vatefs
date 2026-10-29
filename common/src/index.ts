@@ -134,6 +134,8 @@ export {
     sidsMatch,
     hasForcedSidInRoute,
     isTrackSidName,
+    isHapziSid,
+    isSlowSid,
     isVectorSidName,
     isOffExitVectorSid,
     isIfrSidEligible,

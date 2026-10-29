@@ -207,6 +207,7 @@ import {
     hasSlowRemark,
     hasVectRemark,
     isIfrSidEligible,
+    isSlowSid,
     isTrackSidName,
     parseRflToFeet,
     resolveEssaHeavyPreferredDepRwy,
@@ -2480,14 +2481,17 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             console.log(`[ASSIGN] ES SID ${esSid} already matches preferred — not forcing FPL`)
         }
 
-        const sidAlt = resolveSidAltitude(airport, sid, slow || isTrackSidName(sid))
-        if (sidAlt !== undefined && (!f.cfl || f.cfl <= 2)) {
+        const assignSlow = slow || isSlowSid(sid)
+        const sidAlt = resolveSidAltitude(airport, sid, assignSlow)
+        // SLOW/track/HAPZI: always apply climb (don't treat 5000 as sacred custom CFL)
+        const mayOverwriteCfl = assignSlow || !f.cfl || f.cfl <= 2
+        if (sidAlt !== undefined && mayOverwriteCfl && f.cfl !== sidAlt) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign, altitude: sidAlt } satisfies OutboundPluginCommand))
             f.cfl = sidAlt
             console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${sid} at ${airport}`)
         }
 
-        if (needForce && isTrackSidName(sid) && isIfrSidEligible(liveStrip.flightRules)) {
+        if (needForce && isSlowSid(sid) && isIfrSidEligible(liveStrip.flightRules)) {
             if (!hasSlowRemark(f.remarks)) {
                 f.remarks = withSlowRemark(f.remarks, true) || undefined
                 console.log(`[REMARKS] ${callsign}: set SLOW (track SID ${sid})`)
@@ -2522,7 +2526,7 @@ function resolvePreferredSidForFlight(flight: Flight): string | undefined {
     const slow =
         isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType) ||
         hasSlowRemark(flight.remarks) ||
-        isTrackSidName(flight.sid)
+        isSlowSid(flight.sid)
 
     if (airport === "ESMS") {
         const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
@@ -2917,7 +2921,7 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
     const slow =
         isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType) ||
         hasSlowRemark(flight.remarks) ||
-        isTrackSidName(flight.sid)
+        isSlowSid(flight.sid)
     const preferred = lopDct ? undefined : resolvePreferredSidForFlight(flight)
 
     // Force SID only when ES already has a GetSid/ESE designator that mismatches preferred.
@@ -2928,7 +2932,7 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
         !sidsMatch(flight.sid, preferred) &&
         !isVectorDeparture(flight) &&
         !hasForcedSidInRoute(flight.route) &&
-        !isTrackSidName(flight.sid) &&
+        !isSlowSid(flight.sid) &&
         !/^VFR/i.test(flight.sid)
     ) {
         flight.sidDisplayOverride = preferred
@@ -2948,14 +2952,15 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
     // After optional force, prefer live SID; else preferred for CFL when GetSid empty
     const sidForCfl = flight.sid || preferred
 
-    // Auto-assign CFL from SID altitude if not already set
-    if (sidForCfl && flight.origin && (!flight.cfl || flight.cfl <= 2)) {
-        const sidAlt = resolveSidAltitude(
-            flight.origin,
-            sidForCfl,
-            slow || isTrackSidName(sidForCfl),
-        )
-        if (sidAlt !== undefined) {
+    // Auto-assign CFL from SID altitude if not already set (SLOW overwrites prior default)
+    const cflSlow = slow || isSlowSid(sidForCfl)
+    if (
+        sidForCfl &&
+        flight.origin &&
+        (cflSlow || !flight.cfl || flight.cfl <= 2)
+    ) {
+        const sidAlt = resolveSidAltitude(flight.origin, sidForCfl, cflSlow)
+        if (sidAlt !== undefined && flight.cfl !== sidAlt) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
             console.log(`[${logTag}] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${sidForCfl})`)
             if (cliArgs.mock) {
@@ -6078,20 +6083,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     point: "",
                                 } satisfies OutboundPluginCommand))
                             }
-                            // Keep custom CFL when already assigned (cfl > 2); same guard as preferred-SID path
+                            const slow =
+                                !!strip.isSlow ||
+                                hasSlowRemark(strip.remarks) ||
+                                isSlowSid(message.value)
+                            const sidAlt = resolveSidAltitude(strip.adep, message.value, slow)
+                            // SLOW SID: overwrite prior 5000; else keep custom CFL (cfl > 2)
                             const hasCustomCfl =
-                                flightForSid?.cfl != null && flightForSid.cfl > 2
-                            if (!hasCustomCfl) {
-                                const slow =
-                                    !!strip.isSlow ||
-                                    hasSlowRemark(strip.remarks) ||
-                                    isTrackSidName(message.value)
-                                const sidAlt = resolveSidAltitude(strip.adep, message.value, slow)
-                                if (sidAlt !== undefined) {
-                                    sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
-                                    console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
-                                    mockCflAuto = sidAlt
-                                }
+                                !slow && flightForSid?.cfl != null && flightForSid.cfl > 2
+                            if (!hasCustomCfl && sidAlt !== undefined) {
+                                sendUdp(JSON.stringify({ type: "assignCfl", callsign: strip.callsign, altitude: sidAlt }))
+                                console.log(`[ASSIGN] Auto-CFL ${sidAlt} for SID ${message.value} at ${strip.adep}`)
+                                mockCflAuto = sidAlt
                             }
                         }
                         break
@@ -6178,12 +6181,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     // V / Z: never auto-add SLOW flag from SID
                     if (
                         message.value &&
-                        isTrackSidName(message.value) &&
+                        isSlowSid(message.value) &&
                         isIfrSidEligible(strip.flightRules)
                     ) {
                         if (!hasSlowRemark(flightForAssign.remarks)) {
                             flightForAssign.remarks = withSlowRemark(flightForAssign.remarks, true) || undefined
-                            console.log(`[REMARKS] ${strip.callsign}: set SLOW (track SID ${message.value})`)
+                            console.log(`[REMARKS] ${strip.callsign}: set SLOW (slow SID ${message.value})`)
                         }
                         flightStore.markSlowRemarkManual(flightForAssign)
                         flightStore.holdScratchFields(flightForAssign, 3000)
@@ -7305,6 +7308,23 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 flight.cfl = sidAlt
                                 console.log(`[REMARKS] ${flight.callsign}: SLOW cleared → CFL ${sidAlt}`)
                             }
+                        }
+                    }
+                    // Enabling SLOW: force CFL 3000 (mirrors clear path)
+                    if (!prevSlow && nextSlow && flight.origin) {
+                        const preferred = resolvePreferredSidForFlight(flight)
+                        const sidForCfl = preferred || flight.sid
+                        const sidAlt = sidForCfl
+                            ? resolveSidAltitude(flight.origin, sidForCfl, true)
+                            : 3000
+                        if (sidAlt !== undefined && flight.cfl !== sidAlt) {
+                            sendUdp(JSON.stringify({
+                                type: "assignCfl",
+                                callsign: flight.callsign,
+                                altitude: sidAlt,
+                            } satisfies OutboundPluginCommand))
+                            flight.cfl = sidAlt
+                            console.log(`[REMARKS] ${flight.callsign}: SLOW set → CFL ${sidAlt}`)
                         }
                     }
                     const updatedStrip = flightStore.regenerateStrip(remarkStrip.callsign)

@@ -316,6 +316,10 @@ export function resolveSidAltitude(
     sidName: string,
     slow = false
 ): number | undefined {
+    // ESSA SLOW (track/HAPZI): prefer 3000 over COPX (often still 5000)
+    if (slow && airport.toUpperCase() === "ESSA") {
+        return getDefaultInitialClimbFt(airport, true)
+    }
     const fromCopx = getSidAltitude(airport, sidName)
     if (fromCopx !== undefined) return fromCopx
     if (airport.toUpperCase() === "ESGG") {

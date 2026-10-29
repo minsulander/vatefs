@@ -231,6 +231,7 @@ import {
   hasSlowRemark,
   isIfrSidEligible,
   isTrackSidName,
+  isSlowSid as isSlowSidCommon,
   isVectorSidName,
   parseRflToFeet,
   resolveLopDirectHighlights,
@@ -497,8 +498,7 @@ function isMilSid(sid: string): boolean {
 function isSlowSid(sid: string): boolean {
   if (isVfrSid(sid) || isMilSid(sid)) return false
   if (isVectorSidName(sid)) return false
-  if (isTrackSidName(sid)) return true
-  return /^HAPZI/i.test(sid)
+  return isSlowSidCommon(sid)
 }
 
 /** Technical SID name; only add spaces around · between designator and fix (e.g. ARS6E · KOGAV). */

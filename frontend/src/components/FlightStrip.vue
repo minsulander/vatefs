@@ -1682,6 +1682,7 @@ import {
   isIfrSidEligible,
   isLocalInboundPresentation,
   isTrackSidName,
+  isSlowSid,
   isOffExitVectorSid,
   needsEssaEastSidBox,
   normalizeEssaRwy,
@@ -3383,7 +3384,7 @@ const sidHighlight = computed(() => {
   // Off-exit radar-vector (ARS6E·KOGAV / "ARS 6E veKOGAV") — same orange as SLOW.
   // Same-exit ARS6E·ARS displays as "ARS 6E" and must not amber.
   if (isOffExitVectorSid(raw) || /[A-Z]{2,}\s+\d+[A-Z]+\s+ve[A-Z]{2,}/i.test(shown)) return true
-  if (isTrackSidName(raw) || formatTrackSidDisplay(raw)) return true
+  if (isSlowSid(raw) || isSlowSid(shown) || formatTrackSidDisplay(raw)) return true
   // Formatted SLOW display: 120veBABAP / 010·240veNOSLI
   if (/\d{3}(·\d{3})?ve[A-Z]{2,}/i.test(shown)) return true
   return false
