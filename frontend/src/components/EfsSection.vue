@@ -2427,17 +2427,16 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
   }
 
   // INBOUND APP: always ETA (drag reorder does not stick).
-  // Workspace sort-flow flips direction: newestBottom = earliest at bottom (default);
-  // newestTop = earliest at top. Position reverse alone is undone by ETA re-sort.
+  // newestBottom = “first on top” → earliest at top; newestTop → earliest at bottom.
   if (etaSortEnabled.value) {
     const useEtn = isInboundEtnSortTitle(props.section.title)
     if (props.workspaceMode) {
       if (useEtn) {
-        return workspaceSortFlow.value === 'newestTop'
+        return workspaceSortFlow.value === 'newestBottom'
           ? [...sortBySectorEntry(list)].reverse()
           : sortBySectorEntry(list)
       }
-      return workspaceSortFlow.value === 'newestTop'
+      return workspaceSortFlow.value === 'newestBottom'
         ? sortByEtaEarliestTop(list)
         : sortByEta(list)
     }
@@ -2767,6 +2766,12 @@ function onWorkspaceToggleFlow() {
   // Snapshot before toggle — preferManualOrder would still be true after if we reversed
   const keepTimeSort = timeSortEnabled.value && !preferManualOrder.value
   ws.toggleSortFlow(props.workspaceInstanceId)
+  // Keep server insert end in sync with the button (YAML addFromTop alone ignored the toggle)
+  const flow = workspaceSection.value?.sortFlow ?? 'newestBottom'
+  const addFromTop = flow === 'newestTop'
+  for (const sid of sectionIdsForStripMatch()) {
+    store.setSectionAddFromTop(effectiveBayId.value, sid, addFromTop)
+  }
   // INBOUND APP / TOBT / TSAT / EOBT auto-sort: direction follows sortFlow — never enter MAN
   if (etaSortEnabled.value || keepTimeSort) return
   store.reverseSectionStripOrder(topIds)

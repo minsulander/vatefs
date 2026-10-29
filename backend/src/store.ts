@@ -1066,6 +1066,30 @@ class EfsStore {
         return { section, changed }
     }
 
+    /**
+     * Set where new/auto-moved strips insert (workspace sort-flow).
+     * Updates store layout + staticConfig so flightStore.getNewStripPosition sees it.
+     */
+    setSectionAddFromTop(
+        bayId: string,
+        sectionId: string,
+        addFromTop: boolean,
+    ): { section: Section; changed: boolean } | null {
+        const section = this.findSection(bayId, sectionId)
+        if (!section) return null
+        const prev = section.addFromTop ?? true
+        const changed = prev !== addFromTop
+        if (changed) {
+            section.addFromTop = addFromTop
+            // flightStore reads staticConfig.layout — keep in sync
+            for (const bay of staticConfig.layout.bays) {
+                const sec = bay.sections.find((s) => s.id === sectionId)
+                if (sec) sec.addFromTop = addFromTop
+            }
+        }
+        return { section, changed }
+    }
+
     // Clear all data (called on refresh/reconnect)
     clear() {
         this.strips.clear()

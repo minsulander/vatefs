@@ -5362,6 +5362,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "setSectionAddFromTop": {
+            const result = store.setSectionAddFromTop(
+                message.bayId,
+                message.sectionId,
+                !!message.addFromTop,
+            )
+            if (result?.changed) {
+                broadcastSection(message.bayId, result.section, socket)
+                console.log(
+                    `Section ${message.sectionId} addFromTop → ${result.section.addFromTop}`,
+                )
+            }
+            break
+        }
+
         case "stripAction": {
             const strip = store.getStrip(message.stripId)
             if (strip) {

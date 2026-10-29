@@ -2506,6 +2506,19 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    /** Sync insert end with workspace sort-flow (newestTop → addFromTop). */
+    function setSectionAddFromTop(bayId: string, sectionId: string, addFromTop: boolean) {
+        const bay = layout.value.bays.find((b) => b.id === bayId)
+        const section = bay?.sections.find((s) => s.id === sectionId)
+        if (section) section.addFromTop = addFromTop
+        sendMessage({
+            type: 'setSectionAddFromTop',
+            bayId,
+            sectionId,
+            addFromTop,
+        })
+    }
+
     function isPendingDepSectionId(sectionId: string): boolean {
         return sectionId === 'pending_dep' || sectionId.endsWith('_pending_dep')
     }
@@ -3887,6 +3900,7 @@ export const useEfsStore = defineStore("efs", () => {
         removeGapAtIndex,
         getGapAtIndex,
         setSectionHeight,
+        setSectionAddFromTop,
         broadcastSectionHeights,
         sendStripAction,
         sendAssignment,

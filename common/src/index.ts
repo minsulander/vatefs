@@ -219,6 +219,7 @@ export type {
     ReorderStripsMessage,
     SetGapMessage,
     SetSectionHeightMessage,
+    SetSectionAddFromTopMessage,
     StripActionMessage,
     AssignmentType,
     StripAssignMessage,
