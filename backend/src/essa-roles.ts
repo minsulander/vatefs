@@ -677,8 +677,12 @@ export function applyEssaRunwayPairLayout(
     const insertStack = (bayId: string, afterSectionId: string, stack: EssaRunwaySectionPlacement[]) => {
         let after = afterSectionId
         for (const p of stack) {
-            // addFromTop:false — first L/U into RWY stays above later; CFTO sort is frontend
-            const section: Section = { id: p.sectionId, title: p.title, addFromTop: false }
+            // ARR column: first at bottom (addFromTop). DEP column: first on top.
+            const section: Section = {
+                id: p.sectionId,
+                title: p.title,
+                addFromTop: !p.preferDepColumn,
+            }
             insertAfter(bayId, after, section)
             after = p.sectionId
         }

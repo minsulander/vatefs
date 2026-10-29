@@ -1723,7 +1723,6 @@ import {
 } from '@/composables/useStripScribbles'
 import {
   applySpawnExpanderDefaults,
-  collapseExpandersOnLeaveCdAllOrTsat,
   collapseStripExpanders,
   useStripExpanders,
 } from '@/composables/useStripExpanders'
@@ -5178,18 +5177,6 @@ watch(
     ) {
       collapseStripExpanders(props.strip.id)
     }
-  },
-)
-
-/**
- * Backup when the same FlightStrip instance stays mounted (e.g. zoom overlay).
- * Cross-section moves remount the bay strip — store handleStripMessage /
- * moveStrip* call collapseExpandersOnLeaveCdAllOrTsat for those.
- */
-watch(
-  () => props.strip.sectionId,
-  (sectionId, prevSectionId) => {
-    collapseExpandersOnLeaveCdAllOrTsat(props.strip.id, prevSectionId, sectionId)
   },
 )
 

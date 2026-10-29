@@ -76,51 +76,6 @@ export function isCdAllOrTsatSection(sectionId: string): boolean {
   return isCdAllSection(sectionId) || isTsatSection(sectionId)
 }
 
-/**
- * Close expanders when a strip leaves CD ALL / TSAT for any reason
- * (rule auto-move, drag, remote update). Safe no-op otherwise.
- *
- * Must run in the store (not only FlightStrip watchers): section moves remount
- * the strip under a different EfsSection, so a component watcher never sees
- * the prev→next transition.
- */
-export function collapseExpandersOnLeaveCdAllOrTsat(
-  stripId: string,
-  prevSectionId: string | undefined,
-  nextSectionId: string,
-): void {
-  if (!prevSectionId || prevSectionId === nextSectionId) return
-  if (isCdAllOrTsatSection(prevSectionId) && !isCdAllOrTsatSection(nextSectionId)) {
-    collapseStripExpanders(stripId)
-  }
-}
-
-/** Collapse top expander only when no CTOT is present. Bottom left as-is. */
-export function collapseTopExpanderIfNoCtot(
-  stripId: string,
-  ctot: string | undefined | null,
-): void {
-  if (ctot) return
-  ensure(stripId).top = false
-}
-
-/**
- * CD ALL → TSAT: close top expander when unregulated (no CTOT).
- * Bottom expander unchanged. Safe no-op for other transitions.
- *
- * Store-side (same remount reason as leave-CD collapse).
- */
-export function collapseTopExpanderOnCdAllToTsatIfNoCtot(
-  stripId: string,
-  prevSectionId: string | undefined,
-  nextSectionId: string,
-  ctot: string | undefined | null,
-): void {
-  if (!prevSectionId || prevSectionId === nextSectionId) return
-  if (!isCdAllSection(prevSectionId) || !isTsatSection(nextSectionId)) return
-  collapseTopExpanderIfNoCtot(stripId, ctot)
-}
-
 export function getStripExpanderState(stripId: string): StripExpanderState {
   const s = ensure(stripId)
   return { top: s.top, bottom: s.bottom }

@@ -25,28 +25,36 @@ layout:
         inbound_acc:
           # APP / top-down covering approach: unassumed ACC-owned arrivals at ETN ≤ 15.
           # Hidden from TWR-only boards. Sorted by sector-entry minutes.
+          # First at bottom (newest inserts on top).
           title: INBOUND ACC
+          addFromTop: true
           visibleFor: [APP]
         inbound:
           # Placeholder title only — runtime always resolves to INBOUND APP (TWR)
           # or INBOUND TWR-E, TWR-W (GND-only). Never shown as bare "INBOUND".
           # Hidden when APP family is also selected (inbound-from-yourself).
           # TWR: ETN≤15 gate + ETN sort. GND: tower-bound rules, appearance order.
+          # INBOUND APP: first at bottom (newest on top).
           title: INBOUND
+          addFromTop: true
           visibleFor: [GND, TWR]
         ctr_arr:
           # Same strip home for CTR ARR (TWR) and TMA ARR (APP / CD+GND+TWR+APP default).
           # filterEssaLayout retitles to TMA ARR when APP family is selected.
+          # First at bottom (newest inserts on top).
           title: CTR ARR
+          addFromTop: true
           visibleFor: [TWR, APP]
         arr_runway:
           # Placeholder — replaced at runtime with RUNWAY 01L/19R style pair headers
           title: RUNWAY
-          # First L/U into bay stays above later; CFTO ranks above LINEUP in UI
-          addFromTop: false
+          # ARR RWY: first at bottom (newest inserts on top)
+          addFromTop: true
           visibleFor: [TWR]
         taxi_arr:
           title: TAXIWAY ARR
+          # First at bottom (newest inserts on top).
+          addFromTop: true
           # TWR-only: still-on-RWY hold; once vacated → TAXI ARR + XFER to GND.
           # With GND selected, TWR uses this for assumed taxi-in as usual.
           visibleFor: [GND, TWR]
@@ -67,21 +75,23 @@ layout:
 
     bay3:
       sections:
-        # TWR-only: other-owned taxi-out (mirror INBOUND APP).
-        # Header resolves to INBOUND GND-E, GND-N, GND-W.
-        # Hidden when GND is also selected. Assumed / inbound-transfer → TAXI DEP.
-        inbound_gnd:
-          title: INBOUND GND
-          visibleFor: [TWR]
         taxi_dep:
           title: TAXIWAY DEP
           # First in the taxi sequence stays on top. The last one cleared
           # (newest taxi-out) is appended at the bottom.
           addFromTop: false
           visibleFor: [GND, TWR]
+        # TWR-only: other-owned taxi-out (mirror INBOUND APP).
+        # Header resolves to INBOUND GND-E, GND-N, GND-W.
+        # Hidden when GND is also selected. Assumed / inbound-transfer → TAXI DEP.
+        # Below TAXI DEP on TWR-only boards.
+        inbound_gnd:
+          title: INBOUND GND
+          visibleFor: [TWR]
         push_start:
           title: PUSH BACK / START-UP
-          addFromTop: true
+          # First on top (newest inserts at bottom).
+          addFromTop: false
           visibleFor: [GND]
         # Declared for sectionRules / strip assignment. Workspace built-in
         # defaults omit this header — add via catalog when needed.
@@ -92,22 +102,21 @@ layout:
 
     bay4:
       sections:
-        cleared:
-          # Cleared deps waiting for push/startup (CD and GND).
-          # Split → TSAT / EOBT only. TSAT order: earliest at bottom
-          # (same as INBOUND APP ETA); auto-fit preferTop:false when size-fit on.
-          title: TSAT / EOBT
-          addFromTop: true
-          visibleFor: [CD, GND]
+        pending_dep:
+          # CD (uncleared) — TOBT order: earliest on top (first on top sort-flow).
+          # Title becomes "CD ALL" only when merged with TSAT / EOBT.
+          title: CD
+          addFromTop: false
+          visibleFor: [CD]
 
     bay5:
       sections:
-        pending_dep:
-          # CD (uncleared) — TOBT order: earliest at bottom (same as TSAT / INBOUND APP).
-          # Title becomes "CD ALL" only when merged with TSAT / EOBT.
-          title: CD
-          addFromTop: true
-          visibleFor: [CD]
+        cleared:
+          # Cleared deps waiting for push/startup (CD and GND).
+          # Split → TSAT / EOBT only. Earliest on top (first on top sort-flow).
+          title: TSAT / EOBT
+          addFromTop: false
+          visibleFor: [CD, GND]
 
 sectionRules:
   # VCH pending pushback / startup request (annotation 2)

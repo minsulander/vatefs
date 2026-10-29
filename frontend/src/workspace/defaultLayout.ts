@@ -1,6 +1,6 @@
 import type { EfsLayout, Section } from '@vatefs/common'
 import { isEssaDynamicRunwaySectionId } from '@vatefs/common'
-import type { SortFlow, WorkspaceLayout, WorkspaceSection } from './types'
+import type { SectionStripSize, SortFlow, WorkspaceLayout, WorkspaceSection } from './types'
 import { WORKSPACE_MAX_COLUMNS, WORKSPACE_MIN_COLUMNS } from './types'
 import { essaRoleKey, formatEssaRolesLabel } from './roleLabel'
 import {
@@ -10,8 +10,10 @@ import {
   stripSectionIdsForMember,
   type WorkspaceCatalogMode,
 } from './splitGroups'
+import { preferredSortFlowForWorkspaceSection } from './sortFlowDefaults'
 
 export type { WorkspaceCatalogMode }
+export { preferredSortFlowForWorkspaceSection } from './sortFlowDefaults'
 
 type EssaFamily = 'CD' | 'GND' | 'TWR' | 'APP'
 
@@ -78,7 +80,8 @@ function classifyRunwaySections(serverLayout: EfsLayout): {
 }
 
 type SecDraft = {
-  sectionId: string
+  /** null = empty overflow blocker (no YAML section) */
+  sectionId: string | null
   title?: string
   groupId?: WorkspaceSection['groupId']
   member?: string
@@ -88,27 +91,70 @@ type SecDraft = {
   instanceId?: string
 }
 
+/**
+ * ESSA divider strip-size defaults:
+ * - INBOUND APP / INBOUND ACC → compact
+ * - CD / CD ALL → expanded
+ * - else normal
+ */
+export function defaultEssaStripSize(
+  sectionId: string | null | undefined,
+  title?: string | null,
+): SectionStripSize {
+  if (!sectionId) return 'normal'
+  const t = (title || '').toUpperCase().trim()
+  if (sectionId === 'inbound_acc' || t === 'INBOUND ACC') return 'compact'
+  if (sectionId === 'inbound') {
+    // INBOUND TWR-* stays normal; APP (and bare INBOUND) → compact
+    if (t.startsWith('INBOUND TWR')) return 'normal'
+    if (t === 'INBOUND APP' || t === 'INBOUND' || t.startsWith('INBOUND APP')) {
+      return 'compact'
+    }
+  }
+  if (sectionId === 'pending_dep') {
+    if (t === 'CD' || t === 'CD ALL' || t.startsWith('CD ') || !t) return 'expanded'
+  }
+  return 'normal'
+}
+
 function draftToSection(
   draft: SecDraft,
   serverLayout: EfsLayout,
   defaultFlow: SortFlow,
   anchorColumn: number,
 ): WorkspaceSection {
+  if (draft.sectionId == null) {
+    return {
+      instanceId: draft.instanceId ?? `empty-${anchorColumn}`,
+      sectionId: null,
+      anchorColumn,
+      stripSize: 'normal',
+      sortFlow: defaultFlow,
+      ...(draft.y != null ? { y: draft.y } : {}),
+      ...(draft.yRatio != null ? { yRatio: draft.yRatio } : {}),
+    }
+  }
   const server = findServerSection(serverLayout, draft.sectionId)
   const title = draft.title ?? server?.title ?? draft.sectionId
   const anno =
     draft.groupId != null || draft.member != null
       ? { title, groupId: draft.groupId, member: draft.member }
       : annotateCatalogSection(draft.sectionId, title, 'essa')
+  const resolvedTitle = anno.title ?? title
   return {
     instanceId: draft.instanceId ?? draft.sectionId,
     sectionId: draft.sectionId,
-    title: anno.title ?? title,
+    title: resolvedTitle,
     groupId: anno.groupId,
     member: anno.member,
     anchorColumn,
-    stripSize: 'normal',
-    sortFlow: sortFlowFromSection(server, defaultFlow, draft.addFromTop),
+    stripSize: defaultEssaStripSize(draft.sectionId, resolvedTitle),
+    sortFlow: sortFlowFromSection(server, defaultFlow, draft.addFromTop, {
+      sectionId: draft.sectionId,
+      title: resolvedTitle,
+      groupId: anno.groupId,
+      member: anno.member,
+    }),
     ...(draft.y != null ? { y: draft.y } : {}),
     ...(draft.yRatio != null ? { yRatio: draft.yRatio } : {}),
   }
@@ -206,14 +252,14 @@ function essaDefaultColumnPlan(
             { sectionId: 'push_start', addFromTop: true },
           ],
           [
+            { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false },
             {
               sectionId: 'pending_dep',
               title: 'CD',
               groupId: 'cd_all',
               member: 'pending',
-              addFromTop: true,
+              addFromTop: false,
             },
-            { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true },
           ],
         ],
       }
@@ -228,7 +274,7 @@ function essaDefaultColumnPlan(
             { sectionId: 'taxi_dep', addFromTop: false },
             { sectionId: 'push_start', addFromTop: true },
           ],
-          [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }],
+          [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
         ],
       }
     }
@@ -240,15 +286,14 @@ function essaDefaultColumnPlan(
         [tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
         [tmaDep, ...runwayDrafts(runways.dep)],
         [
-          { sectionId: 'inbound_gnd' },
           { sectionId: 'taxi_dep', addFromTop: false },
+          { sectionId: 'inbound_gnd' },
         ],
       ],
     }
   }
 
-  // CD alone — real TSAT/EOBT split; EOBT at bottom quarter (TSAT overflow above);
-  // empty 4th column for CD overflow.
+  // CD alone — TSAT | EOBT (bottom ⅓) | CD | empty divider (bottom half).
   if (hasCd && !hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
@@ -259,7 +304,7 @@ function essaDefaultColumnPlan(
             title: 'TSAT',
             groupId: 'cd_cleared',
             member: 'tsat',
-            addFromTop: true,
+            addFromTop: false,
           },
         ],
         [
@@ -268,8 +313,8 @@ function essaDefaultColumnPlan(
             title: 'EOBT',
             groupId: 'cd_cleared',
             member: 'eobt',
-            addFromTop: true,
-            yRatio: 0.75,
+            addFromTop: false,
+            yRatio: 2 / 3,
           },
         ],
         [
@@ -278,10 +323,10 @@ function essaDefaultColumnPlan(
             title: 'CD',
             groupId: 'cd_all',
             member: 'pending',
-            addFromTop: true,
+            addFromTop: false,
           },
         ],
-        [],
+        [{ sectionId: null, yRatio: 0.5 }],
       ],
     }
   }
@@ -294,12 +339,12 @@ function essaDefaultColumnPlan(
         [inboundTwrMergedDraft(serverLayout), { sectionId: 'taxi_arr' }],
         [{ sectionId: 'taxi_dep', addFromTop: false }],
         [{ sectionId: 'push_start', addFromTop: true }],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }],
+        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
       ],
     }
   }
 
-  // TWR alone — INBOUND APP own column; INBOUND GND above TAXI DEP
+  // TWR alone — INBOUND APP own column; TAXI DEP above INBOUND GND
   if (!hasCd && !hasGnd && hasTwr) {
     return {
       columnCount: 4,
@@ -315,14 +360,14 @@ function essaDefaultColumnPlan(
           ...runwayDrafts(runways.dep),
         ],
         [
-          { sectionId: 'inbound_gnd' },
           { sectionId: 'taxi_dep', addFromTop: false },
+          { sectionId: 'inbound_gnd' },
         ],
       ],
     }
   }
 
-  // CD + GND (no TWR) — no INBOUND GND; CD and TSAT/EOBT separate columns
+  // CD + GND (no TWR) — no INBOUND GND; TSAT/EOBT left of CD
   if (hasCd && hasGnd && !hasTwr) {
     return {
       columnCount: 4,
@@ -332,14 +377,14 @@ function essaDefaultColumnPlan(
           { sectionId: 'taxi_dep', addFromTop: false },
           { sectionId: 'push_start', addFromTop: true },
         ],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }],
+        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
         [
           {
             sectionId: 'pending_dep',
             title: 'CD',
             groupId: 'cd_all',
             member: 'pending',
-            addFromTop: true,
+            addFromTop: false,
           },
         ],
       ],
@@ -365,12 +410,12 @@ function essaDefaultColumnPlan(
           { sectionId: 'taxi_dep', addFromTop: false },
           { sectionId: 'push_start', addFromTop: true },
         ],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }],
+        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
       ],
     }
   }
 
-  // CD + GND + TWR — CD stacked above TSAT/EOBT in one column; ARR RWY above taxi
+  // CD + GND + TWR — TSAT/EOBT stacked above CD; ARR RWY above taxi
   if (hasCd && hasGnd && hasTwr) {
     return {
       columnCount: 4,
@@ -390,14 +435,14 @@ function essaDefaultColumnPlan(
           { sectionId: 'push_start', addFromTop: true },
         ],
         [
+          { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false },
           {
             sectionId: 'pending_dep',
             title: 'CD',
             groupId: 'cd_all',
             member: 'pending',
-            addFromTop: true,
+            addFromTop: false,
           },
-          { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true },
         ],
       ],
     }
@@ -408,10 +453,23 @@ function essaDefaultColumnPlan(
 }
 
 function sortFlowFromSection(
-  sec: { addFromTop?: boolean } | undefined,
+  sec: { id?: string; title?: string; addFromTop?: boolean } | undefined,
   defaultFlow: SortFlow,
   fallbackAddFromTop?: boolean,
+  workspace?: {
+    sectionId?: string | null
+    title?: string
+    groupId?: string
+    member?: string
+  },
 ): SortFlow {
+  const preferred = preferredSortFlowForWorkspaceSection({
+    sectionId: workspace?.sectionId ?? sec?.id,
+    title: workspace?.title ?? sec?.title,
+    groupId: workspace?.groupId,
+    member: workspace?.member,
+  })
+  if (preferred) return preferred
   const flag = sec?.addFromTop ?? fallbackAddFromTop
   if (flag === false) return 'newestBottom'
   if (flag === true) return 'newestTop'
@@ -677,15 +735,21 @@ export function buildWorkspaceLayoutFromServer(
       // CTR INBOUND is catalog / TMA-only — keep off the CTR-only builtin board
       if (sec.id === 'ctr_inbound') continue
       const anno = annotateCatalogSection(sec.id, sec.title, 'saab')
+      const resolvedTitle = anno.title ?? sec.title
       sections.push({
         instanceId: sec.id,
         sectionId: sec.id,
-        title: anno.title ?? sec.title,
+        title: resolvedTitle,
         groupId: anno.groupId,
         member: anno.member,
         anchorColumn: anchor,
         stripSize: 'normal',
-        sortFlow: sortFlowFromSection(sec, defaultFlow, sec.addFromTop),
+        sortFlow: sortFlowFromSection(sec, defaultFlow, sec.addFromTop, {
+          sectionId: sec.id,
+          title: resolvedTitle,
+          groupId: anno.groupId,
+          member: anno.member,
+        }),
       })
     }
     col++
@@ -697,8 +761,10 @@ export function buildWorkspaceLayoutFromServer(
   return {
     version: 1,
     columnCount,
-    // Collapse co-located TMA+CTR* and pending+cleared into merged headers
-    sections: collapseSaabDepHeaders(collapseSaabCtrTmaHeaders(sections)),
+    // Collapse co-located TMA+CTR* / CTR / pending+cleared into merged headers
+    sections: collapseSaabDepHeaders(
+      collapseSaabCtrHeaders(collapseSaabCtrTmaHeaders(sections)),
+    ),
     roleKey: opts?.roleKey ?? 'saab',
     roles: opts?.roles ? [...opts.roles] : [],
     rolesLabel: opts?.rolesLabel,
@@ -741,6 +807,41 @@ function collapseSaabCtrTmaHeaders(sections: WorkspaceSection[]): WorkspaceSecti
         sectionId: 'ctr_arr',
         title: 'TMA / CTR',
         groupId: 'saab_ctr_tma' as const,
+        member: undefined,
+        members: undefined,
+        anchorColumn: placeAt.anchorColumn,
+        ...(placeAt.y != null ? { y: placeAt.y } : {}),
+      }
+    })
+}
+
+/**
+ * OTHER: ctr_arr + ctr_dep both titled CTR → one CTR header (splittable to ARR/DEP).
+ * Used by 1RWY 3 BAYS (TMA | CTR + RUNWAY | …).
+ */
+function collapseSaabCtrHeaders(sections: WorkspaceSection[]): WorkspaceSection[] {
+  const family = sections.filter(
+    (s) =>
+      (s.sectionId === 'ctr_arr' || s.sectionId === 'ctr_dep') &&
+      (s.title || '').toUpperCase().trim() === 'CTR',
+  )
+  if (family.length < 2) return sections
+
+  const keep =
+    family.find((s) => s.sectionId === 'ctr_arr') ?? family[0]!
+  const drop = new Set(
+    family.map((s) => s.instanceId).filter((id) => id !== keep.instanceId),
+  )
+  const placeAt = family.reduce((a, b) => ((a.y ?? 0) <= (b.y ?? 0) ? a : b))
+  return sections
+    .filter((s) => !drop.has(s.instanceId))
+    .map((s) => {
+      if (s.instanceId !== keep.instanceId) return s
+      return {
+        ...s,
+        sectionId: 'ctr_arr',
+        title: 'CTR',
+        groupId: 'saab_ctr' as const,
         member: undefined,
         members: undefined,
         anchorColumn: placeAt.anchorColumn,
