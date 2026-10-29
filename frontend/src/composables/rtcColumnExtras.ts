@@ -33,7 +33,7 @@ export type RtcBayExtras = {
   arrAppMerged: boolean
   /** CTR + TMA combined into one "CTR/TMA" (or "TMA/CTR") header */
   ctrTmaMerged: boolean
-  /** DEP split into CLR + PUSH&START (push/start leave TAXIWAY visually) */
+  /** DEP split into CLR + PUSH&START (push/start leave CLR visually) */
   depSplit: boolean
   /**
    * When covering TMA without CTR, DEP split yields RUNWAY + TAXIWAY + CLR
@@ -679,7 +679,8 @@ export function rtcStripMatchIds(bayId: string, displaySectionId: string): strin
     return [fullRtcSectionId(bayId, 'dep')]
   }
   if (isRtcPushStartId(displaySectionId)) {
-    return [fullRtcSectionId(bayId, 'twy')]
+    // STUP/PUSH live in DEP (not TAXIWAY); PUSH&START is a DEP split view
+    return [fullRtcSectionId(bayId, 'dep')]
   }
   return [displaySectionId]
 }
@@ -691,7 +692,7 @@ export function rtcDropSectionId(bayId: string, displaySectionId: string): strin
   if (isRtcArrAppMergedId(displaySectionId)) return fullRtcSectionId(bayId, 'arr')
   if (isRtcCtrTmaMergedId(displaySectionId)) return fullRtcSectionId(bayId, 'app')
   if (isRtcClrId(displaySectionId)) return fullRtcSectionId(bayId, 'dep')
-  if (isRtcPushStartId(displaySectionId)) return fullRtcSectionId(bayId, 'twy')
+  if (isRtcPushStartId(displaySectionId)) return fullRtcSectionId(bayId, 'dep')
   return displaySectionId
 }
 

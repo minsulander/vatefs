@@ -139,6 +139,28 @@ export function isParkTrashDeleteRule(ruleId: string | undefined): boolean {
     return ruleId === "delete_parked" || ruleId === "delete_parked_local"
 }
 
+/** RTC DEP / CLR display sections that share the push→cleared→pending sequence. */
+export function isRtcDepSequenceSectionId(sectionId: string): boolean {
+    return (
+        sectionId === "dep" ||
+        /^(bay\d+|idle)_dep$/.test(sectionId) ||
+        /^(bay\d+|idle)_clr$/.test(sectionId)
+    )
+}
+
+/**
+ * RTC DEP sequence tiers (0 = first / most advanced at top):
+ * PUSH/STUP → CLR acked → not cleared
+ */
+export function rtcDepSequenceTier(
+    flight: Pick<Flight, "clearance" | "clearanceReadback" | "groundstate">,
+): number {
+    const gs = (flight.groundstate || "").toUpperCase()
+    if (gs === "PUSH" || gs === "STUP") return 0
+    if (flight.clearance || flight.clearanceReadback) return 1
+    return 2
+}
+
 /**
  * Park-trash turnaround: a new outbound FPL (same callsign, origin at our airport)
  * should start a fresh departure cycle (CD ALL / pending_dep).
@@ -2297,6 +2319,32 @@ class FlightStore {
         } else if (currentAssignment) {
             position = currentAssignment.position
             bottom = currentAssignment.bottom
+            // RTC DEP: when CLR / PUSH progresses in the same bay, move to bottom of new tier
+            if (
+                !bottom &&
+                isMultiAirportConfig(this.config) &&
+                isRtcDepSequenceSectionId(currentAssignment.sectionId) &&
+                currentAssignment.sectionId === targetSection.sectionId
+            ) {
+                const tier = rtcDepSequenceTier(flight)
+                const prev = flight.lastRtcDepSeqTier
+                if (prev !== undefined && prev !== tier) {
+                    position = this.getNewStripPosition(
+                        currentAssignment.bayId,
+                        currentAssignment.sectionId,
+                        flight,
+                    )
+                    this.stripAssignments.set(callsign, {
+                        bayId: currentAssignment.bayId,
+                        sectionId: currentAssignment.sectionId,
+                        position,
+                        bottom: false,
+                    })
+                    console.log(
+                        `[RULE] ${callsign}: RTC DEP tier ${prev}→${tier} → bottom of tier (pos ${position})`,
+                    )
+                }
+            }
         } else {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
             bottom = false
@@ -2316,6 +2364,9 @@ class FlightStore {
             holdSection && currentAssignment
                 ? currentAssignment.sectionId
                 : targetSection.sectionId
+        if (isMultiAirportConfig(this.config) && isRtcDepSequenceSectionId(placeSectionId)) {
+            flight.lastRtcDepSeqTier = rtcDepSequenceTier(flight)
+        }
         const appTransferTop = this.applyAppTransferCtrArrTop(
             callsign,
             flight,

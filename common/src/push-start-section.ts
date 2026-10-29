@@ -15,5 +15,8 @@ export function isPushStartFamilySectionId(sectionId: string): boolean {
 /** Store / rules always use the YAML section id. */
 export function canonicalPushStartSectionId(sectionId: string): string {
   if (sectionId === 'push_back' || sectionId === 'start_up') return 'push_start'
+  // RTC: bayN_push_start is a DEP split view — STUP/PUSH live under bayN_dep
+  const rtc = /^(bay\d+|idle)_push_start$/i.exec(sectionId)
+  if (rtc) return `${rtc[1]}_dep`
   return sectionId
 }

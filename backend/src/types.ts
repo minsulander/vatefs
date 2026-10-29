@@ -247,6 +247,12 @@ export interface Flight {
      * While lastSectionRule==='manual' and this still matches, rules must not yank the strip.
      */
     placementStickyKey?: string
+    /**
+     * RTC DEP sequence tier last applied (0=PUSH/STUP, 1=cleared, 2=pending).
+     * When the tier advances in the same bay*_dep section, strip moves to the
+     * bottom of the new tier.
+     */
+    lastRtcDepSeqTier?: number
 
     // Special strip tracking
     synthetic?: boolean       // Flight was created from UI (VFR DEP/ARR/CROSS), not from EuroScope

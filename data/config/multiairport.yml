@@ -160,21 +160,7 @@ sectionRules:
     coversTma: true
     priority: 101
 
-  # === TWY (only start/push or taxi — CLR alone stays in DEP) ===
-  twy_push_start:
-    sectionId: twy
-    direction: departure
-    airborne: false
-    groundstates: [STUP, PUSH]
-    priority: 60
-
-  twy_push_start_local:
-    sectionId: twy
-    direction: local
-    airborne: false
-    groundstates: [STUP, PUSH]
-    priority: 60
-
+  # === TWY (taxi only — STUP/PUSH stay in DEP until taxi) ===
   twy_taxi_dep:
     sectionId: twy
     direction: departure
@@ -211,7 +197,7 @@ sectionRules:
     groundstates: ['', NSTS, ARR, TAXI, TXIN]
     priority: 30
 
-  # === DEP (pending + cleared) ===
+  # === DEP (pending + cleared + push/start) ===
   # False-airborne at gate/pre-push — keep in DEP (beats CTR 100).
   # Do not include ''/NSTS here: real airborne deps often keep empty GS after takeoff.
   dep_gate_false_airborne:
@@ -239,6 +225,21 @@ sectionRules:
     direction: local
     groundstates: [PARK]
     priority: 110
+
+  # STUP/PUSH remain under DEP (not TAXIWAY) until taxi
+  dep_push_start:
+    sectionId: dep
+    direction: departure
+    airborne: false
+    groundstates: [STUP, PUSH]
+    priority: 60
+
+  dep_push_start_local:
+    sectionId: dep
+    direction: local
+    airborne: false
+    groundstates: [STUP, PUSH]
+    priority: 60
 
   dep_pending:
     sectionId: dep
@@ -319,9 +320,10 @@ actionRules:
     notMyRole: [TWR]
     priority: 115
 
+  # RDY (DE-ICE) stays in DEP until PUSH — not TAXIWAY
   push_deice_gnd:
     action: PUSH
-    sectionId: twy
+    sectionId: dep
     direction: either
     controller: myself
     groundstates: [DE-ICE]
@@ -519,7 +521,7 @@ actionRules:
 
   txo_push:
     action: TXO
-    sectionId: twy
+    sectionId: dep
     direction: either
     controller: myself
     groundstates: [PUSH, STUP]
@@ -652,15 +654,15 @@ moveRules:
       type: setGroundstate
       value: TXIN
 
-  # DEP <-> TWY (clearance stays via CLNC; push/taxi via drag)
-  move_dep_to_twy_push:
+  # DEP <-> TWY (push stays in DEP; drag to TWY = taxi out)
+  move_dep_to_twy_taxi:
     fromSectionId: dep
     toSectionId: twy
     direction: either
-    myRole: [GND]
+    myRole: [GND, TWR, APP, CTR]
     command:
       type: setGroundstate
-      value: PUSH
+      value: TAXI
 
   move_twy_to_dep:
     fromSectionId: twy
