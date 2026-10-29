@@ -439,6 +439,10 @@ export function workspaceMemberAcceptsStrip(
     return wantArr ? saabStripIsArrSide(strip) : saabStripIsDepSide(strip)
   }
 
+  // ESSA TAXIWAY merge/split — server section ids already separate ARR/DEP.
+  // Do not apply OTHER taxi filter (full merge keeps sectionId taxi_dep).
+  if (g === 'taxiway') return true
+
   // OTHER TAXIWAY ARR / DEP — shared `taxi` parent
   if (g === 'saab_taxi' || sid === 'taxi_arr' || sid === 'taxi_dep') {
     const isMemberSlice =
