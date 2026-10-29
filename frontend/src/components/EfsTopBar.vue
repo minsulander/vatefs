@@ -609,7 +609,14 @@
                 class="efs-popup-item efs-popup-item--start"
                 @click="onRightLayouts"
               >
-                <span>Layout</span>
+                <span class="layout-menu-title">
+                  <span>Layout</span>
+                  <span
+                    v-if="loadedLayoutLabel"
+                    class="layout-loaded-name"
+                    :title="`Loaded: ${loadedLayoutLabel}`"
+                  >{{ loadedLayoutLabel }}</span>
+                </span>
                 <span
                   class="column-count-ctrl"
                   title="Number of bays"
@@ -643,7 +650,14 @@
                 class="efs-popup-item efs-popup-item--start"
                 @click="onRightLayouts"
               >
-                <span>Layout</span>
+                <span class="layout-menu-title">
+                  <span>Layout</span>
+                  <span
+                    v-if="loadedLayoutLabel"
+                    class="layout-loaded-name"
+                    :title="`Loaded: ${loadedLayoutLabel}`"
+                  >{{ loadedLayoutLabel }}</span>
+                </span>
                 <span
                   class="column-count-ctrl"
                   title="Number of bays"
@@ -842,7 +856,12 @@ import {
   resolveEssaRwyConfigId,
   essaRwyQuickrefImageUrl,
 } from "@vatefs/common"
-import { getWorkspace, DTRANS_CATALOG, type DtransVariantId } from "@/workspace"
+import {
+  getWorkspace,
+  resolveLoadedLayoutLabel,
+  DTRANS_CATALOG,
+  type DtransVariantId,
+} from "@/workspace"
 import { useInfoStripMenu } from "@/composables/useInfoStrips"
 import {
   useRwyFlagMenu,
@@ -853,6 +872,10 @@ import TrashDialog from "./TrashDialog.vue"
 
 const efs = useEfsStore()
 const ws = getWorkspace()
+/** Catalog → Layout: name of the loaded DEFAULT / saved / OTHER profile */
+const loadedLayoutLabel = computed(() =>
+  resolveLoadedLayoutLabel(ws.activeLayout.value),
+)
 const chromeScale = useEfsChromeScaleValue()
 const fsIconSize = computed(() => Math.max(16, Math.round(20 * chromeScale.value)))
 const trashOpen = ref(false)
@@ -2397,11 +2420,31 @@ span.essa-status-btn.esgg-roles-readonly {
   font-size: calc(12px * var(--efs-scale, 1));
 }
 
+.layout-menu-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(8px * var(--efs-scale, 1));
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.layout-loaded-name {
+  color: #888;
+  font-weight: 500;
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: calc(140px * var(--efs-scale, 1));
+}
+
 .column-count-ctrl {
   display: inline-flex;
   align-items: center;
   gap: 0;
   margin-left: auto;
+  flex-shrink: 0;
   border: 1px solid #666;
   height: calc(22px * var(--efs-scale, 1));
   padding: 0 calc(2px * var(--efs-scale, 1));

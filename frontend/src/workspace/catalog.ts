@@ -71,6 +71,7 @@ export const SAAB_CATALOG_SECTIONS: readonly SaabCatalogEntry[] = [
   // Bottom of menu upward: DEP → PENDING CLR → CLEARED
   { sectionId: 'cleared', title: 'CLEARED', flow: 'departure' },
   { sectionId: 'pending_dep', title: 'PENDING CLR', flow: 'departure' },
+  // DEP primary id is pending_dep (cleared comes along on merge/split)
   { sectionId: 'pending_dep', title: 'DEP', flow: 'departure' },
 ] as const
 

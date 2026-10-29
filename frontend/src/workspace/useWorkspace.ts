@@ -27,6 +27,8 @@ import {
   annotateCatalogSection,
   buildDefaultWorkspaceLayout,
   buildWorkspaceLayoutFromServer,
+  defaultEssaStripSize,
+  preferredSortFlowForWorkspaceSection,
   serverBayIdForSection,
 } from './defaultLayout'
 import { essaRoleKey, formatEssaRolesLabel } from './roleLabel'
@@ -38,11 +40,15 @@ import {
   splitWorkspaceSection,
 } from './splitGroups'
 import {
+  clearActiveLayouts,
   getDefaultSortFlow,
   listSavedLayouts,
+  loadActiveLayoutForRole,
   persistActiveLayout,
+  resolveLoadedLayoutLabel,
   sanitizeWorkspaceLayout,
   setDefaultSortFlow as persistDefaultSortFlow,
+  withLoadedLayoutLabel,
 } from './storage'
 import {
   measureBayScale,
@@ -164,7 +170,7 @@ export function useWorkspace() {
   function ensureFromServer(
     serverLayout: EfsLayout,
     roles: string[],
-    opts?: { forceBuiltIn?: boolean; saabProfileId?: string },
+    opts?: { forceBuiltIn?: boolean; saabProfileId?: string; resync?: boolean },
   ) {
     const defaultFlow = getDefaultSortFlow()
     const store = useEfsStore()
@@ -185,13 +191,36 @@ export function useWorkspace() {
       }
       if (
         opts?.forceBuiltIn ||
+        opts?.resync ||
         !activeLayout.value ||
         activeLayout.value.roleKey !== roleKey
       ) {
-        activeLayout.value = buildWorkspaceLayoutFromServer(serverLayout, {
-          roleKey,
-          defaultSortFlow: defaultFlow,
-        })
+        // Restore last working board for this SAAB profile (keeps per-divider sortFlow)
+        // Skip restore when resyncing after a profile switch — saved board may be
+        // from a premature build against the previous profile's bays.
+        const saved =
+          !opts?.forceBuiltIn && !opts?.resync
+            ? loadActiveLayoutForRole(roleKey)
+            : null
+        if (saved) {
+          activeLayout.value = withLoadedLayoutLabel({
+            ...saved,
+            roleKey,
+            columnCount: Math.max(saved.columnCount, serverLayout.bays.length),
+          })
+        } else {
+          const profile = store.saabLayouts?.find((l) => l.id === profileId)
+          activeLayout.value = sanitizeWorkspaceLayout({
+            ...buildWorkspaceLayoutFromServer(serverLayout, {
+              roleKey,
+              defaultSortFlow: defaultFlow,
+            }),
+            sourceLabel: profile
+              ? `${profile.name} · ${profile.bayCount} BAYS`
+              : 'DEFAULT',
+            sourceSavedId: undefined,
+          })
+        }
         closedSectionIds.value = new Set()
         manuallyAddedRunwayIds.value = new Set()
         persistActiveLayout(activeLayout.value)
@@ -201,12 +230,32 @@ export function useWorkspace() {
 
     const roleKey = essaRoleKey(roles)
     if (opts?.forceBuiltIn || !activeLayout.value || activeLayout.value.roleKey !== roleKey) {
-      activeLayout.value = buildDefaultWorkspaceLayout(serverLayout, roles, {
-        defaultSortFlow: defaultFlow,
-      })
-      closedSectionIds.value = new Set()
-      manuallyAddedRunwayIds.value = new Set()
-      persistActiveLayout(activeLayout.value)
+      // Restore last working board for this ESSA role set (keeps per-divider sortFlow)
+      const saved =
+        !opts?.forceBuiltIn ? loadActiveLayoutForRole(roleKey) : null
+      if (saved) {
+        activeLayout.value = withLoadedLayoutLabel({
+          ...saved,
+          roleKey,
+          roles: [...roles],
+          rolesLabel: formatEssaRolesLabel(roles),
+        })
+        closedSectionIds.value = new Set()
+        manuallyAddedRunwayIds.value = new Set()
+        persistActiveLayout(activeLayout.value)
+        syncRunwaySectionsFromServer(serverLayout)
+      } else {
+        activeLayout.value = sanitizeWorkspaceLayout({
+          ...buildDefaultWorkspaceLayout(serverLayout, roles, {
+            defaultSortFlow: defaultFlow,
+          }),
+          sourceLabel: 'DEFAULT',
+          sourceSavedId: undefined,
+        })
+        closedSectionIds.value = new Set()
+        manuallyAddedRunwayIds.value = new Set()
+        persistActiveLayout(activeLayout.value)
+      }
     } else {
       // Re-sanitize in place so duplicate CD / INBOUND APP from older saves drop
       const before = activeLayout.value
@@ -272,6 +321,27 @@ export function useWorkspace() {
       const layoutNow: WorkspaceLayout | null = activeLayout.value
       if (!layoutNow) break
       const col = preferredRunwayColumn(layoutNow, serverLayout, sec.id)
+      // ARR-column runways (after CTR ARR) default first-at-bottom; DEP column first-on-top
+      const afterCtrArr = layoutNow.sections.some(
+        (s) =>
+          s.anchorColumn === col &&
+          (s.sectionId === 'ctr_arr' ||
+            (s.title || '').toUpperCase().trim() === 'CTR ARR' ||
+            (s.title || '').toUpperCase().trim() === 'TMA ARR'),
+      )
+      const preferred = preferredSortFlowForWorkspaceSection({
+        sectionId: sec.id,
+        title: sec.title,
+      })
+      const sortFlow =
+        preferred ??
+        (afterCtrArr
+          ? 'newestTop'
+          : sec.addFromTop === false
+            ? 'newestBottom'
+            : sec.addFromTop === true
+              ? 'newestTop'
+              : defaultFlow)
       const next = insertSectionWithoutOverlap(
         {
           instanceId: sec.id,
@@ -279,7 +349,7 @@ export function useWorkspace() {
           title: sec.title,
           anchorColumn: col,
           stripSize: 'normal',
-          sortFlow: sec.addFromTop === false ? 'newestBottom' : defaultFlow,
+          sortFlow,
         },
         layoutNow.sections,
       )
@@ -325,12 +395,27 @@ export function useWorkspace() {
     }
 
     const prev = state.lastRoleKey
+    // Keep previous role's per-divider sortFlow / stripSize before switching
+    if (activeLayout.value && activeLayout.value.roleKey && activeLayout.value.roleKey !== roleKey) {
+      persistActiveLayout(activeLayout.value)
+    }
     state.lastRoleKey = roleKey
 
-    // Tentative built-in so strips have somewhere to go
-    activeLayout.value = buildDefaultWorkspaceLayout(serverLayout, roles, {
-      defaultSortFlow: getDefaultSortFlow(),
-    })
+    // Prefer last working board for this role set; else tentative built-in
+    const saved = loadActiveLayoutForRole(roleKey)
+    if (saved) {
+      activeLayout.value = sanitizeWorkspaceLayout({
+        ...saved,
+        roleKey,
+        roles: [...roles],
+        rolesLabel: formatEssaRolesLabel(roles),
+      })
+      syncRunwaySectionsFromServer(serverLayout)
+    } else {
+      activeLayout.value = buildDefaultWorkspaceLayout(serverLayout, roles, {
+        defaultSortFlow: getDefaultSortFlow(),
+      })
+    }
     closedSectionIds.value = new Set()
     persistActiveLayout(activeLayout.value)
 
@@ -355,13 +440,30 @@ export function useWorkspace() {
    * Put a layout on the board without confirming/closing the picker.
    * Layout = bay count + section dividers only (info strips are independent).
    */
-  function previewLayout(layout: WorkspaceLayout, opts?: { resetClosed?: boolean }) {
+  function previewLayout(
+    layout: WorkspaceLayout,
+    opts?: {
+      resetClosed?: boolean
+      /** Catalog → Layout label (DEFAULT / saved name / OTHER profile). */
+      sourceLabel?: string | null
+      sourceSavedId?: string | null
+    },
+  ) {
     const roleKey = layout.roleKey || essaRoleKey(layout.roles)
-    const cleaned = sanitizeWorkspaceLayout({
+    const withSource: WorkspaceLayout = {
       ...layout,
       roleKey,
       rolesLabel: layout.rolesLabel || formatEssaRolesLabel(layout.roles),
-    })
+    }
+    if (opts && 'sourceLabel' in opts) {
+      if (opts.sourceLabel?.trim()) withSource.sourceLabel = opts.sourceLabel.trim()
+      else delete withSource.sourceLabel
+    }
+    if (opts && 'sourceSavedId' in opts) {
+      if (opts.sourceSavedId?.trim()) withSource.sourceSavedId = opts.sourceSavedId.trim()
+      else delete withSource.sourceSavedId
+    }
+    const cleaned = sanitizeWorkspaceLayout(withSource)
     activeLayout.value = cleaned
     if (opts?.resetClosed !== false) closedSectionIds.value = new Set()
     persistActiveLayout(activeLayout.value)
@@ -407,7 +509,7 @@ export function useWorkspace() {
         roles: [...stamp],
         rolesLabel: formatEssaRolesLabel(stamp),
       },
-      { resetClosed: false },
+      { resetClosed: false, sourceLabel: 'DEFAULT', sourceSavedId: null },
     )
   }
 
@@ -1373,16 +1475,26 @@ export function useWorkspace() {
       manuallyAddedRunwayIds.value = nextManual
     }
     const anno = annotateCatalogSection(sectionId, title, catalogMode)
+    const resolvedTitle = anno.title ?? title
     const sec: WorkspaceSection = {
       // Match server/YAML sections: stable instanceId === sectionId
       instanceId: sectionId,
       sectionId,
-      title: anno.title ?? title,
+      title: resolvedTitle,
       groupId: anno.groupId,
       member: anno.member,
       anchorColumn: col,
-      stripSize: 'normal',
-      sortFlow: getDefaultSortFlow(),
+      stripSize:
+        catalogMode === 'essa'
+          ? defaultEssaStripSize(sectionId, resolvedTitle)
+          : 'normal',
+      sortFlow:
+        preferredSortFlowForWorkspaceSection({
+          sectionId,
+          title: resolvedTitle,
+          groupId: anno.groupId,
+          member: anno.member,
+        }) ?? getDefaultSortFlow(),
     }
     activeLayout.value = {
       ...layout,
@@ -1824,11 +1936,17 @@ export function useWorkspace() {
     persistDefaultSortFlow(flow)
   }
 
-  function clearWorkspace() {
+  function clearWorkspace(opts?: { clearPersisted?: boolean }) {
     activeLayout.value = null
     layoutDialogOpen.value = false
     // Keep lastRoleKey / layoutPromptConfirmedFor so a mode flicker doesn't re-prompt
-    persistActiveLayout(null)
+    if (opts?.clearPersisted) {
+      // YAML config changed — drop all role/profile working boards
+      clearActiveLayouts()
+    } else {
+      // Leave workspace mode: keep per-role activeByRoleKey so sortFlow restores
+      persistActiveLayout(null)
+    }
   }
 
   function isLayoutDialogOpen() {
@@ -1952,21 +2070,25 @@ export function watchEssaRolesForWorkspace(
     () => store.activeConfig,
     (file, prev) => {
       if (prev && file && file !== prev) {
-        ws.clearWorkspace()
+        ws.clearWorkspace({ clearPersisted: true })
       }
     },
   )
 
-  // OTHER: rebuild workspace when profile changes (server layout swap)
+  // OTHER: persist outgoing profile; do not rebuild here — server bays are often
+  // still the previous profile until refresh+layout arrive (see serverLayout watch).
   if (saabLayoutId) {
     watch(
       saabLayoutId,
       (id, prev) => {
         if (!inWorkspace() || essaRolesMode.value) return
-        if (!id || !serverLayoutRef.value.bays.length) return
-        if (id !== prev || !ws.activeLayout.value) {
+        if (!id) return
+        if (id !== prev && ws.activeLayout.value) {
+          persistActiveLayout(ws.activeLayout.value)
+        }
+        // Initial mount / empty board only — never stamp a new profile onto stale bays
+        if (!ws.activeLayout.value && serverLayoutRef.value.bays.length) {
           ws.ensureFromServer(serverLayoutRef.value, [], {
-            forceBuiltIn: id !== prev,
             saabProfileId: id,
           })
         }
@@ -2002,15 +2124,26 @@ export function watchEssaRolesForWorkspace(
       // ES RWY config / assigned-pair headers — keep workspace runway dividers in sync
       ws.syncRunwaySectionsFromServer(layout)
     } else if (store.saabLayoutsMode) {
-      // Profile switch: refresh clears bays then loads the new map — always rebuild
-      // when coming back from empty, or when roleKey no longer matches.
+      // Profile switch clears bays then loads the new map — always resync after that
+      // (roleKey may already match from saabLayoutId updating before layout arrives).
       const profileId = store.saabLayoutId || '1rwy4'
       const roleKey = `saab:${profileId}`
       const afterRefresh = !(prev?.bays?.length) && layout.bays.length > 0
-      if (afterRefresh || ws.activeLayout.value.roleKey !== roleKey) {
+      const baySig = (l: EfsLayout) =>
+        l.bays.map((b) => b.sections.map((s) => s.id).join(',')).join('|')
+      const structureChanged = !!prev?.bays?.length && baySig(prev) !== baySig(layout)
+      if (
+        afterRefresh ||
+        structureChanged ||
+        ws.activeLayout.value.roleKey !== roleKey
+      ) {
+        if (ws.activeLayout.value && ws.activeLayout.value.roleKey !== roleKey) {
+          persistActiveLayout(ws.activeLayout.value)
+        }
         ws.ensureFromServer(layout, [], {
-          forceBuiltIn: true,
           saabProfileId: profileId,
+          // Fresh server bays after switch — rebuild from server (or pending saved)
+          resync: afterRefresh || structureChanged,
         })
       }
     }

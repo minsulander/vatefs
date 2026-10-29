@@ -14,6 +14,11 @@
       >
         <div class="efs-popup-header">
           {{ reason === 'role-change' ? 'Choose layout' : 'Layout' }}
+          <span
+            v-if="loadedLayoutLabel"
+            class="layout-dialog-loaded"
+            :title="`Loaded: ${loadedLayoutLabel}`"
+          >{{ loadedLayoutLabel }}</span>
         </div>
         <div v-if="currentRolesLabel" class="efs-popup-section">
           Current: {{ currentRolesLabel }}
@@ -142,9 +147,11 @@ import {
   mergeImportedLayouts,
   parseImportPayload,
   renameSavedLayout,
+  resolveLoadedLayoutLabel,
   sanitizeWorkspaceLayout,
   saveNamedLayout,
   setUserDefaultLayout,
+  workspaceSharedRevision,
 } from '@/workspace/storage'
 import {
   builtinLayoutSelectionId,
@@ -173,11 +180,18 @@ const mustConfirm = computed(() => reason.value === 'role-change')
 
 const currentRolesLabel = computed(() => formatEssaRolesLabel(store.essaRoles))
 const roleKey = computed(() => essaRoleKey(store.essaRoles))
-const userDefaultId = computed(() => getUserDefaultLayoutId(roleKey.value))
+const userDefaultId = computed(() => {
+  void workspaceSharedRevision.value
+  return getUserDefaultLayoutId(roleKey.value)
+})
+const loadedLayoutLabel = computed(() =>
+  resolveLoadedLayoutLabel(ws.activeLayout.value),
+)
 
 const savedTick = ref(0)
 const allSaved = computed(() => {
   void savedTick.value
+  void workspaceSharedRevision.value
   return listSavedLayouts()
 })
 
@@ -314,12 +328,15 @@ function previewSelectedOnBoard() {
     }
     const entry = allSaved.value.find((l) => l.id === selectedId.value)
     if (entry) {
-      ws.previewLayout({
-        ...entry.layout,
-        roleKey: key,
-        roles,
-        rolesLabel: currentRolesLabel.value,
-      })
+      ws.previewLayout(
+        {
+          ...entry.layout,
+          roleKey: key,
+          roles,
+          rolesLabel: currentRolesLabel.value,
+        },
+        { sourceLabel: entry.name, sourceSavedId: entry.id },
+      )
     } else {
       ws.previewBuiltInDefault(store.layout, roles, roles)
     }
@@ -408,6 +425,8 @@ function onApply() {
         roleKey: key,
         roles,
         rolesLabel: currentRolesLabel.value,
+        sourceLabel: entry.name,
+        sourceSavedId: entry.id,
       })
     } else {
       ws.applyBuiltInDefault(store.layout, roles, roles)
@@ -443,7 +462,9 @@ function onSaveCurrent() {
   if (!active) return
   const name = window.prompt('Layout name', `Layout ${currentRolesLabel.value}`)
   if (!name) return
-  const entry = saveNamedLayout(name, {
+  const trimmed = name.trim()
+  if (!trimmed) return
+  const entry = saveNamedLayout(trimmed, {
     ...active,
     roleKey: roleKey.value,
     roles: [...store.essaRoles],
@@ -452,6 +473,14 @@ function onSaveCurrent() {
   selectedId.value = entry.id
   savedTick.value++
   folderOpen.value = { ...folderOpen.value, [roleKey.value]: true }
+  // Catalog → Layout shows this name as the loaded layout
+  if (ws.activeLayout.value) {
+    ws.previewLayout(ws.activeLayout.value, {
+      resetClosed: false,
+      sourceLabel: entry.name,
+      sourceSavedId: entry.id,
+    })
+  }
 }
 
 function onMakeDefault() {
@@ -480,6 +509,13 @@ function onRename() {
   if (!trimmed || trimmed === entry.name) return
   renameSavedLayout(entry.id, trimmed)
   savedTick.value++
+  if (ws.activeLayout.value?.sourceSavedId === entry.id) {
+    ws.previewLayout(ws.activeLayout.value, {
+      resetClosed: false,
+      sourceLabel: trimmed,
+      sourceSavedId: entry.id,
+    })
+  }
 }
 
 function onDelete() {
@@ -543,6 +579,23 @@ async function onImportFile(ev: Event) {
 .layout-pick-item {
   justify-content: space-between;
   gap: 10px;
+}
+
+.efs-popup-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.layout-dialog-loaded {
+  margin-left: auto;
+  color: #888;
+  font-weight: 500;
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
 }
 
 .layout-pick-name {

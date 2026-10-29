@@ -1,4 +1,8 @@
-/** ESSA flexible workspace — local-only continuous-flow layout (#51). */
+/**
+ * ESSA / OTHER flexible workspace.
+ * Named Catalog layouts sync via the local backend (VatEFSworkspace.json);
+ * live working boards (`active` / `activeByRoleKey`) stay per-browser.
+ */
 
 import type { DtransVariantId } from './dtrans'
 
@@ -112,6 +116,13 @@ export interface WorkspaceLayout {
   roles: string[]
   /** Optional display label (collapsed GND/TWR) */
   rolesLabel?: string
+  /**
+   * Name shown in Catalog → Layout (e.g. DEFAULT, saved name, "1RWY · 3 BAYS").
+   * Set when a profile/saved layout is loaded; kept across board edits.
+   */
+  sourceLabel?: string
+  /** Saved layout id when loaded from a named save (not builtin DEFAULT). */
+  sourceSavedId?: string
 }
 
 export interface SavedWorkspaceLayout {
@@ -128,8 +139,14 @@ export interface WorkspaceStoreFile {
   /** roleKey → default saved layout id */
   userDefaults: Record<string, string>
   layouts: SavedWorkspaceLayout[]
-  /** Active workspace for current session (optional persist) */
+  /**
+   * Last working board for the current session (legacy single slot).
+   * Prefer `activeByRoleKey` when restoring so ESSA roles / SAAB profiles
+   * keep per-divider sortFlow (and other section prefs) across switches.
+   */
   active?: WorkspaceLayout | null
+  /** roleKey → last working workspace (sortFlow, stripSize, heights, …) */
+  activeByRoleKey?: Record<string, WorkspaceLayout>
   /** Global default sort/flow for new sections */
   defaultSortFlow?: SortFlow
 }

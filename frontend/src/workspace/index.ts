@@ -1,5 +1,6 @@
 export * from './types'
 export * from './roleLabel'
+export * from './sortFlowDefaults'
 export * from './defaultLayout'
 export * from './splitGroups'
 export * from './catalog'

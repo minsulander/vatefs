@@ -1,6 +1,7 @@
 import { normalizeEssaRwy } from '@vatefs/common'
 import type { SplitGroupId, WorkspaceSection } from './types'
 import { WORKSPACE_HEADER_H, newInstanceId } from './types'
+import { preferredSortFlowForWorkspaceSection } from './sortFlowDefaults'
 
 export interface SplitMemberDef {
   member: string
@@ -279,13 +280,13 @@ export const OTHER_SPLIT_GROUPS: SplitGroupDef[] = [
     ],
   },
   {
-    // Merged title DEP; split → PENDING CLR + CLEARED
+    // Merged title DEP; split → CLEARED + PENDING CLR (CLEARED on top)
     id: 'saab_clearance',
     mergedTitle: 'DEP',
     mergedSectionIds: ['pending_dep', 'cleared'],
     members: [
-      { member: 'pending', sectionId: 'pending_dep', title: 'PENDING CLR' },
       { member: 'cleared', sectionId: 'cleared', title: 'CLEARED' },
+      { member: 'pending', sectionId: 'pending_dep', title: 'PENDING CLR' },
     ],
   },
 ]
@@ -717,7 +718,13 @@ export function splitWorkspaceSection(
     member: m.member,
     anchorColumn: col,
     stripSize: section.stripSize,
-    sortFlow: section.sortFlow,
+    sortFlow:
+      preferredSortFlowForWorkspaceSection({
+        sectionId: m.sectionId,
+        title: m.title,
+        groupId: g!.id,
+        member: m.member,
+      }) ?? section.sortFlow,
     // First stays put; later members evenly divide the old section (halfway for 2)
     y: Math.round(baseY + i * step),
   }))

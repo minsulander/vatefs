@@ -12,7 +12,14 @@
         aria-label="Layout"
         @pointerdown.stop
       >
-        <div class="efs-popup-header">Layout</div>
+        <div class="efs-popup-header">
+          Layout
+          <span
+            v-if="loadedLayoutLabel"
+            class="layout-dialog-loaded"
+            :title="`Loaded: ${loadedLayoutLabel}`"
+          >{{ loadedLayoutLabel }}</span>
+        </div>
 
         <div class="efs-popup-list workspace-layout-list">
           <button
@@ -106,8 +113,10 @@ import {
   mergeImportedLayouts,
   parseImportPayload,
   renameSavedLayout,
+  resolveLoadedLayoutLabel,
   saveNamedLayout,
   setUserDefaultLayout,
+  workspaceSharedRevision,
 } from '@/workspace/storage'
 import type { WorkspaceLayout } from '@/workspace/types'
 
@@ -137,6 +146,9 @@ function parseBuiltinSaabId(id: string): string | null {
 const store = useEfsStore()
 const ws = getWorkspace()
 const open = ws.layoutDialogOpen
+const loadedLayoutLabel = computed(() =>
+  resolveLoadedLayoutLabel(ws.activeLayout.value),
+)
 
 const selectedId = ref<string>('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -148,6 +160,8 @@ const autoFallbackId = ref('')
 const didPick = ref(false)
 /** After click → switchSaabLayout, preview when the new server bays arrive. */
 const pendingPreviewProfileId = ref<string | null>(null)
+/** True after switch until layout has been cleared (refresh) then refilled. */
+const awaitingLayoutAfterSwitch = ref(false)
 const savedTick = ref(0)
 
 const currentProfileId = computed(() => store.saabLayoutId || '1rwy4')
@@ -164,6 +178,7 @@ const profiles = computed(() =>
 
 const allSaved = computed(() => {
   void savedTick.value
+  void workspaceSharedRevision.value
   return listSavedLayouts().filter((e) => {
     const key = e.layout.roleKey || ''
     return key.startsWith(SAAB_ROLE_PREFIX) || profiles.value.some((p) => key === saabRoleKey(p.id))
@@ -173,6 +188,7 @@ const allSaved = computed(() => {
 /** Exactly one AUTO row: user pick, else the profile that was active when the dialog opened. */
 function saabAutoLayoutId(): string {
   void savedTick.value
+  void workspaceSharedRevision.value
   return getUserDefaultLayoutId(SAAB_AUTO_KEY) || autoFallbackId.value || builtinSaabId('1rwy4')
 }
 
@@ -244,12 +260,20 @@ function formatColCount(n: number): string {
   return `${cols} BAYS`
 }
 
+function profileSourceLabel(profileId: string): string {
+  const profile = profiles.value.find((p) => p.id === profileId)
+  return profile ? `${profile.name} · ${profile.bayCount} BAYS` : 'DEFAULT'
+}
+
 function previewBuiltinOnBoard(profileId: string) {
   const built = buildWorkspaceLayoutFromServer(store.layout, {
     roleKey: saabRoleKey(profileId),
     defaultSortFlow: getDefaultSortFlow(),
   })
-  ws.previewLayout(built)
+  ws.previewLayout(built, {
+    sourceLabel: profileSourceLabel(profileId),
+    sourceSavedId: null,
+  })
 }
 
 /** Click loads immediately (switch profile / preview saved). Cancel restores. */
@@ -260,24 +284,36 @@ function selectLayout(id: string) {
   if (builtinPid) {
     if (builtinPid !== currentProfileId.value) {
       pendingPreviewProfileId.value = builtinPid
+      awaitingLayoutAfterSwitch.value = true
       store.switchSaabLayout(builtinPid)
     } else {
       pendingPreviewProfileId.value = null
+      awaitingLayoutAfterSwitch.value = false
       previewBuiltinOnBoard(builtinPid)
     }
     return
   }
   const entry = allSaved.value.find((l) => l.id === id)
   if (!entry) return
+  const labeled = {
+    ...entry.layout,
+    sourceLabel: entry.name,
+    sourceSavedId: entry.id,
+  }
   const targetPid =
     parseSaabRoleKey(entry.layout.roleKey || '') || currentProfileId.value
   if (targetPid !== currentProfileId.value) {
     pendingPreviewProfileId.value = null
-    ws.pendingSaabSavedLayout.value = entry.layout
+    awaitingLayoutAfterSwitch.value = true
+    ws.pendingSaabSavedLayout.value = labeled
     store.switchSaabLayout(targetPid)
   } else {
     pendingPreviewProfileId.value = null
-    ws.previewLayout(entry.layout)
+    awaitingLayoutAfterSwitch.value = false
+    ws.previewLayout(labeled, {
+      sourceLabel: entry.name,
+      sourceSavedId: entry.id,
+    })
   }
 }
 
@@ -286,15 +322,22 @@ function onSaveCurrent() {
   if (!layout) return
   const name = window.prompt('Layout name')
   if (!name?.trim()) return
+  const trimmed = name.trim()
   const key = saabRoleKey(currentProfileId.value)
   const profile = profiles.value.find((l) => l.id === currentProfileId.value)
-  saveNamedLayout(name.trim(), {
+  const entry = saveNamedLayout(trimmed, {
     ...layout,
     roleKey: key,
     roles: [],
     rolesLabel: profile ? `${profile.name} · ${profile.bayCount} BAYS` : key,
   })
   savedTick.value++
+  selectedId.value = entry.id
+  ws.previewLayout(ws.activeLayout.value!, {
+    resetClosed: false,
+    sourceLabel: entry.name,
+    sourceSavedId: entry.id,
+  })
 }
 
 function onDelete() {
@@ -314,8 +357,17 @@ function onRename() {
   if (!selectedSaved.value) return
   const name = window.prompt('Rename layout', selectedSaved.value.name)
   if (!name?.trim()) return
-  renameSavedLayout(selectedSaved.value.id, name.trim())
+  const trimmed = name.trim()
+  const id = selectedSaved.value.id
+  renameSavedLayout(id, trimmed)
   savedTick.value++
+  if (ws.activeLayout.value?.sourceSavedId === id) {
+    ws.previewLayout(ws.activeLayout.value, {
+      resetClosed: false,
+      sourceLabel: trimmed,
+      sourceSavedId: id,
+    })
+  }
 }
 
 function onMakeDefault() {
@@ -364,6 +416,7 @@ function closeOnly() {
     }
   }
   pendingPreviewProfileId.value = null
+  awaitingLayoutAfterSwitch.value = false
   didPick.value = false
   ws.layoutDialogOpen.value = false
 }
@@ -376,32 +429,20 @@ function onApply() {
   // No row clicked — keep the board as-is (so Save current still works)
   if (!didPick.value) {
     pendingPreviewProfileId.value = null
+    awaitingLayoutAfterSwitch.value = false
     ws.layoutDialogOpen.value = false
     return
   }
-  // Click already switched/previewed — persist and close
-  const builtinPid = parseBuiltinSaabId(selectedId.value)
-  if (builtinPid) {
-    if (builtinPid !== currentProfileId.value) {
-      pendingPreviewProfileId.value = builtinPid
-      store.switchSaabLayout(builtinPid)
-    } else {
-      const built = ws.activeLayout.value
-      if (built) ws.applyLayout(built)
-    }
-  } else if (selectedSaved.value) {
-    const targetPid =
-      parseSaabRoleKey(selectedSaved.value.layout.roleKey || '') || currentProfileId.value
-    if (targetPid !== currentProfileId.value) {
-      ws.pendingSaabSavedLayout.value = selectedSaved.value.layout
-      store.switchSaabLayout(targetPid)
-    } else {
-      ws.applyLayout(selectedSaved.value.layout)
-    }
+  // Row click already switched/previewed. Board rebuild after profile switch is
+  // finished by the layout watch (while dialog open) and/or ensureFromServer resync.
+  if (ws.activeLayout.value && !awaitingLayoutAfterSwitch.value) {
+    ws.applyLayout(ws.activeLayout.value)
+  } else {
+    ws.confirmLayoutPrompt(SAAB_AUTO_KEY)
   }
   pendingPreviewProfileId.value = null
+  awaitingLayoutAfterSwitch.value = false
   didPick.value = false
-  ws.confirmLayoutPrompt(SAAB_AUTO_KEY)
   ws.layoutDialogOpen.value = false
 }
 
@@ -421,6 +462,7 @@ watch(open, (isOpen) => {
   // Snapshot only — do not preview/rebuild the board until the user clicks a row
   didPick.value = false
   pendingPreviewProfileId.value = null
+  awaitingLayoutAfterSwitch.value = false
   profileBeforeOpen.value = currentProfileId.value
   autoFallbackId.value = builtinSaabId(currentProfileId.value)
   layoutBeforeOpen.value = ws.activeLayout.value
@@ -429,15 +471,30 @@ watch(open, (isOpen) => {
   selectedId.value = builtinSaabId(currentProfileId.value)
 })
 
-/** Preview after a click-triggered profile switch once server bays are ready. */
+/**
+ * Preview after a click-triggered profile switch once server bays are ready.
+ * Must wait for refresh to clear bays then refill — saabLayoutId updates before
+ * the new layout arrives; previewing against the previous profile's bays is wrong
+ * and used to clear pendingPreview too early (needed a second click).
+ */
 watch(
-  () => [store.saabLayoutId, store.layout.bays.length] as const,
-  () => {
+  () => store.layout.bays.length,
+  (n, prev) => {
+    if (!awaitingLayoutAfterSwitch.value || !open.value || !didPick.value) return
+    // Refresh clears to 0 — keep waiting for the refill
+    if (n === 0) return
+    // Only accept a refill after we saw (or started from) an empty board
+    if (prev !== 0 && prev != null) return
     const want = pendingPreviewProfileId.value
-    if (!want || !open.value || !didPick.value) return
-    if (store.saabLayoutId !== want || !store.layout.bays.length) return
-    pendingPreviewProfileId.value = null
-    previewBuiltinOnBoard(want)
+    if (want) {
+      if (store.saabLayoutId !== want) return
+      pendingPreviewProfileId.value = null
+      awaitingLayoutAfterSwitch.value = false
+      previewBuiltinOnBoard(want)
+      return
+    }
+    // Saved layout applied via pendingSaabSavedLayout in ensureFromServer
+    awaitingLayoutAfterSwitch.value = false
   },
 )
 
@@ -458,6 +515,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   padding: 16px;
   background: rgba(0, 0, 0, 0.35);
   pointer-events: auto;
+}
+
+.efs-popup-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.layout-dialog-loaded {
+  margin-left: auto;
+  color: #888;
+  font-weight: 500;
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
 }
 
 .layout-pick-item {
