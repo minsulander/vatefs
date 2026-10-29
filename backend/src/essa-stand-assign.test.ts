@@ -10,6 +10,8 @@ import {
     normalizeApronTitle,
     resolveAircraftDims,
     isSchengenOrigin,
+    applyEssaStandMenuGeoLayout,
+    GEO_APRON_ORDER,
     _testReset,
     _testSetAircraft,
     _testMarkLoaded,
@@ -133,7 +135,7 @@ _testSetAircraft([
 ])
 _testMarkLoaded()
 
-check("apron order and stand slots fixed", () => {
+check("apron order is geographic (south→north; M after cargo)", () => {
     const menu = buildEssaStandMenu({
         stripId: "SAS123",
         callsign: "SAS123",
@@ -144,13 +146,172 @@ check("apron order and stand slots fixed", () => {
         traffic: [],
     })
     assert.ok(menu)
+    // Fixture: T5A odds; T5F (F34); H
     assert.deepEqual(
         menu!.aprons.map((a) => a.title),
-        ["T5 PIER A", "T5 PIER F", "H"],
+        ["T5A", "T5F", "H"],
     )
+    const idxs = Object.fromEntries(GEO_APRON_ORDER.map((t, i) => [t, i]))
+    assert.ok(idxs["T5A"]! < idxs["T5F"]!)
+    assert.ok(idxs["T5F"]! < idxs["H"]!)
+    assert.ok(idxs["M"]! < idxs["J"]!)
+    assert.ok(idxs["J"]! < idxs["K"]!)
+    assert.ok(idxs["K"]! < idxs["L"]!)
+    assert.ok(idxs["L"]! < idxs["P"]!)
     assert.deepEqual(
         menu!.aprons[0]!.stands.map((s) => s.name),
         ["01", "03", "05"],
+    )
+})
+
+check("T3 single list: 60A,53,55,57 then 52→58; T2 descending", () => {
+    const laid = applyEssaStandMenuGeoLayout([
+        {
+            title: "T2",
+            stands: [
+                { name: "62", fit: "allowed", area: false, selectable: true },
+                { name: "68", fit: "allowed", area: false, selectable: true },
+                { name: "65", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+        {
+            title: "T3",
+            stands: [
+                { name: "58", fit: "allowed", area: false, selectable: true },
+                { name: "53", fit: "allowed", area: false, selectable: true },
+                { name: "52", fit: "allowed", area: false, selectable: true },
+                { name: "57", fit: "allowed", area: false, selectable: true },
+                { name: "60A", fit: "allowed", area: false, selectable: true },
+                { name: "55", fit: "allowed", area: false, selectable: true },
+                { name: "56", fit: "allowed", area: false, selectable: true },
+                { name: "54", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+        {
+            title: "R",
+            stands: [
+                { name: "R10", fit: "allowed", area: false, selectable: true },
+                { name: "R3", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+        {
+            title: "M",
+            stands: [{ name: "M5", fit: "allowed", area: false, selectable: true }],
+        },
+        {
+            title: "P",
+            stands: [{ name: "APNP", fit: "allowed", area: false, selectable: true }],
+        },
+    ])
+    const titles = laid.map((a) => a.title)
+    assert.ok(titles.indexOf("R") < titles.indexOf("T2"))
+    assert.ok(titles.indexOf("T2") < titles.indexOf("T3"))
+    assert.ok(titles.indexOf("T3") < titles.indexOf("M"))
+    assert.ok(titles.indexOf("M") < titles.indexOf("P"))
+    assert.deepEqual(
+        laid.find((a) => a.title === "T2")!.stands.map((s) => s.name),
+        ["68", "65", "62"],
+    )
+    assert.deepEqual(
+        laid.find((a) => a.title === "T3")!.stands.map((s) => s.name),
+        ["60A", "53", "55", "57", "52", "54", "56", "58"],
+    )
+    assert.deepEqual(
+        laid.find((a) => a.title === "R")!.stands.map((s) => s.name),
+        ["R3", "R10"],
+    )
+})
+
+check("D/E, T4, T5: odds ascending then evens ascending", () => {
+    const de = applyEssaStandMenuGeoLayout([
+        {
+            title: "APRON D/E",
+            stands: [
+                { name: "112", fit: "allowed", area: false, selectable: true },
+                { name: "101", fit: "allowed", area: false, selectable: true },
+                { name: "119", fit: "allowed", area: false, selectable: true },
+                { name: "110", fit: "allowed", area: false, selectable: true },
+                { name: "108", fit: "allowed", area: false, selectable: true },
+                { name: "103", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+    ])
+    assert.deepEqual(
+        de.map((a) => a.title),
+        ["E", "D"],
+    )
+    assert.deepEqual(
+        de[0]!.stands.map((s) => s.name),
+        ["101", "103", "119"],
+    )
+    assert.deepEqual(
+        de[1]!.stands.map((s) => s.name),
+        ["108", "110", "112"],
+    )
+
+    const t4 = applyEssaStandMenuGeoLayout([
+        {
+            title: "T4",
+            stands: [
+                { name: "44", fit: "allowed", area: false, selectable: true },
+                { name: "31", fit: "allowed", area: false, selectable: true },
+                { name: "43", fit: "allowed", area: false, selectable: true },
+                { name: "32", fit: "allowed", area: false, selectable: true },
+                { name: "40", fit: "allowed", area: false, selectable: true },
+                { name: "42", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+    ])
+    assert.deepEqual(
+        t4.find((a) => a.title === "T4")!.stands.map((s) => s.name),
+        ["31", "43", "32", "40", "42", "44"],
+    )
+
+    const t5a = applyEssaStandMenuGeoLayout([
+        {
+            title: "T5 PIER A",
+            stands: [
+                { name: "04", fit: "allowed", area: false, selectable: true },
+                { name: "01", fit: "allowed", area: false, selectable: true },
+                { name: "10", fit: "allowed", area: false, selectable: true },
+                { name: "03", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+    ])
+    assert.deepEqual(
+        t5a.find((a) => a.title === "T5A")!.stands.map((s) => s.name),
+        ["01", "03", "04", "10"],
+    )
+
+    const t5f = applyEssaStandMenuGeoLayout([
+        {
+            title: "T5 PIER F",
+            stands: [
+                { name: "F34", fit: "allowed", area: false, selectable: true },
+                { name: "F31", fit: "allowed", area: false, selectable: true },
+                { name: "F28L", fit: "allowed", area: false, selectable: true },
+                { name: "F33", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+    ])
+    assert.deepEqual(
+        t5f.find((a) => a.title === "T5F")!.stands.map((s) => s.name),
+        ["F31", "F33", "F28L", "F34"],
+    )
+
+    const remoteF = applyEssaStandMenuGeoLayout([
+        {
+            title: "APRON F",
+            stands: [
+                { name: "F44", fit: "allowed", area: false, selectable: true },
+                { name: "F40", fit: "allowed", area: false, selectable: true },
+                { name: "F42", fit: "allowed", area: false, selectable: true },
+            ],
+        },
+    ])
+    assert.deepEqual(
+        remoteF.find((a) => a.title === "F")!.stands.map((s) => s.name),
+        ["F40", "F42", "F44"],
     )
 })
 

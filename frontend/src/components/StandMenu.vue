@@ -94,69 +94,8 @@
         class="stand-menu-columns"
         :style="columnsBoxStyle"
       >
-        <!-- T5 spans Pier A+B and Pier F (+ Remote F); same header chrome as T4/… -->
-        <div v-if="t5Columns.length" class="stand-menu-col-group">
-          <div class="sid-route-section stand-menu-col-title stand-menu-group-title">T5</div>
-          <div class="stand-menu-col-group-body">
-            <div
-              v-for="col in t5Columns"
-              :key="col.key"
-              class="stand-menu-col"
-            >
-              <div class="stand-menu-col-scroll">
-                <template v-for="sec in col.sections" :key="col.key + '-' + sec.title">
-                  <div
-                    v-if="sec.subtitle"
-                    class="sid-route-section stand-menu-sub"
-                  >{{ sec.subtitle }}</div>
-                  <div class="sid-route-list">
-                    <button
-                      v-for="stand in sec.stands"
-                      :key="stand.name"
-                      type="button"
-                      class="sid-route-item stand-menu-item stand-menu-key"
-                      :class="standItemClass(stand)"
-                      :disabled="!stand.selectable"
-                      :title="standTitle(stand)"
-                      @click="onSelect(stand)"
-                    >
-                      <span class="stand-key-icon" aria-hidden="true">
-                        <v-icon
-                          v-if="occupiedStatusIcon(stand)"
-                          class="stand-occ-icon"
-                          :icon="occupiedStatusIcon(stand)!"
-                          size="15"
-                        />
-                      </span>
-                      <span class="stand-key-name">{{ stand.name }}</span>
-                      <span class="stand-key-right">
-                        <template v-if="stand.assignedCount && stand.assignedCount > 0">
-                          <span class="stand-key-cs">{{ stand.assignedCount }} assigned</span>
-                          <span class="stand-key-time"></span>
-                        </template>
-                        <template v-else-if="stand.occupied">
-                          <span class="stand-key-cs">{{ stand.occupied.label }}</span>
-                          <span class="stand-key-time">
-                            <v-icon
-                              v-if="showBlockedByIcon(stand)"
-                              class="stand-key-block-icon"
-                              icon="mdi-cancel"
-                              size="11"
-                            />
-                            <span v-if="standKeySubText(stand)">{{ standKeySubText(stand) }}</span>
-                          </span>
-                        </template>
-                      </span>
-                    </button>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div
-          v-for="col in otherColumns"
+          v-for="col in columns"
           :key="col.key"
           class="stand-menu-col"
         >
@@ -250,6 +189,8 @@ interface StandColumnSection {
   title: string
   /** Shown under the column title when the column merges several aprons (e.g. PIER A) */
   subtitle?: string
+  /** Compact folder name — this apron only (never col+subtitle merge). */
+  folderLabel: string
   stands: StandMenuStand[]
 }
 
@@ -283,57 +224,78 @@ let ignoreCloseUntil = 0
 let refineToken = 0
 
 /**
- * Column groups (file order within each column):
- *   T5(A+B | F+Remote) | T4 | T3+T2 | D/E | G+H | J+K+L+P | M+R | S
- * T5 uses a spanning header; other columns use the first apron as the title.
+ * Display columns L→R after combining (geo order preserved).
+ * Backend still emits S/N faces; we stack them in one column (S then N, etc.).
  */
-const COLUMN_ORDER = ['T5AB', 'T5F', 'T4', 'T32', 'DE', 'GH', 'JKLP', 'MR', 'S'] as const
+const COLUMN_ORDER = [
+  'R',
+  'S',
+  'ED',
+  'T23',
+  'T4',
+  'T5BA',
+  'T5F',
+  'GHM',
+  'JKLP',
+] as const
 
+/**
+ * Map backend apron title → combined column + Full mid-subtitle + Compact folder.
+ * Order of sections follows backend apron order (E before D, *S before *N, …).
+ */
 function columnKeyForApron(
   title: string,
-): { key: string; colTitle: string; subtitle?: string; /** Pier labels under shared T5 header. */ keepSub?: boolean } {
+): { key: string; colTitle: string; subtitle: string; folderLabel: string } {
   const t = title.trim().toUpperCase()
-  if (t === 'T5 PIER A') return { key: 'T5AB', colTitle: 'T5', subtitle: 'Pier A', keepSub: true }
-  if (t === 'T5 PIER B') return { key: 'T5AB', colTitle: 'T5', subtitle: 'Pier B', keepSub: true }
-  if (t === 'T5 PIER F') return { key: 'T5F', colTitle: 'T5', subtitle: 'Pier F', keepSub: true }
-  if (t === 'APRON F' || t === 'F') return { key: 'T5F', colTitle: 'T5', subtitle: 'Remote F', keepSub: true }
-  if (t === 'T4') return { key: 'T4', colTitle: 'T4' }
-  if (t === 'T3') return { key: 'T32', colTitle: 'T3', subtitle: 'T3' }
-  if (t === 'T2') return { key: 'T32', colTitle: 'T3', subtitle: 'T2' }
-  if (t === 'APRON D/E' || t === 'D/E') return { key: 'DE', colTitle: 'D/E' }
-  if (['G', 'H'].includes(t) || /^APRON\s+[GH]$/.test(t)) {
-    const letter = t.replace(/^APRON\s+/, '')
-    return { key: 'GH', colTitle: 'G', subtitle: letter }
-  }
-  if (['J', 'K', 'L', 'P'].includes(t) || /^APRON\s+[JKLP]$/.test(t)) {
-    const letter = t.replace(/^APRON\s+/, '')
-    return { key: 'JKLP', colTitle: 'J', subtitle: letter }
-  }
-  if (['M', 'R'].includes(t) || /^APRON\s+[MR]$/.test(t)) {
-    const letter = t.replace(/^APRON\s+/, '')
-    return { key: 'MR', colTitle: 'M', subtitle: letter }
-  }
-  if (t === 'S' || t === 'APRON S') return { key: 'S', colTitle: 'S' }
-  return { key: t, colTitle: t }
+  if (t === 'E') return { key: 'ED', colTitle: 'E', subtitle: 'E', folderLabel: 'E' }
+  if (t === 'D') return { key: 'ED', colTitle: 'E', subtitle: 'D', folderLabel: 'D' }
+  if (t === 'T2') return { key: 'T23', colTitle: 'T2', subtitle: 'T2', folderLabel: 'T2' }
+  if (t === 'T3') return { key: 'T23', colTitle: 'T2', subtitle: 'T3', folderLabel: 'T3' }
+  if (t === 'T4') return { key: 'T4', colTitle: 'T4', subtitle: 'T4', folderLabel: 'T4' }
+  if (t === 'T5B') return { key: 'T5BA', colTitle: 'T5B', subtitle: 'T5B', folderLabel: 'T5B' }
+  if (t === 'T5A') return { key: 'T5BA', colTitle: 'T5B', subtitle: 'T5A', folderLabel: 'T5A' }
+  if (t === 'T5F') return { key: 'T5F', colTitle: 'T5F', subtitle: 'F', folderLabel: 'T5F' }
+  if (t === 'F') return { key: 'T5F', colTitle: 'T5F', subtitle: 'F', folderLabel: 'F' }
+  if (t === 'G') return { key: 'GHM', colTitle: 'G', subtitle: 'G', folderLabel: 'G' }
+  if (t === 'H') return { key: 'GHM', colTitle: 'G', subtitle: 'H', folderLabel: 'H' }
+  if (t === 'M') return { key: 'GHM', colTitle: 'G', subtitle: 'M', folderLabel: 'M' }
+  if (t === 'J') return { key: 'JKLP', colTitle: 'J', subtitle: 'J', folderLabel: 'J' }
+  if (t === 'K') return { key: 'JKLP', colTitle: 'J', subtitle: 'K', folderLabel: 'K' }
+  if (t === 'L') return { key: 'JKLP', colTitle: 'J', subtitle: 'L', folderLabel: 'L' }
+  if (t === 'P') return { key: 'JKLP', colTitle: 'J', subtitle: 'P', folderLabel: 'P' }
+  if (t === 'R') return { key: 'R', colTitle: 'R', subtitle: 'R', folderLabel: 'R' }
+  if (t === 'S') return { key: 'S', colTitle: 'S', subtitle: 'S', folderLabel: 'S' }
+  return { key: t, colTitle: t, subtitle: t, folderLabel: t }
 }
 
 const columns = computed((): StandColumn[] => {
   const map = new Map<string, StandColumn>()
   for (const apron of aprons.value) {
     if (!apron.stands.length) continue
-    const { key, colTitle, subtitle, keepSub } = columnKeyForApron(apron.title)
+    const { key, colTitle, subtitle, folderLabel } = columnKeyForApron(apron.title)
     let col = map.get(key)
     if (!col) {
       col = { key, title: colTitle, sections: [] }
       map.set(key, col)
     }
-    // T5: always show pier/remote labels under the spanning header.
-    // Other columns: first apron is the title; later aprons get mid-list labels.
     col.sections.push({
       title: apron.title,
-      subtitle: keepSub || col.sections.length > 0 ? subtitle : undefined,
+      // Mid-label later; first section usually omitted (column title covers it)
+      subtitle,
+      folderLabel,
       stands: apron.stands,
     })
+  }
+  // Full mid-labels: omit when same as column title (no dual E/T2/G/L…);
+  // keep when different (J/K under column L). Single-section columns: none.
+  for (const col of map.values()) {
+    for (const sec of col.sections) {
+      if (col.sections.length === 1 || sec.folderLabel === col.title) {
+        sec.subtitle = undefined
+      } else {
+        sec.subtitle = sec.folderLabel
+      }
+    }
   }
   const ordered: StandColumn[] = []
   for (const key of COLUMN_ORDER) {
@@ -349,23 +311,23 @@ type CompactRow =
   | { kind: 'section'; key: string; label: string }
   | { kind: 'stand'; key: string; stand: StandMenuStand }
 
-/** Flatten aprons into one scrollable list with light section labels. */
+/** Flatten combined columns (same order as Full) into one scrollable list. */
 const compactRows = computed((): CompactRow[] => {
   const rows: CompactRow[] = []
-  for (const apron of aprons.value) {
-    if (!apron.stands.length) continue
-    const { subtitle, colTitle, keepSub } = columnKeyForApron(apron.title)
-    const label = keepSub && subtitle ? subtitle : colTitle
-    rows.push({ kind: 'section', key: `sec-${apron.title}`, label })
-    for (const stand of apron.stands) {
-      rows.push({ kind: 'stand', key: stand.name, stand })
+  for (const col of columns.value) {
+    for (const sec of col.sections) {
+      rows.push({
+        kind: 'section',
+        key: `sec-${col.key}-${sec.title}`,
+        label: sec.folderLabel,
+      })
+      for (const stand of sec.stands) {
+        rows.push({ kind: 'stand', key: stand.name, stand })
+      }
     }
   }
   return rows
 })
-
-const t5Columns = computed(() => columns.value.filter((c) => c.key === 'T5AB' || c.key === 'T5F'))
-const otherColumns = computed(() => columns.value.filter((c) => c.key !== 'T5AB' && c.key !== 'T5F'))
 
 const menuAnchor = computed((): [number, number] => [
   placedLeft.value ?? props.target[0],
@@ -792,20 +754,20 @@ onBeforeUnmount(() => {
 
 /* Preferred = green left edge only (fill stays availability colour) */
 .sid-route-item.exit-match {
-  box-shadow: inset 8px 0 0 #5a9a4a;
+  box-shadow: inset 8px 0 0 #33ae35;
 }
 
 .sid-route-item.exit-match.stand-planned.stand-planned-air {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #c0b8a8;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #c0b8a8;
 }
 
 .sid-route-item.exit-match.stand-planned {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b8a898;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b8a898;
 }
 
 .sid-route-item.exit-match.stand-occupied,
 .sid-route-item.exit-match.stand-blocked {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b07070;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b07070;
 }
 
 .sid-route-item.stand-not-allowed {
@@ -1150,6 +1112,12 @@ onBeforeUnmount(() => {
   border-top: none;
 }
 
+/* No #888 stand rule above mid-column / compact folder headers */
+.sid-route-overlay .stand-menu-col-scroll > .sid-route-list:has(+ .stand-menu-sub) > .sid-route-item:last-child,
+.sid-route-overlay .stand-menu-compact-list > .sid-route-item:has(+ .stand-menu-compact-sec) {
+  border-bottom: none;
+}
+
 .sid-route-overlay .sid-route-empty {
   padding: calc(8px * var(--s, 1));
   font-size: calc(10px * var(--s, 1));
@@ -1194,7 +1162,7 @@ onBeforeUnmount(() => {
 
 /* Fill = availability; preferred = green left edge only */
 .sid-route-overlay .sid-route-item.exit-match {
-  box-shadow: inset 8px 0 0 #5a9a4a;
+  box-shadow: inset 8px 0 0 #33ae35;
 }
 
 .sid-route-overlay .sid-route-item.stand-planned.stand-planned-air {
@@ -1217,16 +1185,16 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-planned.stand-planned-air {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #c0b8a8;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #c0b8a8;
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-planned {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b8a898;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b8a898;
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-occupied,
 .sid-route-overlay .sid-route-item.exit-match.stand-blocked {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 1px #b07070;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b07070;
 }
 
 .sid-route-overlay .sid-route-item.stand-not-allowed {
@@ -1258,7 +1226,7 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.exit-match.selected {
-  box-shadow: inset 8px 0 0 #5a9a4a, inset 0 0 0 2px #1a3a6e;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 2px #1a3a6e;
 }
 
 .sid-route-overlay .sid-route-item:hover:not(:disabled),

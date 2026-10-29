@@ -249,6 +249,283 @@ function headingDiff(a: number, b: number): number {
     return d
 }
 
+// ─── Stand menu geographic layout (TWR looking west: south→north L→R) ────────
+
+/** ESSA TWR — menu geography reference. */
+export const ESSA_TWR = { lat: 59.64932297049761, lon: 17.933728764815783 }
+
+/** Swedavia T3 SYD / NORD faces (Plan för uppställningsplatser). */
+export const T3_SYD_STANDS = new Set(["60A", "53", "55", "57"])
+export const T3_NORD_STANDS = new Set(["52", "54", "56", "58"])
+
+/**
+ * Apron titles L→R (south→north from TWR). M with G/H; last stack J→K→L→P.
+ * D/E → E then D; T2/T3/T4/T5* single piers (T3: 60A/odds then evens↑).
+ * T2: single descending 68→62 block.
+ */
+export const GEO_APRON_ORDER = [
+    "R",
+    "S",
+    "E",
+    "D",
+    "T2",
+    "T3",
+    "T4",
+    "T5B",
+    "T5A",
+    "T5F",
+    "F",
+    "G",
+    "H",
+    "M",
+    "J",
+    "K",
+    "L",
+    "P",
+] as const
+
+/** GRP title → menu pier id; stands ordered odds ascending then evens ascending. */
+const PIER_ODDS_THEN_EVENS: Record<string, string> = {
+    T4: "T4",
+    "T5 PIER B": "T5B",
+    "T5 PIER A": "T5A",
+    "T5 PIER F": "T5F",
+}
+
+/** T3 SYD list order (60A first, then odds ascending). */
+const T3S_STAND_ORDER = ["60A", "53", "55", "57"] as const
+
+function variantCentroid(v: StandVariant): { lat: number; lon: number } | undefined {
+    if (v.coords.length > 0) {
+        let lat = 0
+        let lon = 0
+        for (const c of v.coords) {
+            lat += c.lat
+            lon += c.lon
+        }
+        const n = v.coords.length
+        return { lat: lat / n, lon: lon / n }
+    }
+    if (v.circle) return { lat: v.circle.lat, lon: v.circle.lon }
+    return undefined
+}
+
+/** Mean lat of a stand’s variants (kept for tests / diagnostics). */
+export function standCentroidLat(name: string): number | undefined {
+    const variants = essaVariants.get(name)
+    if (!variants?.length) return undefined
+    let latSum = 0
+    let n = 0
+    for (const v of variants) {
+        const c = variantCentroid(v)
+        if (!c) continue
+        latSum += c.lat
+        n++
+    }
+    return n > 0 ? latSum / n : undefined
+}
+
+/** Natural key: F28L → ["F", 28, "L"], R10B → ["R", 10, "B"], 60A → [60, "A"]. */
+function standChronoKey(name: string): (string | number)[] {
+    const parts = name.toUpperCase().match(/\d+|[^\d]+/g) ?? [name.toUpperCase()]
+    return parts.map((p) => (/^\d+$/.test(p) ? Number.parseInt(p, 10) : p))
+}
+
+function compareChronoKeys(a: (string | number)[], b: (string | number)[]): number {
+    const n = Math.max(a.length, b.length)
+    for (let i = 0; i < n; i++) {
+        const x = a[i]
+        const y = b[i]
+        if (x === undefined) return -1
+        if (y === undefined) return 1
+        if (typeof x === "number" && typeof y === "number") {
+            if (x !== y) return x - y
+            continue
+        }
+        const sx = String(x)
+        const sy = String(y)
+        if (sx !== sy) return sx < sy ? -1 : 1
+    }
+    return 0
+}
+
+/** Ascending numerical order (S / odd faces: 101→119, 31→43, …). */
+function sortStandsAscending<T extends { name: string }>(stands: T[]): T[] {
+    return [...stands].sort((a, b) =>
+        compareChronoKeys(standChronoKey(a.name), standChronoKey(b.name)),
+    )
+}
+
+/** Descending numerical order (T2 pier: 68→62, …). */
+function sortStandsDescending<T extends { name: string }>(stands: T[]): T[] {
+    return [...stands].sort((a, b) =>
+        compareChronoKeys(standChronoKey(b.name), standChronoKey(a.name)),
+    )
+}
+
+/** T3S face: 60A, 53, 55, 57 then any extras ascending. */
+function sortT3SouthStands<T extends { name: string }>(stands: T[]): T[] {
+    const rank = new Map<string, number>(T3S_STAND_ORDER.map((n, i) => [n.toUpperCase(), i]))
+    return [...stands].sort((a, b) => {
+        const ra = rank.get(a.name.toUpperCase())
+        const rb = rank.get(b.name.toUpperCase())
+        if (ra !== undefined && rb !== undefined) return ra - rb
+        if (ra !== undefined) return -1
+        if (rb !== undefined) return 1
+        return compareChronoKeys(standChronoKey(a.name), standChronoKey(b.name))
+    })
+}
+
+/** T3 single list: south face (60A…) then north face descending. */
+function sortT3Stands<T extends { name: string }>(stands: T[]): T[] {
+    const south: T[] = []
+    const north: T[] = []
+    const other: T[] = []
+    for (const s of stands) {
+        const side = isSouthSideStand(s.name)
+        if (side === true) south.push(s)
+        else if (side === false) north.push(s)
+        else other.push(s)
+    }
+    return [
+        ...sortT3SouthStands(south),
+        ...sortStandsAscending(north),
+        ...sortStandsAscending(other),
+    ]
+}
+
+function normalizeMenuApronTitle(title: string): string {
+    const t = title.trim().toUpperCase()
+    if (t === "D/E") return "APRON D/E"
+    if (t === "APRON F") return "F"
+    if (t === "APRON S") return "S"
+    if (t === "APRON R") return "R"
+    if (t === "APRON M") return "M"
+    if (/^APRON\s+[GHJKLP]$/.test(t)) return t.replace(/^APRON\s+/, "")
+    return t
+}
+
+function standPrimaryNumber(name: string): number | undefined {
+    const m = name.match(/\d+/)
+    return m ? Number.parseInt(m[0]!, 10) : undefined
+}
+
+/** Odd (or T3 60A) → south; even → north. */
+function isSouthSideStand(name: string): boolean | undefined {
+    const upper = name.toUpperCase()
+    if (upper === "60A") return true // T3 SYD (Swedavia)
+    if (T3_SYD_STANDS.has(upper) || T3_SYD_STANDS.has(name)) return true
+    if (T3_NORD_STANDS.has(upper) || T3_NORD_STANDS.has(name)) return false
+    const num = standPrimaryNumber(name)
+    if (num === undefined) return undefined
+    return num % 2 === 1
+}
+
+/** Odds ascending, then evens ascending (101→119, then 108→112; 31→43, then 32→44). */
+function sortStandsOddsAscThenEvensAsc<T extends { name: string }>(stands: T[]): T[] {
+    const south: T[] = []
+    const north: T[] = []
+    const other: T[] = []
+    for (const s of stands) {
+        const side = isSouthSideStand(s.name)
+        if (side === true) south.push(s)
+        else if (side === false) north.push(s)
+        else other.push(s)
+    }
+    return [
+        ...sortStandsAscending(south),
+        ...sortStandsAscending(north),
+        ...sortStandsAscending(other),
+    ]
+}
+
+function putSplit(
+    byTitle: Map<string, StandMenuApron>,
+    southKey: string,
+    northKey: string,
+    stands: StandMenuEntry[],
+    sortSouth: (s: StandMenuEntry[]) => StandMenuEntry[] = sortStandsAscending,
+    sortNorth: (s: StandMenuEntry[]) => StandMenuEntry[] = sortStandsAscending,
+) {
+    const south: StandMenuEntry[] = []
+    const north: StandMenuEntry[] = []
+    const other: StandMenuEntry[] = []
+    for (const s of stands) {
+        const side = isSouthSideStand(s.name)
+        if (side === true) south.push(s)
+        else if (side === false) north.push(s)
+        else other.push(s)
+    }
+    if (south.length) {
+        byTitle.set(southKey, { title: southKey, stands: sortSouth(south) })
+    }
+    if (north.length) {
+        byTitle.set(northKey, { title: northKey, stands: sortNorth(north) })
+    }
+    if (other.length) {
+        const sorted = sortSouth(other)
+        const dest = byTitle.get(southKey) ?? byTitle.get(northKey)
+        if (dest) dest.stands.push(...sorted)
+        else byTitle.set(southKey, { title: southKey, stands: sorted })
+    }
+}
+
+/**
+ * D/E → E/D; T3 single pier (60A/odds↑ then evens↑); T4 & T5* odds↑+evens↑;
+ * T2 descending; geo group order.
+ */
+export function applyEssaStandMenuGeoLayout(aprons: StandMenuApron[]): StandMenuApron[] {
+    const byTitle = new Map<string, StandMenuApron>()
+
+    for (const apron of aprons) {
+        const norm = normalizeMenuApronTitle(apron.title)
+        if (norm === "APRON D/E") {
+            putSplit(byTitle, "E", "D", apron.stands)
+            continue
+        }
+        if (norm === "T2") {
+            byTitle.set("T2", {
+                title: "T2",
+                stands: sortStandsDescending(apron.stands),
+            })
+            continue
+        }
+        if (norm === "T3") {
+            byTitle.set("T3", {
+                title: "T3",
+                stands: sortT3Stands(apron.stands),
+            })
+            continue
+        }
+        const pierId = PIER_ODDS_THEN_EVENS[norm]
+        if (pierId) {
+            byTitle.set(pierId, {
+                title: pierId,
+                stands: sortStandsOddsAscThenEvensAsc(apron.stands),
+            })
+            continue
+        }
+        byTitle.set(norm, {
+            title: norm,
+            stands: sortStandsAscending(apron.stands),
+        })
+    }
+
+    const ordered: StandMenuApron[] = []
+    const seen = new Set<string>()
+    for (const key of GEO_APRON_ORDER) {
+        const a = byTitle.get(key)
+        if (a?.stands.length) {
+            ordered.push(a)
+            seen.add(key)
+        }
+    }
+    for (const [key, a] of byTitle) {
+        if (!seen.has(key) && a.stands.length) ordered.push(a)
+    }
+    return ordered
+}
+
 // ─── Apron title normalize ───────────────────────────────────────────────────
 
 export function normalizeApronTitle(raw: string): string {
@@ -1294,7 +1571,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
     return {
         stripId: input.stripId,
         currentStand: input.currentStand,
-        aprons,
+        aprons: applyEssaStandMenuGeoLayout(aprons),
     }
 }
 
