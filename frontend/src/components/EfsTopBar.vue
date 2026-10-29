@@ -1049,6 +1049,13 @@ const CONN_WARN_FEED_KEYS = [
   'cdmLocal',
 ] as const
 
+/** CDM local files only apply at ESSA — skip WARN elsewhere. */
+const cdmLocalWarnApplies = computed(
+  () =>
+    efs.essaRolesMode ||
+    efs.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
+)
+
 const connLevel = computed((): ConnLevel => {
   if (!efs.connected || !efs.pluginConnected) return 'err'
   const f = efs.feeds
@@ -1058,6 +1065,7 @@ const connLevel = computed((): ConnLevel => {
   const pluginDetail = f?.plugin?.detail ?? ''
   if (/UDP aging|UDP stale/i.test(pluginDetail)) return 'warn'
   for (const key of CONN_WARN_FEED_KEYS) {
+    if (key === 'cdmLocal' && !cdmLocalWarnApplies.value) continue
     const item = f?.[key]
     if (item && !item.ok) return 'warn'
   }

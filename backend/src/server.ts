@@ -4312,16 +4312,8 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         const cdmPlugins = findCdmPluginsDir()
         refreshCdmPluginVersion(cdmPlugins)
         const cdmDir = findCdmDataDir()
-        const ver = reportedCdmPluginVersion ? ` · CDM ${reportedCdmPluginVersion}` : ""
-        localFeedState.cdmLocal = cdmDir
-            ? { ok: true, detail: `${path.resolve(cdmDir)}${ver}` }
-            : {
-                  ok: false,
-                  detail: reportedCdmPluginVersion
-                      ? `No CDM_data_*.txt (CDM ${reportedCdmPluginVersion})`
-                      : "Not found",
-              }
-        if (cdmDir) pollLocalCdmDataFiles()
+        applyCdmLocalFeedState(cdmDir)
+        if (cdmDir && isEssaAirportConfigured()) pollLocalCdmDataFiles()
     } else {
         localFeedState.euroscopeDir = { ok: false, detail: "Not found" }
         const esaaPkg = discoverEsaaPackageDir(undefined, EUROSCOPE_PACKAGE)
@@ -4329,7 +4321,7 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
             ? { ok: true, detail: path.resolve(esaaPkg) }
             : { ok: false, detail: "Not found" }
         localFeedState.hoppieConfig = { ok: false, detail: "Not loaded" }
-        localFeedState.cdmLocal = { ok: false, detail: "Not found" }
+        applyCdmLocalFeedState(undefined)
     }
 
     await Promise.allSettled([
@@ -10353,21 +10345,37 @@ function pollLocalCdmDataFiles() {
     }
 }
 
+function isEssaAirportConfigured(): boolean {
+    return staticConfig.myAirports.some((a) => a.toUpperCase() === "ESSA")
+}
+
+/** CDM local files only matter for ESSA — mark N/A elsewhere so WARN stays quiet. */
+function applyCdmLocalFeedState(cdmDir: string | undefined) {
+    if (!isEssaAirportConfigured()) {
+        localFeedState.cdmLocal = { ok: true, detail: "N/A (not ESSA)" }
+        return
+    }
+    const ver = reportedCdmPluginVersion ? ` · CDM ${reportedCdmPluginVersion}` : ""
+    if (cdmDir) {
+        localFeedState.cdmLocal = { ok: true, detail: `${path.resolve(cdmDir)}${ver}` }
+    } else {
+        localFeedState.cdmLocal = {
+            ok: false,
+            detail: reportedCdmPluginVersion
+                ? `No CDM_data_*.txt (CDM ${reportedCdmPluginVersion})`
+                : "Not found",
+        }
+    }
+}
+
 const cdmPluginsDir = findCdmPluginsDir()
 const cdmDataDir = findCdmDataDir()
 refreshCdmPluginVersion(cdmPluginsDir)
-if (cdmDataDir) {
+applyCdmLocalFeedState(cdmDataDir)
+if (cdmDataDir && isEssaAirportConfigured()) {
     console.log(`CDM_data directory: ${cdmDataDir}`)
-    const ver = reportedCdmPluginVersion ? ` · CDM ${reportedCdmPluginVersion}` : ""
-    localFeedState.cdmLocal = { ok: true, detail: `${path.resolve(cdmDataDir)}${ver}` }
     setInterval(pollLocalCdmDataFiles, CDM_DATA_POLL_MS)
     pollLocalCdmDataFiles()
-} else {
+} else if (isEssaAirportConfigured()) {
     console.warn("CDM_data directory not found under EuroScope package Plugins")
-    localFeedState.cdmLocal = {
-        ok: false,
-        detail: reportedCdmPluginVersion
-            ? `No CDM_data_*.txt (CDM ${reportedCdmPluginVersion})`
-            : "Not found",
-    }
 }
