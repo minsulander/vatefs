@@ -473,7 +473,6 @@ import {
 } from '@/composables/useAutoFitStripSize'
 import {
   collapseStripExpanders,
-  isCdAllOrTsatSection,
   setStripExpanderState,
 } from '@/composables/useStripExpanders'
 import { setStripSizeMode } from '@/composables/useStripSizeMode'
@@ -690,6 +689,22 @@ function stripIsClearedForMergedDep(strip: FlightStripData): boolean {
   if (isClearedSectionId(strip.sectionId)) return true
   if (isPendingDepSectionId(strip.sectionId)) return false
   return !!(strip.clearance || strip.clearanceReadback)
+}
+
+/** PUSH / STUP — most advanced ground status still under the merged DEP header. */
+function stripIsPushStartForMergedDep(strip: FlightStripData): boolean {
+  const gs = (strip.groundstate || '').toUpperCase()
+  return gs === 'PUSH' || gs === 'STUP'
+}
+
+/**
+ * Merged DEP sequence tiers (0 = first / most advanced):
+ * PUSH&START → CLEARED → PENDING CLR
+ */
+function mergedDepSequenceTier(strip: FlightStripData): number {
+  if (stripIsPushStartForMergedDep(strip)) return 0
+  if (stripIsClearedForMergedDep(strip)) return 1
+  return 2
 }
 
 const props = withDefaults(defineProps<{
@@ -1932,6 +1947,8 @@ const isReqPushSection = computed(
 
 const timeModeName = computed(() => {
   if (isReqPushSection.value) return 'VCH'
+  // RTC DEP: clearance-sequence sort (not EOBT)
+  if (store.multiAirport && isRtcDepSectionId(props.section.id)) return 'SEQ'
   if (!useCdmSortLabels.value) return 'EOBT'
   if (props.section.id === 'cleared_eobt') return 'EOBT'
   return isClearedSectionId(props.section.id) ? 'TSAT' : 'TOBT'
@@ -1951,9 +1968,12 @@ const sortModeTitle = computed(() => {
   if (isReqPushSection.value || sectionSortMode.value === 'vch') {
     return 'Sort by VCH Request Order - click for MAN'
   }
+  if (store.multiAirport && isRtcDepSectionId(props.section.id)) {
+    return 'Sort by PUSH → CLR → pending (new at bottom of tier) - click for MAN'
+  }
   if (!useCdmSortLabels.value) {
     return isMergedDepDivider.value
-      ? 'Sort by clearance then EOBT - click for MAN'
+      ? 'Sort by PUSH/CLR then EOBT - click for MAN'
       : 'Sort by EOBT - click for MAN'
   }
   if (props.section.id === 'cleared_eobt') {
@@ -1967,8 +1987,8 @@ const sortModeTitle = computed(() => {
 /**
  * Fixed sort field per section:
  * - Classic (non-ESSA): always EOBT
- * - ESSA pending_dep (CD ALL): TOBT → EOBT (desc — earliest / first at bottom)
- * - ESSA cleared (TSAT): TSAT → EOBT (desc — earliest / first at bottom)
+ * - ESSA pending_dep (CD ALL): TOBT → EOBT (asc — earliest / first on top)
+ * - ESSA cleared (TSAT): TSAT → EOBT (asc — earliest / first on top)
  */
 function activeTimeSortField(): TimeSortField {
   if (!useCdmSortLabels.value) return 'etobt'
@@ -1980,15 +2000,9 @@ function activeTimeSortField(): TimeSortField {
 }
 
 function baseTimeSortDir(): TimeSortDir {
-  // ESSA/SAAB CDM time bays (TOBT / TSAT / EOBT): earliest = first in sequence at
-  // bottom — matches INBOUND APP ETA and newestTop sort-flow (“first at bottom”).
-  // Classic EOBT / RTC stay earliest-at-top (asc).
-  if (
-    useCdmSortLabels.value &&
-    (isClearedSectionId(props.section.id) || isPendingDepSectionId(props.section.id))
-  ) {
-    return 'desc'
-  }
+  // Classic EOBT / RTC / ESSA CDM (CD / TSAT / EOBT): earliest at top (asc),
+  // matching newestBottom sort-flow (“first on top”).
+  // INBOUND APP ETA still uses its own sort path (not this helper’s desc).
   return 'asc'
 }
 
@@ -2151,12 +2165,11 @@ function stripMatchesThisSection(strip: FlightStripData): boolean {
   if (store.multiAirport) {
     if (strip.bayId !== props.bayId) return false
     const extras = getRtcBayExtras(props.bayId)
-    // When DEP is split: PUSH&START takes STUP/PUSH off TAXIWAY; TWY keeps the rest
+    // When DEP is split: PUSH&START takes STUP/PUSH; CLR keeps the rest of DEP
     if (extras.depSplit) {
       const pushGs = isRtcPushStartGroundstate(strip.groundstate)
       if (isRtcPushStartId(props.section.id)) return pushGs
-      if (logicalSectionIdFromRtc(props.section.id) === 'twy') return !pushGs
-      if (isRtcClrId(props.section.id)) return !pushGs // CLR = dep bay only
+      if (isRtcClrId(props.section.id)) return !pushGs
     }
     return true
   }
@@ -2204,18 +2217,27 @@ function sortByDepTime(
   dir: TimeSortDir,
 ): FlightStripData[] {
   const nowMin = utcNowMinutes()
-  // Merged DEP: clearance tiers follow sort-flow, then EOBT within each.
-  // newestBottom (new at bottom): cleared above pending CLR
-  // newestTop (new at top): pending CLR above cleared
+  // OTHER merged DEP: PUSH/STUP → CLEARED → PENDING CLR, then EOBT within each.
+  // newestBottom (first on top): push → cleared → pending
+  // newestTop (first at bottom): pending → cleared → push
+  // RTC DEP/CLR: same tiers (push top → CLR → pending bottom); within tier by
+  // sticky position (state progress appends at bottom of the new tier).
   const clearanceFirst = isMergedDepDivider.value
-  const clearedAbovePending =
-    clearanceFirst && workspaceSortFlow.value === 'newestBottom'
+  const rtcDepSeq =
+    store.multiAirport && isRtcDepSectionId(props.section.id)
+  const advancedFirst = rtcDepSeq
+    ? true
+    : clearanceFirst && workspaceSortFlow.value === 'newestBottom'
   return [...list].sort((a, b) => {
-    if (clearanceFirst) {
-      const aClr = stripIsClearedForMergedDep(a) ? 1 : 0
-      const bClr = stripIsClearedForMergedDep(b) ? 1 : 0
-      if (aClr !== bClr) {
-        return clearedAbovePending ? bClr - aClr : aClr - bClr
+    if (clearanceFirst || rtcDepSeq) {
+      const ta = mergedDepSequenceTier(a)
+      const tb = mergedDepSequenceTier(b)
+      if (ta !== tb) {
+        return advancedFirst ? ta - tb : tb - ta
+      }
+      if (rtcDepSeq) {
+        if (a.position !== b.position) return a.position - b.position
+        return a.callsign.localeCompare(b.callsign)
       }
     }
     const ka = depTimeSortKey(a, field, nowMin)
@@ -2642,6 +2664,7 @@ function toggleSortMode() {
 /**
  * Section id sent on moveStrip for this drop.
  * PUSH BACK / START UP use the header id (server sets GS, stores as push_start).
+ * RTC bayN_push_start is canonicalized to bayN_dep (STUP/PUSH stay in DEP).
  * Merged DEP keeps pending vs cleared membership when already in-family.
  */
 function membershipSectionForDrop(stripId: string): string {
@@ -2948,23 +2971,17 @@ async function runScheduledAutoFit() {
         container: el,
         visualIds: topStripIds.value,
         // Size priority follows first-in-sequence, not insert addFromTop.
-        // ESSA/SAAB INBOUND APP + TOBT/TSAT: earliest (first) at visual bottom —
-        // keep that strip maximised (preferTop:false). Other bays: first at top.
-        preferTop: !(
-          hasEssa.value &&
-          (isInboundAppSection.value ||
-            (useCdmSortLabels.value &&
-              (isClearedSectionId(props.section.id) ||
-                isPendingDepSectionId(props.section.id))))
-        ),
+        // ESSA/SAAB INBOUND APP: earliest at visual bottom (preferTop:false).
+        // CD / TSAT / EOBT: earliest on top (preferTop:true) with first-on-top flow.
+        preferTop: !(hasEssa.value && isInboundAppSection.value),
         canCompact: stripCanCompact,
         allowSizeFit: modeAllowsFit && !overflowHandlesExtra,
         growBack:
           store.autoFitStripSizeMode !== 'off' &&
           store.autoFitStripSizeGrowBack &&
           !overflowHandlesExtra,
-        // CD ALL / TSAT / PENDING DEP / CLEARED: keep bottom in view when scrolled
-        scrollToBottom: isCdAllOrTsatSection(props.section.id),
+        // INBOUND APP (first at bottom): keep bottom in view. CD/TSAT first on top.
+        scrollToBottom: !!(hasEssa.value && isInboundAppSection.value),
       })
     } while (autoFitQueued && !autoFitApplying.value)
     // Scrollbar appearing/disappearing must not immediately re-run fit
@@ -3020,6 +3037,22 @@ watch(
       if (prev && prevSet.has(id)) continue
       applyHeaderStripSizeToStrip(id, size)
     }
+  },
+  { flush: 'post' },
+)
+
+/**
+ * Layout restore / SAAB·ESSA profile switch: section.stripSize is per-layout, but
+ * per-strip size mode is separate — re-apply when the divider's saved size changes.
+ */
+watch(
+  headerStripSize,
+  (size, prev) => {
+    if (!(props.workspaceMode || store.multiAirport)) return
+    if (prev === undefined) return // first paint handled by strip-id watch above
+    if (size === prev) return
+    applyHeaderStripSizeToStrips()
+    requestAnimationFrame(() => scheduleAutoFitRecheck(true))
   },
   { flush: 'post' },
 )

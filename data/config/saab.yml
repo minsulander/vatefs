@@ -17,38 +17,36 @@ include:
   - saab-rules.yml
 
 layouts:
-  # 1RWY · 3 BAYS — L→R: INBOUND | TMA/CTR + RUNWAY | DEP + TAXIWAY
+  # 1RWY · 3 BAYS — L→R: TMA | CTR + RUNWAY | TAXIWAY + DEP
   1rwy3:
     name: 1RWY
     layout:
       bays:
         bay1:
           sections:
-            inbound:
-              title: INBOUND
+            tma:
+              title: TMA
         bay2:
           sections:
-            # Workspace collapses these to one "TMA / CTR" header
-            tma:
-              title: TMA / CTR
+            # Workspace collapses ctr_arr + ctr_dep titled CTR → one CTR header
             ctr_arr:
-              title: TMA / CTR
+              title: CTR
             ctr_dep:
-              title: TMA / CTR
+              title: CTR
             runway:
               title: RUNWAY
               addFromTop: false
         bay3:
           sections:
+            taxi:
+              title: TAXIWAY
+              addFromTop: false
             pending_dep:
               title: DEP
             cleared:
               title: DEP
-            taxi:
-              title: TAXIWAY
-              addFromTop: false
 
-  # 1RWY · 4 BAYS — L→R: INBOUND+CTR ARR | CTR DEP+RUNWAY | TAXI+PUSH | PENDING+CLEARED
+  # 1RWY · 4 BAYS — L→R: INBOUND+CTR ARR | CTR DEP+RUNWAY | TAXI+PUSH | CLEARED+PENDING
   1rwy4:
     name: 1RWY
     layout:
@@ -57,8 +55,11 @@ layouts:
           sections:
             inbound:
               title: INBOUND
+              # First at bottom (newest on top)
+              addFromTop: true
             ctr_arr:
               title: CTR ARR
+              addFromTop: true
             # Declared for sectionRules / catalog (TMA-only coverage default).
             # Not shown in the CTR-only builtin column plan until added.
             ctr_inbound:
@@ -78,15 +79,16 @@ layouts:
               addFromTop: false
             push_start:
               title: PUSH&START
-              addFromTop: true
+              # First on top (newest at bottom)
+              addFromTop: false
         bay4:
           sections:
-            pending_dep:
-              title: PENDING CLR
             cleared:
               title: CLEARED
+            pending_dep:
+              title: PENDING CLR
 
-  # 2RWY · 4 BAYS — L→R: INBOUND+CTR ARR+RWY ARR | CTR DEP+RWY DEP | TAXI+PUSH | PENDING+CLEARED
+  # 2RWY · 4 BAYS — L→R: INBOUND+CTR ARR+RWY ARR | CTR DEP+RWY DEP | TAXI+PUSH | CLEARED+PENDING
   2rwy4:
     name: 2RWY
     layout:
@@ -95,11 +97,15 @@ layouts:
           sections:
             inbound:
               title: INBOUND
+              # First at bottom (newest on top)
+              addFromTop: true
             ctr_arr:
               title: CTR ARR
+              addFromTop: true
             arr_runway:
               title: RUNWAY ARR
-              addFromTop: false
+              # ARR RWY: first at bottom
+              addFromTop: true
         bay2:
           sections:
             ctr_dep:
@@ -115,10 +121,11 @@ layouts:
               addFromTop: false
             push_start:
               title: PUSH&START
-              addFromTop: true
+              # First on top (newest at bottom)
+              addFromTop: false
         bay4:
           sections:
-            pending_dep:
-              title: PENDING CLR
             cleared:
               title: CLEARED
+            pending_dep:
+              title: PENDING CLR

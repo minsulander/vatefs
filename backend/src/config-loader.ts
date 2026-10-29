@@ -327,6 +327,34 @@ export function loadConfig(configPath: string, options?: LoadConfigOptions): Efs
         : []
 
     if (isSaabLayouts) {
+        const remapSectionIds = (
+            from: string,
+            to: string,
+        ) => {
+            const remap = <T extends {
+                sectionId?: string
+                fromSectionId?: string
+                toSectionId?: string
+            }>(rules: T[]): T[] =>
+                rules.map((rule) => {
+                    const next = { ...rule }
+                    if (next.sectionId === from) next.sectionId = to
+                    if (next.fromSectionId === from) next.fromSectionId = to
+                    if (next.toSectionId === from) next.toSectionId = to
+                    return next
+                })
+            sectionRules = remap(sectionRules)
+            actionRules = remap(actionRules)
+            moveRules = remap(moveRules)
+        }
+        // 1RWY 3 BAYS: TMA replaces INBOUND — keep inbound-targeted rules alive on TMA
+        if (!sectionToBay.has('inbound') && sectionToBay.has('tma')) {
+            remapSectionIds('inbound', 'tma')
+        }
+        // Combined DEP (no PUSH&START bay): STUP/PUSH stay under CLEARED / DEP
+        if (!sectionToBay.has('push_start') && sectionToBay.has('cleared')) {
+            remapSectionIds('push_start', 'cleared')
+        }
         sectionRules = filterRulesForSectionMap(sectionRules, sectionToBay)
         actionRules = filterRulesForSectionMap(actionRules, sectionToBay)
         moveRules = filterRulesForSectionMap(moveRules, sectionToBay)
