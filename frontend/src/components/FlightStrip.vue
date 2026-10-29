@@ -2950,7 +2950,7 @@ function onPaperGoaScribbleClear() {
   removeClrScribbles(props.strip.id, 'goa')
 }
 
-/** UTFLYGNING / soft G/A — same conditions as zoom rising-/ tag */
+/** PÅ BANAN / UTFLYGNING / soft G/A — same conditions as zoom rising-/ tag */
 const paperCanXferAppDiag = computed(() => {
   if (!store.isPaperLook || isPaperEmptyFlightHolder.value) return false
   if (!store.isController || !store.allowMoveOwnedStrip(props.strip)) return false
@@ -2959,7 +2959,9 @@ const paperCanXferAppDiag = computed(() => {
   return (
     !!props.strip.missedApproach ||
     sec === 'ctr_dep' ||
-    sec.endsWith('_ctr_dep')
+    sec.endsWith('_ctr_dep') ||
+    sec === 'runway' ||
+    sec.includes('runway')
   )
 })
 

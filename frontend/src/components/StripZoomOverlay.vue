@@ -629,7 +629,7 @@ function flushHotspotFlagsFromScribbles() {
   ) {
     store.sendStripAction(id, 'REFUSE')
   }
-  // ESGG paper: rising diagonal in UTFLYGNING / G/A → XFER to APP (pin bottom)
+  // ESGG paper: rising / in PÅ BANAN / UTFLYGNING / G/A → XFER APP (pin UTFLYGNING)
   // Skip if already pending out (e.g. bay/zoom clickspot already fired)
   if (
     tags.xferApp &&
@@ -640,7 +640,9 @@ function flushHotspotFlagsFromScribbles() {
     hasShapeMatchedPaperScribble(id, 'xfer-app') &&
     (s.missedApproach ||
       s.sectionId === 'ctr_dep' ||
-      s.sectionId.endsWith('_ctr_dep'))
+      s.sectionId.endsWith('_ctr_dep') ||
+      s.sectionId === 'runway' ||
+      s.sectionId.includes('runway'))
   ) {
     store.sendStripAction(id, 'XFER')
   }
@@ -754,14 +756,16 @@ function commitStrokeMaybeClr(points: string) {
     pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-refuse')
     return
   }
-  const utflygningOrGoa =
+  const utflygningOrRunwayOrGoa =
     store.isPaperLook &&
     live.transferPending !== 'in' &&
     store.allowMoveOwnedStrip(live) &&
     (!!live.missedApproach ||
       live.sectionId === 'ctr_dep' ||
-      live.sectionId.endsWith('_ctr_dep'))
-  if (utflygningOrGoa && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
+      live.sectionId.endsWith('_ctr_dep') ||
+      live.sectionId === 'runway' ||
+      live.sectionId.includes('runway'))
+  if (utflygningOrRunwayOrGoa && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
     pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-app')
     return
   }

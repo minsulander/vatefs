@@ -5414,23 +5414,32 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         }
                         // Clear incoming ROF once we hand off to the requester
                         if (flight.rofRequestFrom) flightStore.clearRofRequest(flight)
-                        // ESGG paper: XFER from UTFLYGNING / soft G/A → pin bottom tray
-                        const inUtflygning =
+                        // ESGG paper: XFER from PÅ BANAN / UTFLYGNING / G/A → pin tray
+                        const onRunway =
+                            strip.sectionId === "runway" ||
+                            strip.sectionId.includes("runway")
+                        const inUtflygningSec =
+                            strip.sectionId === "ctr_dep" ||
+                            strip.sectionId.endsWith("_ctr_dep")
+                        const paperAppXfer =
                             staticConfig.look === "paper" &&
-                            (strip.sectionId === "ctr_dep" ||
-                                strip.sectionId.endsWith("_ctr_dep") ||
-                                !!flight.missedApproach)
-                        if (inUtflygning) {
-                            // Ensure strip is in ctr_dep before pin (soft G/A may still be on runway)
-                            if (
-                                flight.missedApproach &&
-                                strip.sectionId !== "ctr_dep" &&
-                                !strip.sectionId.endsWith("_ctr_dep")
-                            ) {
-                                // Section rules will move on reevaluate; start pin session now
-                                flightStore.startUtflygningPin(strip.callsign)
-                            } else {
-                                flightStore.startUtflygningPin(strip.callsign)
+                            isAppOrDepCallsign(targetCallsign) &&
+                            (inUtflygningSec || onRunway || !!flight.missedApproach)
+                        if (paperAppXfer) {
+                            // ARR/local still on PÅ BANAN: soft G/A so rules move to UTFLYGNING
+                            const arrLike =
+                                strip.stripType === "arrival" || strip.stripType === "local"
+                            if (onRunway && arrLike && !flight.missedApproach) {
+                                flightStore.applySoftMissedApproach(strip.callsign)
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "setEfsGoAround",
+                                        callsign: strip.callsign,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                            }
+                            flightStore.startUtflygningPin(strip.callsign)
+                            if (inUtflygningSec) {
                                 const pinned = flightStore.pinUtflygningTray(strip.callsign)
                                 if (pinned) {
                                     const applied = store.updateStripFromFlight(pinned.strip, {
@@ -5449,6 +5458,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     broadcastStrip(applied)
                                 }
                             }
+                            // Still on PÅ BANAN: pin session kept until auto-move → UTFLYGNING
                         }
                     }
                 // PARK (TERM): PARK + release + clear scratchpad + clear HS + clear EST

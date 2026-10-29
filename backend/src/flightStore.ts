@@ -4065,9 +4065,10 @@ class FlightStore {
     ): boolean {
         if (this.config.look !== 'paper') return false
         if (!this.isCtrDepSectionId(assignment.sectionId)) return false
+        // Active APP-xfer pin session: hold even if airborne briefly false
+        if (this.isUtflygningPinned(flight.callsign)) return true
         if (!flight.airborne) return false
         if (flight.missedApproach) return true
-        if (this.isUtflygningPinned(flight.callsign)) return true
         const target =
             flight.handoffTargetController ||
             getCallsignForPositionId(flight.handoffTargetControllerId)
@@ -4475,6 +4476,13 @@ class FlightStore {
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }
         if (!this.isCtrDepSectionId(sectionId)) {
+            // PÅ BANAN / elsewhere: keep pin session until auto-move into UTFLYGNING
+            if (
+                this.utflygningPinSession.has(callsign) &&
+                !this.utflygningDragReleased.has(callsign)
+            ) {
+                return { position: currentPosition, bottom: currentBottom, bumped: false }
+            }
             this.clearUtflygningPinned(callsign)
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }

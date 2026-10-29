@@ -2363,12 +2363,21 @@ export const useEfsStore = defineStore("efs", () => {
 
         stripsVersion.value++
 
-        // ESGG paper: pin tray on UTFLYGNING → rising / (backend XFERs on isBottom)
+        // ESGG paper: pin tray on UTFLYGNING → rising / when XFER-eligible (backend XFERs on isBottom)
         if (
             isPaperLook.value &&
             (storeSectionId === 'ctr_dep' || storeSectionId.endsWith('_ctr_dep'))
         ) {
-            pushRisingDiagonalLeftCol(stripId, 'blue', 'xfer-app')
+            const arrLike =
+                strip.stripType === 'arrival' || strip.stripType === 'local'
+            const depAirborne =
+                strip.stripType === 'departure' && !!strip.airborne
+            if (
+                isIfrSidEligible(strip.flightRules) &&
+                (arrLike || depAirborne || !!strip.missedApproach)
+            ) {
+                pushRisingDiagonalLeftCol(stripId, 'blue', 'xfer-app')
+            }
         }
 
         // Send update to server (drop intent may be push_back / start_up)
