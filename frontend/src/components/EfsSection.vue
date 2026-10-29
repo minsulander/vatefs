@@ -880,22 +880,27 @@ function collectSectionStrips(): FlightStripData[] {
   return list
 }
 
-/** Apply section strip-size mode to all strips here (same as per-strip size menu). */
+/** Apply section strip-size mode to one strip (same as per-strip size menu). */
+function applyHeaderStripSizeToStrip(stripId: string, size = headerStripSize.value) {
+  if (size === 'compact') {
+    collapseStripExpanders(stripId)
+    setStripSizeMode(stripId, 'compact')
+  } else if (size === 'expanded') {
+    setStripSizeMode(stripId, 'normal')
+    setStripExpanderState(stripId, { top: true, bottom: true })
+  } else {
+    // normal
+    collapseStripExpanders(stripId)
+    setStripSizeMode(stripId, 'normal')
+  }
+  adoptManualStripFitBaseline(stripId)
+}
+
+/** Apply section strip-size mode to all strips here. */
 function applyHeaderStripSizeToStrips() {
   const size = headerStripSize.value
   for (const strip of collectSectionStrips()) {
-    if (size === 'compact') {
-      collapseStripExpanders(strip.id)
-      setStripSizeMode(strip.id, 'compact')
-    } else if (size === 'expanded') {
-      setStripSizeMode(strip.id, 'normal')
-      setStripExpanderState(strip.id, { top: true, bottom: true })
-    } else {
-      // normal
-      collapseStripExpanders(strip.id)
-      setStripSizeMode(strip.id, 'normal')
-    }
-    adoptManualStripFitBaseline(strip.id)
+    applyHeaderStripSizeToStrip(strip.id, size)
   }
 }
 
@@ -3002,6 +3007,22 @@ watch(topStripIds, (ids, prev) => {
     if (!ids.includes(id)) clearAutoFitState(id)
   }
 })
+
+/** New / moved-in strips inherit this section's strip-size setting (workspace / RTC). */
+watch(
+  [topStripIds, bottomStripIds],
+  ([topIds, bottomIds], prev) => {
+    if (!(props.workspaceMode || store.multiAirport)) return
+    const prevSet = new Set([...(prev?.[0] ?? []), ...(prev?.[1] ?? [])])
+    const size = headerStripSize.value
+    for (const id of [...topIds, ...bottomIds]) {
+      // First run (prev undefined): apply to every strip so load matches header.
+      if (prev && prevSet.has(id)) continue
+      applyHeaderStripSizeToStrip(id, size)
+    }
+  },
+  { flush: 'post' },
+)
 
 function onWindowResizeForAutoFit() {
   scheduleAutoFitRecheck()
