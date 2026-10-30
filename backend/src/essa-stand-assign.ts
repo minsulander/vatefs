@@ -1011,10 +1011,7 @@ function physicalFitVariant(
     extraMaxWingspan?: number,
     extraMaxLength?: number,
 ): boolean {
-    if (v.use) {
-        const allowed = new Set([...v.use.toUpperCase()])
-        if (![...ac.use.toUpperCase()].some((c) => allowed.has(c))) return false
-    }
+    // Allowed stands: engine type + size only — ignore GRP USE: restrictions
     if (v.atyp && v.atyp.length > 0) {
         if (!v.atyp.some((p) => atypMatches(p, ac.type))) return false
     }
@@ -1084,12 +1081,7 @@ function variantRejectReasons(
     extraMaxLength?: number,
 ): string[] {
     const reasons: string[] = []
-    if (v.use) {
-        const allowed = new Set([...v.use.toUpperCase()])
-        if (![...ac.use.toUpperCase()].some((c) => allowed.has(c))) {
-            reasons.push(`use ${ac.use || "?"} (need ${v.use})`)
-        }
-    }
+    // USE: ignored for allowed-stand checks (engine + size only)
     if (v.atyp && v.atyp.length > 0) {
         if (!v.atyp.some((p) => atypMatches(p, ac.type))) {
             reasons.push(`type ${ac.type} (need ${v.atyp.join("/")})`)
@@ -1374,9 +1366,21 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                 // (above). Do not show Planned on the unused assigned stand.
             } else if (!positionStand) {
                 // No polygon hit: PARK+stand → Occupied; otherwise Planned if assigned
+                // Airborne / DEPA / departed: free the stand (do not keep Planned).
+                const gsGone =
+                    t.airborne ||
+                    gs === "DEPA" ||
+                    gs === "LINEUP" ||
+                    gs === "TAXI" ||
+                    gs === "TXIN"
                 if (parked && !t.airborne) {
                     if (!occupiedBy.has(assignedKey)) occupiedBy.set(assignedKey, t)
-                } else if (t.assigned && !assignedBy.has(assignedKey) && !occupiedBy.has(assignedKey)) {
+                } else if (
+                    !gsGone &&
+                    t.assigned &&
+                    !assignedBy.has(assignedKey) &&
+                    !occupiedBy.has(assignedKey)
+                ) {
                     assignedBy.set(assignedKey, t)
                 }
             }

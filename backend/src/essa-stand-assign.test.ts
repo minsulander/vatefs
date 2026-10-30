@@ -560,7 +560,8 @@ check("occupied arrival stand is not marked departure", () => {
     assert.equal(f34.occupied?.departure, false)
 })
 
-check("airborne planned (+ blocked) sets airborne for softer shade", () => {
+check("airborne assigned stand is freed (not planned)", () => {
+    // Departed/airborne must not keep Planned (SAS246 / SAS491 session bug)
     const menu = buildEssaStandMenu({
         stripId: "SAS123",
         callsign: "SAS123",
@@ -580,12 +581,9 @@ check("airborne planned (+ blocked) sets airborne for softer shade", () => {
     })
     assert.ok(menu)
     const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")!
-    assert.equal(s01.occupied?.kind, "assigned")
-    assert.equal(s01.occupied?.airborne, true)
+    assert.equal(s01.occupied, undefined)
     const s03 = menu!.aprons[0]!.stands.find((s) => s.name === "03")!
-    assert.equal(s03.occupied?.kind, "blocked")
-    assert.equal(s03.occupied?.blockFrom, "assigned")
-    assert.equal(s03.occupied?.airborne, true)
+    assert.equal(s03.occupied, undefined)
 })
 
 check("PUSH groundstate still occupies while GPS in polygon", () => {
