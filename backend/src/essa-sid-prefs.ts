@@ -26,6 +26,8 @@ export interface NamedSidPref {
     heading?: undefined
     /** Appendix A receiving sector for this SID/exit */
     nextSector?: AppDepSector
+    /** Optional slow/initial climb CFL (ft) when prefs override SID/COPX default */
+    cflFt?: number
 }
 
 export interface TrackSidPref {
@@ -35,9 +37,18 @@ export interface TrackSidPref {
     sid?: undefined
     letter?: undefined
     nextSector?: AppDepSector
+    /** Optional slow/initial climb CFL (ft) when prefs override SID/COPX default */
+    cflFt?: number
 }
 
 export type SidPref = NamedSidPref | TrackSidPref
+
+/** Per-ARR MAP delivery (dual-ARR configs 1/2). */
+export interface MapDeliveryPref {
+    nextSector: AppDepSector
+    heading?: number
+    altitudeFt?: number
+}
 
 export interface EssaSidConfigPrefs {
     depRunway: string
@@ -53,6 +64,11 @@ export interface EssaSidConfigPrefs {
     mapHeading?: number
     /** Appendix A MAP delivery altitude feet (e.g. 4000 FT) */
     mapAltitudeFt?: number
+    /**
+     * Dual-ARR MAP overrides keyed by ARR runway (e.g. config 1: 01R vs 01L).
+     * When present and `arrRwy` matches a key, used instead of map* / primary-ARR match.
+     */
+    mapByArr?: Record<string, MapDeliveryPref>
 }
 
 let prefsByConfig: Map<string, EssaSidConfigPrefs> = new Map()
@@ -228,6 +244,8 @@ export interface PreferredSidResult {
     sortGroup: string[]
     exit?: string
     nextSector?: AppDepSector
+    /** From slow pref `cflFt` when set (e.g. config 15C) */
+    cflFt?: number
 }
 
 const SECTOR_TO_SI: Record<AppDepSector, string> = {
@@ -396,8 +414,9 @@ export function resolveEssaDepInfoStrip(configId: string): EssaDepInfoStrip | nu
 
 /**
  * Appendix A missed-approach delivery (HDG / ALT / next sector).
- * HDG/CFL only when `arrRwy` matches the config's primary ARR (or arrRwy is unset).
- * Differing ARR (e.g. 01L under config 1) → sector only, no heading/altitude.
+ * Prefer `mapByArr[arrRwy]` when dual-ARR overrides exist (config 1/2).
+ * Else HDG/CFL only when `arrRwy` matches the config's primary ARR (or arrRwy is unset).
+ * Differing ARR without a mapByArr entry → sector only, no heading/altitude.
  */
 export function resolveMapDelivery(
     configId: string,
@@ -412,6 +431,19 @@ export function resolveMapDelivery(
     const combo = getEssaRwyCombination(configId)
     const configArr = combo?.arrName ? normalizeEssaRwy(combo.arrName) : undefined
     const flightArr = arrRwy ? normalizeEssaRwy(arrRwy) : undefined
+
+    if (flightArr && config?.mapByArr) {
+        const byArr = Object.entries(config.mapByArr).find(
+            ([k]) => normalizeEssaRwy(k) === flightArr,
+        )?.[1]
+        if (byArr) {
+            return {
+                sector: byArr.nextSector,
+                heading: byArr.heading,
+                altitudeFt: byArr.altitudeFt,
+            }
+        }
+    }
 
     const arrMatches =
         !flightArr || !configArr || flightArr === configArr
@@ -428,32 +460,99 @@ export function resolveMapDelivery(
 }
 
 /**
+ * ESSA TMA side from assigned heading (east vs west half-plane).
+ * 001–179 → East; 181–359 → West; 000/360 and 180 are ambiguous (null).
+ */
+export function tmaSideFromHeading(headingDeg: number): "E" | "W" | null {
+    const h = ((headingDeg % 360) + 360) % 360
+    if (h > 0 && h < 180) return "E"
+    if (h > 180 && h < 360) return "W"
+    return null
+}
+
+/** Shortest angular difference between two headings (0–180°). */
+export function headingDeltaDeg(a: number, b: number): number {
+    const ha = ((a % 360) + 360) % 360
+    const hb = ((b % 360) + 360) % 360
+    let d = Math.abs(ha - hb)
+    if (d > 180) d = 360 - d
+    return d
+}
+
+/** Parallel ARR RWYs where opposite-TMA G/A heading flip applies (not 08/26). */
+export function isEssaParallelGaRunway(rwy: string | undefined | null): boolean {
+    const n = normalizeEssaRwy(rwy || "")
+    return n === "01L" || n === "01R" || n === "19L" || n === "19R"
+}
+
+/**
+ * G/A from 01L/R or 19L/R: flip ARR-E ↔ ARR-W only when all of:
+ * - assigned AHD is set
+ * - AHD points into the opposite TMA half from Appendix `mapNextSector`
+ * - AHD differs by ≥ 90° from Appendix `mapHeading` (small tweaks stay)
+ * Without a known appendix MAP heading, keep the base sector (no flip).
+ */
+export function resolveOppositeTmaArrSector(
+    baseSector: AppDepSector,
+    assignedHeading: number | undefined | null,
+    arrRwy?: string | null,
+    appendixMapHeading?: number | null,
+): AppDepSector {
+    if (baseSector !== "ARR-E" && baseSector !== "ARR-W") return baseSector
+    if (!isEssaParallelGaRunway(arrRwy)) return baseSector
+    if (assignedHeading == null || !(assignedHeading > 0)) return baseSector
+    if (appendixMapHeading == null || !(appendixMapHeading > 0)) return baseSector
+    // Small tweaks / near-MAP headings must not flip
+    if (headingDeltaDeg(assignedHeading, appendixMapHeading) < 90) return baseSector
+    const side = tmaSideFromHeading(assignedHeading)
+    if (!side) return baseSector
+    const baseSide = baseSector === "ARR-E" ? "E" : "W"
+    if (side === baseSide) return baseSector
+    return side === "E" ? "ARR-E" : "ARR-W"
+}
+
+/**
  * Appendix A next APP/DEP sector for TWR handoff (normal SID / slow / MAP).
+ * G/A: MAP sector, then optional opposite-TMA flip from assigned heading.
  */
 export function resolveAppDepNextSector(options: {
     configId: string
     route?: string
     slow?: boolean
     missedApproach?: boolean
+    /** Arrival runway (G/A opposite-TMA flip — 01/19 only) */
+    arrRwy?: string
+    /** Assigned heading degrees (AHD); used on missed approach only */
+    assignedHeading?: number
 }): AppDepSector {
     const config = prefsByConfig.get(options.configId)
     if (!config) return "DEP-W"
 
     if (options.missedApproach) {
-        return resolveMapDelivery(options.configId).sector
+        const map = resolveMapDelivery(options.configId, options.arrRwy)
+        return resolveOppositeTmaArrSector(
+            map.sector,
+            options.assignedHeading,
+            options.arrRwy,
+            map.heading,
+        )
     }
 
     const useSlow = !!options.slow && !config.slowFollowSid
-    if (useSlow && config.slowNextSector) {
-        return config.slowNextSector
-    }
 
+    // Prefer per-exit nextSector from the active pref list (slow BABAP → DEP-E).
+    // Blanket slowNextSector is only the fallback when the exit has no sector
+    // (was wrongly forcing ARR-W for all slow SIDs — SAS83R / APF664G).
     const prefs = activePrefList(config, useSlow)
     const allExits = prefs.flatMap((p) => p.exits)
     const exit = findRouteExit(options.route, allExits)
     if (exit) {
         const pref = prefs.find((p) => p.exits.some((e) => e.toUpperCase() === exit))
         if (pref?.nextSector) return pref.nextSector
+    }
+
+    if (useSlow && config.slowNextSector) {
+        return config.slowNextSector
     }
 
     // Prefer first pref with nextSector, else DEP-W
@@ -489,7 +588,25 @@ export function resolvePreferredSid(options: {
     if (!pref) return { sid: null, sortGroup, exit }
 
     const sid = resolvePrefSid(options.airport, runway, pref, exit) ?? null
-    return { sid, sortGroup, exit, nextSector: pref.nextSector }
+    return { sid, sortGroup, exit, nextSector: pref.nextSector, cflFt: pref.cflFt }
+}
+
+/**
+ * Slow-pref CFL override (e.g. config 15C 4000/3000). Undefined → use SID/COPX default.
+ */
+export function resolveSlowPrefCflFt(options: {
+    configId: string
+    route?: string
+}): number | undefined {
+    const config = prefsByConfig.get(options.configId)
+    if (!config || config.slowFollowSid || !config.slowPrefs?.length) return undefined
+    const allExits = config.slowPrefs.flatMap((p) => p.exits)
+    const exit = findRouteExit(options.route, allExits)
+    if (!exit) return undefined
+    const pref = config.slowPrefs.find((p) =>
+        p.exits.some((e) => e.toUpperCase() === exit),
+    )
+    return pref?.cflFt
 }
 
 /** SIDs matching any pref in the active list (named letter-group or track patterns). */

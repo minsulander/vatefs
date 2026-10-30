@@ -99,7 +99,19 @@
     "slowNextSector": "ARR-W",
     "mapNextSector": "ARR-E",
     "mapHeading": 90,
-    "mapAltitudeFt": 4000
+    "mapAltitudeFt": 4000,
+    "mapByArr": {
+      "01R": {
+        "nextSector": "ARR-E",
+        "heading": 90,
+        "altitudeFt": 4000
+      },
+      "01L": {
+        "nextSector": "ARR-W",
+        "heading": 270,
+        "altitudeFt": 4000
+      }
+    }
   },
   "2": {
     "depRunway": "19R",
@@ -172,15 +184,23 @@
     "slowPrefs": [
       {
         "exits": [
+          "KOGAV",
+          "RESNA"
+        ],
+        "sid": "HAPZI",
+        "letter": "G",
+        "nextSector": "ARR-W"
+      },
+      {
+        "exits": [
           "ARS",
           "PETEV",
           "NOSLI",
-          "INWIQ",
-          "RESNA",
-          "KOGAV"
+          "INWIQ"
         ],
         "sid": "HAPZI",
-        "letter": "G"
+        "letter": "G",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -188,13 +208,26 @@
           "TOVRI"
         ],
         "track": "190",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
     "mapNextSector": "ARR-E",
     "mapHeading": 90,
-    "mapAltitudeFt": 4000
+    "mapAltitudeFt": 4000,
+    "mapByArr": {
+      "19L": {
+        "nextSector": "ARR-E",
+        "heading": 90,
+        "altitudeFt": 4000
+      },
+      "19R": {
+        "nextSector": "ARR-W",
+        "heading": 270,
+        "altitudeFt": 4000
+      }
+    }
   },
   "3": {
     "depRunway": "01L",
@@ -375,7 +408,8 @@
           "INWIQ"
         ],
         "track": "040",
-        "heading": "250"
+        "heading": "250",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -383,14 +417,16 @@
           "KOGAV"
         ],
         "track": "040",
-        "heading": "330"
+        "heading": "330",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -454,7 +490,8 @@
           "INWIQ"
         ],
         "track": "040",
-        "heading": "250"
+        "heading": "250",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -462,7 +499,8 @@
           "KOGAV"
         ],
         "track": "040",
-        "heading": "330"
+        "heading": "330",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -470,7 +508,8 @@
           "TOVRI"
         ],
         "track": "080",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -549,29 +588,32 @@
     "slowPrefs": [
       {
         "exits": [
-          "ARS",
           "PETEV",
           "NOSLI",
           "INWIQ"
         ],
-        "track": "240"
+        "track": "240",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
+          "ARS",
           "RESNA",
           "KOGAV"
         ],
-        "track": "330"
+        "track": "330",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
-    "slowNextSector": "ARR-E",
+    "slowNextSector": "ARR-W",
     "mapNextSector": "ARR-E",
     "mapHeading": 90,
     "mapAltitudeFt": 4000
@@ -653,24 +695,27 @@
           "INWIQ"
         ],
         "track": "160",
-        "heading": "250"
+        "heading": "250",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "RESNA",
           "KOGAV"
         ],
-        "track": "330"
+        "track": "330",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
-    "slowNextSector": "ARR-E",
+    "slowNextSector": "ARR-W",
     "mapNextSector": "ARR-E",
     "mapHeading": 360,
     "mapAltitudeFt": 4000
@@ -750,14 +795,16 @@
           "PETEV"
         ],
         "track": "190",
-        "heading": "240"
+        "heading": "240",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "NOSLI",
           "INWIQ"
         ],
-        "track": "160"
+        "track": "160",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -765,17 +812,19 @@
           "KOGAV"
         ],
         "track": "090",
-        "heading": "010"
+        "heading": "010",
+        "nextSector": "DEP-E"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
-    "slowNextSector": "ARR-W",
+    "slowNextSector": "DEP-W",
     "mapNextSector": "ARR-E",
     "mapHeading": 360,
     "mapAltitudeFt": 4000
@@ -857,7 +906,8 @@
           "INWIQ"
         ],
         "track": "160",
-        "heading": "250"
+        "heading": "250",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -865,7 +915,8 @@
           "KOGAV"
         ],
         "track": "160",
-        "heading": "270"
+        "heading": "270",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -873,7 +924,8 @@
           "TOVRI"
         ],
         "track": "070",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -951,7 +1003,8 @@
           "INWIQ"
         ],
         "track": "150",
-        "heading": "270"
+        "heading": "270",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -959,7 +1012,8 @@
           "KOGAV"
         ],
         "track": "150",
-        "heading": "290"
+        "heading": "290",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -967,7 +1021,8 @@
           "TOVRI"
         ],
         "track": "090",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1049,19 +1104,28 @@
           "ARS",
           "PETEV",
           "NOSLI",
-          "INWIQ",
+          "INWIQ"
+        ],
+        "sid": "HAPZI",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
           "RESNA",
           "KOGAV"
         ],
         "sid": "HAPZI",
-        "letter": "G"
+        "letter": "G",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1148,7 +1212,8 @@
           "BABAP"
         ],
         "track": "010",
-        "heading": "240"
+        "heading": "240",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -1156,7 +1221,8 @@
           "KOGAV"
         ],
         "track": "010",
-        "heading": "330"
+        "heading": "330",
+        "nextSector": "ARR-W"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1238,12 +1304,20 @@
           "ARS",
           "PETEV",
           "NOSLI",
-          "INWIQ",
+          "INWIQ"
+        ],
+        "sid": "HAPZI",
+        "letter": "G",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
           "RESNA",
           "KOGAV"
         ],
         "sid": "HAPZI",
-        "letter": "G"
+        "letter": "G",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -1251,7 +1325,8 @@
           "TOVRI"
         ],
         "track": "190",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1330,11 +1405,12 @@
     "slowPrefs": [
       {
         "exits": [
+          "ARS",
           "RESNA",
-          "KOGAV",
-          "ARS"
+          "KOGAV"
         ],
-        "track": "300"
+        "track": "300",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -1343,14 +1419,16 @@
           "INWIQ",
           "BABAP"
         ],
-        "track": "230"
+        "track": "230",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "TOVRI"
         ],
         "track": "300",
-        "heading": "040"
+        "heading": "040",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1434,14 +1512,16 @@
           "NOSLI",
           "INWIQ"
         ],
-        "track": "270"
+        "track": "270",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
           "RESNA",
           "KOGAV"
         ],
-        "track": "290"
+        "track": "290",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -1449,7 +1529,8 @@
           "TOVRI"
         ],
         "track": "090",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1597,11 +1678,18 @@
           "ARS",
           "PETEV",
           "NOSLI",
-          "INWIQ",
+          "INWIQ"
+        ],
+        "track": "290",
+        "nextSector": "DEP-W"
+      },
+      {
+        "exits": [
           "RESNA",
           "KOGAV"
         ],
-        "track": "290"
+        "track": "290",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
@@ -1609,7 +1697,8 @@
           "TOVRI"
         ],
         "track": "090",
-        "heading": "120"
+        "heading": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1694,7 +1783,8 @@
           "INWIQ"
         ],
         "track": "250",
-        "heading": "270"
+        "heading": "270",
+        "nextSector": "DEP-W"
       },
       {
         "exits": [
@@ -1702,14 +1792,16 @@
           "KOGAV"
         ],
         "track": "250",
-        "heading": "290"
+        "heading": "290",
+        "nextSector": "ARR-W"
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E"
       }
     ],
     "slowNextSector": "ARR-W",
@@ -1857,19 +1949,31 @@
           "ARS",
           "PETEV",
           "NOSLI",
-          "INWIQ",
+          "INWIQ"
+        ],
+        "track": "190",
+        "heading": "210",
+        "nextSector": "DEP-W",
+        "cflFt": 4000
+      },
+      {
+        "exits": [
           "RESNA",
           "KOGAV"
         ],
         "track": "190",
-        "heading": "210"
+        "heading": "210",
+        "nextSector": "ARR-W",
+        "cflFt": 4000
       },
       {
         "exits": [
           "BABAP",
           "TOVRI"
         ],
-        "track": "120"
+        "track": "120",
+        "nextSector": "DEP-E",
+        "cflFt": 3000
       }
     ],
     "slowNextSector": "ARR-W",

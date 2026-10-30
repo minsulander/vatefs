@@ -1094,6 +1094,8 @@ function resolveIdealAppDepSector(flight: Flight, missedApproach: boolean): AppD
         route: flight.route,
         slow: flightIsSlowForApp(flight),
         missedApproach,
+        arrRwy: flight.arrRwy,
+        assignedHeading: flight.ahdg && flight.ahdg > 0 ? flight.ahdg : undefined,
     })
 }
 

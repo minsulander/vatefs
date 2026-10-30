@@ -245,6 +245,7 @@ import {
 import {
     loadEssaSidPrefs,
     resolvePreferredSid,
+    resolveSlowPrefCflFt,
     resolveMapDelivery,
     resolveEssaDepInfoStrip,
     collectSidsForTmaExit,
@@ -2464,6 +2465,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
         isSlowAircraft(flight.wakeTurbulence ?? "", flight.aircraftType ?? "", flight.engineType)
 
     let preferred: string | null = null
+    let essaSlowCflFt: number | undefined
     if (airport === "ESMS") {
         const ekch30 = isEkchRwy30Active(staticConfig.activeRunways)
         preferred = resolveEsmsPreferredSid({ runway, route: routeForPref, ekch30 }).sid
@@ -2477,13 +2479,18 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
         const essa = staticConfig.activeRunways?.["ESSA"]
         const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
         if (!configId) return
-        preferred = resolvePreferredSid({
+        const prefResult = resolvePreferredSid({
             airport,
             runway,
             configId,
             route: routeForPref,
             slow,
-        }).sid
+        })
+        preferred = prefResult.sid
+        if (slow) {
+            essaSlowCflFt =
+                prefResult.cflFt ?? resolveSlowPrefCflFt({ configId, route: routeForPref })
+        }
     }
     if (!preferred) {
         console.log(`[ASSIGN] No preferred SID for ${strip.callsign} after DEP RWY ${runway}`)
@@ -2522,7 +2529,10 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
         }
 
         const assignSlow = slow || isSlowSid(sid)
-        const sidAlt = resolveSidAltitude(airport, sid, assignSlow)
+        const sidAlt =
+            (assignSlow && essaSlowCflFt != null && essaSlowCflFt > 0
+                ? essaSlowCflFt
+                : undefined) ?? resolveSidAltitude(airport, sid, assignSlow)
         // SLOW/track/HAPZI: always apply climb (don't treat 5000 as sacred custom CFL)
         const mayOverwriteCfl = assignSlow || !f.cfl || f.cfl <= 2
         if (sidAlt !== undefined && mayOverwriteCfl && f.cfl !== sidAlt) {
@@ -2999,7 +3009,17 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
         flight.origin &&
         (cflSlow || !flight.cfl || flight.cfl <= 2)
     ) {
-        const sidAlt = resolveSidAltitude(flight.origin, sidForCfl, cflSlow)
+        let prefCfl: number | undefined
+        if (cflSlow && (flight.origin || "").toUpperCase() === "ESSA") {
+            const essa = staticConfig.activeRunways?.["ESSA"]
+            const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
+            if (configId) {
+                const tokens = (flight.route || "").trim().split(/\s+/).filter(Boolean)
+                if (tokens[0]?.includes("/")) tokens.shift()
+                prefCfl = resolveSlowPrefCflFt({ configId, route: tokens.join(" ") })
+            }
+        }
+        const sidAlt = prefCfl ?? resolveSidAltitude(flight.origin, sidForCfl, cflSlow)
         if (sidAlt !== undefined && flight.cfl !== sidAlt) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
             console.log(`[${logTag}] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${sidForCfl})`)
