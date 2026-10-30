@@ -1593,13 +1593,20 @@ class FlightStore {
             this.queueAutoAssume(result, flight)
         }
 
-        // ESGG paper: APP assumed our outbound G/A XFER → retire strip, reprint clean ARR in INBOUND
-        if (
-            sound === 'accept' &&
-            this.config.look === 'paper' &&
-            (flight.efsGoAround || flight.missedApproach)
-        ) {
-            return this.reprintCleanArrivalAfterGoAroundAssume(flight, sound)
+        // APP assumed our outbound G/A XFER
+        if (sound === 'accept' && (flight.efsGoAround || flight.missedApproach)) {
+            // ESGG paper: retire strip, reprint clean ARR in INBOUND
+            if (this.config.look === 'paper') {
+                return this.reprintCleanArrivalAfterGoAroundAssume(flight, sound)
+            }
+            // ESSA digital: clear full amber transfer-assumed colour + G/A flags
+            // (strip stays; rules place in INBOUND APP on next approach)
+            flight.transferOutAccepted = undefined
+            flight.efsGoAround = false
+            flight.missedApproach = false
+            flight.missedApproachHoldUntil = undefined
+            flight.clearedToLand = false
+            flight.clearedToLandHoldUntil = undefined
         }
         return result
     }
@@ -2380,6 +2387,17 @@ class FlightStore {
             const previousRule = flight.lastSectionRule ?? 'unknown'
             flight.lastSectionRule = ruleSource
             console.log(`[RULE] ${callsign} ${previousSection.sectionId} -> ${targetSection.sectionId} (rule: ${ruleSource}, was: ${previousRule})`)
+            // G/A → INBOUND APP: reset amber transfer-assumed colour
+            if (
+                (targetSection.sectionId === 'inbound' ||
+                    targetSection.sectionId.startsWith('inbound_')) &&
+                (previousSection.sectionId === 'ctr_dep' ||
+                    previousSection.sectionId.endsWith('_ctr_dep') ||
+                    previousSection.sectionId === 'ctr_arr' ||
+                    previousSection.sectionId.endsWith('_ctr_arr'))
+            ) {
+                flight.transferOutAccepted = undefined
+            }
         } else if (currentAssignment) {
             position = currentAssignment.position
             bottom = currentAssignment.bottom
@@ -3535,10 +3553,16 @@ class FlightStore {
                 } else if (nextGs !== 'DE-ICE' && prevGs === 'DE-ICE') {
                     flight.groundstateBeforeReady = undefined
                 }
+                const sameAsHeld = incomingGs === flight.groundstate
                 flight.groundstate = incomingGs
                 if (incomingGs === 'PARK') flight.airborne = false
                 flight.groundstateClearedUntil = undefined
-                flight.groundstateHoldUntil = undefined
+                // Echo of our optimistic GS must not clear the hold — otherwise a
+                // same-value CAD (ONFREQ echo) opens a window for PUSH to bounce
+                // the strip back to PUSH&START (SAS75HG undo→TSAT).
+                if (!sameAsHeld) {
+                    flight.groundstateHoldUntil = undefined
+                }
             }
         }
         if (message.clearance !== undefined) {
