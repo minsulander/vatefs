@@ -81,12 +81,26 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
      */
     bool SendInitiateCoordination(const std::string &callsign, int altitudeFeet,
                                   const std::string &point, const std::string &targetController);
+    /**
+     * Dump tracked FPs + authoritative CAD (present GS/CLR/ASSR/CFL/…) to the backend.
+     * Does not itself ask peers to reassert — use RequestFullRefreshWithPeerAssist for that.
+     */
     void Refresh();
+    /**
+     * `.efs refresh` / annotation EFSREF: Refresh() + UDP efsRefreshRequest (IRIS peer
+     * reassert) + a deferred follow-up Refresh so peer-written flags can land in local ES.
+     */
+    void RequestFullRefreshWithPeerAssist();
     bool FilterFlightPlan(EuroScopePlugIn::CFlightPlan FlightPlan);
     /** Poll tracking/handoff ownership and push UDP when ES state changes without a callback */
     void PollOwnershipChanges();
     /** Poll VCH + EFS annotations (H/S=4, CTL=3, EFSGA=5, DepC=6) — ES has no CAD DataType for annotations */
     void PollVchAnnotationChanges();
+    /**
+     * Strip annotation 7 == "EFSREF" (not scratchpad): pulse trigger for full refresh.
+     * Cleared after fire so it does not re-trigger every timer tick.
+     */
+    void PollEfsRefreshAnnotation();
     /**
      * Ground Radar stand list item (tag 2). Scratch GRP/S / GRP/M also set stand;
      * the list often has the gate earlier (incl. departures to non-ES ADES).
@@ -225,6 +239,12 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     bool pendingFullRefresh;
     /** Earliest time to run pendingFullRefresh (+2s after StartBackend for bind) */
     std::time_t fullRefreshNotBefore;
+    /**
+     * After `.efs refresh` / EFSREF: second Refresh once peers have had time to reassert
+     * assumed CLR/CFL/CTL into the network (local ES then has values to dump).
+     */
+    bool pendingRefreshFollowUp;
+    std::time_t refreshFollowUpNotBefore;
     /**
      * Callsigns whose airway expansion was requested because a strip spawned
      * (or the filed route changed on an existing strip). One GetExtractedRoute

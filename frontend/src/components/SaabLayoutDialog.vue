@@ -318,7 +318,8 @@ function selectLayout(id: string) {
 }
 
 function onSaveCurrent() {
-  const layout = ws.activeLayout.value
+  // Prefer board snapshot from dialog open — not a catalog preview sitting on activeLayout
+  const layout = layoutBeforeOpen.value ?? ws.activeLayout.value
   if (!layout) return
   const name = window.prompt('Layout name')
   if (!name?.trim()) return
@@ -333,11 +334,12 @@ function onSaveCurrent() {
   })
   savedTick.value++
   selectedId.value = entry.id
-  ws.previewLayout(ws.activeLayout.value!, {
+  ws.previewLayout(entry.layout, {
     resetClosed: false,
     sourceLabel: entry.name,
     sourceSavedId: entry.id,
   })
+  layoutBeforeOpen.value = entry.layout
 }
 
 function onDelete() {

@@ -162,6 +162,8 @@ export interface FlightStrip {
     // DCL (Data-Link Clearance) state
     dclStatus?: 'REQUEST' | 'INVALID' | 'SENT' | 'WILCO' | 'UNABLE' | 'REJECTED' | 'DONE'
     dclMessage?: string           // Original pilot request text
+    /** Pilot telex had free-text after ATIS — show DCL (not ACK CLR) and open CLR dialog. */
+    dclRequestHasRemarks?: boolean
     dclClearance?: string         // Filled-out clearance template for preview
     /**
      * Paper CLR-read: DCL text was dismissed. Hides the DCL mark and the left

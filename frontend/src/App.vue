@@ -123,4 +123,19 @@ body.touch-dragging * {
     -webkit-user-select: none;
     user-select: none;
 }
+
+/*
+ * Apple Pencil / stylus: allow click synthesis on interactive controls.
+ * Global touch-action:none (while dragging) and strip user-select rules otherwise
+ * make pen taps unreliable compared to finger touchend handlers.
+ */
+.flight-strip button,
+.flight-strip input,
+.flight-strip textarea,
+.flight-strip a,
+.efs-popup-menu button,
+.efs-popup-chip,
+.action-button {
+    touch-action: manipulation;
+}
 </style>

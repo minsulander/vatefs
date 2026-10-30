@@ -3025,11 +3025,11 @@ watch(topStripIds, (ids, prev) => {
   }
 })
 
-/** New / moved-in strips inherit this section's strip-size setting (workspace / RTC). */
+/** New / moved-in strips inherit this section's strip-size setting (workspace / RTC / SAAB). */
 watch(
   [topStripIds, bottomStripIds],
   ([topIds, bottomIds], prev) => {
-    if (!(props.workspaceMode || store.multiAirport)) return
+    if (!(props.workspaceMode || store.multiAirport || store.saabLayoutsMode)) return
     const prevSet = new Set([...(prev?.[0] ?? []), ...(prev?.[1] ?? [])])
     const size = headerStripSize.value
     for (const id of [...topIds, ...bottomIds]) {
@@ -3048,7 +3048,7 @@ watch(
 watch(
   headerStripSize,
   (size, prev) => {
-    if (!(props.workspaceMode || store.multiAirport)) return
+    if (!(props.workspaceMode || store.multiAirport || store.saabLayoutsMode)) return
     if (prev === undefined) return // first paint handled by strip-id watch above
     if (size === prev) return
     applyHeaderStripSizeToStrips()

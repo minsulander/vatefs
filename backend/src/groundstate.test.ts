@@ -93,4 +93,18 @@ check("resolve: scratch TXO allows TAXI", () => {
     )
 })
 
+check("resolve: bare empty GS is no-op (preserve current)", () => {
+    assert.equal(
+        resolveIncomingGroundstate({ groundstate: "", current: "PUSH" }),
+        undefined,
+    )
+})
+
+check("resolve: NOSTATE still clears", () => {
+    assert.equal(
+        resolveIncomingGroundstate({ scratch: "NOSTATE", groundstate: "", current: "TAXI" }),
+        "",
+    )
+})
+
 console.log(`groundstate: ${passed} passed`)

@@ -420,12 +420,13 @@ function formatHhMm(raw: string | undefined): string {
 }
 
 /**
- * Prefer TS → TB → EB. Only for departures Occupied on stand
- * (not blocked — those show the related stand name).
+ * Prefer GS label (STUP/PUSH/TAXI) → TS → TB → EB.
+ * Only for departures Occupied on stand (not blocked — those show related stand).
  */
 function depTimeText(stand: StandMenuStand): string {
   const occ = stand.occupied
   if (!occ || occ.kind !== 'occupied') return ''
+  if (occ.gsLabel) return occ.gsLabel
   if (occ.tsat) return `TS ${formatHhMm(occ.tsat)}`
   if (occ.tobt) return `TB ${formatHhMm(occ.tobt)}`
   if (occ.eobt) return `EB ${formatHhMm(occ.eobt)}`

@@ -1239,7 +1239,15 @@ class FlightStore {
     applyOptimisticGroundstate(callsign: string, state: string): void {
         const flight = this.flights.get(callsign)
         if (!flight) return
-        flight.groundstate = state
+        const next = state as GroundState
+        const prev = (flight.groundstate || '').toUpperCase()
+        // Remember pre-READY state so cancel READY can restore (not always ONFREQ)
+        if (next === 'DE-ICE' && prev !== 'DE-ICE') {
+            flight.groundstateBeforeReady = flight.groundstate ?? ''
+        } else if (next !== 'DE-ICE' && prev === 'DE-ICE') {
+            flight.groundstateBeforeReady = undefined
+        }
+        flight.groundstate = next
         if (state === 'PARK') flight.airborne = false
         if (!state) {
             flight.groundstateClearedUntil = Date.now() + 3000
@@ -1249,6 +1257,22 @@ class FlightStore {
             flight.groundstateHoldUntil = Date.now() + 12000
         }
         flight.lastUpdate = Date.now()
+    }
+
+    /**
+     * Cancel READY (DE-ICE): restore groundstate from before READY was set.
+     * Falls back to ONFREQ only when we never recorded a prior state.
+     */
+    restoreGroundstateBeforeReady(callsign: string): GroundState {
+        const flight = this.flights.get(callsign)
+        if (!flight) return 'ONFREQ'
+        const restore =
+            flight.groundstateBeforeReady !== undefined
+                ? flight.groundstateBeforeReady
+                : 'ONFREQ'
+        flight.groundstateBeforeReady = undefined
+        this.applyOptimisticGroundstate(callsign, restore)
+        return restore
     }
 
     /**
@@ -1271,6 +1295,31 @@ class FlightStore {
     }
 
     /**
+     * Controller CTL / CTL_GS: set cleared-to-land, clear G/A flags, and hold
+     * against TopSky MISAP_ CAD that would immediately wipe CTL (SAS701 race).
+     */
+    applyControllerClearedToLand(callsign: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.clearedToLand = true
+        // Clear active G/A routing; keep misapScratchLatched so sticky MISAP_ does not re-fire
+        flight.missedApproach = false
+        flight.efsGoAround = false
+        flight.missedApproachHoldUntil = undefined
+        flight.clearedToLandHoldUntil = Date.now() + 12000
+        flight.lastUpdate = Date.now()
+    }
+
+    /** Clear CTL (unsetCTL / GOA) and drop the anti-MISAP hold. */
+    clearControllerClearedToLand(callsign: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.clearedToLand = false
+        flight.clearedToLandHoldUntil = undefined
+        flight.lastUpdate = Date.now()
+    }
+
+    /**
      * ESGG paper soft go-around: local optimistic state (UDP setEfsGoAround syncs via ann 5).
      * Does not set TopSky MISAP_. Keeps CTL + ATA until APP assumes the G/A XFER.
      */
@@ -1280,6 +1329,18 @@ class FlightStore {
         flight.efsGoAround = true
         flight.missedApproach = true
         flight.missedApproachHoldUntil = Date.now() + 12000
+        flight.lastUpdate = Date.now()
+    }
+
+    /** Mark an active TopSky / GOA missed approach (fresh event). */
+    applyFreshMissedApproach(callsign: string): void {
+        const flight = this.flights.get(callsign)
+        if (!flight) return
+        flight.missedApproach = true
+        flight.misapScratchLatched = true
+        flight.clearedToLand = false
+        flight.clearedToLandHoldUntil = undefined
+        flight.ata = undefined
         flight.lastUpdate = Date.now()
     }
 
@@ -1560,7 +1621,10 @@ class FlightStore {
         flight.efsGoAround = false
         flight.missedApproach = false
         flight.missedApproachHoldUntil = undefined
+        // Keep latch if TopSky still shows MISAP_ — next approach must not re-enter G/A routing
+        flight.misapScratchLatched = hadTopSkyMisap || flight.misapScratchLatched
         flight.clearedToLand = false
+        flight.clearedToLandHoldUntil = undefined
         flight.ata = undefined
         flight.lastUpdate = Date.now()
 
@@ -2970,6 +3034,8 @@ class FlightStore {
             if (ownershipOptimistic && !isMe) {
                 // Keep EFS owner through empty clears during optimistic window
             } else {
+                const wasMe =
+                    !!myCs && (flight.controller || '').toUpperCase() === myCs
                 flight.controller = message.controller
                 if (isMe) {
                     flight.ownershipOptimisticUntil = undefined
@@ -2977,6 +3043,12 @@ class FlightStore {
                     flight.handoffOptimisticUntil = undefined
                     flight.ownershipOptimisticUntil = undefined
                     if (flight.rofRequestFrom) this.clearRofRequest(flight)
+                    // Left our track after G/A XFER: drop active G/A routing so the
+                    // next inbound/assume uses normal rules (sticky MISAP_ stays latched).
+                    if (wasMe && flight.missedApproach && !flight.efsGoAround) {
+                        flight.missedApproach = false
+                        flight.missedApproachHoldUntil = undefined
+                    }
                 }
             }
         }
@@ -3341,12 +3413,28 @@ class FlightStore {
         if (message.groundstate !== undefined && message.groundstate !== flight.groundstate
                 && (message.groundstate !== '' || (flight.groundstate ?? '') !== ''))
             console.log(`[ASSIGN] ${callsign} groundstate: ${flight.groundstate ?? '-'} -> ${message.groundstate}`)
+        if (message.clearance !== undefined && !!message.clearance !== !!flight.clearance)
+            console.log(
+                `[ASSIGN] ${callsign} clearance: ${flight.clearance ? 'true' : 'false'} -> ${message.clearance}${message.clearanceEdge ? ' (edge)' : ''}`,
+            )
+        const ctlHoldActive =
+            flight.clearedToLandHoldUntil !== undefined &&
+            Date.now() < flight.clearedToLandHoldUntil
         if (message.clearedToLand !== undefined && message.clearedToLand !== flight.clearedToLand)
             console.log(`[ASSIGN] ${callsign} clearedToLand: ${message.clearedToLand}`)
-        if (message.scratch === 'MISAP_' && !flight.missedApproach)
-            console.log(`[ASSIGN] ${callsign} missedApproach`)
-        else if (message.scratch === '' && flight.missedApproach)
-            console.log(`[ASSIGN] ${callsign} missedApproach cleared`)
+        if (message.scratch === 'MISAP_' && !flight.misapScratchLatched) {
+            if (ctlHoldActive && flight.clearedToLand) {
+                console.log(`[ASSIGN] ${callsign} MISAP_ ignored (CTL hold)`)
+            } else {
+                console.log(`[ASSIGN] ${callsign} missedApproach (fresh MISAP_)`)
+            }
+        } else if (
+            message.scratch !== undefined &&
+            message.scratch !== 'MISAP_' &&
+            flight.misapScratchLatched
+        ) {
+            console.log(`[ASSIGN] ${callsign} MISAP_ scratch cleared`)
+        }
         if (message.scratch === 'WX_' && !flight.weatherGiven)
             console.log(`[ASSIGN] ${callsign} weatherGiven (WX_)`)
 
@@ -3365,6 +3453,10 @@ class FlightStore {
         // Any CAD means ES has reported assigned data for this FP (Refresh always sends CAD).
         // Critical for deferring TopSky SSR allocate until existing ASSR can land.
         flight.controllerAssignedSeen = true
+        if (message.bulkRefresh) {
+            // Positive sync only — present ASSR/GS/CLR/CFL fill blanks; wipe defenses below.
+            console.log(`[REFRESH] bulk CAD ${callsign}`)
+        }
         if (message.squawk !== undefined) {
             // ASSR must be ICAO octal (0–7). Ignore junk like "9875" from interim ES updates.
             const next = normalizeAssignedSquawk(message.squawk)
@@ -3379,9 +3471,17 @@ class FlightStore {
         // Ignore CAD final=0 (unset override) so FPL altitude RFL is not wiped
         if (message.rfl !== undefined && message.rfl > 0) flight.rfl = message.rfl
         if (message.cfl !== undefined) {
-            flight.cfl = message.cfl
-            // Real altitude clears approach-type label
-            if (message.cfl === 0 || message.cfl > 2) flight.approachType = undefined
+            // Don't let a transient cfl:0 from incomplete CAD wipe a real cleared level
+            // (refresh/reconnect races). Approach codes 1/2 and positive altitudes always apply.
+            const keepExistingCfl =
+                message.cfl === 0 &&
+                flight.cfl !== undefined &&
+                flight.cfl > 2
+            if (!keepExistingCfl) {
+                flight.cfl = message.cfl
+                // Real altitude clears approach-type label
+                if (message.cfl === 0 || message.cfl > 2) flight.approachType = undefined
+            }
         }
         if (message.xfl !== undefined) {
             flight.xfl = message.xfl > 0 ? message.xfl : undefined
@@ -3401,11 +3501,19 @@ class FlightStore {
                 flight.groundstateHoldUntil !== undefined &&
                 Date.now() < flight.groundstateHoldUntil &&
                 !!flight.groundstate
-            if (!holdingEfsGs) {
+            // Explicit NOSTATE / EFS clear only — bare empty GetGroundState() on refresh
+            // mass-wiped PUSH/TAXI/ARR/DEPA (VatEFS-261029-2150 ~21:52:52).
+            const explicitClear =
+                message.scratch === 'NOSTATE' ||
+                (message.groundstate === '' && !flight.groundstate)
+            if (holdingEfsGs) {
+                // keep EFS-set groundstate
+            } else if (explicitClear || !flight.groundstate) {
                 flight.groundstate = ''
                 flight.groundstateClearedUntil = Date.now() + 3000
                 flight.groundstateHoldUntil = undefined
             }
+            // else: keep known GS when ES reports empty without NOSTATE
         } else if (incomingGs !== undefined && incomingGs !== '') {
             const holdingClear =
                 flight.groundstateClearedUntil !== undefined &&
@@ -3420,6 +3528,13 @@ class FlightStore {
             } else if (holdingEfsGs) {
                 // keep EFS-set groundstate
             } else {
+                const prevGs = (flight.groundstate || '').toUpperCase()
+                const nextGs = (incomingGs || '').toUpperCase()
+                if (nextGs === 'DE-ICE' && prevGs !== 'DE-ICE') {
+                    flight.groundstateBeforeReady = flight.groundstate ?? ''
+                } else if (nextGs !== 'DE-ICE' && prevGs === 'DE-ICE') {
+                    flight.groundstateBeforeReady = undefined
+                }
                 flight.groundstate = incomingGs
                 if (incomingGs === 'PARK') flight.airborne = false
                 flight.groundstateClearedUntil = undefined
@@ -3431,8 +3546,20 @@ class FlightStore {
                 flight.clearanceHoldUntil !== undefined &&
                 Date.now() < flight.clearanceHoldUntil &&
                 !!flight.clearance !== !!message.clearance
+            // Same class as empty-GS wipe: bulk Refresh/FPL often sent clearance:false
+            // while ES still had CLR. Only accept true→false from CLEARENCE_FLAG edge
+            // (or when EFS already cleared optimistically — flight.clearance already false).
+            const ignoreNonEdgeClear =
+                !message.clearance &&
+                !!flight.clearance &&
+                !message.clearanceEdge &&
+                !holdingClr
             if (holdingClr) {
                 // Keep EFS-set CLR until EuroScope catches up
+            } else if (ignoreNonEdgeClear) {
+                console.log(
+                    `[ASSIGN] ${callsign} clearance false ignored (non-edge bulk CAD)`,
+                )
             } else {
                 if (
                     flight.clearanceHoldUntil !== undefined &&
@@ -3463,6 +3590,7 @@ class FlightStore {
         }
         // Soft G/A must not wipe CTL that was already set before/when G/A was applied.
         // Paper: once CTL is on the strip, ignore VCH clearing it (landing / ATA / list).
+        // CTL hold: controller just set CTL/CTL_GS — ignore VCH clear while clearScratchpad races.
         // Explicit EFS unsetCTL / move rules set flight.clearedToLand = false locally first.
         if (message.clearedToLand !== undefined) {
             const softGaKeepCtl =
@@ -3473,8 +3601,15 @@ class FlightStore {
                 message.clearedToLand === false &&
                 !!flight.clearedToLand &&
                 this.config.look === 'paper'
-            if (!softGaKeepCtl && !paperKeepCtl) {
+            const ctlHoldKeep =
+                message.clearedToLand === false &&
+                !!flight.clearedToLand &&
+                ctlHoldActive
+            if (!softGaKeepCtl && !paperKeepCtl && !ctlHoldKeep) {
                 flight.clearedToLand = message.clearedToLand
+                if (!message.clearedToLand) {
+                    flight.clearedToLandHoldUntil = undefined
+                }
             }
         }
         if (message.communicationType !== undefined) {
@@ -3484,20 +3619,36 @@ class FlightStore {
         if (message.efsGoAround !== undefined) {
             flight.efsGoAround = message.efsGoAround
         }
-        // TopSky G/A: scratch MISAP_
+        // TopSky G/A: scratch MISAP_ — rising edge only.
+        // Sticky MISAP_ after a prior G/A must NOT keep special section routing;
+        // next approach uses normal inbound until GOA / fresh MISAP_ again.
+        let rejectMisapForCtlHold = false
         if (message.scratch === 'MISAP_') {
-            flight.missedApproach = true
-            flight.clearedToLand = false
-            flight.missedApproachHoldUntil = undefined
-            flight.ata = undefined
-        } else if (message.scratch === '') {
-            const holdingSoftMa =
-                flight.missedApproachHoldUntil !== undefined &&
-                Date.now() < flight.missedApproachHoldUntil
-            // Empty scratch drops TopSky MA; EFSGA may still keep MA below
-            if (!holdingSoftMa && !flight.efsGoAround) {
-                flight.missedApproach = false
+            if (ctlHoldActive && flight.clearedToLand) {
+                // Controller just set CTL — ignore MISAP_ echo, re-clear scratch
+                rejectMisapForCtlHold = true
+                flight.misapScratchLatched = true
+            } else if (!flight.misapScratchLatched) {
+                // Fresh MISAP_ (or first sighting after scratch left MISAP_)
+                flight.missedApproach = true
+                flight.clearedToLand = false
                 flight.missedApproachHoldUntil = undefined
+                flight.clearedToLandHoldUntil = undefined
+                flight.ata = undefined
+                flight.misapScratchLatched = true
+            }
+            // else: sticky MISAP_ while MA already cleared for next approach — ignore
+        } else if (message.scratch !== undefined) {
+            flight.misapScratchLatched = false
+            if (message.scratch === '') {
+                const holdingSoftMa =
+                    flight.missedApproachHoldUntil !== undefined &&
+                    Date.now() < flight.missedApproachHoldUntil
+                // Empty scratch drops TopSky MA; EFSGA may still keep MA below
+                if (!holdingSoftMa && !flight.efsGoAround) {
+                    flight.missedApproach = false
+                    flight.missedApproachHoldUntil = undefined
+                }
             }
         }
         // TopSky WEATHER manual alert (WX_) — UI state survives scratch consume/clear
@@ -3542,6 +3693,11 @@ class FlightStore {
         let clearScratchpadCallsign: string | undefined
         let clearScratchpadDelayMs: number | undefined
         let refreshCallsigns: string[] | undefined
+        // Re-clear MISAP_ while CTL hold is active (stale CAD after CTL/CTL_GS)
+        if (rejectMisapForCtlHold) {
+            clearScratchpadCallsign = callsign
+            clearScratchpadDelayMs = 100
+        }
         if (message.scratch !== undefined) {
             const scratch = message.scratch
             const lamRof = scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
@@ -3595,10 +3751,16 @@ class FlightStore {
         let restoreScratchValue: string | undefined
         if (message.scratch !== undefined) {
             const scratch = message.scratch
+            // Bulk refresh omits empty scratch in the plugin; if one slips through,
+            // do not wipe known remarks/HP (same class as empty-GS / non-edge CLR).
+            const skipBulkEmptyScratch =
+                !!message.bulkRefresh && scratch === "" && (!!flight.remarks || !!flight.hp)
             const holdingScratchFields =
                 flight.scratchFieldsHoldUntil !== undefined &&
                 Date.now() < flight.scratchFieldsHoldUntil
-            if (holdingScratchFields && !isProtocolScratch(scratch)) {
+            if (skipBulkEmptyScratch) {
+                // keep EFS remarks/HP
+            } else if (holdingScratchFields && !isProtocolScratch(scratch)) {
                 const desired = buildCombinedScratch(flight.remarks, flight.hp)
                 // Normalize for compare: ES may echo "VECT" while we store ".VECT"
                 if (scratch !== desired) {
@@ -3837,6 +3999,7 @@ class FlightStore {
         if (message.latitude !== undefined) flight.latitude = message.latitude
         if (message.longitude !== undefined) flight.longitude = message.longitude
         if (message.groundSpeed !== undefined) flight.groundSpeed = message.groundSpeed
+        if (message.heading !== undefined) flight.heading = message.heading
         // radar target squawk is not the same as the assigned squawk
         //if (message.squawk !== undefined) flight.squawk = message.squawk
         flight.lastUpdate = Date.now()
@@ -5324,10 +5487,16 @@ class FlightStore {
 
         const myRole = actionConfig.myRole ?? 'TWR'
         const primaryAction = actions?.[0]
-        // READY → GND: never use EuroScope nextController (often APP) when sequence missed
-        if (!xferFrequency && primaryAction === 'READY' && (myRole === 'DEL' || isEssaRolesConfig(actionConfig))) {
-            const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
-            if (freq) xferFrequency = freq.toFixed(3)
+        // READY / DEL XFER (RDY already set) → GND: never use EuroScope nextController (often APP)
+        if (
+            !xferFrequency &&
+            (primaryAction === 'READY' || primaryAction === 'XFER') &&
+            (myRole === 'DEL' || (primaryAction === 'READY' && isEssaRolesConfig(actionConfig)))
+        ) {
+            if (primaryAction === 'READY' || myRole === 'DEL') {
+                const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
+                if (freq) xferFrequency = freq.toFixed(3)
+            }
         }
 
         const isEsgg = actionConfig.myAirports.some((a) => a.toUpperCase() === 'ESGG')
@@ -5392,7 +5561,10 @@ class FlightStore {
         // Supplement xferFrequency from online controller tracking when flight data doesn't have it
         if (!xferFrequency && actions?.length) {
             if (primaryAction === 'XFER') {
-                if (myRole === 'GND') {
+                if (myRole === 'DEL') {
+                    const freq = getControllerFrequency('GND') ?? getControllerFrequency('TWR')
+                    if (freq) xferFrequency = freq.toFixed(3)
+                } else if (myRole === 'GND') {
                     const freq = getControllerFrequency('TWR')
                     if (freq) xferFrequency = freq.toFixed(3)
                 } else if (myRole === 'TWR' && (stripType === 'arrival' || stripType === 'local')) {
@@ -5591,6 +5763,7 @@ class FlightStore {
             rofFlashUntil,
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
+            dclRequestHasRemarks: flight.dclRequestHasRemarks || undefined,
             dclClearance: flight.dclClearance,
             paperClrReadSuppressed: paperFresh
                 ? undefined

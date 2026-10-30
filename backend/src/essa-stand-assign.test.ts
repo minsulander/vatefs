@@ -588,6 +588,89 @@ check("airborne planned (+ blocked) sets airborne for softer shade", () => {
     assert.equal(s03.occupied?.airborne, true)
 })
 
+check("PUSH groundstate still occupies while GPS in polygon", () => {
+    // Coords = stand 01 polygon; GS PUSH must NOT free the stand
+    const menu = buildEssaStandMenu({
+        stripId: "EWG5PZ",
+        callsign: "EWG5PZ",
+        origin: "LKPR",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "NSZ5YB",
+                stand: "01",
+                latitude: 59.652132,
+                longitude: 17.930388,
+                groundstate: "PUSH",
+                departure: true,
+                dims: resolveAircraftDims("B738", "M", "NSZ5YB"),
+                assigned: true,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
+    assert.equal(s01?.occupied?.kind, "occupied")
+    assert.equal(s01?.occupied?.gsLabel, "PUSH")
+})
+
+check("STUP on stand shows STUP instead of TSAT", () => {
+    // Coords are stand 01 polygon (same as BLOCKS occupied fixture)
+    const menu = buildEssaStandMenu({
+        stripId: "EWG5PZ",
+        callsign: "EWG5PZ",
+        origin: "LKPR",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "SAS121",
+                stand: "01",
+                latitude: 59.652132,
+                longitude: 17.930388,
+                groundstate: "STUP",
+                departure: true,
+                tsat: "1200",
+                dims: resolveAircraftDims("A320", "M", "SAS121"),
+                assigned: true,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
+    assert.equal(s01?.occupied?.kind, "occupied")
+    assert.equal(s01?.occupied?.gsLabel, "STUP")
+    assert.equal(s01?.occupied?.tsat, undefined)
+})
+
+check("radar-only (no FPL) still occupies by GPS", () => {
+    const menu = buildEssaStandMenu({
+        stripId: "EWG5PZ",
+        callsign: "EWG5PZ",
+        origin: "LKPR",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "SAS22",
+                // no stand assignment / no origin — GPS only
+                latitude: 59.652132,
+                longitude: 17.930388,
+                dims: resolveAircraftDims("A320", "M", "SAS22"),
+                assigned: false,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
+    assert.equal(s01?.occupied?.kind, "occupied")
+    assert.equal(s01?.occupied?.label, "SAS22")
+})
+
 check("departure on stand occupies and BLOCKS neighbour", () => {
     // DEPARTURE on 01 (BLOCKS:3:C — unpadded GRP ref) — widebody exceeds C → 03 blocked
     const menu = buildEssaStandMenu({

@@ -1557,6 +1557,7 @@
             ]"
             :title="action === 'CONTACTME' ? 'EuroScope .contactme (needs ES window focus)' : undefined"
             @click.stop="() => onActionClick(action)"
+            @pointerup.stop="(e: PointerEvent) => onActionPointerUp(e, action)"
             @touchend.stop="(e) => onActionTouch(e, action)"
           >
             <span class="action-text">{{ actionLabel(action) }}</span>
@@ -5558,11 +5559,19 @@ function onReaBadgeClick(event: MouseEvent) {
 /**
  * Instant / On assume: label CLNC as ACK CLR (voice-ack sets clearance flag).
  * Manual: open CLR dialog as usual.
- * Hoppie / dclStatus never renames this key (top expander chip still shows DCL).
+ * DCL REQUEST with pilot remarks → DCL button (manual review), not ACK CLR.
+ * Hoppie / dclStatus otherwise never renames this key (top expander chip still shows DCL).
  */
-const showAckClrLabel = computed(
-  () => store.autoLopSsr === 'instant' || store.autoLopSsr === 'assume',
-)
+const showAckClrLabel = computed(() => {
+  if (
+    props.strip.dclStatus === 'REQUEST' &&
+    (props.strip.dclRequestHasRemarks || !!props.strip.dclMessage)
+  ) {
+    // Remarks in telex, or any active REQUEST — prefer DCL over ACK CLR
+    if (props.strip.dclRequestHasRemarks) return false
+  }
+  return store.autoLopSsr === 'instant' || store.autoLopSsr === 'assume'
+})
 
 /** Strip label for action codes (internal codes unchanged for rules/handlers). */
 function actionLabel(action: string): string {
@@ -5570,6 +5579,7 @@ function actionLabel(action: string): string {
   const compactPair = isCompactBay.value && effectiveActionCount.value > 1
   switch (action) {
     case 'CLNC':
+      if (props.strip.dclRequestHasRemarks && props.strip.dclStatus === 'REQUEST') return 'DCL'
       return showAckClrLabel.value ? 'ACK CLR' : 'CLR'
     case 'TXO':
       if (rtoChoiceOpen.value) return compactPair ? 'OUT' : 'TAXI OUT'
@@ -5628,7 +5638,11 @@ function actionButtonClass(action: string): Record<string, boolean> {
   // DCL status coloring for CLNC button (green while SENT or DONE/WILCO confirmed)
   if (action === 'CLNC') {
     const status = props.strip.dclStatus
-    classes['action-dcl-request'] = status === 'REQUEST'
+    const remarksNeedAction =
+      status === 'REQUEST' && !!props.strip.dclRequestHasRemarks
+    classes['action-dcl-request'] = status === 'REQUEST' && !remarksNeedAction
+    // Remarks in PREDEP telex → stronger highlight than normal yellow REQUEST
+    classes['action-dcl-remarks'] = remarksNeedAction
     classes['action-dcl-error'] = status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED'
     classes['action-dcl-sent'] = status === 'SENT' || status === 'DONE' || status === 'WILCO'
   }
@@ -6097,6 +6111,13 @@ function onDragAreaTouchCancel() {
   touchStarted = false
 }
 
+/** Apple Pencil / stylus: pointerup fires reliably; touchend does not. */
+function onActionPointerUp(e: PointerEvent, action: string) {
+  if (e.pointerType !== 'pen') return
+  e.preventDefault()
+  onActionClick(action)
+}
+
 // Action button handlers
 function onActionClick(action: string) {
   if (action === 'CONTACTME') {
@@ -6107,6 +6128,7 @@ function onActionClick(action: string) {
   if (action === 'CLNC') {
     if (!canEditAssignedData.value) return
     // Auto-prep mode: always ACK CLR (voice ack → clearance flag), never open CLR dialog
+    // Exception: DCL request with pilot remarks → open CLR (manual DCL)
     if (showAckClrLabel.value) {
       store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
       return
@@ -9613,6 +9635,16 @@ button.tobt-setby-pm:hover {
 }
 .action-button.action-dcl-request .action-text {
   color: #f9a825 !important;
+}
+/* PREDEP remarks → filled amber DCL key (needs manual review) */
+.action-button.action-dcl-remarks {
+  background: #f9a825 !important;
+  color: #1a1a1a !important;
+  font-weight: 700 !important;
+}
+.action-button.action-dcl-remarks .action-text {
+  color: #1a1a1a !important;
+  font-weight: 700 !important;
 }
 .action-button.action-dcl-error {
   background: #ebebeb !important;

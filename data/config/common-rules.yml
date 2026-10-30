@@ -42,12 +42,15 @@ sectionRules:
     groundstates: [TAXI, TXIN]
     priority: 30
 
-  # CTR DEP: Missed approach — airborne arrival controlled by me (highest priority)
-  ctr_dep_missed_approach:
-    sectionId: ctr_dep
+  # CTR ARR: Active (fresh) missed approach only — sticky TopSky MISAP_ alone must
+  # not keep this routing after G/A was cleared (next approach = normal inbound).
+  # clearedToLand: false so CTL lets runway_cleared_to_land win.
+  ctr_arr_missed_approach:
+    sectionId: ctr_arr
     missedApproach: true
     controller: myself
     airborne: true
+    clearedToLand: false
     priority: 105
 
   # CTR DEP: Airborne departures (groundstate DEPA + airborne flag)
@@ -258,6 +261,18 @@ actionRules:
     notMyRole: [GND]
     priority: 120
 
+  # DEL: RDY (DE-ICE) already set — transfer only (UI labels XFER, not READY)
+  xfer_del_rdy:
+    action: XFER
+    direction: either
+    controller: myself
+    clearance: true
+    groundstates: [DE-ICE]
+    handoffInitiated: false
+    myRole: [DEL]
+    notMyRole: [GND]
+    priority: 121
+
   # DEL: CLNC always available for pending departures/local
   clnc_del:
     action: CLNC
@@ -423,7 +438,7 @@ actionRules:
     myRole: [TWR]
     priority: 85
 
-  # CTR DEP missed approach: XFER to APP when APP is separately online (TWR top-down)
+  # Missed approach (CTR ARR): XFER to APP when APP is separately online (TWR top-down)
   xfer_missed_approach:
     action: XFER
     missedApproach: true

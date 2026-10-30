@@ -829,7 +829,8 @@ function handleLiveMessage(apt: string, raw: WebSocket.RawData) {
 
 /**
  * Publish `reassertAssumed` on every open airport room (except self via server fanout).
- * Called when this controller types `.efs refresh` and needs peers to re-write flags.
+ * Peer-assist half of `.efs refresh` / annotation EFSREF — not the invoke path.
+ * Local dump is plugin Refresh() over UDP; IRIS only asks peers to re-write ES flags.
  */
 export function requestPeerReassertAssumed(): boolean {
     const settings = getSettings()

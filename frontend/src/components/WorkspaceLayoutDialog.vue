@@ -458,14 +458,16 @@ onMounted(() => window.addEventListener('keydown', onKeydown, true))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true))
 
 function onSaveCurrent() {
-  const active = ws.activeLayout.value
-  if (!active) return
+  // Save the board as it was when the dialog opened — not the live DEFAULT/saved preview
+  // that syncSelectionAndFolders / selectLayout put on activeLayout.
+  const toSave = layoutBeforeOpen.value ?? ws.activeLayout.value
+  if (!toSave) return
   const name = window.prompt('Layout name', `Layout ${currentRolesLabel.value}`)
   if (!name) return
   const trimmed = name.trim()
   if (!trimmed) return
   const entry = saveNamedLayout(trimmed, {
-    ...active,
+    ...toSave,
     roleKey: roleKey.value,
     roles: [...store.essaRoles],
     rolesLabel: currentRolesLabel.value,
@@ -473,14 +475,21 @@ function onSaveCurrent() {
   selectedId.value = entry.id
   savedTick.value++
   folderOpen.value = { ...folderOpen.value, [roleKey.value]: true }
-  // Catalog → Layout shows this name as the loaded layout
-  if (ws.activeLayout.value) {
-    ws.previewLayout(ws.activeLayout.value, {
+  // Apply the newly saved layout (and label) onto the board
+  ws.previewLayout(
+    {
+      ...entry.layout,
+      roleKey: roleKey.value,
+      roles: [...store.essaRoles],
+      rolesLabel: currentRolesLabel.value,
+    },
+    {
       resetClosed: false,
       sourceLabel: entry.name,
       sourceSavedId: entry.id,
-    })
-  }
+    },
+  )
+  layoutBeforeOpen.value = sanitizeWorkspaceLayout(entry.layout)
 }
 
 function onMakeDefault() {

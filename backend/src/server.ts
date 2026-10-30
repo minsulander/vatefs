@@ -296,6 +296,7 @@ import {
     saveWorkspaceStore,
 } from "./workspace-store.js"
 import { buildCombinedScratch } from "./scratchpad.js"
+import { parseDclRequestTelex } from "./dcl-request.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
 
@@ -949,6 +950,8 @@ type OutboundPluginCommand =
     | { type: "setCtoc"; callsign: string; ctoc: string }
     /** One airway expansion. Plugin runs a single GetExtractedRoute per timer tick. */
     | { type: "expandRoute"; callsign: string }
+    /** Full FP+CAD dump (same as .efs refresh) — used when DEP PREP waits for ASSR/CFL */
+    | { type: "refresh" }
     | {
           type: "amendFlightPlan"
           callsign: string
@@ -1600,7 +1603,9 @@ function canPublishEssaStripview(): boolean {
     if (byAirport) {
         for (const [apt, roles] of byAirport) {
             if (apt.toUpperCase() !== "ESSA") continue
-            return roles.some((r) => r === "TWR" || r === "GND")
+            // DEL included: alone on AD must overwrite stale TWR/GND order (else IRIS
+            // keeps old traffic and never shows a clean/empty stripview).
+            return roles.some((r) => r === "TWR" || r === "GND" || r === "DEL")
         }
     }
     // Fallback before myRolesByAirport is primed: physical ESSA layout roles
@@ -1610,7 +1615,9 @@ function canPublishEssaStripview(): boolean {
             r === "TWR-E" ||
             r === "TWR-W" ||
             String(r).startsWith("TWR") ||
-            String(r).startsWith("GND"),
+            String(r).startsWith("GND") ||
+            String(r).startsWith("CD") ||
+            String(r) === "DEL",
     )
 }
 
@@ -2996,9 +3003,8 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
         if (sidAlt !== undefined && flight.cfl !== sidAlt) {
             sendUdp(JSON.stringify({ type: "assignCfl", callsign: flight.callsign, altitude: sidAlt }))
             console.log(`[${logTag}] Auto-assigned CFL ${sidAlt} for ${flight.callsign} (SID ${sidForCfl})`)
-            if (cliArgs.mock) {
-                flight.cfl = sidAlt
-            }
+            // Optimistic so strip shows CFL before CAD echo (live + mock)
+            flight.cfl = sidAlt
         }
     }
 
@@ -3013,7 +3019,8 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
     }
     if (requestTopskySquawkReset(flight.callsign)) {
         console.log(`[${logTag}] Requested TopSky squawk for ${flight.callsign}`)
-        flight.squawk = undefined
+        // Keep any prior ASSR on the strip until CAD reports the new code —
+        // clearing here blanked SSR after restart/refresh while TopSky allocated.
     }
     return {}
 }
@@ -3282,10 +3289,18 @@ function scheduleDeferredAutoDepPrep(callsign: string) {
         pendingAutoDepPrepTimers.delete(key)
         if (!pendingAutoDepPrepCallsigns.has(key)) return
         if (runAutoDepPrep(key)) return
-        // Still no CAD — do not allocate; CAD flush will retry. Avoid marking done.
+        // Still no CAD — ask plugin for a full Refresh so ASSR/CFL land, then retry once.
         console.log(
-            `[DEP PREP] Still waiting for ES assigned data for ${key} after ${AUTO_DEP_PREP_SETTLE_MS}ms`,
+            `[DEP PREP] Still waiting for ES assigned data for ${key} after ${AUTO_DEP_PREP_SETTLE_MS}ms — requesting refresh`,
         )
+        sendUdp(JSON.stringify({ type: "refresh" } satisfies OutboundPluginCommand))
+        const retry = setTimeout(() => {
+            pendingAutoDepPrepTimers.delete(key)
+            if (!pendingAutoDepPrepCallsigns.has(key)) return
+            if (runAutoDepPrep(key)) return
+            console.log(`[DEP PREP] Still waiting for ES assigned data for ${key} after refresh`)
+        }, AUTO_DEP_PREP_SETTLE_MS)
+        pendingAutoDepPrepTimers.set(key, retry)
     }, AUTO_DEP_PREP_SETTLE_MS)
     pendingAutoDepPrepTimers.set(key, t)
 }
@@ -3445,18 +3460,16 @@ function tryAutoSendDcl(flight: Flight): boolean {
 
 /**
  * Handle an incoming Hoppie telex (DCL request from pilot).
- * Parses: REQUEST PREDEP CLEARANCE <callsign> <actype> TO <dest> AT <airport> STAND <stand> ATIS <atis>
+ * Parses: REQUEST PREDEP CLEARANCE <callsign> <actype> TO <dest> AT <airport> STAND <stand> ATIS <atis> [remarks…]
  */
 function handleDclRequest(from: string, packet: string) {
-    const match = packet.match(
-        /^REQUEST PREDEP CLEARANCE\s+(\S+)\s+(\S+)\s+TO\s+(\S+)\s+AT\s+(\S+)\s+STAND\s+(\S+)\s+ATIS\s+(\S+)$/i,
-    )
-    if (!match) {
+    const parsed = parseDclRequestTelex(packet)
+    if (!parsed) {
         console.log(`[DCL] Could not parse telex from ${from}: ${packet}`)
         return
     }
 
-    const [, callsign, , , airport, ,] = match
+    const { callsign, airport, remarks: requestRemarks } = parsed
     const dclCallsign = getDclCallsign()
     const { time, date } = formatTimestamp()
 
@@ -3492,20 +3505,25 @@ function handleDclRequest(from: string, packet: string) {
     }
 
     // Valid request
-    console.log(`[DCL] Valid request from ${from} for ${callsign} at ${airport}`)
+    console.log(
+        `[DCL] Valid request from ${from} for ${callsign} at ${airport}` +
+            (requestRemarks ? ` (remarks: ${requestRemarks} — manual DCL)` : ""),
+    )
     flight.dclStatus = "REQUEST"
     flight.dclMessage = packet
+    // Pilot remarks force manual review (same as DCL mode manual) — never auto-send
+    flight.dclRequestHasRemarks = !!requestRemarks
 
     // Play notification sound (if enabled in user settings)
     if (currentUiSettings.dclSoundEnabled) {
         playDclSound()
     }
 
-    // Build clearance preview
-    const templateData = buildDclTemplateData(flight, "")
+    // Build clearance preview (seed RMK from pilot request when present)
+    const templateData = buildDclTemplateData(flight, requestRemarks ?? "")
     let preview: string | undefined
     try {
-        preview = fillDclTemplate(airport!, templateData)
+        preview = fillDclTemplate(airport, templateData)
     } catch (err) {
         console.error(`[DCL] Template preview error: ${err instanceof Error ? err.message : err}`)
     }
@@ -3524,7 +3542,7 @@ function handleDclRequest(from: string, packet: string) {
     }
 
     // Regenerate and broadcast strip
-    const strip = flightStore.regenerateStrip(callsign!)
+    const strip = flightStore.regenerateStrip(callsign)
     if (strip) {
         store.updateStripFromFlight(strip)
         broadcastStrip(strip)
@@ -3533,6 +3551,12 @@ function handleDclRequest(from: string, packet: string) {
     // Record when the request was received (for REQUEST timeout)
     flight.dclRequestedAt = Date.now()
 
+    // Remarks in request → always manual (open CLR / DCL button); skip auto/semi send
+    if (requestRemarks) {
+        console.log(`[DCL] Skipping auto-send for ${callsign} — request contains remarks`)
+        return
+    }
+
     // Attempt automatic DCL processing based on mode
     if (currentDclMode === "auto") {
         // AUTO mode: assign CFL + squawk if needed, then try to send
@@ -3540,7 +3564,7 @@ function handleDclRequest(from: string, packet: string) {
         // If ASSR was deferred (CAD not seen yet), retry once after settle before auto-send
         if (assignResult.deferredSquawk && !cliArgs.mock) {
             setTimeout(() => {
-                const f = flightStore.getFlight(callsign!)
+                const f = flightStore.getFlight(callsign)
                 if (f && f.dclStatus === "REQUEST" && !hasValidAssignedSquawk(f.squawk)) {
                     autoAssignCflAndSquawk(f, "DCL AUTO")
                 }
@@ -3553,7 +3577,7 @@ function handleDclRequest(from: string, packet: string) {
         if (!cliArgs.mock) {
             setTimeout(() => {
                 // Re-fetch the flight in case data updated during the wait
-                const updatedFlight = flightStore.getFlight(callsign!)
+                const updatedFlight = flightStore.getFlight(callsign)
                 if (updatedFlight && updatedFlight.dclStatus === "REQUEST") {
                     if (!tryAutoSendDcl(updatedFlight)) {
                         console.log(`[DCL AUTO] Could not auto-send for ${callsign} (missing data), falling back to manual`)
@@ -4971,7 +4995,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     callsign: result.strip.callsign,
                                 } satisfies OutboundPluginCommand),
                             )
-                            flight.clearedToLand = true
+                            flightStore.applyControllerClearedToLand(result.strip.callsign)
                             stateChanged = true
                             console.log(
                                 `[MOVE] ${result.strip.callsign}: CTL (drag ARR/local to PÅ BANAN)`,
@@ -5024,7 +5048,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         ) {
                             console.log(`[MOVE] Clearing clearedToLand for ${result.strip.callsign} (left runway section)`)
                             sendUdp(JSON.stringify({ type: "unsetClearedToLand", callsign: result.strip.callsign }))
-                            flight.clearedToLand = false
+                            flightStore.clearControllerClearedToLand(result.strip.callsign)
                             stateChanged = true
                         }
 
@@ -5203,7 +5227,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                             callsign: result.strip.callsign,
                                         } satisfies OutboundPluginCommand),
                                     )
-                                    flight.clearedToLand = false
+                                    flightStore.clearControllerClearedToLand(result.strip.callsign)
                                 }
                                 stateChanged = true
                                 console.log(
@@ -5536,10 +5560,36 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         parkFlight.remarks = undefined
                         parkFlight.hp = undefined
                     }
-                // CTL_GS: set ARR groundstate + set cleared-to-land (from ground state menu)
+                // CTL_GS: set ARR groundstate + CTL (from ground state menu)
                 } else if (message.action === "CTL_GS") {
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "ARR" }))
                     sendUdp(JSON.stringify({ type: "setClearedToLand", callsign: strip.callsign } satisfies OutboundPluginCommand))
+                    // Same as CTL: clear TopSky MISAP_ / soft G/A so section rules can leave CTR ARR
+                    const maFlight = flightStore.getFlight(strip.callsign)
+                    const hadTopSkyMisap = !!maFlight?.missedApproach && !maFlight.efsGoAround
+                    if (maFlight?.efsGoAround) {
+                        sendUdp(
+                            JSON.stringify({
+                                type: "unsetEfsGoAround",
+                                callsign: strip.callsign,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        flightStore.clearSoftMissedApproach(strip.callsign)
+                    }
+                    if (maFlight) {
+                        // Hold CTL against MISAP_ CAD race (also clears MA / soft G/A flags)
+                        flightStore.applyControllerClearedToLand(strip.callsign)
+                        if (hadTopSkyMisap) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "clearScratchpad",
+                                    callsign: strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                        }
+                        assumePendingAppInboundOnCtl(strip, maFlight)
+                        reevaluateAndBroadcast(strip.callsign)
+                    }
                 // ROF: ESSA ground DEL↔GND↔TWR → EFS `/EFSROF/` (no TopSky).
                 // Otherwise TopSky first; on failure/timeout → EFS-native fallback.
                 } else if (message.action === "ROF") {
@@ -5657,10 +5707,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     sendUdp(JSON.stringify({ type: "goaround", callsign: strip.callsign } satisfies OutboundPluginCommand))
                     const goaFlight = flightStore.getFlight(strip.callsign)
                     if (goaFlight) {
-                        // Optimistic: clear ATA / CTL immediately (plugin also sends MISAP_)
-                        goaFlight.ata = undefined
-                        goaFlight.clearedToLand = false
-                        goaFlight.missedApproach = true
+                        // Optimistic: clear ATA / CTL; fresh G/A (not sticky MISAP_ alone)
+                        flightStore.clearControllerClearedToLand(strip.callsign)
+                        flightStore.applyFreshMissedApproach(strip.callsign)
                         let heading: number | undefined
                         let altitudeFt: number | undefined
                         let logExtra = ""
@@ -5713,10 +5762,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 } else if (message.action === "resetSquawk") {
                     // TopSky AllocateSSR only — never invent a code (incl. --mock).
-                    // Clear until EuroScope reports the assigned squawk.
-                    const sqFlight = flightStore.getFlight(strip.callsign)
+                    // Keep current ASSR visible until CAD echoes the new code.
                     if (requestTopskySquawkReset(strip.callsign)) {
-                        if (sqFlight) sqFlight.squawk = undefined
                         reevaluateAndBroadcast(strip.callsign)
                     }
                 // ESGG paper soft G/A (col-3 arrow scribble / equivalent) — EFSGA ann, not TopSky MISAP_
@@ -5795,9 +5842,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     // CTL on a missed-approach flight: clear TopSky MISAP_ and/or EFS soft G/A
                     if (message.action === "CTL") {
                         const maFlight = flightStore.getFlight(strip.callsign)
-                        if (maFlight?.missedApproach && !maFlight.efsGoAround) {
-                            sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: strip.callsign } satisfies OutboundPluginCommand))
-                        }
+                        const hadTopSkyMisap = !!maFlight?.missedApproach && !maFlight.efsGoAround
                         if (maFlight?.efsGoAround) {
                             sendUdp(
                                 JSON.stringify({
@@ -5806,6 +5851,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 } satisfies OutboundPluginCommand),
                             )
                             flightStore.clearSoftMissedApproach(strip.callsign)
+                        }
+                        if (hadTopSkyMisap) {
+                            sendUdp(JSON.stringify({ type: "clearScratchpad", callsign: strip.callsign } satisfies OutboundPluginCommand))
                         }
                     }
                 }
@@ -5863,20 +5911,22 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 }
                 if (flight && !cliArgs.mock && message.action in optimisticGs) {
                     flightStore.applyOptimisticGroundstate(strip.callsign, optimisticGs[message.action]!)
-                    if (message.action === "CTL_GS") {
-                        flight.clearedToLand = true
-                        flight.missedApproach = false
+                    // CTL_GS optimistic CTL+hold already applied in the CTL_GS branch above
+                    if (message.action === "CTL_GS" && !flight.clearedToLandHoldUntil) {
+                        flightStore.applyControllerClearedToLand(strip.callsign)
+                        assumePendingAppInboundOnCtl(strip, flight)
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }
                 // Paper CTL checkbox / scribble L — optimistic so section rules move immediately.
                 // Pending APP/CTR→TWR inbound: ASSUME first so runway_cleared_to_land → PÅ BANAN.
+                // Hold against TopSky MISAP_ CAD wiping CTL (G/A force-CTL race).
                 if (flight && !cliArgs.mock && (message.action === "CTL" || message.action === "unsetCTL")) {
-                    flight.clearedToLand = message.action === "CTL"
                     if (message.action === "CTL") {
-                        flight.missedApproach = false
-                        flight.efsGoAround = false
+                        flightStore.applyControllerClearedToLand(strip.callsign)
                         assumePendingAppInboundOnCtl(strip, flight)
+                    } else {
+                        flightStore.clearControllerClearedToLand(strip.callsign)
                     }
                     reevaluateAndBroadcast(strip.callsign)
                     pushPaperStripIfNeeded(strip.id)
@@ -5888,6 +5938,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         console.log(`[DCL] Clearing DCL state for ${strip.callsign} (voice clearance)`)
                         flight.dclStatus = undefined
                         flight.dclMessage = undefined
+                        flight.dclRequestHasRemarks = undefined
                         flight.dclClearance = undefined
                         flight.dclSeqNumber = undefined
                         flight.dclPdcNumber = undefined
@@ -5907,6 +5958,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.controllerId = staticConfig.myPositionId
                             flight.handoffTargetController = ""
                             flight.ownershipOptimisticUntil = Date.now() + 5000
+                            // Cancel own READY→GND transfer: restore pre-RDY groundstate
+                            if (
+                                strip.transferPending === "out" &&
+                                (flight.groundstate || "").toUpperCase() === "DE-ICE"
+                            ) {
+                                flightStore.restoreGroundstateBeforeReady(strip.callsign)
+                            }
                             releaseDtransManualStickyOnAssume(strip, flight)
                             if (
                                 staticConfig.look === "paper" &&
@@ -5961,21 +6019,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.coo = undefined
                             break
                         case "CTL":
-                            flight.clearedToLand = true
-                            flight.missedApproach = false
-                            flight.efsGoAround = false
+                            flightStore.applyControllerClearedToLand(strip.callsign)
                             assumePendingAppInboundOnCtl(strip, flight)
                             break
                         case "unsetCTL":
-                            flight.clearedToLand = false
+                            flightStore.clearControllerClearedToLand(strip.callsign)
                             break
                         case "softGA":
                             flightStore.applySoftMissedApproach(strip.callsign)
                             break
                         case "GOA": {
-                            flight.clearedToLand = false
-                            flight.missedApproach = true
-                            flight.ata = undefined
+                            flightStore.clearControllerClearedToLand(strip.callsign)
+                            flightStore.applyFreshMissedApproach(strip.callsign)
                             if (isEssaRolesConfig(staticConfig)) {
                                 const essa = staticConfig.activeRunways?.["ESSA"]
                                 const configId =
@@ -5999,32 +6054,31 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         }
                         case "READY": {
-                            flight.groundstate = "DE-ICE"
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "DE-ICE")
                             const readyTarget = resolveXferTarget(strip, flight)
                             flight.handoffTargetController = readyTarget || ""
                             if (readyTarget) flight.handoffOptimisticUntil = Date.now() + 3000
                             break
                         }
                         case "FRQ":
-                            flight.groundstate = "ONFREQ"
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "ONFREQ")
                             break
                         case "STUP":
-                            flight.groundstate = "STUP"
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "STUP")
                             break
                         case "DEICE":
-                            flight.groundstate = "DE-ICE"
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "DE-ICE")
                             break
                         case "ARR":
-                            flight.groundstate = "ARR"
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "ARR")
                             break
                         case "CTL_GS":
-                            flight.groundstate = "ARR"
-                            flight.clearedToLand = true
-                            flight.missedApproach = false
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "ARR")
+                            flightStore.applyControllerClearedToLand(strip.callsign)
+                            assumePendingAppInboundOnCtl(strip, flight)
                             break
                         case "NOGS":
-                            flight.groundstate = ""
-                            flight.groundstateClearedUntil = Date.now() + 3000
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "")
                             break
                     }
 
@@ -6043,11 +6097,28 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     // Non-mock optimistic updates: apply local state immediately without waiting for plugin round-trip
                     if (message.action === "ASSUME" && flight) {
                         // Optimistic until ES ownership echo confirms StartTracking
+                        const cancelingReadyXfer =
+                            strip.transferPending === "out" &&
+                            (flight.groundstate || "").toUpperCase() === "DE-ICE"
                         flight.controller = staticConfig.myCallsign
                         flight.controllerId = staticConfig.myPositionId
                         flight.handoffTargetController = ""
                         flight.handoffOptimisticUntil = undefined
                         flight.ownershipOptimisticUntil = Date.now() + 5000
+                        // Cancel own READY→GND: restore pre-RDY groundstate (not always ONFREQ)
+                        // (do not clear when GND assumes an inbound READY transfer)
+                        if (cancelingReadyXfer) {
+                            const restored = flightStore.restoreGroundstateBeforeReady(
+                                strip.callsign,
+                            )
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "setGroundState",
+                                    callsign: strip.callsign,
+                                    state: restored || "ONFREQ",
+                                } satisfies OutboundPluginCommand),
+                            )
+                        }
                         releaseDtransManualStickyOnAssume(strip, flight)
                         maybeAutoPrepOnAssume(flight.callsign)
                         // ESGG paper: ASSUME while above-push CD→GND pinned → unpin
@@ -6098,7 +6169,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetControllerId = undefined
                         flight.handoffOptimisticUntil = undefined
                     } else if ((message.action === "READY" || message.action === "DEICE") && flight) {
-                        flight.groundstate = "DE-ICE"
+                        flightStore.applyOptimisticGroundstate(strip.callsign, "DE-ICE")
                     }
                     // toggleClearanceFlag: optimistic clearance already applied above
                     reevaluateAndBroadcast(strip.callsign)
@@ -7705,6 +7776,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     stand: f.stand,
                     latitude: f.latitude,
                     longitude: f.longitude,
+                    heading: f.heading,
                     groundstate: f.groundstate,
                     airborne: !!f.airborne,
                     departure: origin === "ESSA",
@@ -9277,12 +9349,15 @@ udpIn.on("message", (msg, rinfo) => {
             return
         }
 
-        // `.efs refresh` — ask peer EFS sessions to re-write assumed CLR/CFL/CTL into ES
+        // `.efs refresh` / annotation EFSREF — IRIS half only.
+        // Local ES→EFS dump is plugin Refresh() over UDP; this asks peer EFS sessions
+        // (VatIRIS) to re-write assumed CLR/CFL/CTL/GS into EuroScope so the network
+        // rebroadcasts to the requester. Not how refresh is "invoked" — chat/ann only.
         if (data.type === "efsRefreshRequest") {
             const ok = requestPeerReassertAssumed()
             console.log(
                 ok
-                    ? "[efsRefreshRequest] peer reassertAssumed published"
+                    ? "[efsRefreshRequest] peer reassertAssumed published (IRIS)"
                     : "[efsRefreshRequest] peer reassertAssumed not published (sync off / no WS / cooldown)",
             )
             return
@@ -9515,6 +9590,7 @@ udpIn.on("message", (msg, rinfo) => {
                         if (airportsChanged && previousAirports.length > 0) {
                             console.log(`Airports changed, clearing store`)
                             store.clear()
+                            clearAutoDepPrepSession()
                             broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
                             broadcastUserSettings()
                         }
@@ -9581,6 +9657,8 @@ udpIn.on("message", (msg, rinfo) => {
                     console.log(`Frequency/AoR changed, clearing store`)
                 }
                 store.clear()
+                // Allow DEP PREP to re-run after wipe — otherwise CFL/ASSR stay empty
+                clearAutoDepPrepSession()
                 broadcastRefresh(
                     callsignChanged && previousCallsign
                         ? `Callsign changed to ${msg.callsign}`
@@ -10017,6 +10095,7 @@ function checkDclTimeouts() {
                 // Reset DCL state
                 flight.dclStatus = undefined
                 flight.dclMessage = undefined
+                flight.dclRequestHasRemarks = undefined
                 flight.dclClearance = undefined
                 flight.dclSeqNumber = undefined
                 flight.dclPdcNumber = undefined

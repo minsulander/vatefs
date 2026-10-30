@@ -96,7 +96,7 @@ Build outputs a `VatEFS.dll` that loads into EuroScope. The plugin:
 - Filters flight plans for Swedish airports (ICAO starting with "ES")
 - Tracks flight plan updates, controller assignments, and runway configurations
 - Sends JSON data via UDP to the backend
-- Supports commands: `.efs all`, `.efs mine`, `.efs debug`, `.efs test`
+- Supports commands: `.efs start|stop|status|refresh|help|debug|cid|assume|transfer|apl|atyp` — also pulse strip annotation 7 to `EFSREF` (not scratchpad) for the same full refresh as `.efs refresh`
 
 ## Technology Stack
 

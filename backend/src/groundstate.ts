@@ -179,6 +179,8 @@ export function resolveIncomingGroundstate(opts: {
     }
 
     if (scratchGs) return scratchGs
-    if (groundstate === "") return ""
+    // Bare empty GetGroundState() is unreliable (refresh dumps wipe known PUSH/TAXI/…).
+    // Explicit clear is scratch NOSTATE (handled above). Treat empty as "no GS update".
+    if (groundstate === "") return undefined
     return undefined
 }

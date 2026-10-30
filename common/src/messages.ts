@@ -402,6 +402,7 @@ export interface StandMenuStand {
      * departure: for occupied — ESSA departure on stand (takeoff icon) vs arrival (parking).
      * tsat/tobt/eobt: departure times on Occupied (or hard-Blocked from occupied);
      * UI labels TS / TB / EB (prefer TS → TB → EB). Not set for Planned/Inbound.
+     * gsLabel: STUP/PUSH/TAXI when cleared but still on stand (replaces TS/TB/EB).
      */
     occupied?: {
         label: string
@@ -413,6 +414,7 @@ export interface StandMenuStand {
         tsat?: string
         tobt?: string
         eobt?: string
+        gsLabel?: string
     }
     /**
      * APNH/APNJ/APNL/APNP only: count of aircraft on/assigned to the area (info text;

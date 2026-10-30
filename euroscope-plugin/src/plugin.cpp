@@ -119,8 +119,63 @@ static void SetJsonGroundstateFromFpOrScratch(
         message["groundstate"] = scratchStr;
         return;
     }
-    message["groundstate"] = gsStr;
+    // Omit empty GetGroundState() — backend treats missing GS as "no update".
+    // Sending "" on Refresh mass-wiped known PUSH/TAXI/ARR in EFS.
+    if (!gsStr.empty()) {
+        message["groundstate"] = gsStr;
+    }
 }
+
+/**
+ * Bulk FPL/Refresh dumps: only emit clearance when true.
+ * Bare false on refresh flickered CLR off in EFS while ES still had it.
+ * CLEARENCE_FLAG edge updates always send the value (+ clearanceEdge).
+ */
+static void SetJsonClearanceFromFpBulk(nlohmann::json &message,
+                                       EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    if ((bool)FlightPlan.GetClearenceFlag()) {
+        message["clearance"] = true;
+    }
+}
+
+static void SetJsonClearanceFromFpEdge(nlohmann::json &message,
+                                       EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+    message["clearanceEdge"] = true;
+}
+
+/**
+ * Bulk Refresh scratch: omit empty and GS tokens (those go via groundstate).
+ * Empty scratch on refresh wiped remarks/HP; GS tokens are not remarks.
+ * Still emit MISAP_/WX_/remarks/protocol; GRP stand tokens become stand fields.
+ */
+static void SetJsonScratchForBulkRefresh(nlohmann::json &message,
+                                         EuroScopePlugIn::CFlightPlan FlightPlan)
+{
+    const char *scratch = FlightPlan.GetControllerAssignedData().GetScratchPadString();
+    if (!scratch || scratch[0] == '\0') return;
+    if (strlen(scratch) > 50) return;
+    std::string s = scratch;
+    if (IsGroundStateToken(s)) return;
+    if (s.find("GRP/S/") != std::string::npos && s.length() > 6) {
+        message["stand"] = s.substr(6);
+        return;
+    }
+    if (s.rfind("GRP/M/", 0) == 0) {
+        const size_t lastSlash = s.find_last_of('/');
+        if (lastSlash != std::string::npos && lastSlash + 1 < s.size()) {
+            message["stand"] = s.substr(lastSlash + 1);
+        }
+        return;
+    }
+    message["scratch"] = s;
+}
+
+/** EFS refresh pulse — strip annotation index 7 (not scratchpad; not VCH/CDM). */
+static const int EFS_REFRESH_ANNOTATION_INDEX = 7;
+static const char *EFS_REFRESH_ANNOTATION_TOKEN = "EFSREF";
 
 namespace VatEFS
 {
@@ -135,6 +190,8 @@ VatEFSPlugin::VatEFSPlugin()
     debug = false;
     pendingFullRefresh = false;
     fullRefreshNotBefore = 0;
+    pendingRefreshFollowUp = false;
+    refreshFollowUpNotBefore = 0;
     udpReceiveSocket = nullptr;
     winsockInitialized = false;
     backendProcess = nullptr;
@@ -270,7 +327,7 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         }
         // Swedish L/U·TXO etc. often only in scratch — fall back when GetGroundState empty
         SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
-        message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+        SetJsonClearanceFromFpBulk(message, FlightPlan);
 
         const char *route = fpData.GetRoute();
         if (route && *route && strlen(route) < 1000)
@@ -417,6 +474,33 @@ void VatEFSPlugin::OnFlightPlanFlightPlanDataUpdate(EuroScopePlugIn::CFlightPlan
         DebugMessage(out.str());
         PostJson(message, "OnFlightPlanFlightPlanDataUpdate");
         fplPushedCallsigns.insert(callsign);
+
+        // FPL often arrives without a separate CAD (new FP after Refresh). Push ASSR/CFL/GS
+        // so EFS strips sync squawk/CFL/groundstate without waiting for a CAD edge.
+        {
+            auto ctrData = FlightPlan.GetControllerAssignedData();
+            nlohmann::json cad = nlohmann::json::object();
+            cad["type"] = "controllerAssignedDataUpdate";
+            SetJsonIfValidUtf8(cad, "callsign", callsign.c_str());
+            AppendOwnershipFields(cad, FlightPlan);
+            const char *squawk = ctrData.GetSquawk();
+            if (IsValidOctalSquawk(squawk)) {
+                SetJsonIfValidUtf8(cad, "squawk", squawk);
+            }
+            // Omit cfl:0 on this accompany CAD (same as bulk Refresh) — do not wipe EFS CFL.
+            int cfl = ctrData.GetClearedAltitude();
+            if (cfl != 0) cad["cfl"] = cfl;
+            SetJsonGroundstateFromFpOrScratch(cad, FlightPlan);
+            SetJsonClearanceFromFpBulk(cad, FlightPlan);
+            {
+                std::string hs = GetHoldShort(callsign);
+                bool ctl = GetVchCtl(callsign);
+                cad["hs"] = hs;
+                cad["clearedToLand"] = ctl;
+            }
+            AppendXfl(cad, FlightPlan);
+            PostJson(cad, "OnFlightPlanFlightPlanDataUpdate/CAD");
+        }
     } catch (const std::exception &e) {
         DisplayMessage(std::string("OnFlightPlanFlightPlanDataUpdate exception: ") + e.what());
     } catch (...) {
@@ -660,7 +744,7 @@ void VatEFSPlugin::OnFlightPlanControllerAssignedDataUpdate(EuroScopePlugIn::CFl
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_CLEARENCE_FLAG:
             out << " clearance " << FlightPlan.GetClearenceFlag();
-            message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+            SetJsonClearanceFromFpEdge(message, FlightPlan);
             break;
         case EuroScopePlugIn::CTR_DATA_TYPE_DEPARTURE_SEQUENCE:
             out << " dsq"; // TODO where dis dsq?
@@ -1156,15 +1240,13 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         }
         return true;
     } else if (subcommand == "refresh") {
-        Refresh();
-        // Ask peer EFS backends (via VatIRIS sync) to re-write CLR/CFL/CTL/etc for
-        // traffic they track — late joiners need those network writes in their ES.
-        {
-            nlohmann::json req = nlohmann::json::object();
-            req["type"] = "efsRefreshRequest";
-            PostJson(req, "OnCompileCommand");
-        }
-        DisplayMessage("Refreshed local ES data; asked peer EFS users to reassert assumed flags");
+        // Local ES→EFS dump (UDP) + optional IRIS peer reassert — see RequestFullRefreshWithPeerAssist
+        RequestFullRefreshWithPeerAssist();
+        return true;
+    } else if (subcommand == "help") {
+        DisplayMessage(
+            ".efs start|stop|status|refresh|debug|cid|assume|transfer|apl|atyp  |  "
+            "refresh also: set strip annotation 7 to EFSREF (not scratchpad)");
         return true;
     } else if (subcommand == "start") {
         backendAutoRestartUsed = false;
@@ -1386,6 +1468,7 @@ void VatEFSPlugin::OnTimer(int counter)
                    GetConnectionType() != EuroScopePlugIn::CONNECTION_TYPE_SWEATBOX) {
             disabled = true;
             pendingFullRefresh = false;
+            pendingRefreshFollowUp = false;
             DebugMessage("EFS updates disabled");
             nlohmann::json message = nlohmann::json::object();
             message["type"] = "connectionTypeUpdate";
@@ -1413,11 +1496,18 @@ void VatEFSPlugin::OnTimer(int counter)
             DisplayMessage("Dumping flight plans, clearance, and CDM to EFS (after start)");
             Refresh();
         }
+        if (pendingRefreshFollowUp && std::time(NULL) >= refreshFollowUpNotBefore) {
+            pendingRefreshFollowUp = false;
+            DisplayMessage("Follow-up refresh (after peer reassert window)");
+            Refresh();
+        }
         if (counter % 5 == 0) UpdateMyself();
         // Ownership (assume / transfer / accept / refuse) often has no ES callback — poll every tick.
         PollOwnershipChanges();
         // VCH H/S (ann 4) + CTL (ann 3) + EFSGA (5) + DepC (6) — no CAD DataType callback.
         PollVchAnnotationChanges();
+        // Annotation 7 == EFSREF — full refresh pulse (not scratchpad).
+        PollEfsRefreshAnnotation();
         // GRP arrival-list stand is assigned before the handoff scratch broadcast.
         PollGrpArrivalStands();
         // ES XFL / COPX / DirectTo — ACC coordination often has no CAD callback.
@@ -2748,18 +2838,27 @@ bool VatEFSPlugin::SendRefuseCoordination(const std::string &callsign)
 
 void VatEFSPlugin::Refresh()
 {
-    // Force a full CDM push — PollCdmDataFiles normally skips unchanged rows, so a
-    // mid-session .efs start would otherwise miss ASRT/TSAC/CTOC/TOBT.
+    // Force full CDM + GRP stand re-emit (polls normally skip unchanged snapshots).
     lastCdmFileSnapshot.clear();
+    lastGrpStandSnapshot.clear();
 
+    int dumped = 0;
     for (EuroScopePlugIn::CFlightPlan FlightPlan = FlightPlanSelectFirst(); FlightPlan.IsValid();
          FlightPlan = FlightPlanSelectNext(FlightPlan)) {
+        // Same Sweden ES* filter as live CAD — do not create junk flights worldwide.
+        if (!FilterFlightPlan(FlightPlan)) continue;
+
         OnFlightPlanFlightPlanDataUpdate(FlightPlan);
 
         auto ctrData = FlightPlan.GetControllerAssignedData();
         nlohmann::json message = nlohmann::json::object();
         message["type"] = "controllerAssignedDataUpdate";
+        // Authoritative positive sync: backend fills present fields; omits stay no-op.
+        message["bulkRefresh"] = true;
         SetJsonIfValidUtf8(message, "callsign", FlightPlan.GetCallsign());
+        AppendOwnershipFields(message, FlightPlan);
+        AppendBasicFlightPlanFields(message, FlightPlan);
+
         const char *squawk = ctrData.GetSquawk();
         if (IsValidOctalSquawk(squawk)) {
             SetJsonIfValidUtf8(message, "squawk", squawk);
@@ -2768,11 +2867,14 @@ void VatEFSPlugin::Refresh()
         if (rfl > 0 && rfl <= 100000) {
             message["rfl"] = rfl;
         }
+        // Omit transient cfl:0 — backend also guards, but bulk must not look like a wipe.
         int cfl = ctrData.GetClearedAltitude();
-        message["cfl"] = cfl;
-        if (cfl == 1 || cfl == 2) {
-            message["ahdg"] = 0;
-            message["direct"] = "";
+        if (cfl != 0) {
+            message["cfl"] = cfl;
+            if (cfl == 1 || cfl == 2) {
+                message["ahdg"] = 0;
+                message["direct"] = "";
+            }
         }
         AppendXfl(message, FlightPlan);
         {
@@ -2780,7 +2882,7 @@ void VatEFSPlugin::Refresh()
             if (cs && cs[0] != '\0')
                 lastXflSnapshot[cs] = MakeXflSnapshot(FlightPlan);
         }
-        SetJsonIfValidUtf8(message, "scratch", ctrData.GetScratchPadString());
+        SetJsonScratchForBulkRefresh(message, FlightPlan);
         // VCH HS (ann 4) + CTL (ann 3) + REQ (ann 2) + EFS soft G/A (ann 5) + DepC (ann 6)
         {
             const char *cs = FlightPlan.GetCallsign();
@@ -2808,21 +2910,26 @@ void VatEFSPlugin::Refresh()
             message["vchRequest"] = vchReq;
         }
         SetJsonGroundstateFromFpOrScratch(message, FlightPlan);
-        message["clearance"] = (bool)FlightPlan.GetClearenceFlag();
+        SetJsonClearanceFromFpBulk(message, FlightPlan);
+        {
+            char comm = ctrData.GetCommunicationType();
+            char commStr[2] = {comm == 0 ? '0' : comm, '\0'};
+            SetJsonIfValidUtf8(message, "communicationType", commStr);
+        }
         int speed = ctrData.GetAssignedSpeed();
-        if (speed >= 0 && speed <= 1500) { // Reasonable speed range
+        if (speed >= 0 && speed <= 1500) {
             message["asp"] = speed;
         }
         double mach = ctrData.GetAssignedMach();
-        if (mach >= 0.0 && mach <= 10.0) { // Reasonable mach range
+        if (mach >= 0.0 && mach <= 10.0) {
             message["mach"] = mach;
         }
         int rate = ctrData.GetAssignedRate();
-        if (rate >= -50000 && rate <= 50000) { // Reasonable rate range
+        if (rate >= -50000 && rate <= 50000) {
             message["arc"] = rate;
         }
         int heading = ctrData.GetAssignedHeading();
-        if (heading >= 0 && heading <= 360) { // Valid heading range
+        if (heading >= 0 && heading <= 360) {
             message["ahdg"] = heading;
         }
         const char *directTo = ctrData.GetDirectToPointName();
@@ -2834,6 +2941,7 @@ void VatEFSPlugin::Refresh()
             message["direct"] = "";
         }
         PostJson(message, "Refresh");
+        dumped++;
     }
     for (EuroScopePlugIn::CRadarTarget RadarTarget = RadarTargetSelectFirst();
          RadarTarget.IsValid(); RadarTarget = RadarTargetSelectNext(RadarTarget)) {
@@ -2846,6 +2954,50 @@ void VatEFSPlugin::Refresh()
 
     // Push every CDM row + strip annotation (ASRT/TSAC/CTOC/setBy) now that FPs exist
     PollCdmDataFiles(true);
+    // Snapshot cleared above — re-emit GRP stands present in the list
+    PollGrpArrivalStands();
+
+    DebugMessage(std::string("Refresh dumped ") + std::to_string(dumped) + " flight plan(s)");
+}
+
+void VatEFSPlugin::RequestFullRefreshWithPeerAssist()
+{
+    Refresh();
+    // Ask peer EFS backends (VatIRIS sync) to re-write CLR/CFL/CTL/etc for traffic
+    // they track — late joiners need those network writes in their local ES.
+    {
+        nlohmann::json req = nlohmann::json::object();
+        req["type"] = "efsRefreshRequest";
+        PostJson(req, "RequestFullRefreshWithPeerAssist");
+    }
+    // First dump often runs before peer reassert lands in ES — follow up once.
+    pendingRefreshFollowUp = true;
+    refreshFollowUpNotBefore = std::time(NULL) + 3;
+    DisplayMessage(
+        "Refreshed local ES→EFS; asked peer EFS (IRIS) to reassert assumed flags; follow-up dump in 3s");
+}
+
+void VatEFSPlugin::PollEfsRefreshAnnotation()
+{
+    for (EuroScopePlugIn::CFlightPlan fp = FlightPlanSelectFirst(); fp.IsValid();
+         fp = FlightPlanSelectNext(fp)) {
+        if (!FilterFlightPlan(fp)) continue;
+        const char *cs = fp.GetCallsign();
+        if (!cs || cs[0] == '\0') continue;
+        const char *ann = fp.GetControllerAssignedData().GetFlightStripAnnotation(
+            EFS_REFRESH_ANNOTATION_INDEX);
+        if (!ann || ann[0] == '\0') continue;
+        std::string token = ann;
+        for (auto &c : token)
+            c = (char)std::toupper((unsigned char)c);
+        if (token != EFS_REFRESH_ANNOTATION_TOKEN && token != "REFRESH") continue;
+
+        // Clear first so the pulse does not re-fire every timer tick
+        fp.GetControllerAssignedData().SetFlightStripAnnotation(EFS_REFRESH_ANNOTATION_INDEX, "");
+        DisplayMessage(std::string("Annotation EFSREF on ") + cs + " — running full refresh");
+        RequestFullRefreshWithPeerAssist();
+        return;
+    }
 }
 
 void VatEFSPlugin::DebugMessage(const std::string &message, const std::string &sender)

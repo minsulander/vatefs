@@ -185,7 +185,8 @@ export function useWorkspace() {
         applyLayout({
           ...pending,
           roleKey,
-          columnCount: Math.max(pending.columnCount, serverLayout.bays.length),
+          // Keep saved/preview bay count — do not expand back to profile default
+          columnCount: Math.max(1, pending.columnCount || 1),
         })
         return
       }
@@ -206,7 +207,8 @@ export function useWorkspace() {
           activeLayout.value = withLoadedLayoutLabel({
             ...saved,
             roleKey,
-            columnCount: Math.max(saved.columnCount, serverLayout.bays.length),
+            // Keep user's column count (e.g. 2-col DEL save must not snap to 4 bays)
+            columnCount: Math.max(1, saved.columnCount || 1),
           })
         } else {
           const profile = store.saabLayouts?.find((l) => l.id === profileId)

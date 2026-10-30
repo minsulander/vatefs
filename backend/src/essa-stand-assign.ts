@@ -38,6 +38,11 @@ export interface StandOccupancy {
     tobt?: string
     /** Departure EOBT (HHmm) — UI label EB */
     eobt?: string
+    /**
+     * When still on stand but startup/push/taxi cleared: show STUP / PUSH / TAXI
+     * instead of TS/TB/EB.
+     */
+    gsLabel?: string
 }
 
 export interface StandMenuEntry {
@@ -1285,9 +1290,20 @@ export interface ClassifyInput {
     traffic: OccupierInfo[]
 }
 
-function depTimesFrom(info: OccupierInfo): Pick<StandOccupancy, "tsat" | "tobt" | "eobt"> {
+/** Still on stand but cleared — prefer GS label over TSAT/EOBT (GPS still occupies). */
+function gsOccupancyLabel(gs: string): string | undefined {
+    const g = gs.toUpperCase()
+    if (g === "STUP") return "STUP"
+    if (g === "PUSH") return "PUSH"
+    if (g === "TAXI") return "TAXI"
+    return undefined
+}
+
+function depTimesFrom(info: OccupierInfo): Pick<StandOccupancy, "tsat" | "tobt" | "eobt" | "gsLabel"> {
     if (!info.departure) return {}
-    const out: Pick<StandOccupancy, "tsat" | "tobt" | "eobt"> = {}
+    const gsLabel = gsOccupancyLabel(info.groundstate || "")
+    if (gsLabel) return { gsLabel }
+    const out: Pick<StandOccupancy, "tsat" | "tobt" | "eobt" | "gsLabel"> = {}
     if (info.tsat) out.tsat = info.tsat
     if (info.tobt) out.tobt = info.tobt
     if (info.eobt) out.eobt = info.eobt
@@ -1328,9 +1344,12 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
 
     for (const t of input.traffic) {
         if (t.callsign.toUpperCase() === selfCs) continue
+        const gs = (t.groundstate || "").toUpperCase()
+        // Occupancy = GPS in stand polygon (or PARK+assigned). GS PUSH/TAXI alone does NOT free.
 
         let positionStand: string | undefined
-        if (t.latitude !== undefined && t.longitude !== undefined) {
+        // Airborne: never occupy by GPS (still may show as Planned via assignment)
+        if (!t.airborne && t.latitude !== undefined && t.longitude !== undefined) {
             positionStand = findStandAtPosition(t.latitude, t.longitude, t.heading)
             if (positionStand) {
                 if (isMultiAssignStand(positionStand)) {
@@ -1342,7 +1361,6 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
         }
 
         const assignedKey = t.stand ? resolveStandKey(t.stand) : undefined
-        const gs = (t.groundstate || "").toUpperCase()
         const parked = gs === "PARK"
 
         if (assignedKey) {
@@ -1356,7 +1374,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                 // (above). Do not show Planned on the unused assigned stand.
             } else if (!positionStand) {
                 // No polygon hit: PARK+stand → Occupied; otherwise Planned if assigned
-                if (parked) {
+                if (parked && !t.airborne) {
                     if (!occupiedBy.has(assignedKey)) occupiedBy.set(assignedKey, t)
                 } else if (t.assigned && !assignedBy.has(assignedKey) && !occupiedBy.has(assignedKey)) {
                     assignedBy.set(assignedKey, t)

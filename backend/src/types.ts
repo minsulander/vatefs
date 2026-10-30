@@ -134,6 +134,8 @@ export interface Flight {
     /** Peer EFS sync: show DCL in the paper CLR-read box without local Hoppie state. */
     syncedDclMark?: boolean
     dclMessage?: string           // Original pilot request text
+    /** Pilot telex had free-text after ATIS — force manual DCL (no ACK CLR / auto-send). */
+    dclRequestHasRemarks?: boolean
     dclClearance?: string         // Filled-out clearance template for preview
     dclSeqNumber?: number         // Our CPDLC sequence number (to match WILCO/UNABLE)
     dclPdcNumber?: number         // PDC number for this clearance
@@ -220,6 +222,11 @@ export interface Flight {
      * while annotation echo catches up.
      */
     missedApproachHoldUntil?: number
+    /**
+     * Until this timestamp, keep controller-set CTL against TopSky MISAP_ CAD that
+     * would clear CTL and re-assert missed approach (race after CTL / CTL_GS).
+     */
+    clearedToLandHoldUntil?: number
     /** ROF requester login callsign (/LAM/ROF/{cs} or /EFSROF/…/{cs}; until transfer) */
     rofRequestFrom?: string
     /** Epoch ms until inbound ROF SI/XFER flash ends (request itself stays until XFER) */
@@ -285,6 +292,15 @@ export interface Flight {
      */
     groundstateHoldUntil?: number
     /**
+     * Groundstate before READY (DE-ICE). Restored when cancelling READY transfer / re-assume.
+     */
+    groundstateBeforeReady?: GroundState
+    /**
+     * True while TopSky scratch is continuously MISAP_. Rising edge sets missedApproach;
+     * sticky MISAP_ alone must not keep G/A section routing after MA was cleared.
+     */
+    misapScratchLatched?: boolean
+    /**
      * Until this timestamp, ignore ES clearance that differs from EFS-set value
      * (stale CAD echo after CLR correct / voice CLR / drag setClearance).
      */
@@ -300,6 +316,8 @@ export interface Flight {
     latitude?: number         // Current latitude from radar
     longitude?: number        // Current longitude from radar
     groundSpeed?: number      // Ground speed in knots from radar
+    /** Track heading degrees from radar (stand occupancy orientation) */
+    heading?: number
 
     // Timestamps
     firstSeen?: number        // When flight was first seen (Date.now())
@@ -410,6 +428,17 @@ export interface ControllerAssignedDataUpdateMessage {
     exitCoordAccepted?: boolean
     groundstate?: GroundState
     clearance?: boolean
+    /**
+     * True when this CAD is a CTR_DATA_TYPE_CLEARENCE_FLAG edge (explicit set/clear).
+     * Bulk Refresh/FPL dumps omit clearance:false; non-edge false must not wipe known CLR.
+     */
+    clearanceEdge?: boolean
+    /**
+     * Plugin `.efs refresh` / annotation EFSREF bulk dump.
+     * Authoritative **positive** sync: apply present fields; omitted/empty/falsey
+     * bulk fields must not wipe known-good EFS state (same defenses as cold start).
+     */
+    bulkRefresh?: boolean
     /** VCH CTL — strip annotation 3 */
     clearedToLand?: boolean
     /** EFS soft G/A — strip annotation 5 ("EFSGA") */
