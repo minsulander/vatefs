@@ -7335,9 +7335,35 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     message.isBottom,
                 )
                 if (result) {
-                    const created = store.updateStripFromFlight(result.strip, {
+                    let created = store.updateStripFromFlight(result.strip, {
                         allowPositionChange: true,
                     })
+                    // No drop target: remap off hidden ESSA columns (inbound_acc / taxi_arr
+                    // for CD-only) so VFR ARR / CROSS / etc. appear like VFR DEP.
+                    if (
+                        !message.targetBayId &&
+                        !message.targetSectionId &&
+                        created &&
+                        !store.isSectionVisibleOnLayout(created.sectionId)
+                    ) {
+                        const prefer =
+                            message.stripType === "vfrDep"
+                                ? ["pending_dep", "cleared", "push_start", "taxi_dep"]
+                                : message.stripType === "vfrArr"
+                                  ? ["inbound", "taxi_arr", "ctr_arr", "pending_dep"]
+                                  : ["inbound", "ctr_arr", "ctr_dep", "pending_dep", "cleared"]
+                        const place = store.defaultVisibleSpecialPlacement(prefer)
+                        if (place) {
+                            const moved = store.moveStrip(
+                                created.id,
+                                place.bayId,
+                                place.sectionId,
+                                undefined,
+                                false,
+                            )
+                            if (moved) created = moved.strip
+                        }
+                    }
                     broadcastStrip(created)
                     console.log(
                         `[CREATE] ${message.stripType} strip for ${cs || created.id} -> ${created.sectionId}`,

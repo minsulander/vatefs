@@ -1156,6 +1156,48 @@ class EfsStore {
     }
 
     /**
+     * Pick a visible bay/section for special strips (notes/vehicles/VFR) when the
+     * user did not drop onto a header. Prefer CD/TSAT over hidden APP-only bays
+     * (unfiltered YAML put inbound_acc first — strips vanished for CD/GND).
+     */
+    /** True when sectionId is on the role-filtered client layout. */
+    isSectionVisibleOnLayout(sectionId: string): boolean {
+        for (const bay of this.getLayout().bays) {
+            for (const sec of bay.sections) {
+                if (sec.id === sectionId) return true
+            }
+        }
+        return false
+    }
+
+    defaultVisibleSpecialPlacement(
+        preferSectionIds: string[],
+    ): { bayId: string; sectionId: string } | undefined {
+        // Role-filtered client layout (not raw YAML — inbound_acc is APP-only)
+        const layout = this.getLayout()
+        for (const want of preferSectionIds) {
+            for (const bay of layout.bays) {
+                for (const sec of bay.sections) {
+                    if (sec.id === want || sec.id.endsWith(`_${want}`)) {
+                        return { bayId: bay.id, sectionId: sec.id }
+                    }
+                }
+            }
+        }
+        for (const bay of layout.bays) {
+            for (const section of bay.sections) {
+                if (!/runway/i.test(section.id)) {
+                    return { bayId: bay.id, sectionId: section.id }
+                }
+            }
+        }
+        const bay = layout.bays[0]
+        const section = bay?.sections[0]
+        if (!bay || !section) return undefined
+        return { bayId: bay.id, sectionId: section.id }
+    }
+
+    /**
      * Create a note strip (no associated flight, just text).
      * Optional paperInfoKind for paper-look blank / HINDER / Bogsering / etc.
      * Returns the created strip.
@@ -1195,12 +1237,21 @@ class EfsStore {
             bayId = targetBayId
             sectionId = targetSectionId
             pos = position ?? 0
-        } else if (staticConfig.layout.bays.length > 0 && staticConfig.layout.bays[0].sections.length > 0) {
-            bayId = staticConfig.layout.bays[0].id
-            sectionId = staticConfig.layout.bays[0].sections[0].id
-            pos = 0
         } else {
-            return undefined
+            const found = this.defaultVisibleSpecialPlacement([
+                'pending_dep',
+                'cleared',
+                'push_start',
+                'taxi_dep',
+                'taxi_arr',
+                'inbound',
+                'ctr_dep',
+                'ctr_arr',
+            ])
+            if (!found) return undefined
+            bayId = found.bayId
+            sectionId = found.sectionId
+            pos = 0
         }
 
         // Insert at top: shift existing strips down (ARR addFromTop)
@@ -1378,23 +1429,17 @@ class EfsStore {
             sectionId = targetSectionId
             pos = position ?? 0
         } else {
-            // Prefer a non-runway section so the strip lands somewhere useful
-            let found: { bayId: string; sectionId: string } | undefined
-            for (const bay of staticConfig.layout.bays) {
-                for (const section of bay.sections) {
-                    if (!/runway/i.test(section.id)) {
-                        found = { bayId: bay.id, sectionId: section.id }
-                        break
-                    }
-                }
-                if (found) break
-            }
-            if (!found) {
-                const bay = staticConfig.layout.bays[0]
-                const section = bay?.sections[0]
-                if (!bay || !section) return undefined
-                found = { bayId: bay.id, sectionId: section.id }
-            }
+            const found = this.defaultVisibleSpecialPlacement([
+                'pending_dep',
+                'cleared',
+                'push_start',
+                'taxi_dep',
+                'taxi_arr',
+                'inbound',
+                'ctr_dep',
+                'ctr_arr',
+            ])
+            if (!found) return undefined
             bayId = found.bayId
             sectionId = found.sectionId
             pos = 0
