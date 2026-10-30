@@ -497,6 +497,8 @@ export interface StripActionMessage {
     type: 'stripAction'
     stripId: string
     action: string             // e.g., "ASSUME", "CTL", "CTO"
+    /** For toggleClearanceFlag: explicit set (ACK CLR → true). Avoids toggle races. */
+    desired?: boolean
 }
 
 export type AssignmentType =

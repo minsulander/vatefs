@@ -2548,11 +2548,12 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
-    function sendStripAction(stripId: string, action: string) {
+    function sendStripAction(stripId: string, action: string, desired?: boolean) {
         sendMessage({
             type: 'stripAction',
             stripId,
-            action
+            action,
+            ...(desired !== undefined ? { desired } : {}),
         })
     }
 

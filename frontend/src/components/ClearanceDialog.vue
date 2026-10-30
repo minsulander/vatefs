@@ -698,14 +698,14 @@ watch(
 
 function onOk() {
   if (!props.strip.clearance) {
-    store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+    store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
   }
   dialogOpen.value = false
 }
 
 function onCancel() {
   if (props.strip.clearance) {
-    store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+    store.sendStripAction(props.strip.id, 'toggleClearanceFlag', false)
   }
   dialogOpen.value = false
 }

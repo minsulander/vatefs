@@ -4527,13 +4527,15 @@ const showCtot = computed(() =>
 
 /**
  * Taxi DEP / runway / CTR DEP onward: never show EOBT/TOBT (CTOT alone if regulated).
- * ESSA DEP exception: TTOT stays visible from PUSH&START through taxi/runway.
+ * ESSA DEP exception: TTOT stays visible from PUSH&START through taxi/runway
+ * (including CFTO) until the strip moves to CTR DEP.
  * Arrivals keep ETA on taxi_arr / inbound.
  */
 const showPrimaryTime = computed(() => {
   if (!sectionIdMatches(props.strip.sectionId, TAXI_ONWARD_SECTIONS)) return true
-  // ESSA: top window switches to TTOT at PUSH&START — keep showing in taxi+
-  if (isEssaDep.value && isPushStartOrLater.value && !props.strip.clearedForTakeoff) {
+  // ESSA: TTOT from PUSH&START through runway — hide once in CTR DEP
+  if (isEssaDep.value && isPushStartOrLater.value) {
+    if (isCtrDepSection(props.strip.sectionId)) return false
     return true
   }
   // Outbound dep/local: no EOBT from taxi onward (CTOT shown separately)
@@ -6120,6 +6122,7 @@ function onActionPointerUp(e: PointerEvent, action: string) {
 
 // Action button handlers
 function onActionClick(action: string) {
+  if (Date.now() < actionTouchGuardUntil) return
   if (action === 'CONTACTME') {
     if (store.isPmOnCooldown('contactme', props.strip.callsign)) return
     store.sendStripAction(props.strip.id, 'CONTACTME')
@@ -6130,7 +6133,8 @@ function onActionClick(action: string) {
     // Auto-prep mode: always ACK CLR (voice ack → clearance flag), never open CLR dialog
     // Exception: DCL request with pilot remarks → open CLR (manual DCL)
     if (showAckClrLabel.value) {
-      store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+      // Explicit set-true — networked/touch doubles must not toggle CLR off
+      store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
       return
     }
     clncDialogOpen.value = true
@@ -6148,8 +6152,12 @@ function onActionClick(action: string) {
   store.sendStripAction(props.strip.id, action)
 }
 
+/** Suppress the synthetic click that follows touchend (double ACK CLR). */
+let actionTouchGuardUntil = 0
+
 function onActionTouch(event: TouchEvent, action: string) {
   event.preventDefault()
+  actionTouchGuardUntil = Date.now() + 500
   if (action === 'CONTACTME') {
     if (store.isPmOnCooldown('contactme', props.strip.callsign)) return
     store.sendStripAction(props.strip.id, 'CONTACTME')
@@ -6158,7 +6166,7 @@ function onActionTouch(event: TouchEvent, action: string) {
   if (action === 'CLNC') {
     if (!canEditAssignedData.value) return
     if (showAckClrLabel.value) {
-      store.sendStripAction(props.strip.id, 'toggleClearanceFlag')
+      store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
       return
     }
     clncDialogOpen.value = true

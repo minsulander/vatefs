@@ -5624,14 +5624,30 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 } else if (message.action === "toggleClearanceFlag") {
                     const clrFlight = flightStore.getFlight(strip.callsign)
-                    const desired = !(clrFlight?.clearance ?? false)
-                    // Paper: assume untracked DEP/local before CLR on (TWR top-down + CD/DEL)
-                    if (desired && clrFlight) {
-                        assumeUntrackedPaperDepLocal(clrFlight, strip.stripType, "voice CLR")
-                    }
-                    sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign: strip.callsign, desired } satisfies OutboundPluginCommand))
-                    if (clrFlight) {
-                        flightStore.applyOptimisticClearance(strip.callsign, desired)
+                    // Explicit desired (ACK CLR / dialog) wins; else toggle.
+                    // Idempotent set-true: networked + touch/click doubles were flipping CLR off.
+                    const desired =
+                        typeof message.desired === "boolean"
+                            ? message.desired
+                            : !(clrFlight?.clearance ?? false)
+                    if (!!clrFlight?.clearance === !!desired) {
+                        // Already at target — still reevaluate (pending→TSAT) but skip UDP flip
+                        if (clrFlight) reevaluateAndBroadcast(strip.callsign)
+                    } else {
+                        // Paper: assume untracked DEP/local before CLR on (TWR top-down + CD/DEL)
+                        if (desired && clrFlight) {
+                            assumeUntrackedPaperDepLocal(clrFlight, strip.stripType, "voice CLR")
+                        }
+                        sendUdp(
+                            JSON.stringify({
+                                type: "toggleClearanceFlag",
+                                callsign: strip.callsign,
+                                desired,
+                            } satisfies OutboundPluginCommand),
+                        )
+                        if (clrFlight) {
+                            flightStore.applyOptimisticClearance(strip.callsign, desired)
+                        }
                     }
                 } else if (message.action === "toggleClearanceRead") {
                     // Paper FPS col 4 (CLR read).
