@@ -483,6 +483,7 @@ import {
   serverBayIdForSection,
   workspaceMemberAcceptsStrip,
   yamlSectionIdForWorkspace,
+  preferredSortFlowForWorkspaceSection,
   type SortFlow,
 } from '@/workspace'
 import { useUiScalePercent } from '@/composables/useEfsUiScale'
@@ -2007,30 +2008,30 @@ function baseTimeSortDir(): TimeSortDir {
 }
 
 /**
- * YAML / server addFromTop for this section — natural workspace sort-flow.
- * Synthetic split ids (cleared_tsat, push_back, inbound_twr_e, …) are not on
- * the server layout; resolve to the parent YAML id so sort-flow matches the
- * button after split (otherwise TSAT inherited newestTop while “natural”
- * fell back to newestBottom and reversed time order).
+ * Built-in / preferred sort-flow for this section — natural baseline for
+ * reversing TOBT/TSAT/EOBT time order. Do NOT read live layout.addFromTop:
+ * onWorkspaceToggleFlow mutates that flag, which made natural === current
+ * after one click so time sort never reversed (MAN-only reverse worked).
  */
 function sectionNaturalSortFlow(): SortFlow {
   const id = props.section.id
+  const preferred = preferredSortFlowForWorkspaceSection({
+    sectionId: id,
+    title: props.section.title,
+  })
+  if (preferred) return preferred
   const catalogMode = store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa'
   const lookupIds = [...new Set([yamlSectionIdForWorkspace(id, catalogMode), id])]
   for (const bay of store.layout.bays) {
     for (const lookupId of lookupIds) {
       const sec = bay.sections.find((s) => s.id === lookupId)
       if (!sec) continue
+      // YAML default only (not runtime-mutated addFromTop after flow toggle)
       if (sec.addFromTop === false) return 'newestBottom'
       if (sec.addFromTop === true) return 'newestTop'
-      // No explicit flag — match base time dir to sort-flow labels:
-      // desc = earliest/first at bottom = newestTop; asc = first on top = newestBottom.
-      // (Previously inverted: OTHER CLEARED defaulted newestBottom in the workspace
-      // but natural claimed newestTop → activeTimeSortDir flipped EOBT the wrong way.)
       return baseTimeSortDir() === 'desc' ? 'newestTop' : 'newestBottom'
     }
   }
-  // No server section: same mapping as above
   return baseTimeSortDir() === 'desc' ? 'newestTop' : 'newestBottom'
 }
 
