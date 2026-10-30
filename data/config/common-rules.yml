@@ -42,11 +42,12 @@ sectionRules:
     groundstates: [TAXI, TXIN]
     priority: 30
 
-  # CTR ARR: Active (fresh) missed approach only — sticky TopSky MISAP_ alone must
+  # CTR DEP: Active (fresh) missed approach / G/A — sticky TopSky MISAP_ alone must
   # not keep this routing after G/A was cleared (next approach = normal inbound).
   # clearedToLand: false so CTL lets runway_cleared_to_land win.
-  ctr_arr_missed_approach:
-    sectionId: ctr_arr
+  # (0.10.8 briefly used CTR ARR; session feedback restored CTR DEP.)
+  ctr_dep_missed_approach:
+    sectionId: ctr_dep
     missedApproach: true
     controller: myself
     airborne: true

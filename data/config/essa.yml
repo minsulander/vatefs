@@ -339,12 +339,15 @@ sectionRules:
     myRole: [GND]
     priority: 105
 
+  # Post-landing local only (ARR/TXIN). Without GS gate, assumed locals in CD/TSAT
+  # jumped to TAXIWAY ARR (OSY11F ACK CLR / ASSUME).
   taxi_arr_assumed_local_gnd:
     sectionId: taxi_arr
     direction: local
     airborne: false
     onRunway: false
     clearedToLand: false
+    groundstates: [ARR, TXIN]
     controller: myself
     myRole: [GND]
     priority: 105
@@ -585,6 +588,17 @@ actionRules:
     myRole: [TWR, APP, CTR]
     priority: 95
 
+  # G/A strip now lives in CTR DEP (common-rules ctr_dep_missed_approach)
+  goa_ctr_dep:
+    action: GOA
+    sectionId: ctr_dep
+    direction: either
+    controller: myself
+    airborne: true
+    clearedToLand: true
+    myRole: [TWR, APP, CTR]
+    priority: 95
+
   # TopSky ROF (airborne APP/CTR-owned) — keep TopSky; only once inside 20 nm of ESSA
   rof_inbound_arr:
     action: ROF
@@ -685,6 +699,17 @@ deleteRules:
     priority: 90
 
 moveRules:
+  # TSAT → PUSH: write GS even for TWR top-down (common-rules was GND-only —
+  # drag to PUSH left EuroScope ONFREQ while bay showed PUSH).
+  move_cleared_to_push:
+    fromSectionId: cleared
+    toSectionId: push_start
+    direction: either
+    myRole: [GND, TWR, DEL, APP, CTR]
+    command:
+      type: setGroundstate
+      value: PUSH
+
   # Override common-rules taxi moves for split sections (taxi_dep)
   # CD ALL / TSAT → TAXI DEP: TXO only — never set CLR
   move_pending_to_taxi:
