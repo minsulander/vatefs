@@ -59,6 +59,8 @@ let canPublishIrisOrder: () => boolean = () => false
 let sessionCoversEssaTower: () => boolean = () => false
 /** Last known remote /order entries (ours + peer split TWR/GND). */
 let lastRemoteOrderEntries: IrisOrderEntry[] = []
+/** Keys we last included in a local stripview publish (for disconnect cleanup). */
+let lastPublishedOrderKeys = new Set<string>()
 let getEssaSepIndicators: () => {
     sep: string
     dlv: string
@@ -422,7 +424,10 @@ function stripviewOpts() {
 /** Local stripview snapshot, then merge peer split-position entries. */
 export function peekEssaOrderPayload(revision = orderRevision + 1): IrisOrderPayload {
     const strips = getAllStrips()
-    const opts = stripviewOpts()
+    const opts = {
+        ...stripviewOpts(),
+        previouslyPublishedKeys: lastPublishedOrderKeys,
+    }
     const local = buildEssaIrisOrder(strips, revision, "ESSA", opts)
     if (lastRemoteOrderEntries.length === 0) return local
     return mergeEssaIrisOrderForSplitPublish(local, lastRemoteOrderEntries, strips, opts)
@@ -457,6 +462,9 @@ export async function pushIrisOrderToRemote(
     }
     lastPushedOrderEntriesJson = JSON.stringify(body.entries)
     lastRemoteOrderEntries = body.entries.map((e) => ({ ...e }))
+    // Remember what we still claim on stripview so disconnects can drop them next push
+    const localOnly = buildEssaIrisOrder(getAllStrips(), body.revision, "ESSA", stripviewOpts())
+    lastPublishedOrderKeys = new Set(localOnly.entries.map((e) => e.stripKey.toUpperCase()))
     noteSuccess()
     return true
 }
@@ -1084,6 +1092,7 @@ export function stopScribbleSyncPolling() {
     lastPollOk = false
     lastPushedOrderEntriesJson = ""
     lastRemoteOrderEntries = []
+    lastPublishedOrderKeys = new Set()
     lastPushedSepJson = ""
     lastCftoAtdSig.clear()
     refreshHealth()

@@ -446,13 +446,18 @@ function sortIrisOrderEntries(entries: IrisOrderEntry[], revision: number): Iris
  * Merge local order with last remote snapshot for split TWR/GND publishers.
  * - Replace entries for flights this client knows and still on stripview
  * - Drop keys this client has that left to APP/DEP/Unicom
- * - Keep remote keys this client does not have (other split position)
+ * - Drop keys we previously published that disappeared from local strips
+ *   (disconnect / soft-delete) — otherwise peers re-keep them forever
+ * - Keep remote keys this client never knew (other split position)
  */
 export function mergeEssaIrisOrderForSplitPublish(
     local: IrisOrderPayload,
     remoteEntries: ReadonlyArray<IrisOrderEntry>,
     localStrips: ReadonlyArray<StripviewStrip>,
-    opts?: IrisStripviewOpts,
+    opts?: IrisStripviewOpts & {
+        /** Strip keys this session last published on stripview (callsign upper). */
+        previouslyPublishedKeys?: ReadonlySet<string>
+    },
 ): IrisOrderPayload {
     const knownKeys = new Set<string>()
     const dropKeys = new Set<string>()
@@ -464,6 +469,14 @@ export function mergeEssaIrisOrderForSplitPublish(
         knownKeys.add(key)
         if (!isEssaStripviewOrderStrip(s, opts)) {
             dropKeys.add(key)
+        }
+    }
+    // Gone from our strip list entirely after we had published them → drop
+    // (NSZ51M / DLH6LL disconnect left remote DEPA entries stuck on Stripview).
+    if (opts?.previouslyPublishedKeys) {
+        for (const k of opts.previouslyPublishedKeys) {
+            const key = k.toUpperCase()
+            if (!knownKeys.has(key)) dropKeys.add(key)
         }
     }
 

@@ -490,6 +490,65 @@ check("split-order merge keeps peer strips and drops local leavers", () => {
     assert.ok(!keys.includes("GONE"))
 })
 
+check("disconnect / soft-delete drops previously published stripview keys", () => {
+    const local = buildEssaIrisOrder(
+        [
+            strip({
+                callsign: "STILL",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+            }),
+        ],
+        1,
+    )
+    const remote = [
+        {
+            stripKey: "STILL",
+            bayId: "TWR-W" as const,
+            sectionId: "TAXI" as const,
+            position: 0,
+            cfto: false,
+            atd: null,
+        },
+        {
+            stripKey: "GONE",
+            bayId: "TWR-W" as const,
+            sectionId: "DEPA" as const,
+            position: 0,
+            cfto: true,
+            atd: "1012",
+        },
+        {
+            stripKey: "PEER",
+            bayId: "TWR-E" as const,
+            sectionId: "LINEUP" as const,
+            position: 0,
+            cfto: false,
+            atd: null,
+        },
+    ]
+    const merged = mergeEssaIrisOrderForSplitPublish(
+        local,
+        remote,
+        [
+            strip({
+                callsign: "STILL",
+                sectionId: "taxi_dep",
+                groundstate: "TAXI",
+                runway: "01L",
+                ownerCallsign: "ESSA_W_TWR",
+            }),
+            // GONE no longer in local strips (disconnect) — was previously published
+        ],
+        { previouslyPublishedKeys: new Set(["STILL", "GONE"]) },
+    )
+    const keys = merged.entries.map((e) => e.stripKey).sort()
+    assert.deepEqual(keys, ["PEER", "STILL"])
+    assert.ok(!keys.includes("GONE"))
+})
+
 check("StripEfsFields: bayId TWR-W/E from dep RWY role", () => {
     const west = buildStripEfsFields(
         strip({
