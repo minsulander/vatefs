@@ -95,6 +95,7 @@ export async function refreshAfvTransceivers(): Promise<boolean> {
             return false
         }
         applyTransceiverSnapshot(data)
+        reapplyMockAfvSpoof()
         everFetched = true
         lastFetchOk = true
         return true
@@ -102,6 +103,8 @@ export async function refreshAfvTransceivers(): Promise<boolean> {
         console.warn("AFV transceivers fetch failed:", e instanceof Error ? e.message : e)
         everFetched = true
         lastFetchOk = false
+        // Keep mock spoof available offline / sweatbox
+        reapplyMockAfvSpoof()
         return false
     } finally {
         inFlight = false
@@ -117,11 +120,21 @@ export function getAfvHealth(): { ok: boolean; detail: string } {
         : { ok: false, detail: "Fetch failed" }
 }
 
-export function startAfvTransceiverPolling(intervalMs = DEFAULT_POLL_MS): void {
+/**
+ * @param onUpdate called after each successful fetch (e.g. rebroadcast RX freqs)
+ */
+export function startAfvTransceiverPolling(
+    intervalMs = DEFAULT_POLL_MS,
+    onUpdate?: () => void,
+): void {
     stopAfvTransceiverPolling()
-    void refreshAfvTransceivers()
+    const tick = async () => {
+        const ok = await refreshAfvTransceivers()
+        if (ok) onUpdate?.()
+    }
+    void tick()
     pollTimer = setInterval(() => {
-        void refreshAfvTransceivers()
+        void tick()
     }, intervalMs)
     if (typeof pollTimer === "object" && "unref" in pollTimer) {
         pollTimer.unref()
@@ -143,4 +156,51 @@ export function __setAfvFrequenciesForTest(map: Record<string, string[]>): void 
             new Set(freqs.map((f) => normalizeFreqKey(f)!).filter(Boolean)),
         ])
     )
+}
+
+/**
+ * Mock / visual-review: force AFV RX freqs for a callsign (does not hit the network).
+ * Survives subsequent live fetches until cleared — merge into snapshot after each fetch
+ * when mockSpoofCallsign is set.
+ */
+let mockSpoofCallsign: string | undefined
+let mockSpoofFreqs: Set<string> = new Set()
+
+/**
+ * Spoof AFV "Monitoring" freqs for `callsign` (e.g. local TWR freqs while on RTC common).
+ * Pass empty freqs to clear. Used with `--mock` + `--afv-rx`.
+ */
+export function setMockAfvRxFrequencies(
+    callsign: string | undefined,
+    freqsMhz: Array<number | string>,
+): void {
+    if (!callsign) {
+        mockSpoofCallsign = undefined
+        mockSpoofFreqs = new Set()
+        return
+    }
+    mockSpoofCallsign = callsign.toUpperCase()
+    mockSpoofFreqs = new Set(
+        freqsMhz
+            .map((f) => normalizeFreqKey(f))
+            .filter((k): k is string => !!k),
+    )
+    applyMockSpoofToMap()
+}
+
+function applyMockSpoofToMap(): void {
+    if (!mockSpoofCallsign || mockSpoofFreqs.size === 0) return
+    const existing = freqsByCallsign.get(mockSpoofCallsign) ?? new Set<string>()
+    const merged = new Set(existing)
+    for (const f of mockSpoofFreqs) merged.add(f)
+    freqsByCallsign.set(mockSpoofCallsign, merged)
+}
+
+/** Re-apply after each live AFV fetch so mock spoof sticks in --mock sessions. */
+export function reapplyMockAfvSpoof(): void {
+    applyMockSpoofToMap()
+}
+
+export function getMockAfvRxFrequencies(): string[] {
+    return [...mockSpoofFreqs]
 }

@@ -52,6 +52,13 @@
         </button>
         <TrashDialog v-model="trashOpen" />
 
+        <!-- Local TWR/AFIS when AFV RX-selected (never ES Primfreq / RTC common) — left of ICAO -->
+        <span
+          v-if="!isEmpty && headerRxFreq"
+          class="bay-header-rx"
+          :title="headerRxFreqTitle"
+        >{{ headerRxFreqDisplay }}</span>
+
         <button
           ref="pickerBtn"
           type="button"
@@ -62,7 +69,10 @@
           <span class="airport-picker-icao">{{ selectedAirport ?? '-' }}</span>
           <v-icon size="10" class="airport-picker-menu-icon">mdi-menu-down</v-icon>
         </button>
-        <div v-if="!isEmpty && (headerAtis || headerQnh)" class="bay-header-meta">
+        <div
+          v-if="!isEmpty && (headerAtis || headerQnh)"
+          class="bay-header-meta"
+        >
           <span
             v-if="headerAtis"
             class="bay-header-atis"
@@ -433,6 +443,31 @@ const airportAtis = computed(() => {
 const headerQnh = computed(() => {
   const q = airportAtis.value?.qnh
   return q != null && q > 0 ? String(q) : null
+})
+
+/** Local ATS freq string from status when AFV has it RX-selected for this column. */
+const headerRxFreq = computed(() => {
+  const icao = selectedAirport.value
+  if (!icao) return null
+  const raw = store.airportRxFrequencies[icao.toUpperCase()]
+  return raw && raw.trim() ? raw.trim() : null
+})
+
+/** Compact display e.g. 118.75 — tweak via .bay-header-rx CSS */
+const headerRxFreqDisplay = computed(() => {
+  const f = headerRxFreq.value
+  if (!f) return ''
+  const n = parseFloat(f)
+  if (!Number.isFinite(n)) return f
+  // Drop trailing zero on hundredths when clean (118.750 → 118.75)
+  return n.toFixed(3).replace(/0$/, '').replace(/\.$/, '')
+})
+
+/** Hover: local freq with full value (not ellipsis) */
+const headerRxFreqTitle = computed(() => {
+  const full = headerRxFreq.value
+  if (!full) return ''
+  return `local freq ${full}`
 })
 
 /** ATIS letter(s) for this column airport — single, or ARR/DEP when split */
@@ -984,7 +1019,7 @@ onMounted(() => {
   margin-left: 0;
 }
 
-/* ICAO centred; QNH/ATIS overlay on the right (inboard of catalog) */
+/* ICAO centred; RX left of ICAO; QNH/ATIS overlay on the right (inboard of catalog) */
 .airport-picker-btn {
   position: absolute;
   left: 50%;
@@ -1050,6 +1085,34 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/**
+ * Local AFV-RX frequency (not Primfreq) — left of column ICAO.
+ * Easy visual tweaks: color / opacity / font-size / letter-spacing / left inset
+ */
+.bay-header-rx {
+  position: absolute;
+  /* Inboard of trash triangle on the left */
+  left: calc(22px * var(--bay-scale));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  max-width: 28%;
+  color: #fff;
+  /* Allow native title tooltip (was pointer-events: none) */
+  pointer-events: auto;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: max(calc(11px * var(--bay-scale, 1)), calc(12px * var(--efs-scale, 1)));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  opacity: 0.85;
 }
 
 .bay-header-atis {

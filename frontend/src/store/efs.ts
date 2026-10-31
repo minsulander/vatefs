@@ -448,6 +448,8 @@ export const useEfsStore = defineStore("efs", () => {
     const workspaceMode = computed(() => essaRolesMode.value || saabLayoutsMode.value)
     /** Per-airport TMA/CTR ownership (ESE OWNER first-online) */
     const airportCoverage = ref<Record<string, { tma: boolean; ctr: boolean }>>({})
+    /** RTC: local TWR/AFIS freq when AFV has it RX-selected (icao → "118.105") */
+    const airportRxFrequencies = ref<Record<string, string>>({})
 
     // ESGG paper role picker (CD / GND / TWR)
     const esggRolesMode = ref(false)
@@ -1689,6 +1691,7 @@ export const useEfsStore = defineStore("efs", () => {
         saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
         saabRunwayCatalog?: Array<{ sectionId: string; title: string }>
         airportCoverage?: Record<string, { tma: boolean; ctr: boolean }>
+        airportRxFrequencies?: Record<string, string>
     }) {
         myCallsign.value = message.callsign
         myAirports.value = message.airports
@@ -1757,6 +1760,11 @@ export const useEfsStore = defineStore("efs", () => {
                     applyRtcCoverageDefaults(bayId, message.airportCoverage![icao.toUpperCase()])
                 })
             }
+        }
+        if (message.multiAirport) {
+            airportRxFrequencies.value = message.airportRxFrequencies ?? {}
+        } else if (message.airportRxFrequencies === undefined) {
+            airportRxFrequencies.value = {}
         }
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
@@ -3822,6 +3830,7 @@ export const useEfsStore = defineStore("efs", () => {
         saabRunwayCatalog,
         workspaceMode,
         airportCoverage,
+        airportRxFrequencies,
         setEssaRoles,
         esggRolesMode,
         esggRoles,

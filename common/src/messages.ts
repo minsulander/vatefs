@@ -163,6 +163,11 @@ export interface StatusMessage {
      * Drives OTHER / RTC builtin defaults; does not move strips by itself.
      */
     airportCoverage?: Record<string, { tma: boolean; ctr: boolean }>
+    /**
+     * RTC: local TWR/AFIS frequency (MHz string, e.g. "118.105") per airport where
+     * AFV lists that frequency among our monitored (RX) transceivers.
+     */
+    airportRxFrequencies?: Record<string, string>
 }
 
 export interface DclStatusMessage {

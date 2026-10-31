@@ -6,12 +6,15 @@ import assert from "node:assert/strict"
 import {
     angleDiffDeg,
     bearingDeg,
+    getAirportAtsFrequencies,
+    getAirportAtsFrequency,
     getAppDepOwnerChain,
     getGndOwnerChain,
     getTwrOwnerChain,
     gndFamilyPrimarySi,
     siToGndFamily,
     __setAppDepOwnerChainsForTest,
+    __setEsePositionForTest,
     __setGndOwnerChainsForTest,
     __setTwrOwnerChainsForTest,
 } from "./ese-airspace.js"
@@ -71,6 +74,75 @@ check("getTwrOwnerChain defaults / ESE", () => {
     assert.deepEqual(getTwrOwnerChain("TW"), ["TW", "TE", "TS"])
     __setTwrOwnerChainsForTest({ TE: ["TE", "TW"] })
     assert.deepEqual(getTwrOwnerChain("TE"), ["TE", "TW"])
+})
+
+check("getAirportAtsFrequencies includes TWR + APP, excludes DEP/CTR/GND", () => {
+    // Unique ICAO so live ESE load (if any) does not collide
+    const icao = "ZZRX"
+    __setEsePositionForTest({
+        callsign: "ZZRX_TWR",
+        frequency: 118.105,
+        si: "ZXT",
+        airport: icao,
+        role: "TWR",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZRX_APP",
+        frequency: 120.155,
+        si: "ZXA",
+        airport: icao,
+        role: "APP",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZRX_E_APP",
+        frequency: 124.205,
+        si: "ZXE",
+        airport: icao,
+        role: "APP",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZRX_DEP",
+        frequency: 130.33,
+        si: "ZXD",
+        airport: icao,
+        role: "DEP",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZRX_GND",
+        frequency: 121.7,
+        si: "ZXG",
+        airport: icao,
+        role: "GND",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZRX_CTR",
+        frequency: 130.9,
+        si: "ZXC",
+        airport: icao,
+        role: "CTR",
+    })
+    assert.deepEqual(getAirportAtsFrequencies(icao), [118.105, 120.155, 124.205])
+    assert.equal(getAirportAtsFrequency(icao), 118.105)
+})
+
+check("getAirportAtsFrequencies AFIS then APP when no TWR", () => {
+    const icao = "ZZAF"
+    __setEsePositionForTest({
+        callsign: "ZZAF_AFIS",
+        frequency: 123.5,
+        si: "ZAF",
+        airport: icao,
+        role: "AFIS",
+    })
+    __setEsePositionForTest({
+        callsign: "ZZAF_APP",
+        frequency: 119.4,
+        si: "ZAA",
+        airport: icao,
+        role: "APP",
+    })
+    assert.deepEqual(getAirportAtsFrequencies(icao), [123.5, 119.4])
+    assert.equal(getAirportAtsFrequency(icao), 123.5)
 })
 
 console.log(`\n${passed} passed`)

@@ -731,6 +731,82 @@ export function getEsePositionByCallsign(callsign: string | undefined): EsePosit
     return positionsByCallsign.get(callsign.toUpperCase())
 }
 
+function isTwrRole(role: string): boolean {
+    return role === "TWR" || role.endsWith("TWR") || role.includes("TOWER")
+}
+
+function isAfisRole(role: string): boolean {
+    return (
+        role === "AFIS" ||
+        role === "AFR" ||
+        role.includes("AFIS") ||
+        role.includes("INFO")
+    )
+}
+
+/** APP / approach (not DEP/CTR/GND) — used for RTC column AFV RX matching. */
+function isAppRole(role: string): boolean {
+    return (
+        role === "APP" ||
+        role.endsWith("APP") ||
+        role.includes("APPROACH") ||
+        role.includes("ARRIVAL")
+    )
+}
+
+/**
+ * Local airport ATS frequencies from .ese [POSITIONS] for RTC column RX matching
+ * (AFV RX ∩ this set, excluding Primfreq / RTC common in the caller).
+ * Order: TWR, then AFIS/AFR/INFO, then APP/approach. Deduped by MHz.
+ */
+export function getAirportAtsFrequencies(airport: string | undefined): number[] {
+    if (!airport) return []
+    const icao = airport.trim().toUpperCase()
+    if (!icao) return []
+    const twr: number[] = []
+    const afis: number[] = []
+    const app: number[] = []
+    const seen = new Set<string>()
+    for (const pos of positionsByCallsign.values()) {
+        if ((pos.airport || "").toUpperCase() !== icao) continue
+        if (!(pos.frequency > 0) || pos.frequency >= 199) continue
+        const role = (pos.role || "").toUpperCase()
+        let bucket: number[] | undefined
+        if (isTwrRole(role)) bucket = twr
+        else if (isAfisRole(role)) bucket = afis
+        else if (isAppRole(role)) bucket = app
+        else continue
+        const key = pos.frequency.toFixed(3)
+        if (seen.has(key)) continue
+        seen.add(key)
+        bucket.push(pos.frequency)
+    }
+    return [...twr, ...afis, ...app]
+}
+
+/**
+ * Preferred local ATS (TWR / AFIS) frequency for an airport from .ese [POSITIONS].
+ * Prefers TWR, then AFIS/AFR. Used by mock `--afv-rx` spoof (tower/AFIS only).
+ */
+export function getAirportAtsFrequency(airport: string | undefined): number | undefined {
+    if (!airport) return undefined
+    const icao = airport.trim().toUpperCase()
+    if (!icao) return undefined
+    let twr: number | undefined
+    let afis: number | undefined
+    for (const pos of positionsByCallsign.values()) {
+        if ((pos.airport || "").toUpperCase() !== icao) continue
+        if (!(pos.frequency > 0) || pos.frequency >= 199) continue
+        const role = (pos.role || "").toUpperCase()
+        if (isTwrRole(role)) {
+            if (twr == null) twr = pos.frequency
+        } else if (isAfisRole(role)) {
+            if (afis == null) afis = pos.frequency
+        }
+    }
+    return twr ?? afis
+}
+
 export function getAllEseSectors(): EseSector[] {
     return sectors
 }

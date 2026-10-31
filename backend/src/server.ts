@@ -224,12 +224,20 @@ import {
     withSlowRemark,
     withVectRemark,
 } from "@vatefs/common"
-import { loadEseAirspace, getEseAirspaceHealth } from "./ese-airspace.js"
+import {
+    loadEseAirspace,
+    getEseAirspaceHealth,
+    getAirportAtsFrequency,
+    getAirportAtsFrequencies,
+} from "./ese-airspace.js"
 import {
     startAfvTransceiverPolling,
     stopAfvTransceiverPolling,
     getAfvHealth,
     refreshAfvTransceivers,
+    controllerMonitorsFrequency,
+    formatFreqMhz,
+    setMockAfvRxFrequencies,
 } from "./afv-transceivers.js"
 import {
     isEssaStripVisibleForRoles,
@@ -312,9 +320,26 @@ const udpOutPort = 17772
 const udpHost = "127.0.0.1"
 
 // Parse command-line arguments
-function parseArgs(): { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } {
+function parseArgs(): {
+    config?: string
+    callsign?: string
+    airports?: string[]
+    recordFile?: string
+    mock?: boolean
+    viffBaseUrl?: string
+    /** Mock: comma-separated ICAOs whose local TWR/AFIS freqs are spoofed as AFV RX (APP matchable separately) */
+    afvRxAirports?: string[]
+} {
     const args = process.argv.slice(2)
-    const result: { config?: string; callsign?: string; airports?: string[]; recordFile?: string; mock?: boolean; viffBaseUrl?: string } = {}
+    const result: {
+        config?: string
+        callsign?: string
+        airports?: string[]
+        recordFile?: string
+        mock?: boolean
+        viffBaseUrl?: string
+        afvRxAirports?: string[]
+    } = {}
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === "--config" && args[i + 1]) {
@@ -330,6 +355,13 @@ function parseArgs(): { config?: string; callsign?: string; airports?: string[];
             result.viffBaseUrl = args[++i]
         } else if (args[i] === "--mock") {
             result.mock = true
+        } else if ((args[i] === "--afv-rx" || args[i] === "--mock-afv-rx") && args[i + 1]) {
+            // Comma-separated ICAOs: spoof those airports' local TWR/AFIS as AFV RX
+            // (column match set also includes APP; spoof still injects tower/AFIS only)
+            result.afvRxAirports = args[++i]
+                .split(",")
+                .map((a) => a.trim().toUpperCase())
+                .filter(Boolean)
         }
     }
 
@@ -503,8 +535,10 @@ if (EUROSCOPE_DIR) {
     } catch (err) {
         console.warn(`Failed to load ESE airspace: ${err instanceof Error ? err.message : err}`)
     }
-    // AFV multi-freq (VATSIM Radar "Monitoring") for APP/DEP XC detection
-    startAfvTransceiverPolling()
+    // AFV multi-freq (VATSIM Radar "Monitoring") for APP/DEP XC + RTC column RX
+    startAfvTransceiverPolling(undefined, () => {
+        if (isMultiAirportConfig(staticConfig)) broadcastStatus()
+    })
     try {
         const airlinesFile =
             resolveIcaoAirlinesFile(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) ??
@@ -695,7 +729,16 @@ if (cliArgs.callsign) {
 
 // Apply command-line airports or mock default
 if (cliArgs.airports && cliArgs.airports.length > 0) {
-    setMyAirports(cliArgs.airports)
+    // --airport wins over restored RTC active/column picks (needed for mock C-box demos)
+    setMyAirports(cliArgs.airports, { force: true })
+    if (isMultiAirportConfig(staticConfig)) {
+        const count = Math.max(staticConfig.columnCount ?? cliArgs.airports.length, cliArgs.airports.length)
+        setColumnCount(count)
+        cliArgs.airports.forEach((icao, i) => setColumnAirport(i, icao))
+        console.log(
+            `RTC columns seeded from --airport: ${cliArgs.airports.join(", ")}`,
+        )
+    }
     console.log(`Airports set to: ${cliArgs.airports.join(", ")}`)
 } else if (cliArgs.mock) {
     // Default to ESGG for mock mode
@@ -1154,6 +1197,9 @@ if (cliArgs.mock) {
         `Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${staticConfig.myAirports.join(", ")})`,
     )
 
+    // Spoof AFV RX for column freq visual review (after ESE load — see applyCliAfvRxSpoof)
+    queueMicrotask(() => applyCliAfvRxSpoof())
+
     // ESSA role boards: show TWR+GND+CD so mock arrivals/deps are visible for STD testing
     if (isEssaRolesConfig(staticConfig)) {
         setEssaRoles(["CD", "GND-E", "GND-N", "GND-W", "TWR-E", "TWR-W"], true)
@@ -1485,7 +1531,86 @@ function buildStatusMessage(): StatusMessage {
                           : staticConfig.myAirports
                   )
                 : undefined,
+        airportRxFrequencies: isMultiAirportConfig(staticConfig)
+            ? buildAirportRxFrequencies()
+            : undefined,
     }
+}
+
+/** True when `mhz` is the ES primary / RTC common frequency (never show as local). */
+function isEsPrimaryFrequency(mhz: number): boolean {
+    const prim = staticConfig.myFrequency
+    if (prim != null && prim > 0 && Math.abs(mhz - prim) < 0.0015) return true
+    // Known RTC common freqs (Stockholm 130.900 / Malmö 122.325) even if prim unset
+    if (Math.abs(mhz - 130.9) < 0.0015) return true
+    if (Math.abs(mhz - 122.325) < 0.0015) return true
+    return false
+}
+
+/**
+ * Mock visual review: spoof AFV RX as the local TWR/AFIS of given ICAOs.
+ * Default demo set when `--mock` + RTC and `--afv-rx` omitted: ESNU, ESSB, ESMS.
+ *
+ * Example:
+ *   cd backend && npm start -- --mock --config multiairport.yml --callsign ESSR_CTR --afv-rx ESNU,ESSB,ESMS,ESGG
+ */
+function applyCliAfvRxSpoof(): void {
+    if (!cliArgs.mock) return
+    const callsign = staticConfig.myCallsign || cliArgs.callsign
+    if (!callsign) return
+    const icaos =
+        cliArgs.afvRxAirports && cliArgs.afvRxAirports.length > 0
+            ? cliArgs.afvRxAirports
+            : isMultiAirportConfig(staticConfig)
+              ? ["ESNU", "ESSB", "ESMS"]
+              : []
+    if (icaos.length === 0) return
+    const freqs: string[] = []
+    const labeled: string[] = []
+    for (const icao of icaos) {
+        const mhz = getAirportAtsFrequency(icao)
+        if (mhz == null || isEsPrimaryFrequency(mhz)) {
+            console.warn(`[AFV-RX mock] ${icao}: no local TWR/AFIS (or equals Primfreq) — skip`)
+            continue
+        }
+        const key = formatFreqMhz(mhz)
+        freqs.push(key)
+        labeled.push(`${icao}=${key}`)
+    }
+    setMockAfvRxFrequencies(callsign, freqs)
+    console.log(
+        `[AFV-RX mock] Spoofed RX for ${callsign}: ${labeled.join(", ") || "(none)"}` +
+            ` — tweak CSS .bay-header-rx / pass --afv-rx ICAO,…`,
+    )
+    if (isMultiAirportConfig(staticConfig)) broadcastStatus()
+}
+
+/**
+ * Per-airport local TWR/AFIS/APP freq when AFV lists it among our RX transceivers.
+ * Match set = ESE local ATS (TWR → AFIS → APP); never Primfreq / RTC common.
+ * First monitored candidate wins (tower preferred over APP when both RX'd).
+ * Empty object when none selected — clients clear stale column labels.
+ */
+function buildAirportRxFrequencies(): Record<string, string> {
+    const out: Record<string, string> = {}
+    const callsign = staticConfig.myCallsign
+    if (!callsign) return out
+    const airports = new Set<string>()
+    for (const a of staticConfig.activeAirports ?? staticConfig.myAirports ?? []) {
+        if (a) airports.add(a.toUpperCase())
+    }
+    for (const a of staticConfig.columnAirports ?? []) {
+        if (a) airports.add(a.toUpperCase())
+    }
+    for (const icao of airports) {
+        for (const mhz of getAirportAtsFrequencies(icao)) {
+            if (isEsPrimaryFrequency(mhz)) continue
+            if (!controllerMonitorsFrequency(callsign, mhz)) continue
+            out[icao] = formatFreqMhz(mhz)
+            break
+        }
+    }
+    return out
 }
 
 let lastPendingPrintFp = ''
@@ -1879,6 +2004,9 @@ function switchConfig(
         }
 
         store.reprocessAllFlights()
+
+        // Mock: (re)spoof AFV RX after landing on RTC so column freqs appear
+        applyCliAfvRxSpoof()
 
         // configList first (clients can drop workspace), then refresh so layout
         // clears before status enables OTHER/ESSA mode (avoids building from stale bays).
@@ -4205,7 +4333,9 @@ function syncOnlineNetworkServices(_realm?: ScribbleRealm) {
         }
     } else {
         console.log(`[REALM] Online VATSIM services (realm=${resolveRealm(currentUiSettings)})`)
-        startAfvTransceiverPolling()
+        startAfvTransceiverPolling(undefined, () => {
+            if (isMultiAirportConfig(staticConfig)) broadcastStatus()
+        })
         startAtisService()
         recalculateDclAvailability()
         try {
