@@ -151,14 +151,15 @@
         </div>
       </div>
 
-      <div class="sid-route-foot">
+      <div class="sid-route-foot" :class="{ 'stand-foot-row': !isCompact }">
+        <button type="button" class="sid-route-fpr" @click="onAuto">AUTO</button>
         <button
           type="button"
           class="sid-route-fpr"
           :disabled="!currentStand"
           @click="onPublish"
-        >Publish</button>
-        <button type="button" class="sid-route-clear" @click="onClear">Clear</button>
+        >PUBLISH</button>
+        <button type="button" class="sid-route-clear" @click="onClear">CLEAR</button>
       </div>
     </div>
   </v-menu>
@@ -614,6 +615,11 @@ function onSelect(stand: StandMenuStand) {
   closeMenu()
 }
 
+function onAuto() {
+  store.sendGrpStand(props.strip.id, 'auto')
+  closeMenu()
+}
+
 function onPublish() {
   if (!currentStand.value) return
   store.sendGrpStand(props.strip.id, 'publish', currentStand.value)
@@ -854,6 +860,23 @@ onBeforeUnmount(() => {
 .sid-route-overlay .sid-route-foot {
   display: flex;
   flex-direction: column;
+}
+
+/* Full apron view: AUTO | PUBLISH | CLEAR in one row */
+.sid-route-overlay .sid-route-foot.stand-foot-row {
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.sid-route-overlay .sid-route-foot.stand-foot-row > button {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+.sid-route-overlay .sid-route-foot.stand-foot-row > button + button {
+  border-top: 3px solid #333;
+  border-left: 1px solid #666;
 }
 
 .sid-route-overlay .stand-menu-columns {
@@ -1300,7 +1323,8 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 2px #000;
 }
 
-.sid-route-overlay .sid-route-fpr + .sid-route-clear {
+.sid-route-overlay .sid-route-foot:not(.stand-foot-row) .sid-route-fpr + .sid-route-fpr,
+.sid-route-overlay .sid-route-foot:not(.stand-foot-row) .sid-route-fpr + .sid-route-clear {
   border-top: 1px solid #666;
 }
 </style>

@@ -48,6 +48,12 @@ import {
 import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, isWithinStripVisibilityRange, findNearestAirport } from "./geo-utils.js"
 import { findStandForPosition, hasStandData } from "./stand-data.js"
+import {
+    hasEssaStandAssignData,
+    isEssaStandBlocked,
+    resolveAircraftDims,
+    type OccupierInfo,
+} from "./essa-stand-assign.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
 import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
@@ -76,7 +82,7 @@ import { getIcaoAirportName } from "./icao-airports.js"
 import { hasSidInEse, getSidInfo, getSidsForRunway, pickEseSidForRouteExit } from "./sid-data.js"
 import {
     parseCombinedScratch,
-    buildCombinedScratch,
+    buildFlightScratch,
     isProtocolScratch,
     isHandoverAssistantScratch,
     shouldClearHandoverScratch,
@@ -1995,10 +2001,10 @@ class FlightStore {
 
             // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
             if (!setScratchValue && this.tryClearAutoSlowRemark(flight)) {
-                setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                setScratchValue = buildFlightScratch(flight)
                 this.holdScratchFields(flight)
             } else if (!setScratchValue && this.tryAutoSlowRemark(flight)) {
-                setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                setScratchValue = buildFlightScratch(flight)
                 this.holdScratchFields(flight)
             }
 
@@ -2492,10 +2498,10 @@ class FlightStore {
 
         // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
         if (this.tryClearAutoSlowRemark(flight)) {
-            setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            setScratchValue = buildFlightScratch(flight)
             this.holdScratchFields(flight)
         } else if (this.tryAutoSlowRemark(flight)) {
-            setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            setScratchValue = buildFlightScratch(flight)
             this.holdScratchFields(flight)
         }
 
@@ -2604,30 +2610,39 @@ class FlightStore {
      * Process an incoming plugin message and return the result
      */
     processMessage(message: PluginMessage): ProcessMessageResult {
+        let result: ProcessMessageResult
         switch (message.type) {
             case 'flightPlanDataUpdate':
-                return this.handleFlightPlanDataUpdate(message)
+                result = this.handleFlightPlanDataUpdate(message)
+                break
 
             case 'controllerAssignedDataUpdate':
-                return this.handleControllerAssignedDataUpdate(message)
+                result = this.handleControllerAssignedDataUpdate(message)
+                break
 
             case 'flightPlanDisconnect':
-                return this.handleFlightPlanDisconnect(message)
+                result = this.handleFlightPlanDisconnect(message)
+                break
 
             case 'radarTargetPositionUpdate':
-                return this.handleRadarTargetPositionUpdate(message)
+                result = this.handleRadarTargetPositionUpdate(message)
+                break
 
             case 'ownershipUpdate':
-                return this.handleOwnershipUpdate(message)
+                result = this.handleOwnershipUpdate(message)
+                break
 
             case 'flightPlanFlightStripPushed':
-                return this.handleFlightStripPushed(message)
+                result = this.handleFlightStripPushed(message)
+                break
 
             case 'cdmLocalUpdate':
-                return this.handleCdmLocalUpdate(message)
+                result = this.handleCdmLocalUpdate(message)
+                break
 
             case 'cdmLocalHeartbeat':
-                return this.handleCdmLocalHeartbeat()
+                result = this.handleCdmLocalHeartbeat()
+                break
 
             case 'controllerPositionUpdate':
             case 'controllerDisconnect':
@@ -2637,6 +2652,89 @@ class FlightStore {
 
             default:
                 return {}
+        }
+        const cs =
+            message && typeof message === "object" && "callsign" in message
+                ? String((message as { callsign?: string }).callsign || "")
+                : ""
+        return this.withStandBlockedPeerRefresh(result, cs || undefined)
+    }
+
+    /** Build GRP occupancy traffic snapshot for ESSA stand checks. */
+    buildEssaOccupierTraffic(): OccupierInfo[] {
+        const traffic: OccupierInfo[] = []
+        for (const f of this.flights.values()) {
+            if (!f.callsign) continue
+            const origin = (f.origin || "").toUpperCase()
+            const destination = (f.destination || "").toUpperCase()
+            traffic.push({
+                callsign: f.callsign,
+                stand: f.stand,
+                latitude: f.latitude,
+                longitude: f.longitude,
+                heading: f.heading,
+                groundstate: f.groundstate,
+                airborne: !!f.airborne,
+                departure: origin === "ESSA",
+                tsat: f.tsat,
+                tobt: f.tobt,
+                eobt: f.eobt,
+                dims: resolveAircraftDims(
+                    f.aircraftType,
+                    f.wakeTurbulence,
+                    f.callsign,
+                    f.fplRemarks,
+                ),
+                assigned: !!(f.stand && destination === "ESSA" && origin !== "ESSA"),
+            })
+        }
+        return traffic
+    }
+
+    private evalStandBlocked(flight: Flight): boolean {
+        if (!hasEssaStandAssignData()) return false
+        if ((flight.destination || "").toUpperCase() !== "ESSA") return false
+        if (!flight.stand) return false
+        return isEssaStandBlocked(
+            flight.stand,
+            flight.callsign,
+            this.buildEssaOccupierTraffic(),
+        )
+    }
+
+    /**
+     * Update cached standBlocked on peer arrivals; returns callsigns whose
+     * flag changed (so strips can be regenerated).
+     */
+    syncPeerStandBlockedFlags(exceptCallsign?: string): string[] {
+        if (!hasEssaStandAssignData()) return []
+        if (!this.config.myAirports.some((a) => a.toUpperCase() === "ESSA")) return []
+        const except = (exceptCallsign || "").toUpperCase()
+        const traffic = this.buildEssaOccupierTraffic()
+        const changed: string[] = []
+        for (const f of this.flights.values()) {
+            if (!f.callsign || f.callsign.toUpperCase() === except) continue
+            if ((f.destination || "").toUpperCase() !== "ESSA") continue
+            const next = f.stand
+                ? isEssaStandBlocked(f.stand, f.callsign, traffic)
+                : false
+            if (!!f.standBlocked !== next) {
+                f.standBlocked = next || undefined
+                changed.push(f.callsign)
+            }
+        }
+        return changed
+    }
+
+    private withStandBlockedPeerRefresh(
+        result: ProcessMessageResult,
+        exceptCallsign?: string,
+    ): ProcessMessageResult {
+        const peers = this.syncPeerStandBlockedFlags(exceptCallsign)
+        if (!peers.length) return result
+        return {
+            ...result,
+            refreshCallsigns: [...new Set([...(result.refreshCallsigns ?? []), ...peers])],
         }
     }
 
@@ -3785,7 +3883,7 @@ class FlightStore {
             if (skipBulkEmptyScratch) {
                 // keep EFS remarks/HP
             } else if (holdingScratchFields && !isProtocolScratch(scratch)) {
-                const desired = buildCombinedScratch(flight.remarks, flight.hp)
+                const desired = buildFlightScratch(flight)
                 // Normalize for compare: ES may echo "VECT" while we store ".VECT"
                 if (scratch !== desired) {
                     restoreScratchValue = desired
@@ -3802,8 +3900,14 @@ class FlightStore {
                     if (hasSlowRemark(nextRemarks)) this.markSlowRemarkManual(flight)
                 }
                 if (nextHp !== null && nextHp !== flight.hp) {
-                    console.log(`[HP] ${callsign}: ${flight.hp ?? '-'} -> ${nextHp ?? '-'} (scratch /)`)
-                    flight.hp = nextHp
+                    // Strip-only HP after airborne/CFTO: ignore empty scratch wiping the cell
+                    if (flight.hpScratchCleared && !nextHp) {
+                        /* keep flight.hp */
+                    } else {
+                        console.log(`[HP] ${callsign}: ${flight.hp ?? '-'} -> ${nextHp ?? '-'} (scratch /)`)
+                        flight.hp = nextHp
+                        if (nextHp) flight.hpScratchCleared = undefined
+                    }
                 }
             }
         }
@@ -3901,7 +4005,7 @@ class FlightStore {
         }
         // After HA auto-assume, restore remarks/HP scratch (EFSHO is protocol-only)
         if (result.autoAssumeCallsigns?.includes(callsign) && result.setScratchValue === undefined) {
-            result.setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            result.setScratchValue = buildFlightScratch(flight)
         }
         this.maybeRestoreEfshoScratch(result, flight)
         return result
@@ -3926,7 +4030,7 @@ class FlightStore {
         const now = Date.now()
         if (flight.efshoClearAt !== undefined && now - flight.efshoClearAt < 1000) return
         flight.efshoClearAt = now
-        result.setScratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+        result.setScratchValue = buildFlightScratch(flight)
         console.log(`[Handover Assistant] ${flight.callsign}: clear EFSHO from label`)
     }
 
@@ -4107,20 +4211,17 @@ class FlightStore {
             this.landingRunwayTouched.delete(callsign)
             // Airborne again after a landing stamp = go-around (or new dep) — clear ATA
             if (flight.ata) flight.ata = undefined
-            // HP/HS are ground annotations — clear once airborne (EFS + EuroScope)
-            const hadHp = !!flight.hp
-            const hadHs = !!flight.hs
-            if (hadHp) {
-                flight.hp = undefined
-                clearAirborneScratch = buildCombinedScratch(flight.remarks, undefined)
-            }
-            if (hadHs) {
+            // HS: clear once airborne. HP: drop from ES scratch only; keep on strip.
+            if (flight.hs) {
                 flight.hs = undefined
                 clearAirborneHs = true
             }
-            // DEP airborne: clear TopSky WX_ scratch token but keep MET UI green
-            if (originMine && flight.weatherGiven && clearAirborneScratch === undefined) {
-                clearAirborneScratch = buildCombinedScratch(flight.remarks, flight.hp)
+            if (flight.hp && !flight.hpScratchCleared) {
+                flight.hpScratchCleared = true
+                clearAirborneScratch = buildFlightScratch(flight)
+            } else if (originMine && flight.weatherGiven) {
+                // DEP airborne: clear TopSky WX_ scratch token but keep MET UI green
+                clearAirborneScratch = buildFlightScratch(flight)
             }
         } else if (wasAirborne && message.altitude <= airborneThreshold) {
             // Short final is often below field+30 with GS still >> 55 (flare over threshold).
@@ -5749,6 +5850,11 @@ class FlightStore {
                   : undefined,
             assignedSpeed: flight.asp ? String(flight.asp) : undefined,
             stand: flight.stand,
+            standBlocked: (() => {
+                const blocked = this.evalStandBlocked(flight)
+                flight.standBlocked = blocked || undefined
+                return blocked || undefined
+            })(),
             runway: stripType === 'departure' || stripType === 'local'
                 ? (extractDisplayDepRunway(
                       flight,
@@ -5814,7 +5920,7 @@ class FlightStore {
             ata: flight.ata,
             remarks: flight.remarks || undefined,
             hp: flight.hp || undefined,
-            hs: flight.hs || undefined,
+            hpScratchCleared: flight.hpScratchCleared || undefined,
             vchRequest: flight.vchRequest || undefined,
             coo: flight.coo || undefined,
             exitCoordPending: flight.exitCoordPending || undefined,

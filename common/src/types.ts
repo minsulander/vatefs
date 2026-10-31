@@ -98,11 +98,21 @@ export interface FlightStrip {
 
     // Additional info
     stand?: string             // Parking stand/gate
+    /**
+     * ESSA arrival: assigned stand is BLOCKS/LIMITS-blocked by a neighbour.
+     * Frontend ambers the STD cell.
+     */
+    standBlocked?: boolean
     runway?: string            // Assigned runway
     remarks?: string           // Controller remarks/annotations (scratchpad .TEXT)
-    /** Holding point — scratchpad /TEXT */
+    /** Holding point — scratchpad /TEXT (may be strip-only after CFTO/airborne) */
     hp?: string
-    /** Hold short — VCH strip annotation 4 (H/S), max 5 chars */
+    /**
+     * HP was cleared from EuroScope scratch but still shown on the strip.
+     * First click clears it; next click opens normal entry.
+     */
+    hpScratchCleared?: boolean
+    /** @deprecated VCH HS field removed from strip UI */
     hs?: string
     /**
      * VCH pending request type — strip annotation 2.

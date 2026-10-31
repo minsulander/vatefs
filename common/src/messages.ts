@@ -929,15 +929,16 @@ export interface RequestStandMenuMessage {
 /**
  * Publish / assign / clear Ground Radar stand via GRP/S scratch broadcast.
  * - assign: set stand (also used when picking from the menu)
+ * - auto: EFS picks a free stand (STANDLIST/priority) and assigns
  * - publish: re-broadcast current stand (no-op if none)
  * - clear: GRP/S/
  */
 export interface GrpStandMessage {
     type: 'grpStand'
     stripId: string
-    /** Stand designator; omit/empty with action clear, or for assign/publish of current */
+    /** Stand designator; omit/empty with action clear/auto, or for assign/publish of current */
     stand?: string
-    action: 'assign' | 'publish' | 'clear'
+    action: 'assign' | 'auto' | 'publish' | 'clear'
 }
 
 export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | SetSectionAddFromTopMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | CdmMasterToggleMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | UpdateWorkspaceStoreMessage | SetEssaRolesMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage | RequestStandMenuMessage | GrpStandMessage

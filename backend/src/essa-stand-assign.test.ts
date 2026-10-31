@@ -7,6 +7,8 @@ import assert from "node:assert/strict"
 import {
     parseEssaStandsContent,
     buildEssaStandMenu,
+    pickEssaAutoStand,
+    isEssaStandBlocked,
     normalizeApronTitle,
     resolveAircraftDims,
     isSchengenOrigin,
@@ -481,7 +483,8 @@ check("assigned stand marks occupancy without moving slot", () => {
     assert.equal(f34.selectable, true)
 })
 
-check("departure planned stand does not carry TS/TB/EB (only occupied)", () => {
+check("departure strip stand without GPS is not Planned", () => {
+    // Dep stand on strip is informational — only GPS (or PARK) occupies
     const menu = buildEssaStandMenu({
         stripId: "SAS123",
         callsign: "SAS123",
@@ -503,9 +506,7 @@ check("departure planned stand does not carry TS/TB/EB (only occupied)", () => {
         ],
     })
     const s03 = menu!.aprons[0]!.stands.find((s) => s.name === "03")!
-    assert.equal(s03.occupied?.kind, "assigned")
-    assert.equal(s03.occupied?.tsat, undefined)
-    assert.equal(s03.occupied?.eobt, undefined)
+    assert.equal(s03.occupied, undefined)
 })
 
 check("occupied departure stand carries TS/TB/EB", () => {
@@ -560,8 +561,35 @@ check("occupied arrival stand is not marked departure", () => {
     assert.equal(f34.occupied?.departure, false)
 })
 
-check("airborne assigned stand is freed (not planned)", () => {
-    // Departed/airborne must not keep Planned (SAS246 / SAS491 session bug)
+check("airborne arrival assigned stand is Planned (Inbound)", () => {
+    // Inbound with GRP stand — softer Planned; deps freed separately via departure flag
+    const menu = buildEssaStandMenu({
+        stripId: "EWG8U",
+        callsign: "EWG8U",
+        origin: "EDDL",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "FIN1TC",
+                stand: "01",
+                airborne: true,
+                departure: false,
+                dims: resolveAircraftDims("A320", "M", "FIN1TC"),
+                assigned: true,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")!
+    assert.equal(s01.occupied?.kind, "assigned")
+    assert.equal(s01.occupied?.label, "FIN1TC")
+    assert.equal(s01.occupied?.airborne, true)
+})
+
+check("airborne departure strip stand is not Planned", () => {
+    // SAS246 / SAS491: departed/airborne must not keep gate Planned
     const menu = buildEssaStandMenu({
         stripId: "SAS123",
         callsign: "SAS123",
@@ -574,6 +602,7 @@ check("airborne assigned stand is freed (not planned)", () => {
                 callsign: "BAW791G",
                 stand: "01",
                 airborne: true,
+                departure: true,
                 dims: resolveAircraftDims("B744", "H", "BAW791G"),
                 assigned: true,
             },
@@ -586,8 +615,7 @@ check("airborne assigned stand is freed (not planned)", () => {
     assert.equal(s03.occupied, undefined)
 })
 
-check("PUSH groundstate still occupies while GPS in polygon", () => {
-    // Coords = stand 01 polygon; GS PUSH must NOT free the stand
+check("PUSH still occupies while GPS in polygon (physical, not GS)", () => {
     const menu = buildEssaStandMenu({
         stripId: "EWG5PZ",
         callsign: "EWG5PZ",
@@ -597,13 +625,13 @@ check("PUSH groundstate still occupies while GPS in polygon", () => {
         wakeTurbulence: "M",
         traffic: [
             {
-                callsign: "NSZ5YB",
+                callsign: "ICE401",
                 stand: "01",
                 latitude: 59.652132,
                 longitude: 17.930388,
                 groundstate: "PUSH",
                 departure: true,
-                dims: resolveAircraftDims("B738", "M", "NSZ5YB"),
+                dims: resolveAircraftDims("B738", "M", "ICE401"),
                 assigned: true,
             },
         ],
@@ -612,6 +640,57 @@ check("PUSH groundstate still occupies while GPS in polygon", () => {
     const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
     assert.equal(s01?.occupied?.kind, "occupied")
     assert.equal(s01?.occupied?.gsLabel, "PUSH")
+})
+
+check("departure strip stand off-stand is not Planned (unlike arrivals)", () => {
+    // After leaving footprint, dep stand on strip is informational only
+    const menu = buildEssaStandMenu({
+        stripId: "EWG5PZ",
+        callsign: "EWG5PZ",
+        origin: "LKPR",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "BAW33L",
+                stand: "01",
+                latitude: 59.66,
+                longitude: 17.95,
+                groundstate: "PUSH",
+                departure: true,
+                dims: resolveAircraftDims("B738", "M", "BAW33L"),
+                assigned: true,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
+    assert.equal(s01?.occupied, undefined)
+})
+
+check("arrival assigned stand still Planned when GPS not on stand", () => {
+    const menu = buildEssaStandMenu({
+        stripId: "EWG5PZ",
+        callsign: "EWG5PZ",
+        origin: "LKPR",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "DLH400",
+                stand: "01",
+                assigned: true,
+                departure: false,
+                dims: resolveAircraftDims("A320", "M", "DLH400"),
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")
+    assert.equal(s01?.occupied?.kind, "assigned")
+    assert.equal(s01?.occupied?.label, "DLH400")
 })
 
 check("STUP on stand shows STUP instead of TSAT", () => {
@@ -841,6 +920,128 @@ check("non-ESSA destination returns undefined", () => {
         traffic: [],
     })
     assert.equal(menu, undefined)
+})
+
+check("AUTO picks from highest STANDLIST tier (weighted)", () => {
+    const picked = pickEssaAutoStand(
+        {
+            stripId: "SAS123",
+            callsign: "SAS123",
+            origin: "EKCH",
+            destination: "ESSA",
+            aircraftType: "A320",
+            wakeTurbulence: "M",
+            traffic: [],
+        },
+        () => 0,
+    )
+    // T5A @ 100 pts dominates F34 @ 10 — rng 0 → first in weighted walk among 01/03/04
+    assert.ok(picked === "01" || picked === "03" || picked === "04")
+    assert.equal(picked, "01")
+})
+
+check("AUTO weighted random can pick later stand in tier", () => {
+    const picked = pickEssaAutoStand(
+        {
+            stripId: "SAS123",
+            callsign: "SAS123",
+            origin: "EKCH",
+            destination: "ESSA",
+            aircraftType: "A320",
+            wakeTurbulence: "M",
+            traffic: [],
+        },
+        () => 0.99,
+    )
+    // Positive STANDLIST weights: 01/03/04 @100 and F34 @10 — high rng → later cand
+    assert.ok(picked === "01" || picked === "03" || picked === "04" || picked === "F34")
+    assert.notEqual(picked, "01")
+})
+
+check("assigned stand blocked by neighbour is flagged", () => {
+    // 03 BLOCKS 1,5 — assigned on 03 blocks stand 01
+    assert.equal(
+        isEssaStandBlocked("01", "SAS123", [
+            {
+                callsign: "DLH400",
+                stand: "03",
+                assigned: true,
+                departure: false,
+                dims: resolveAircraftDims("A333", "H", "DLH400"),
+            },
+        ]),
+        true,
+    )
+    assert.equal(
+        isEssaStandBlocked("01", "SAS123", [
+            {
+                callsign: "DLH400",
+                stand: "F34",
+                assigned: true,
+                departure: false,
+                dims: resolveAircraftDims("A320", "M", "DLH400"),
+            },
+        ]),
+        false,
+    )
+})
+
+check("AUTO skips occupied preferred and picks another", () => {
+    const picked = pickEssaAutoStand(
+        {
+            stripId: "SAS123",
+            callsign: "SAS123",
+            origin: "EKCH",
+            destination: "ESSA",
+            aircraftType: "A320",
+            wakeTurbulence: "M",
+            traffic: [
+                {
+                    callsign: "SAS999",
+                    stand: "01",
+                    latitude: 59.652132,
+                    longitude: 17.930388,
+                    dims: resolveAircraftDims("A320", "M", "SAS999"),
+                    assigned: false,
+                    departure: false,
+                },
+            ],
+        },
+        () => 0,
+    )
+    assert.ok(picked === "03" || picked === "04")
+})
+
+check("AUTO excludes current stand so re-press changes gate", () => {
+    const picked = pickEssaAutoStand(
+        {
+            stripId: "SAS123",
+            callsign: "SAS123",
+            origin: "EKCH",
+            destination: "ESSA",
+            aircraftType: "A320",
+            wakeTurbulence: "M",
+            currentStand: "01",
+            traffic: [],
+        },
+        () => 0,
+    )
+    assert.notEqual(picked, "01")
+    assert.ok(picked === "03" || picked === "04")
+})
+
+check("AUTO skips MANUAL AREA stands", () => {
+    const picked = pickEssaAutoStand({
+        stripId: "EZY1",
+        callsign: "EZY1",
+        origin: "EGLL",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [],
+    })
+    assert.notEqual(picked, "APNH")
+    assert.ok(picked)
 })
 
 console.log(`\n${passed} passed`)

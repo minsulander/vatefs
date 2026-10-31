@@ -99,7 +99,7 @@ export interface OccupierInfo {
     tobt?: string
     eobt?: string
     dims: AircraftDims
-    /** True when flight.stand is an ESSA assignment (arrival or departure) */
+    /** True when an arrival has an ESSA stand assignment (Planned); never deps */
     assigned: boolean
 }
 
@@ -1337,10 +1337,10 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
     for (const t of input.traffic) {
         if (t.callsign.toUpperCase() === selfCs) continue
         const gs = (t.groundstate || "").toUpperCase()
-        // Occupancy = GPS in stand polygon (or PARK+assigned). GS PUSH/TAXI alone does NOT free.
+        // Occupancy is physical (GPS in polygon), not GS. Strip stand is informational
+        // for departures — do not mirror it as Planned (that looked like arrivals).
 
         let positionStand: string | undefined
-        // Airborne: never occupy by GPS (still may show as Planned via assignment)
         if (!t.airborne && t.latitude !== undefined && t.longitude !== undefined) {
             positionStand = findStandAtPosition(t.latitude, t.longitude, t.heading)
             if (positionStand) {
@@ -1357,26 +1357,19 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
 
         if (assignedKey) {
             if (isMultiAssignStand(assignedKey)) {
-                // Always count assignment/presence on multi aprons; never Occ/Plan style
                 if (t.assigned || parked || positionStand === assignedKey) {
                     bumpMulti(assignedKey, t.callsign)
                 }
             } else if (positionStand && positionStand !== assignedKey) {
-                // On a different stand than GRP assignment: only occupy the real stand
-                // (above). Do not show Planned on the unused assigned stand.
+                // On a different stand than GRP assignment: only occupy the real stand.
             } else if (!positionStand) {
-                // No polygon hit: PARK+stand → Occupied; otherwise Planned if assigned
-                // Airborne / DEPA / departed: free the stand (do not keep Planned).
-                const gsGone =
-                    t.airborne ||
-                    gs === "DEPA" ||
-                    gs === "LINEUP" ||
-                    gs === "TAXI" ||
-                    gs === "TXIN"
+                // No polygon hit: PARK+stand → Occupied.
+                // Planned = arrivals only (incl. airborne Inbound shade). Never departures —
+                // strip stand after push/taxi/depart must not keep the gate Planned.
                 if (parked && !t.airborne) {
                     if (!occupiedBy.has(assignedKey)) occupiedBy.set(assignedKey, t)
                 } else if (
-                    !gsGone &&
+                    !t.departure &&
                     t.assigned &&
                     !assignedBy.has(assignedKey) &&
                     !occupiedBy.has(assignedKey)
@@ -1384,7 +1377,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                     assignedBy.set(assignedKey, t)
                 }
             }
-            // positionStand === assignedKey → already Occupied via position; no Planned
+            // positionStand === assignedKey → already Occupied via GPS; no Planned
         }
     }
 
@@ -1595,6 +1588,162 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
         currentStand: input.currentStand,
         aprons: applyEssaStandMenuGeoLayout(aprons),
     }
+}
+
+/**
+ * True when `stand` is BLOCKS/LIMITS-blocked by other traffic (GRP neighbour rules).
+ * Used to amber-highlight the STD cell on the arrival strip.
+ */
+export function isEssaStandBlocked(
+    stand: string | undefined,
+    selfCallsign: string,
+    traffic: OccupierInfo[],
+): boolean {
+    if (!loaded || !stand?.trim()) return false
+    const menu = buildEssaStandMenu({
+        stripId: "_stand_warn",
+        callsign: selfCallsign,
+        origin: "ESGG",
+        destination: "ESSA",
+        aircraftType: "A320",
+        traffic,
+    })
+    if (!menu) return false
+    const key = resolveStandKey(stand)
+    for (const apron of menu.aprons) {
+        for (const s of apron.stands) {
+            if (s.name !== key && s.name.toUpperCase() !== stand.trim().toUpperCase()) continue
+            return s.occupied?.kind === "blocked"
+        }
+    }
+    return false
+}
+
+/**
+ * Weighted pick among candidates (weight ≤ 0 treated as equal share of 1).
+ * `rng` returns [0, 1) — inject for tests.
+ */
+function pickWeightedStand(
+    cands: { name: string; weight: number }[],
+    rng: () => number,
+): string | undefined {
+    if (!cands.length) return undefined
+    const weights = cands.map((c) => (c.weight > 0 ? c.weight : 1))
+    const total = weights.reduce((s, w) => s + w, 0)
+    if (total <= 0) return cands[0]?.name
+    let r = rng() * total
+    if (r < 0) r = 0
+    if (r >= total) r = total - Number.EPSILON
+    for (let i = 0; i < cands.length; i++) {
+        r -= weights[i]!
+        if (r < 0) return cands[i]!.name
+    }
+    return cands[cands.length - 1]!.name
+}
+
+/**
+ * GRP-style Auto: pick a free arrival stand (not MANUAL/AREA/occupied/planned/blocked).
+ * Prefers STANDLIST points (weighted random) + stand PRIORITY; retries with soft filters lifted.
+ * Excludes the strip's current stand so pressing Auto again yields a different gate when possible.
+ */
+export function pickEssaAutoStand(
+    input: ClassifyInput,
+    rng: () => number = Math.random,
+): string | undefined {
+    if (!loaded || input.destination?.toUpperCase() !== "ESSA") return undefined
+    const menu = buildEssaStandMenu(input)
+    if (!menu) return undefined
+
+    const ac = resolveAircraftDims(
+        input.aircraftType,
+        input.wakeTurbulence,
+        input.callsign,
+        input.fplRemarks,
+    )
+    const flightSchengen = isSchengenOrigin(input.origin)
+    const cs = input.callsign.toUpperCase()
+    const currentKey = input.currentStand ? resolveStandKey(input.currentStand) : undefined
+
+    const standWeight = (name: string): number => {
+        let w = 0
+        for (const sl of standLists) {
+            if (!sl.callsignPrefixes.some((p) => cs.startsWith(p.toUpperCase()))) continue
+            for (const raw of sl.stands) {
+                if (resolveStandKey(raw) === name || raw === name) {
+                    w = Math.max(w, sl.points)
+                }
+            }
+        }
+        return w
+    }
+
+    const standBestPriority = (name: string, liftSoft: boolean): number => {
+        const variants = essaVariants.get(name)
+        if (!variants?.length) return Number.NEGATIVE_INFINITY
+        let best = Number.NEGATIVE_INFINITY
+        for (const v of variants) {
+            if (!physicalFitVariant(v, ac)) continue
+            if (!liftSoft && !schengenAgrees(v, flightSchengen)) continue
+            best = Math.max(best, v.priority)
+        }
+        return best
+    }
+
+    const isManualStand = (name: string) =>
+        (essaVariants.get(name) ?? []).some((v) => v.manual)
+
+    const collect = (liftSoft: boolean, excludeCurrent: boolean) => {
+        const out: { name: string; weight: number; priority: number }[] = []
+        for (const apron of menu.aprons) {
+            for (const s of apron.stands) {
+                if (s.area || isManualStand(s.name)) continue
+                if (s.occupied) continue
+                if (excludeCurrent && currentKey && s.name === currentKey) continue
+                if (liftSoft) {
+                    if (!anyPhysicalFit(s.name, ac)) continue
+                } else if (!preferredEligible(s.name, ac, flightSchengen)) {
+                    continue
+                }
+                const priority = standBestPriority(s.name, liftSoft)
+                if (priority === Number.NEGATIVE_INFINITY) continue
+                out.push({ name: s.name, weight: standWeight(s.name), priority })
+            }
+        }
+        return out
+    }
+
+    const choose = (cands: { name: string; weight: number; priority: number }[]): string | undefined => {
+        if (!cands.length) return undefined
+        const positive = cands.filter((c) => c.weight > 0)
+        let pool: typeof cands
+        if (positive.length) {
+            // Ratio of STANDLIST points — higher-point stands more likely (GRP).
+            pool = positive
+        } else {
+            const onZeroList = cands.filter((c) => {
+                for (const sl of standLists) {
+                    if (sl.points !== 0) continue
+                    if (!sl.callsignPrefixes.some((p) => cs.startsWith(p.toUpperCase()))) continue
+                    if (sl.stands.some((raw) => resolveStandKey(raw) === c.name || raw === c.name)) {
+                        return true
+                    }
+                }
+                return false
+            })
+            pool = onZeroList.length ? onZeroList : cands
+        }
+        const maxP = Math.max(...pool.map((c) => c.priority))
+        const top = pool.filter((c) => c.priority === maxP)
+        return pickWeightedStand(top, rng)
+    }
+
+    // Prefer a different stand than current when Auto is pressed again.
+    return (
+        choose(collect(false, true)) ??
+        choose(collect(true, true)) ??
+        choose(collect(false, false)) ??
+        choose(collect(true, false))
+    )
 }
 
 /** Test helpers */

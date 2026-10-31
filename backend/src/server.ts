@@ -190,6 +190,7 @@ import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import {
     loadEssaStandAssign,
     buildEssaStandMenu,
+    pickEssaAutoStand,
     resolveAircraftDims,
     hasEssaStandAssignData,
     type OccupierInfo,
@@ -304,7 +305,7 @@ import {
     loadWorkspaceStore,
     saveWorkspaceStore,
 } from "./workspace-store.js"
-import { buildCombinedScratch } from "./scratchpad.js"
+import { buildCombinedScratch, buildFlightScratch } from "./scratchpad.js"
 import { parseDclRequestTelex } from "./dcl-request.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
@@ -869,6 +870,15 @@ function reevaluateAndBroadcast(callsign: string) {
         return
     }
 
+    // Neighbour BLOCKS/LIMITS may change other arrivals' STD amber
+    for (const peer of flightStore.syncPeerStandBlockedFlags(callsign)) {
+        const peerStrip = flightStore.regenerateStrip(peer)
+        if (peerStrip) {
+            const appliedPeer = store.updateStripFromFlight(peerStrip)
+            broadcastStrip(appliedPeer)
+        }
+    }
+
     if (!result.strip) return
 
     // Handle section change: recompute positions in old section
@@ -1023,8 +1033,8 @@ type OutboundPluginCommand =
       }
 
 /**
- * Clear HS/HP text (VCH + scratch) when handing off to APP/DEP — same moment
- * scribbles are wiped on the frontend. No-op when neither field is set.
+ * Clear HS on APP/DEP handoff. HP stays on the strip until removed; only ensure
+ * it is off the EuroScope scratch (same as airborne/CFTO).
  */
 function clearHsHpForAppDepTransfer(flight: Flight, callsign: string) {
     if (flight.hs) {
@@ -1037,13 +1047,13 @@ function clearHsHpForAppDepTransfer(flight: Flight, callsign: string) {
             } satisfies OutboundPluginCommand),
         )
     }
-    if (flight.hp) {
-        flight.hp = undefined
+    if (flight.hp && !flight.hpScratchCleared) {
+        flight.hpScratchCleared = true
         sendUdp(
             JSON.stringify({
                 type: "setScratch",
                 callsign,
-                value: buildCombinedScratch(flight.remarks, undefined),
+                value: buildFlightScratch(flight),
             } satisfies OutboundPluginCommand),
         )
     }
@@ -2676,7 +2686,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             }
             flightStore.markSlowRemarkManual(f)
             flightStore.holdScratchFields(f, 3000)
-            const scratchValue = buildCombinedScratch(f.remarks, f.hp)
+            const scratchValue = buildFlightScratch(f)
             sendUdp(JSON.stringify({ type: "setScratch", callsign, value: scratchValue } satisfies OutboundPluginCommand))
         }
 
@@ -6024,29 +6034,30 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 }
 
-                // HP clears on CFTO; HS clears on LINE UP or CFTO (match EFS 0.0.17).
-                // RTO undoes CFTO → LINEUP: clear HS and HP (same as leaving takeoff).
+                // HS clears on LINE UP / CFTO / RTO.
+                // HP: off EuroScope scratch on CFTO/RTO, still shown on the strip.
                 if (flight && (message.action === "LU" || message.action === "CTO" || message.action === "RTO")) {
-                    const clearHp = message.action === "CTO" || message.action === "RTO"
-                    const clearHs = true
-                    if (clearHp && flight.hp) {
-                        flight.hp = undefined
-                        const scratchValue = buildCombinedScratch(flight.remarks, undefined)
-                        sendUdp(
-                            JSON.stringify({
-                                type: "setScratch",
-                                callsign: strip.callsign,
-                                value: scratchValue,
-                            } satisfies OutboundPluginCommand),
-                        )
-                    }
-                    if (clearHs && flight.hs) {
+                    if (flight.hs) {
                         flight.hs = undefined
                         sendUdp(
                             JSON.stringify({
                                 type: "setHs",
                                 callsign: strip.callsign,
                                 value: "",
+                            } satisfies OutboundPluginCommand),
+                        )
+                    }
+                    if (
+                        (message.action === "CTO" || message.action === "RTO") &&
+                        flight.hp &&
+                        !flight.hpScratchCleared
+                    ) {
+                        flight.hpScratchCleared = true
+                        sendUdp(
+                            JSON.stringify({
+                                type: "setScratch",
+                                callsign: strip.callsign,
+                                value: buildFlightScratch(flight),
                             } satisfies OutboundPluginCommand),
                         )
                     }
@@ -6162,13 +6173,12 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             // Undo CFTO → LINEUP (UI then offers TAXI OUT / TAXI IN); clear ATD
                             flight.groundstate = "LINEUP"
                             flight.hs = undefined
-                            flight.hp = undefined
                             flight.atd = undefined
                             break
                         case "CTO":
                             flight.groundstate = "DEPA"
                             flight.hs = undefined
-                            flight.hp = undefined
+                            if (flight.hp) flight.hpScratchCleared = true
                             break
                         case "TXO":
                             flight.groundstate = "TAXI"
@@ -6182,6 +6192,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flight.hs = undefined
                             flight.remarks = undefined
                             flight.hp = undefined
+                            flight.hpScratchCleared = undefined
                             flight.coo = undefined
                             break
                         case "CTL":
@@ -6483,7 +6494,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             const f = flightStore.getFlight(strip.callsign)
                             if (!f || !hasSlowRemark(f.remarks)) return
                             flightStore.holdScratchFields(f, 2000)
-                            const scratchValue = buildCombinedScratch(f.remarks, f.hp)
+                            const scratchValue = buildFlightScratch(f)
                             sendUdp(JSON.stringify({
                                 type: "setScratch",
                                 callsign: strip.callsign,
@@ -6987,7 +6998,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             clearHsHpForAppDepTransfer(flight, strip.callsign)
                         }
                         // Restore remarks/HP scratch after peers have seen EFSHO
-                        const restore = buildCombinedScratch(flight.remarks, flight.hp)
+                        const restore = buildFlightScratch(flight)
                         setTimeout(() => {
                             sendUdp(
                                 JSON.stringify({
@@ -7612,7 +7623,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flightStore.markSlowRemarkManual(flight)
                     // Hold across AmendFlightPlan / ES scratch clears so SLOW does not flash off
                     flightStore.holdScratchFields(flight, 3000)
-                    const scratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+                    const scratchValue = buildFlightScratch(flight)
                     sendUdp(JSON.stringify({ type: "setScratch", callsign: remarkStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
                     // Clearing SLOW: re-sync CFL to non-slow climb (fixes 3.0 stuck after SLOW off)
                     if (prevSlow && !nextSlow && flight.origin && (!flight.cfl || flight.cfl === 3000)) {
@@ -7668,8 +7679,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             // Scratchpad holding point — /TEXT (keeps remarks)
             const text = (message.text ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "")
             flight.hp = text || undefined
+            // Manual edit re-syncs HP to EuroScope scratch (or clears both)
+            flight.hpScratchCleared = undefined
             flightStore.holdScratchFields(flight, 3000)
-            const scratchValue = buildCombinedScratch(flight.remarks, flight.hp)
+            const scratchValue = buildFlightScratch(flight)
             sendUdp(JSON.stringify({ type: "setScratch", callsign: hpStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
             const updatedStrip = flightStore.regenerateStrip(hpStrip.callsign)
             if (updatedStrip) {
@@ -7962,7 +7975,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 if (!f.callsign) continue
                 const origin = (f.origin || "").toUpperCase()
                 const destination = (f.destination || "").toUpperCase()
-                const atEssa = origin === "ESSA" || destination === "ESSA"
                 traffic.push({
                     callsign: f.callsign,
                     stand: f.stand,
@@ -7971,6 +7983,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     heading: f.heading,
                     groundstate: f.groundstate,
                     airborne: !!f.airborne,
+                    // Deps + locals — never Planned from strip stand
                     departure: origin === "ESSA",
                     tsat: f.tsat,
                     tobt: f.tobt,
@@ -7981,8 +7994,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         f.callsign,
                         f.fplRemarks,
                     ),
-                    // Arrivals and departures with a stand both occupy/block neighbours
-                    assigned: !!(f.stand && atEssa),
+                    // Planned/assigned is arrivals only; deps still occupy via GPS/PARK
+                    assigned: !!(f.stand && destination === "ESSA" && origin !== "ESSA"),
                 })
             }
             const menu = buildEssaStandMenu({
@@ -8022,6 +8035,58 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 const flight = flightStore.getFlight(strip.callsign)
                 stand = (flight?.stand || strip.stand || "").trim().toUpperCase()
                 if (!stand) break
+            } else if (message.action === "auto") {
+                if (!hasEssaStandAssignData()) break
+                const flight = flightStore.getFlight(strip.callsign)
+                const origin = (flight?.origin ?? strip.adep ?? "").toUpperCase()
+                const destination = (flight?.destination ?? strip.ades ?? "").toUpperCase()
+                if (destination !== "ESSA") break
+                const traffic: OccupierInfo[] = []
+                for (const f of flightStore.getAllFlights()) {
+                    if (!f.callsign) continue
+                    const o = (f.origin || "").toUpperCase()
+                    const d = (f.destination || "").toUpperCase()
+                    traffic.push({
+                        callsign: f.callsign,
+                        stand: f.stand,
+                        latitude: f.latitude,
+                        longitude: f.longitude,
+                        heading: f.heading,
+                        groundstate: f.groundstate,
+                        airborne: !!f.airborne,
+                        departure: o === "ESSA",
+                        tsat: f.tsat,
+                        tobt: f.tobt,
+                        eobt: f.eobt,
+                        dims: resolveAircraftDims(
+                            f.aircraftType,
+                            f.wakeTurbulence,
+                            f.callsign,
+                            f.fplRemarks,
+                        ),
+                        assigned: !!(f.stand && d === "ESSA" && o !== "ESSA"),
+                    })
+                }
+                const picked = pickEssaAutoStand({
+                    stripId: strip.id,
+                    callsign: strip.callsign,
+                    origin,
+                    destination,
+                    aircraftType: flight?.aircraftType ?? strip.aircraftType,
+                    wakeTurbulence: flight?.wakeTurbulence ?? strip.wakeTurbulence,
+                    fplRemarks: flight?.fplRemarks,
+                    currentStand: flight?.stand ?? strip.stand,
+                    traffic,
+                })
+                if (!picked) {
+                    sendMessage(socket, {
+                        type: "notify",
+                        level: "error",
+                        text: `No free stand for ${strip.callsign}`,
+                    })
+                    break
+                }
+                stand = picked
             } else if (message.action === "assign") {
                 if (!stand) break
             }

@@ -187,8 +187,13 @@ export interface Flight {
 
     // Controller remarks (from scratchpad values starting with ".")
     remarks?: string
-    /** Holding point — scratchpad /TEXT */
+    /** Holding point — shown on strip; may be omitted from ES scratch after CFTO/airborne */
     hp?: string
+    /**
+     * HP was removed from EuroScope scratch (airborne / CFTO) but kept on the
+     * strip until the strip is deleted. Scratch echoes must not wipe `hp`.
+     */
+    hpScratchCleared?: boolean
     /** Hold short — VCH strip annotation 4 (TAG_STRIP_ANNO_HOS), max 5 chars */
     hs?: string
     /** VCH pending request — annotation 2 (C/P/S/T/D) */
@@ -209,6 +214,11 @@ export interface Flight {
     autoSlowApplied?: boolean
 
     // Backend-managed state flags
+    /**
+     * Cached ESSA STD conflict: assigned stand is BLOCKS/LIMITS-blocked.
+     * Mirrored onto FlightStrip.standBlocked for the amber STD cell.
+     */
+    standBlocked?: boolean
     /** Cleared to land — VCH strip annotation 3 ("CTL") */
     clearedToLand?: boolean
     missedApproach?: boolean  // Aircraft on missed approach (TopSky MISAP_ and/or EFS soft G/A)

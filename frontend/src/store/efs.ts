@@ -1192,7 +1192,7 @@ export const useEfsStore = defineStore("efs", () => {
 
     function sendGrpStand(
         stripId: string,
-        action: 'assign' | 'publish' | 'clear',
+        action: 'assign' | 'auto' | 'publish' | 'clear',
         stand?: string,
     ) {
         sendMessage({ type: 'grpStand', stripId, action, stand })
