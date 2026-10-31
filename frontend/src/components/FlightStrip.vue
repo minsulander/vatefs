@@ -1327,33 +1327,6 @@
             @contextmenu.prevent.stop="onCooContextMenu"
           >{{ showEstCoordC ? 'C' : strip.coo ? '✓' : 'C' }}</div>
           <div
-            v-if="!isCompactBay && store.essaRolesMode"
-            class="cell cell-hs"
-            :class="{
-              ghost: !strip.hs && !hsEditing,
-              'fit-font': !hsEditing,
-              'hs-editing': hsEditing,
-              editable: canEditAssignedData,
-            }"
-            title="Hold short (VCH H/S)"
-            @click.stop="onHsClick"
-          >
-            <input
-              v-if="hsEditing"
-              ref="hsInput"
-              class="hs-edit-input"
-              type="text"
-              maxlength="5"
-              :value="hsEditText"
-              @click.stop
-              @input="onHsInput"
-              @blur="onHsEditBlur"
-              @keydown.enter="onHsEditBlur"
-              @keydown.escape="onHsEditCancel"
-            />
-            <template v-else>{{ strip.hs || 'HS' }}</template>
-          </div>
-          <div
             v-if="!isCompactBay"
             class="cell cell-hp"
             :class="{
@@ -1362,7 +1335,7 @@
               'hp-editing': hpEditing,
               editable: canEditAssignedData,
             }"
-            title="Holding point (scratchpad /)"
+            :title="hpCellTitle"
             @click.stop="onHpClick"
           >
             <input
@@ -1425,8 +1398,12 @@
             <div
               v-else
               class="cell cell-std fit-font"
-              :class="{ ghost: !strip.stand, editable: canOpenStandMenu }"
-              :title="canOpenStandMenu ? 'Stand' : undefined"
+              :class="{
+                ghost: !strip.stand,
+                editable: canOpenStandMenu,
+                'stand-blocked': !!strip.standBlocked,
+              }"
+              :title="standCellTitle"
               @click.stop="onStandClick"
             >{{ strip.stand || 'STD' }}</div>
           </template>
@@ -4064,11 +4041,6 @@ const remarksInitialText = ref('')
 const remarksDirty = ref(false)
 const remarksInput = ref<HTMLInputElement | null>(null)
 
-// Hold short — VCH annotation 4 (max 5)
-const hsEditing = ref(false)
-const hsEditText = ref('')
-const hsInput = ref<HTMLInputElement | null>(null)
-
 function clearScribblesInCell(sel: string): boolean {
   const root = stripElement.value
   if (!root || store.isPaperLook) return false
@@ -4084,98 +4056,45 @@ function clearScribblesInCell(sel: string): boolean {
   return false
 }
 
-/** APP/DEP (not remote-tower _R_APP / _R_CTR) — same idea as backend isAppOrDepCallsign. */
-function isAppOrDepCallsign(callsign?: string | null): boolean {
-  const cs = (callsign || '').trim().toUpperCase()
-  if (!cs) return false
-  if (cs.endsWith('_DEP')) return true
-  if (cs.endsWith('_R_APP') || cs.endsWith('_R_CTR')) return false
-  if (cs.endsWith('_APP')) return true
-  return false
-}
-
-/** Clear scribbled HS/HP (text fields are cleared on airborne / APP/DEP transfer). */
-function clearHsHpScribbles() {
-  if (store.isPaperLook) return
-  const clearedHs = clearScribblesInCell('.cell-hs')
-  const clearedHp = clearScribblesInCell('.cell-hp')
-  if (clearedHs || clearedHp) {
-    // sync already done per cell; no-op if both empty
-  }
-}
-
-// Text HS/HP clear on airborne / APP/DEP XFER — clear matching scribbles too
+// HP scribbles: clear on airborne/CFTO (strip text may remain until click-cleared).
 watch(
   () =>
     ({
       airborne: !!props.strip.airborne,
-      pending: props.strip.transferPending,
-      target: props.strip.transferCallsign,
+      cfto: !!props.strip.clearedForTakeoff,
     }) as const,
   (cur, prev) => {
     if (store.isPaperLook) return
     const becameAirborne = cur.airborne && !prev?.airborne
-    const xferToAppDep =
-      cur.pending === 'out' &&
-      isAppOrDepCallsign(cur.target) &&
-      (prev?.pending !== 'out' || !isAppOrDepCallsign(prev?.target))
-    if (becameAirborne || xferToAppDep) {
-      nextTick(() => clearHsHpScribbles())
+    const becameCfto = cur.cfto && !prev?.cfto
+    if (becameAirborne || becameCfto) {
+      nextTick(() => clearScribblesInCell('.cell-hp'))
     }
   },
 )
 
-function onHsClick() {
-  if (clearScribblesInCell('.cell-hs')) return
-  if (!canEditAssignedData.value) return
-  if (hsEditing.value) {
-    nextTick(() => hsInput.value?.focus())
-    return
-  }
-  hsEditText.value = props.strip.hs?.trim() || ''
-  hsEditing.value = true
-  nextTick(() => {
-    hsInput.value?.focus()
-    hsInput.value?.select()
-  })
-}
-
-function onHsInput(event: Event) {
-  const el = event.target as HTMLInputElement
-  const cleaned = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)
-  hsEditText.value = cleaned
-  const pos = Math.min(el.selectionStart ?? cleaned.length, cleaned.length)
-  nextTick(() => {
-    if (hsInput.value && hsInput.value.value !== cleaned) {
-      hsInput.value.value = cleaned
-      hsInput.value.setSelectionRange(pos, pos)
-    }
-  })
-}
-
-function onHsEditCancel() {
-  hsEditing.value = false
-}
-
-function onHsEditBlur() {
-  if (!hsEditing.value) return
-  const value = hsEditText.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)
-  hsEditing.value = false
-  if (value !== (props.strip.hs || '')) {
-    store.updateHs(props.strip.id, value)
-  }
-}
-
-// Holding point — scratchpad /TEXT
+// Holding point — scratchpad /TEXT (or strip-only after scratch clear)
 const hpEditing = ref(false)
 const hpEditText = ref('')
 const hpInput = ref<HTMLInputElement | null>(null)
+
+const hpCellTitle = computed(() => {
+  if (props.strip.hp && props.strip.hpScratchCleared) {
+    return 'Holding point (click to clear)'
+  }
+  return 'Holding point (scratchpad /)'
+})
 
 function onHpClick() {
   if (clearScribblesInCell('.cell-hp')) return
   if (!canEditAssignedData.value) return
   if (hpEditing.value) {
     nextTick(() => hpInput.value?.focus())
+    return
+  }
+  // Retained after scratch clear: first click clears; next click opens entry
+  if (props.strip.hp && props.strip.hpScratchCleared) {
+    store.updateHp(props.strip.id, '')
     return
   }
   hpEditText.value = props.strip.hp?.trim() || ''
@@ -5201,7 +5120,6 @@ watch(
     closeAssignmentMenus()
     clncDialogOpen.value = false
     remarksEditing.value = false
-    hsEditing.value = false
     hpEditing.value = false
   },
 )
@@ -5777,9 +5695,7 @@ function onDragAreaTouchStart(event: TouchEvent) {
     target.closest('.remarks-input') ||
     target.closest('.assr-edit-input') ||
     target.closest('.hp-edit-input') ||
-    target.closest('.hs-edit-input') ||
     target.closest('.cell-hp') ||
-    target.closest('.cell-hs') ||
     target.closest('.cell-coo') ||
     target.closest('.cell-xfl') ||
     target.closest('.cell-sid') ||
@@ -6288,6 +6204,12 @@ const canOpenStandMenu = computed(
     (props.strip.ades || '').toUpperCase() === 'ESSA',
 )
 
+const standCellTitle = computed(() => {
+  if (props.strip.standBlocked) return 'Stand blocked by neighbour'
+  if (canOpenStandMenu.value) return 'Stand'
+  return undefined
+})
+
 function onStandClick(event: MouseEvent) {
   if (!canOpenStandMenu.value) return
   menuPosition.value = menuCoordsFromEvent(event)
@@ -6486,8 +6408,7 @@ function onGroundStateClick(action: string) {
   --strip-triangle-stroke-active: calc(0.575px * var(--strip-scale) * var(--strip-stroke-scale));
   /* CLR △ box fill — slightly inset so the shape sits inside the cell */
   --strip-triangle-size: 0.9;
-  /* HP column ≈ square, slightly wider than one body row */
-  /* HS / HP ≈ square; RWY just a bit wider */
+  /* HP ≈ square; RWY just a bit wider */
   --hp-col: calc(var(--strip-body-h) / 2 + 4px * var(--strip-scale));
   --rwy-col: calc(var(--hp-col) + 12px * var(--strip-scale));
   position: relative;
@@ -8113,10 +8034,10 @@ function onGroundStateClick(action: string) {
 /* Match strip-main column tracks so RMK starts under CFL (AHD track = col 4) */
 .exp-bottom-main-dep {
   /* SAAB ESSA DEP: keep AHD at 0.72fr (shared with EST/coo). RTC overrides to 0.36fr. */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
 }
 .exp-bottom-main-arr {
-  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
 }
 /* Under STD (col1) / CTO (col2): ASSR · ADES — own tracks so 4-letter ICAO fits.
    RMK starts under CFL (col3) through end of main (up to TMA exit column). */
@@ -8393,6 +8314,7 @@ function onGroundStateClick(action: string) {
   color: #c5c5c5 !important;
 }
 .flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard,
+.flight-strip.dimmed-data .strip-main .cell-std.stand-blocked,
 .flight-strip.dimmed-data .strip-left .atyp-box.atyp-yellow,
 .flight-strip.dimmed-data .strip-left .wtc-box.wtc-yellow {
   color: #000 !important;
@@ -8476,6 +8398,7 @@ function onGroundStateClick(action: string) {
 }
 /* Keep non-standard RWY readable on yellow fill */
 .flight-strip.transfer-out-accepted .strip-main .cell-rwy.rwy-nonstandard,
+.flight-strip.transfer-out-accepted .strip-main .cell-std.stand-blocked,
 .flight-strip.transfer-out-accepted .strip-left .atyp-box.atyp-yellow,
 .flight-strip.transfer-out-accepted .strip-left .wtc-box.wtc-yellow {
   color: #000 !important;
@@ -8876,21 +8799,21 @@ button.tobt-setby-pm:hover {
   /*
    * ESSA DEP (default, no rtc-layout): col 4 is AHD (bottom) + EST/coo (top).
    * Keep 0.72fr so AHD matches pre-DepC width. OTHER/RTC (.rtc-layout) narrow
-   * EST/coo to 0.36fr and drop HS (AHD moves beside SID).
+   * EST/coo to 0.36fr (AHD moves beside SID).
    */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
-    'cs  cs  xfl coo .   hs  hp  rwy'
-    'std cto cfl ahd sid sid sid sid';
+    'cs  cs  xfl coo .   hp  rwy'
+    'std cto cfl ahd sid sid sid';
 }
 .strip-grid-arr .strip-main {
-  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
+  grid-template-columns: 0.92fr 0.72fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
   /* rnp = plain text under RWY box (no framed cell) */
   grid-template-areas:
-    'cs  cs  .   .   .   hs  hp  rwy'
-    'cto std cfl ahd .   .   .   rnp';
+    'cs  cs  .   .   .   hp  rwy'
+    'cto std cfl ahd .   .   rnp';
 }
-/* OTHER+RTC (rtc-layout): no HS (ESSA-only); STD|triangle; SID|AHD; PEL = xfl (pink C when pending) */
+/* OTHER+RTC (rtc-layout): STD|triangle; SID|AHD; PEL = xfl (pink C when pending) */
 .flight-strip.rtc-layout .strip-grid-arr .strip-main {
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
@@ -8980,8 +8903,8 @@ button.tobt-setby-pm:hover {
   /* minmax(0,…) so △ / text cannot widen fr tracks and squeeze C/S */
   grid-template-columns:
     minmax(0, 0.72fr) minmax(0, 0.92fr) minmax(0, 0.68fr) minmax(0, 0.72fr)
-    minmax(0, 0.87fr) var(--hp-col) var(--hp-col) var(--rwy-col);
-  grid-template-areas: 'cs cs std ahd sid sid sid rwy';
+    minmax(0, 0.87fr) var(--hp-col) var(--rwy-col);
+  grid-template-areas: 'cs cs std ahd sid sid rwy';
 }
 .flight-strip.strip-compact.rtc-layout .strip-grid-dep .strip-main,
 .flight-strip.strip-compact.rtc-layout .strip-grid-arr .strip-main {
@@ -9101,7 +9024,6 @@ button.tobt-setby-pm:hover {
  */
 .strip-main .cell-xfl,
 .strip-main .cell-coo,
-.strip-main .cell-hs,
 .strip-main .cell-hp,
 .strip-main .cell-rwy {
   position: relative;
@@ -9117,7 +9039,6 @@ button.tobt-setby-pm:hover {
 }
 .strip-main .cell-xfl::after,
 .strip-main .cell-coo::after,
-.strip-main .cell-hs::after,
 .strip-main .cell-hp::after,
 .strip-main .cell-rwy::after,
 .strip-main .cell-std::after,
@@ -9191,18 +9112,6 @@ button.tobt-setby-pm:hover {
   font-size: var(--fs-data);
   font-weight: 800;
 }
-.cell-hs {
-  grid-area: hs;
-  font-size: var(--fs-ghost);
-  font-weight: 700;
-  border: none !important;
-}
-.cell-hs.editable {
-  cursor: pointer;
-}
-.cell-hs:not(.ghost) {
-  font-size: var(--fs-data);
-}
 .cell-hp {
   grid-area: hp;
   font-size: var(--fs-ghost);
@@ -9268,6 +9177,16 @@ button.tobt-setby-pm:hover {
 }
 .cell-std:not(.ghost) {
   font-size: var(--fs-mid);
+}
+/* Assigned stand BLOCKS/LIMITS-blocked by neighbour — planned amber fill */
+.strip-main .cell-std.stand-blocked {
+  color: #000;
+  isolation: isolate;
+}
+.strip-main .cell-std.stand-blocked::after {
+  background: #ddd2c0;
+  border-color: #b8a898;
+  z-index: -1;
 }
 /* .cell.cell-cto — beat later .cell { overflow:hidden } so △ tip/stroke aren't clipped */
 .cell.cell-cto {
@@ -9479,11 +9398,9 @@ button.tobt-setby-pm:hover {
   box-sizing: border-box;
   outline: none;
 }
-.cell-hs.hs-editing,
 .cell-hp.hp-editing {
   overflow: visible;
 }
-.hs-edit-input,
 .hp-edit-input {
   position: relative;
   z-index: 2;

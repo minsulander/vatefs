@@ -35,6 +35,21 @@ export function buildCombinedScratch(
     return ""
 }
 
+/**
+ * Scratch string for EuroScope. When `hpScratchCleared`, HP stays on the EFS
+ * strip only (cleared from ES on airborne/CFTO) until the strip is removed.
+ */
+export function buildFlightScratch(flight: {
+    remarks?: string
+    hp?: string
+    hpScratchCleared?: boolean
+}): string {
+    return buildCombinedScratch(
+        flight.remarks,
+        flight.hpScratchCleared ? undefined : flight.hp,
+    )
+}
+
 /** @deprecated use buildCombinedScratch — kept for call sites that only set remarks */
 export function buildScratchRemarks(remarks: string | undefined): string {
     return buildCombinedScratch(remarks, undefined)

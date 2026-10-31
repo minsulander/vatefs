@@ -5,6 +5,7 @@
 import assert from "node:assert/strict"
 import {
     buildCombinedScratch,
+    buildFlightScratch,
     groundstateFromScratch,
     isProtocolScratch,
     isHandoverAssistantScratch,
@@ -191,6 +192,17 @@ check("build roundtrip (no EST)", () => {
     assert.equal(buildCombinedScratch(undefined, "Y2"), "/Y2")
     assert.equal(buildCombinedScratch("SLOW", undefined), ".SLOW")
     assert.equal(buildCombinedScratch(undefined, undefined), "")
+})
+
+check("buildFlightScratch omits HP when scratch-cleared", () => {
+    assert.equal(
+        buildFlightScratch({ remarks: "URNAV", hp: "Y2", hpScratchCleared: true }),
+        ".URNAV",
+    )
+    assert.equal(
+        buildFlightScratch({ remarks: "URNAV", hp: "Y2" }),
+        ".URNAV /Y2",
+    )
 })
 
 console.log(`scratchpad: ${passed} passed`)
