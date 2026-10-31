@@ -82,5 +82,9 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:17770',
     },
+    // PWA dev writes into dev-dist/; ignore so that does not bounce the watcher
+    watch: {
+      ignored: ['**/dev-dist/**'],
+    },
   }
 })

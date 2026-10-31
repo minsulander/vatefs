@@ -71,12 +71,37 @@ function measureBarNeed(el: HTMLElement): number {
   const prevOverflow = el.style.overflow
   const prevGrid = el.style.gridTemplateColumns
   const isBottom = el.classList.contains('efs-bottom-bar')
+  const strip = el.querySelector('.top-airport-strip') as HTMLElement | null
+  const prevStripFlex = strip?.style.flex
+  const prevStripOverflow = strip?.style.overflow
+  const prevStripMin = strip?.style.minWidth
   el.style.width = 'max-content'
   el.style.maxWidth = 'none'
   el.style.overflow = 'visible'
   // 1fr columns collapse under max-content; force content-sized tracks
   if (isBottom) {
     el.style.gridTemplateColumns = 'max-content max-content max-content'
+  }
+  // Airport strip scrolls in real layout — measure chrome without its full width
+  // dominating the fit ratio (otherwise 30+ ICAOs crush the menubar).
+  if (strip) {
+    strip.style.flex = '0 0 auto'
+    strip.style.overflow = 'visible'
+    strip.style.minWidth = '0'
+    // Cap credited strip width so fit stays about essential controls
+    const cap = Math.max(160, Math.floor((document.documentElement.clientWidth || 1280) * 0.35))
+    void el.offsetWidth
+    const full = el.scrollWidth
+    const stripW = strip.scrollWidth
+    const other = Math.max(0, full - stripW)
+    el.style.width = prevWidth
+    el.style.maxWidth = prevMax
+    el.style.overflow = prevOverflow
+    el.style.gridTemplateColumns = prevGrid
+    strip.style.flex = prevStripFlex ?? ''
+    strip.style.overflow = prevStripOverflow ?? ''
+    strip.style.minWidth = prevStripMin ?? ''
+    return other + Math.min(stripW, cap)
   }
   void el.offsetWidth
   const need = el.scrollWidth
@@ -87,9 +112,14 @@ function measureBarNeed(el: HTMLElement): number {
   return need
 }
 
+/** Floor so overflow never collapses the menubar to “tiny until UI-scale poke”. */
+const CHROME_FIT_MIN = 0.72
+
 /**
  * If top/bottom bar content overflows the window width, compress --efs-chrome-scale
  * (fonts, padding, icon sizes via chrome) until it fits.
+ * Airport strip may scroll (see .top-airport-strip); do not let one huge strip
+ * squash chrome below CHROME_FIT_MIN.
  */
 function fitChromeToWidth(): void {
   if (typeof document === 'undefined') return
@@ -99,6 +129,13 @@ function fitChromeToWidth(): void {
     document.querySelector('.efs-bottom-bar') as HTMLElement | null,
   ].filter((el): el is HTMLElement => !!el)
   if (bars.length === 0) return
+
+  // Viewport not ready yet (first paint / move) — keep base scale, retry next frame
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  if (vw < 80) {
+    scheduleChromeFit()
+    return
+  }
 
   // Measure against uncompressed chrome, then refine (non-linear bits / subpixel)
   let fit = 1
@@ -114,13 +151,15 @@ function fitChromeToWidth(): void {
         el.parentElement?.clientWidth ||
         document.documentElement.clientWidth ||
         el.clientWidth
+      if (avail < 80) continue
       const need = measureBarNeed(el)
       if (avail > 0 && need > avail + 1) {
         worst = Math.min(worst, avail / need)
       }
     }
     if (worst >= 0.999) break
-    fit = Math.min(1, Math.max(0.42, fit * worst * 0.98))
+    fit = Math.min(1, Math.max(CHROME_FIT_MIN, fit * worst * 0.98))
+    if (fit <= CHROME_FIT_MIN + 0.001) break
   }
 
   const chrome = baseChromeScale * fit
@@ -200,11 +239,18 @@ export function useEfsUiScale() {
       return
     }
     started = true
+    // First paint: set base scale only; deferred fits avoid measuring before layout
+    // (first open / window move used to leave a tiny menubar until UI-scale poke).
     applyEfsScale()
 
     const onResize = () => applyEfsScale()
+    const onVis = () => {
+      if (document.visibilityState === 'visible') applyEfsScale()
+    }
     window.addEventListener('resize', onResize)
     window.addEventListener('orientationchange', onResize)
+    window.addEventListener('pageshow', onResize)
+    document.addEventListener('visibilitychange', onVis)
 
     // Re-fit when bar content changes (ATIS, callsign, etc.)
     let mutTimer: ReturnType<typeof setTimeout> | null = null
@@ -226,14 +272,23 @@ export function useEfsUiScale() {
       }
     }
     observeBars()
-    // Bars may mount a tick later
+    // Bars may mount a tick later; settle fits after fonts/layout
     requestAnimationFrame(observeBars)
+    const settleTimers = [100, 350, 800].map((ms) =>
+      setTimeout(() => {
+        observeBars()
+        applyEfsScale()
+      }, ms),
+    )
 
     removeListeners = () => {
       window.removeEventListener('resize', onResize)
       window.removeEventListener('orientationchange', onResize)
+      window.removeEventListener('pageshow', onResize)
+      document.removeEventListener('visibilitychange', onVis)
       mutObs?.disconnect()
       if (mutTimer) clearTimeout(mutTimer)
+      for (const t of settleTimers) clearTimeout(t)
       if (chromeFitRaf) cancelAnimationFrame(chromeFitRaf)
       removeListeners = null
       started = false

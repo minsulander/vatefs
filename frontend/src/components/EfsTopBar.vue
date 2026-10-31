@@ -169,12 +169,17 @@
           </div>
         </div>
       </v-dialog>
-      <!-- Airports (+ ATIS/QNH): classic / OTHER — RTC uses per-column headers -->
-      <template v-if="!efs.essaRolesMode && !efs.isPaperLook && !efs.multiAirport">
+      <!-- Airports (+ ATIS/QNH): OTHER all covered; RTC open (click→flash column) + idle/newborn.
+           Scrollable strip so chrome (config / RTC) is never clipped away. -->
+      <div
+        v-if="!efs.essaRolesMode && !efs.isPaperLook && (atisDisplayItems.length > 0 || efs.displayAirports.length > 0)"
+        ref="airportStripEl"
+        class="top-airport-strip"
+      >
       <span
         v-for="info in atisDisplayItems"
         :key="info.airport"
-        class="ml-3 airport-atis"
+        class="airport-atis"
         :class="{
           'airport-atis--idle': info.idle,
           'airport-atis--open': !info.idle && efs.multiAirport,
@@ -184,9 +189,12 @@
         :title="airportTitle(info)"
         @click.stop="onAirportClick(info)"
       >
-        <span class="airport-icao" :class="info.idle ? 'text-grey' : 'text-grey-darken-1'">{{ info.airport }}</span>
-        <!-- Several airports: ATIS + RWY + QNH beside each ICAO. Single: ICAO (+ RWY) only; ATIS/QNH on right. -->
-        <template v-if="showLeftAtisQnh">
+        <span
+          class="airport-icao"
+          :class="info.idle ? 'text-grey' : 'text-grey-darken-1'"
+        >{{ shortAirportLabel(info.airport) }}</span>
+        <!-- 2–3 OTHER airports: ATIS + RWY beside ICAO. -->
+        <template v-if="showLeftAtisDetails">
           <template v-if="info.split">
             <span class="text-amber ml-1" v-if="info.arrAtis">{{ info.arrAtis }}</span>
             <span class="text-grey-darken-2 ml-1" v-if="info.arrRunways">{{ info.arrRunways }}</span>
@@ -197,21 +205,18 @@
             <span class="text-amber ml-1" v-if="info.atis">{{ info.atis }}</span>
             <span class="text-grey-darken-2 ml-1" v-if="info.runways">{{ info.runways }}</span>
           </template>
-          <span class="text-grey ml-1" v-if="info.qnh">{{ info.qnh }}</span>
         </template>
-        <template v-else>
-          <template v-if="info.split">
-            <span class="text-grey-darken-2 ml-1" v-if="info.arrRunways">{{ info.arrRunways }}</span>
-            <span class="text-grey-darken-2 ml-1" v-if="info.depRunways">{{ info.depRunways }}</span>
-          </template>
-          <span v-else-if="info.runways" class="text-grey-darken-2 ml-1">{{ info.runways }}</span>
-        </template>
+        <!-- OTHER multi: QNH on each chip (hidden as overflow step 2). -->
+        <span
+          v-if="showChipQnh && info.qnh"
+          class="text-grey ml-1 airport-chip-qnh"
+        >{{ info.qnh }}</span>
       </span>
       <!-- Fallback: show airports without ATIS data (non-MULTIAPT) -->
-      <span v-if="atisDisplayItems.length === 0 && efs.displayAirports.length > 0" class="text-grey-darken-1 ml-2">
-        {{ efs.displayAirports.join(' ') }}
+      <span v-if="atisDisplayItems.length === 0 && efs.displayAirports.length > 0" class="text-grey-darken-1">
+        {{ efs.displayAirports.map(shortAirportLabel).join(' ') }}
       </span>
-      </template>
+      </div>
       <span v-if="efs.multiAirport && efs.pendingIdleSwap" class="idle-hint ml-2">
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
@@ -403,42 +408,41 @@
           </div>
         </div>
 
-        <!-- ATIS / QNH right: single-airport classic, ESSA, paper (multi → left / bay headers) -->
-        <template v-if="showRightAtisQnh">
-          <div
-            v-if="topAtisEntries.length"
-            class="top-atis"
-            :class="{ 'is-changed': topAtisChanged }"
-            :title="topAtisTitle"
-          >
-            <span class="top-atis-lbl">ATIS</span>
-            <span
-              v-for="(entry, i) in topAtisEntries"
-              :key="`${entry.kind}-${entry.letter}-${i}`"
-              class="top-atis-letter"
-              :class="{
-                'is-changed': topAtisChanged,
-                'is-arr': !topAtisChanged && entry.kind === 'arr',
-                'is-dep': !topAtisChanged && entry.kind === 'dep',
-              }"
-            >{{ entry.letter }}</span>
-          </div>
+        <!-- ATIS right: single-airport classic, ESSA, paper, or OTHER primary when many airports -->
+        <div
+          v-if="showRightAtis && topAtisEntries.length"
+          class="top-atis"
+          :class="{ 'is-changed': topAtisChanged }"
+          :title="topAtisTitle"
+        >
+          <span class="top-atis-lbl">ATIS</span>
+          <span
+            v-for="(entry, i) in topAtisEntries"
+            :key="`${entry.kind}-${entry.letter}-${i}`"
+            class="top-atis-letter"
+            :class="{
+              'is-changed': topAtisChanged,
+              'is-arr': !topAtisChanged && entry.kind === 'arr',
+              'is-dep': !topAtisChanged && entry.kind === 'dep',
+            }"
+          >{{ entry.letter }}</span>
+        </div>
 
-          <button
-            v-if="topQnh != null"
-            type="button"
-            class="top-qnh"
-            :class="{ 'is-changed': topQnhChanged }"
-            :title="topQnhTitle"
-            @pointerdown="onTopQnhPointerDown"
-            @pointerup="onTopQnhPointerUp"
-            @pointerleave="onTopQnhPointerCancel"
-            @pointercancel="onTopQnhPointerCancel"
-            @click="onTopQnhClick"
-          >
-            <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
-          </button>
-        </template>
+        <!-- QNH right: single-airport / ESSA / paper only — OTHER multi uses per-chip QNH -->
+        <button
+          v-if="showRightQnh && topQnh != null"
+          type="button"
+          class="top-qnh"
+          :class="{ 'is-changed': topQnhChanged }"
+          :title="topQnhTitle"
+          @pointerdown="onTopQnhPointerDown"
+          @pointerup="onTopQnhPointerUp"
+          @pointerleave="onTopQnhPointerCancel"
+          @pointercancel="onTopQnhPointerCancel"
+          @click="onTopQnhClick"
+        >
+          <span class="top-qnh-val">{{ topQnh }}</span><span class="top-qnh-unit"> hpa</span>
+        </button>
 
         <div
           ref="connBtnWrap"
@@ -1560,7 +1564,7 @@ function buildAtisItem(airport: string, idle: boolean): AtisDisplayItem {
 
 const atisDisplayItems = computed((): AtisDisplayItem[] => {
   if (efs.multiAirport) {
-    // Top bar: column airports + ES-active only (not leftover saved activeAirports)
+    // Top bar: open columns (click → flash) + idle/newborn (click → swap)
     const es = new Set(efs.esAirports)
     const open = efs.columnAirports.filter((a): a is string => !!a)
     const visible = new Set(open)
@@ -1577,7 +1581,7 @@ const atisDisplayItems = computed((): AtisDisplayItem[] => {
     ]
   }
 
-  // Classic: prefer configured airports; fall back to ATIS feed list
+  // Classic / OTHER: prefer configured airports; fall back to ATIS feed list
   if (efs.myAirports.length > 0) {
     return efs.myAirports.map((a) => buildAtisItem(a, false))
   }
@@ -1592,20 +1596,135 @@ const classicAirportCount = computed(() => {
   return Math.max(efs.myAirports.length, atisDisplayItems.value.length, 1)
 })
 
-/** Several airports → ATIS/QNH beside each ICAO on the left. */
-const showLeftAtisQnh = computed(
-  () => efs.multiAirport || classicAirportCount.value > 1,
-)
+/**
+ * OTHER multi-airport strip densify order when overflowing:
+ * 1) abbreviate ICAOs (drop leading ES)
+ * 2) hide per-airport QNHs
+ * 3) horizontal scroll (CSS) if still needed
+ */
+const airportStripEl = ref<HTMLElement | null>(null)
+const compactAirportLabels = ref(false)
+const hideAirportQnhs = ref(false)
+let airportStripRo: ResizeObserver | null = null
+let airportStripMeasureSeq = 0
+
+function abbreviateAirportIcao(icao: string): string {
+  const u = (icao || '').toUpperCase()
+  if (u.length === 4 && u.startsWith('ES')) return u.slice(2)
+  return icao
+}
+
+function shortAirportLabel(icao: string): string {
+  if (!compactAirportLabels.value) return icao
+  return abbreviateAirportIcao(icao)
+}
+
+function airportStripOverflows(el: HTMLElement): boolean {
+  return el.scrollWidth > el.clientWidth + 1
+}
+
+async function measureAirportStripCompact() {
+  const seq = ++airportStripMeasureSeq
+  const el = airportStripEl.value
+  if (!el || classicAirportCount.value <= 1) {
+    compactAirportLabels.value = false
+    hideAirportQnhs.value = false
+    return
+  }
+
+  // Start from fullest layout; only densify when needed.
+  compactAirportLabels.value = false
+  hideAirportQnhs.value = false
+  await nextTick()
+  if (seq !== airportStripMeasureSeq) return
+  if (!airportStripOverflows(el)) return
+
+  // Step 1: abbreviate ICAOs
+  compactAirportLabels.value = true
+  await nextTick()
+  if (seq !== airportStripMeasureSeq) return
+  if (!airportStripOverflows(el)) return
+
+  // Step 2: hide per-airport QNHs (OTHER multi only)
+  if (showPerAirportQnh.value) {
+    hideAirportQnhs.value = true
+    await nextTick()
+    if (seq !== airportStripMeasureSeq) return
+  }
+  // Step 3: CSS overflow-x: auto scrolls if still overflowing
+}
+
+function bindAirportStripObserver() {
+  airportStripRo?.disconnect()
+  airportStripRo = null
+  const el = airportStripEl.value
+  if (!el || typeof ResizeObserver === 'undefined') return
+  airportStripRo = new ResizeObserver(() => {
+    void measureAirportStripCompact()
+  })
+  airportStripRo.observe(el)
+  void measureAirportStripCompact()
+}
 
 /**
- * Single-airport classic, ESSA roles, paper → ATIS/QNH on the right.
- * Multi / RTC → left (or bay headers), not right.
+ * OTHER with 2+ airports: QNH on each chip (not the far-right control).
+ * RTC / ESSA / paper keep their existing QNH placements.
  */
-const showRightAtisQnh = computed(() => {
+const showPerAirportQnh = computed(() => {
+  if (efs.multiAirport || efs.essaRolesMode || efs.isPaperLook) return false
+  return classicAirportCount.value > 1
+})
+
+const showChipQnh = computed(
+  () => showPerAirportQnh.value && !hideAirportQnhs.value,
+)
+
+/** 2–3 OTHER airports: ATIS + RWY beside each ICAO. */
+const showLeftAtisDetails = computed(() => {
+  if (efs.multiAirport) return false
+  return classicAirportCount.value > 1 && classicAirportCount.value <= 3
+})
+
+/**
+ * Right ATIS: single-airport classic, ESSA, paper, or OTHER primary when many.
+ * RTC uses bay headers.
+ */
+const showRightAtis = computed(() => {
+  if (efs.multiAirport) return false
+  if (efs.essaRolesMode || efs.isPaperLook) return true
+  return classicAirportCount.value <= 1 || classicAirportCount.value > 3
+})
+
+/**
+ * Far-right QNH only when there is no per-chip QNH strip
+ * (single classic / ESSA / paper).
+ */
+const showRightQnh = computed(() => {
   if (efs.multiAirport) return false
   if (efs.essaRolesMode || efs.isPaperLook) return true
   return classicAirportCount.value <= 1
 })
+
+watch(
+  () => [
+    atisDisplayItems.value.map((i) => `${i.airport}:${i.qnh ?? ''}`).join('|'),
+    efs.displayAirports.join('|'),
+    classicAirportCount.value,
+    showLeftAtisDetails.value,
+    showPerAirportQnh.value,
+  ],
+  async () => {
+    await nextTick()
+    if (!airportStripEl.value) {
+      compactAirportLabels.value = false
+      hideAirportQnhs.value = false
+      airportStripRo?.disconnect()
+      airportStripRo = null
+      return
+    }
+    bindAirportStripObserver()
+  },
+)
 
 /** Primary airport for right-bar ATIS / QNH */
 const topMetAirport = computed(() => {
@@ -1825,13 +1944,26 @@ const dclTooltip = computed(() => {
 })
 
 function airportTitle(info: AtisDisplayItem): string | undefined {
-  if (!efs.multiAirport) return undefined
-  if (info.newlyActive) return `${info.airport} newly active`
-  if (info.idle) {
-    if (efs.pendingIdleSwap === info.airport) return `Click a column to open ${info.airport}`
-    return `Select ${info.airport}, then click a column`
+  const full = info.airport
+  const bits: string[] = []
+  if (compactAirportLabels.value && shortAirportLabel(full) !== full) {
+    bits.push(full)
   }
-  return `Highlight ${info.airport} column`
+  // Tooltip QNH when chip QNH is hidden (overflow step 2) or not shown on chip
+  if (info.qnh && !showChipQnh.value) bits.push(`QNH ${info.qnh}`)
+  if (efs.multiAirport) {
+    if (info.newlyActive) bits.push('newly active')
+    else if (info.idle) {
+      bits.push(
+        efs.pendingIdleSwap === info.airport
+          ? `click a column to open`
+          : `select, then click a column`,
+      )
+    } else {
+      bits.push('highlight column')
+    }
+  }
+  return bits.length ? bits.join(' · ') : undefined
 }
 
 function onAirportClick(info: AtisDisplayItem) {
@@ -1907,6 +2039,7 @@ onMounted(() => {
   essaRwyTickTimer = setInterval(() => {
     essaRwyNowTick.value = Date.now()
   }, 60_000)
+  void nextTick(() => bindAirportStripObserver())
 })
 
 onUnmounted(() => {
@@ -1922,6 +2055,8 @@ onUnmounted(() => {
     clearTimeout(connStatusHideTimer)
     connStatusHideTimer = null
   }
+  airportStripRo?.disconnect()
+  airportStripRo = null
   clearTopQnhHold()
 })
 </script>
@@ -1946,9 +2081,28 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* Prefer chrome-scale compression over flex-squashing text/controls */
-.efs-top-bar > :not(.v-spacer) {
+/* Prefer chrome-scale compression over flex-squashing text/controls.
+   Airport strip is the exception — it may shrink/scroll so config stays reachable. */
+.efs-top-bar > :not(.v-spacer):not(.top-airport-strip) {
   flex-shrink: 0;
+}
+
+.top-airport-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: calc(6px * var(--tb));
+  min-width: 0;
+  /* Grow into free space but never push config/RTC chrome off-screen */
+  flex: 1 1 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.top-airport-strip .airport-atis {
+  flex: 0 0 auto;
 }
 
 /* RWY / Roles cluster — roomier spacing when width allows */
