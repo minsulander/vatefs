@@ -354,7 +354,8 @@
       'dimmed-data': dimmedData,
       'transfer-out-accepted': !!strip.transferOutAccepted && !store.isPaperLook,
       'no-drag': !canDragStrip && !isLargeView,
-      'rtc-layout': store.multiAirport,
+      /* OTHER + RTC share SAAB strip chrome; ESSA keeps its own scheme */
+      'rtc-layout': useSaabSharedLayout,
       'klack-left': !klackPulling && strip.klack === 'left',
       'klack-right': !klackPulling && strip.klack === 'right',
       'klack-pulling': klackPulling,
@@ -517,9 +518,9 @@
             />
             <template v-else>{{ strip.hp || 'HP' }}</template>
           </div>
-          <!-- RTC: HP only (no HS/STD sibling — matches flight strips) -->
+          <!-- ESSA only: STD sibling — OTHER/RTC vehicle strips match flight (HP only) -->
           <div
-            v-if="!store.multiAirport"
+            v-if="store.essaRolesMode"
             class="vehicle-cell editable"
             :class="{
               ghost: !strip.std?.trim() && vehicleEditField !== 'std',
@@ -1326,7 +1327,7 @@
             @contextmenu.prevent.stop="onCooContextMenu"
           >{{ showEstCoordC ? 'C' : strip.coo ? '✓' : 'C' }}</div>
           <div
-            v-if="!isCompactBay && !store.multiAirport"
+            v-if="!isCompactBay && store.essaRolesMode"
             class="cell cell-hs"
             :class="{
               ghost: !strip.hs && !hsEditing,
@@ -1533,9 +1534,9 @@
             :title="`Departure route / ${sidCellLabel}`"
             @click.stop="onSidClick"
           >{{ store.displaySidForStrip(strip) || sidCellLabel }}</div>
-          <!-- RTC ARR: empty framed SID slot (no data / no edit) -->
+          <!-- OTHER/RTC ARR: empty framed SID slot (no data / no edit) -->
           <div
-            v-else-if="!isCompactBay && store.multiAirport && !hideArrGroundAssignFields"
+            v-else-if="!isCompactBay && useSaabSharedLayout && !hideArrGroundAssignFields"
             class="cell cell-sid cell-sid-arr-empty"
             aria-hidden="true"
           />
@@ -3643,10 +3644,19 @@ const atypYellowHighlight = computed(
   () => store.multiAirport && heavyAsLeaderType.value,
 )
 /**
- * RTC coordination UI only (`multiAirport` / multiairport.yml).
- * ESSA SAAB and ESGG paper must not get XFL edit / EST / pink pending.
+ * OTHER + RTC share digital SAAB strip chrome (half-width C, no HS, XFL usable).
+ * ESSA (`essaRolesMode`) keeps its own strip scheme; paper never uses this.
  */
-const isRtcCoordUi = computed(() => store.multiAirport)
+const useSaabSharedLayout = computed(
+  () => !store.isPaperLook && !store.essaRolesMode,
+)
+
+/**
+ * Coordination chrome for shared SAAB layout: XFL edit / pink XFL.
+ * EST / C box is airport-gated separately (see showCooCell).
+ * ESGG paper / ESSA must not get this XFL edit path.
+ */
+const isRtcCoordUi = computed(() => useSaabSharedLayout.value)
 
 /** Prefer ACC-proposed XFL while inbound pending; else EuroScope / SID preview. */
 const displayXfl = computed(() => {
@@ -3684,23 +3694,23 @@ const xflCoordAmber = computed(
 )
 
 /**
- * RTC DEP/local: pink C on EST for inbound REQUESTED_BY_OTHER.
- * EST is force-shown while pending even when coordination-exempt.
+ * DEP/local: pink C on EST for inbound REQUESTED_BY_OTHER.
+ * Airport-gated (not RTC-config): ANY non-paper board with a pending proposal.
  * ARR uses pink C in the PEL slot instead (see showArrCoordPendingC).
  */
 const showEstCoordC = computed(
   () =>
-    isRtcCoordUi.value &&
+    !store.isPaperLook &&
     !isArrLayout.value &&
     !!props.strip.exitCoordPending,
 )
 
 /**
- * RTC ARR only: pink C in the PEL grid slot (same cell-xfl area as DEP XFL)
- * for inbound ACC proposal. Accept/Refuse only — no send / XflMenu / DepCoord.
+ * ARR: pink C in the PEL grid slot for inbound ACC proposal.
+ * Accept/Refuse only — no send / XflMenu / DepCoord. Not RTC-config-gated.
  */
 const showArrCoordPendingC = computed(
-  () => isRtcCoordUi.value && isArrLayout.value && !!props.strip.exitCoordPending,
+  () => !store.isPaperLook && isArrLayout.value && !!props.strip.exitCoordPending,
 )
 
 /** DEP: always show XFL (non-compact). ARR: only the pending pink-C PEL slot on RTC. */
@@ -4208,12 +4218,12 @@ const tmaExitPoint = computed(
 )
 
 /**
- * RTC DEP/local EST cell only (not ARR — inbound ARR uses pink C on PEL).
- * Ground IFR when ADEP needs ACC coordination, or inbound pending.
- * Never ESSA (not multiAirport) or paper look.
+ * DEP/local EST / C cell (not ARR — inbound ARR uses pink C on PEL).
+ * Gated by ADEP airport (requiresAccCoordination), not RTC config — so OTHER+ESMS
+ * shows the C box. Never paper look. ESSA/ESGG are not in the coordination set.
  */
 const showCooCell = computed(() => {
-  if (!isRtcCoordUi.value) return false
+  if (store.isPaperLook) return false
   if (isCompactBay.value || isArrLayout.value) return false
   if (props.strip.airborne) return false
   if (!isIfrSidEligible(props.strip.flightRules)) return false
@@ -8864,9 +8874,9 @@ button.tobt-setby-pm:hover {
 }
 .strip-grid-dep .strip-main {
   /*
-   * SAAB ESSA DEP (default): col 4 is AHD (bottom) + EST/coo (top).
-   * Keep 0.72fr so AHD matches pre-DepC width. RTC narrows this track for EST only
-   * (RTC AHD sits in the RWY column, so that override is safe).
+   * ESSA DEP (default, no rtc-layout): col 4 is AHD (bottom) + EST/coo (top).
+   * Keep 0.72fr so AHD matches pre-DepC width. OTHER/RTC (.rtc-layout) narrow
+   * EST/coo to 0.36fr and drop HS (AHD moves beside SID).
    */
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--hp-col) var(--rwy-col);
   grid-template-areas:
@@ -8880,7 +8890,7 @@ button.tobt-setby-pm:hover {
     'cs  cs  .   .   .   hs  hp  rwy'
     'cto std cfl ahd .   .   .   rnp';
 }
-/* RTC: no HS (ESSA-only); STD|triangle; SID|AHD; SID framed; PEL slot = xfl area (pink C when pending) */
+/* OTHER+RTC (rtc-layout): no HS (ESSA-only); STD|triangle; SID|AHD; PEL = xfl (pink C when pending) */
 .flight-strip.rtc-layout .strip-grid-arr .strip-main {
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
@@ -8891,12 +8901,19 @@ button.tobt-setby-pm:hover {
   grid-template-columns: 0.72fr 0.92fr 0.68fr 0.72fr 0.87fr var(--hp-col) var(--rwy-col);
 }
 .flight-strip.rtc-layout .exp-bottom-main-dep {
-  /* RTC: EST/coo half-width track (AHD is in RWY col, not here) */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
+  /*
+   * Same Σfr / cols 1–3 as ARR so CFTO|CFL lines up with CTL|CFL.
+   * EST/coo stays 0.36fr (half of ARR’s 0.72); leftover 0.36fr pads col5
+   * (empty on top row, inside SID span on bottom) → Σ 3.91.
+   */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 1.23fr var(--hp-col) var(--rwy-col);
 }
 .flight-strip.rtc-layout .strip-grid-dep .strip-main {
-  /* RTC: EST/coo ~half; AHD uses RWY column — leave 0.36fr */
-  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 0.87fr var(--hp-col) var(--rwy-col);
+  /*
+   * OTHER/RTC DEP: EST/coo half-width (0.36fr). Match ARR’s 0.72/0.92/0.68 and
+   * Σ3.91 by padding col5 (+0.36 → 1.23fr). Default (ESSA) grids unchanged.
+   */
+  grid-template-columns: 0.72fr 0.92fr 0.68fr 0.36fr 1.23fr var(--hp-col) var(--rwy-col);
   grid-template-areas:
     'cs  cs  xfl coo .   hp  rwy'
     'std cto cfl sid sid sid ahd';

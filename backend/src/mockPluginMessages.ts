@@ -15,6 +15,20 @@ const ESSA_LAT = 59.64849
 const ESSA_LON = 17.928829
 const ESSA_ELEV = 137 // feet
 
+// C-box visual-check airports
+const ESMS_LAT = 55.535564
+const ESMS_LON = 13.376327
+const ESMS_ELEV = 236
+const ESSV_LAT = 57.6628
+const ESSV_LON = 18.3462
+const ESSV_ELEV = 164
+const ESNU_LAT = 63.791801
+const ESNU_LON = 20.282801
+const ESNU_ELEV = 24
+const ESNQ_LAT = 67.821999
+const ESNQ_LON = 20.3368
+const ESNQ_ELEV = 1508
+
 function fpUpdate(
     callsign: string,
     origin: string,
@@ -286,6 +300,96 @@ export const mockPluginMessages: PluginMessage[] = [
     radarUpdate("IBE3456", ESSA_ELEV, ESSA_LAT - 0.002, ESSA_LON + 0.003),
     radarUpdate("WZZ7890", ESSA_ELEV, ESSA_LAT - 0.001, ESSA_LON + 0.001),
     radarUpdate("SAS999", ESSA_ELEV, ESSA_LAT - 0.003, ESSA_LON + 0.002),
+
+    // === C-box coordination visual check (ADEP-gated; works OTHER + RTC) ===
+    // ESMS → C YES (always in NEEDS_COORDINATION)
+    fpUpdate("COOEMS1", "ESMS", "ESSA", "A320", {
+        flightRules: "I",
+        rfl: 28000,
+        depRwy: "17",
+        sid: "BABSI2K",
+        route: "BABSI N850 NOSLI",
+        eobt: "0800",
+    }),
+    ctrUpdate("COOEMS1", {
+        squawk: "4101",
+        groundstate: "",
+        clearance: false,
+        stand: "12",
+        controller: "ESMS_TWR",
+    }),
+    // Slight apron offset so on_runway_geographic does not steal the strip
+    radarUpdate("COOEMS1", ESMS_ELEV, ESMS_LAT + 0.008, ESMS_LON + 0.008),
+
+    // ESSV → C NO (Visby not in NEEDS_COORDINATION)
+    fpUpdate("COOESV1", "ESSV", "ESSA", "AT76", {
+        flightRules: "I",
+        rfl: 18000,
+        depRwy: "03",
+        route: "TRS DCT NOSLI",
+        eobt: "0810",
+    }),
+    ctrUpdate("COOESV1", {
+        squawk: "4102",
+        groundstate: "",
+        clearance: false,
+        stand: "3",
+        controller: "ESSV_TWR",
+    }),
+    radarUpdate("COOESV1", ESSV_ELEV, ESSV_LAT + 0.008, ESSV_LON + 0.008),
+
+    // ESNU + SOPLI → C NO (exempt TMA exit)
+    fpUpdate("COOENU1", "ESNU", "ESSA", "E190", {
+        flightRules: "I",
+        rfl: 31000,
+        depRwy: "14",
+        sid: "SOPLI2A",
+        route: "SOPLI DCT NOSLI",
+        eobt: "0820",
+    }),
+    ctrUpdate("COOENU1", {
+        squawk: "4103",
+        groundstate: "",
+        clearance: false,
+        stand: "5",
+        controller: "ESNU_TWR",
+    }),
+    radarUpdate("COOENU1", ESNU_ELEV, ESNU_LAT + 0.008, ESNU_LON + 0.008),
+
+    // ESNU + non-exempt exit → C YES
+    fpUpdate("COOENU2", "ESNU", "ESSA", "A320", {
+        flightRules: "I",
+        rfl: 33000,
+        depRwy: "14",
+        sid: "UMEXA1A",
+        route: "UMEXA DCT NOSLI",
+        eobt: "0830",
+    }),
+    ctrUpdate("COOENU2", {
+        squawk: "4104",
+        groundstate: "",
+        clearance: false,
+        stand: "6",
+        controller: "ESNU_TWR",
+    }),
+    radarUpdate("COOENU2", ESNU_ELEV, ESNU_LAT + 0.01, ESNU_LON + 0.01),
+
+    // ESNQ → C YES (always in NEEDS_COORDINATION)
+    fpUpdate("COOENQ1", "ESNQ", "ESSA", "B738", {
+        flightRules: "I",
+        rfl: 35000,
+        depRwy: "21",
+        route: "NEKIR DCT NOSLI",
+        eobt: "0840",
+    }),
+    ctrUpdate("COOENQ1", {
+        squawk: "4105",
+        groundstate: "",
+        clearance: false,
+        stand: "2",
+        controller: "ESNQ_TWR",
+    }),
+    radarUpdate("COOENQ1", ESNQ_ELEV, ESNQ_LAT + 0.008, ESNQ_LON + 0.008),
 ]
 
 export interface BackendStateUpdate {
@@ -320,6 +424,22 @@ export const mockMyselfUpdate: MyselfUpdateMessage = {
         ESSA: {
             "01L": { arr: true, dep: true },
             "01R": { arr: false, dep: false },
+        },
+        ESMS: {
+            "17": { arr: true, dep: true },
+            "35": { arr: false, dep: false },
+        },
+        ESSV: {
+            "03": { arr: true, dep: true },
+            "21": { arr: false, dep: false },
+        },
+        ESNU: {
+            "14": { arr: true, dep: true },
+            "32": { arr: false, dep: false },
+        },
+        ESNQ: {
+            "21": { arr: true, dep: true },
+            "03": { arr: false, dep: false },
         },
     },
 }
