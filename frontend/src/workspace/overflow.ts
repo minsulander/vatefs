@@ -4,6 +4,7 @@
  */
 
 import { isStripCompact } from '@/composables/useStripSizeMode'
+import { isRunwayOrderSectionId } from '@vatefs/common'
 import type { WorkspaceSection } from './types'
 import { WORKSPACE_HEADER_H } from './types'
 
@@ -130,6 +131,18 @@ export function packWorkspaceOverflow(input: OverflowPackInput): OverflowPackRes
     const bayScale = input.bayScaleForColumn(c)
     const gapAt = (globalIndex: number) =>
       input.gapPxBeforeIndex?.(sectionId, bayId, globalIndex) ?? 0
+
+    // RUNWAY stays in-bay (autofit + scroll). Spilling to the next column made
+    // the primary list never overflow, so Auto resize never compacted RUNWAY.
+    if (isRunwayOrderSectionId(sectionId)) {
+      byInstance[lastReal.instanceId] = {
+        instanceId: lastReal.instanceId,
+        primaryCount: order.length,
+        hasOverflowPath: false,
+        hidePrimaryScroll: false,
+      }
+      continue
+    }
 
     const hostCaps: { column: number; px: number }[] = []
     for (let nc = c + 1; nc < input.columnCount; nc++) {

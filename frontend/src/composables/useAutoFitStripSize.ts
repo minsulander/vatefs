@@ -75,6 +75,20 @@ export function adoptManualStripFitBaseline(stripId: string): void {
   manualSizeLockById.add(stripId)
 }
 
+/**
+ * Section/divider default size as grow-back ceiling, without locking out autofit.
+ * Used when inheriting header strip-size onto new strips (compact defaults must
+ * not be inferred as “lost tracking → grow to normal”).
+ */
+export function adoptSectionStripFitBaseline(stripId: string): void {
+  setStripFitBaseline(stripId, snapshotCurrent(stripId))
+  manualSizeLockById.delete(stripId)
+}
+
+export function isManualStripFitLocked(stripId: string): boolean {
+  return manualSizeLockById.has(stripId)
+}
+
 function snapshotCurrent(stripId: string): StripFitBaseline {
   const exp = getStripExpanderState(stripId)
   return {

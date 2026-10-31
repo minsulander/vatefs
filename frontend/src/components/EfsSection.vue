@@ -464,6 +464,7 @@ import { useSectionResize } from '@/composables/useSectionResize'
 import { useStripOrderFlip } from '@/composables/useStripOrderFlip'
 import {
   adoptManualStripFitBaseline,
+  adoptSectionStripFitBaseline,
   autoFitApplying,
   autoFitLayoutEpoch,
   clearAutoFitState,
@@ -896,8 +897,19 @@ function collectSectionStrips(): FlightStripData[] {
   return list
 }
 
-/** Apply section strip-size mode to one strip (same as per-strip size menu). */
-function applyHeaderStripSizeToStrip(stripId: string, size = headerStripSize.value) {
+/**
+ * Apply section strip-size mode to one strip.
+ * - `lockManual: true` — user cycled header size (same as per-strip Size menu):
+ *   lock out auto-fit shrink/grow so Compact sticks.
+ * - `resetFitState: true` — new/moved-in strip inherits divider size without lock
+ *   (soft ceiling only). Do NOT clear locks on other re-applies — the headerStripSize
+ *   watcher used to clear right after a divider click and grow-back snapped Compact→Normal.
+ */
+function applyHeaderStripSizeToStrip(
+  stripId: string,
+  size = headerStripSize.value,
+  opts?: { lockManual?: boolean; resetFitState?: boolean },
+) {
   if (size === 'compact') {
     collapseStripExpanders(stripId)
     setStripSizeMode(stripId, 'compact')
@@ -909,14 +921,24 @@ function applyHeaderStripSizeToStrip(stripId: string, size = headerStripSize.val
     collapseStripExpanders(stripId)
     setStripSizeMode(stripId, 'normal')
   }
-  adoptManualStripFitBaseline(stripId)
+  if (opts?.lockManual) {
+    adoptManualStripFitBaseline(stripId)
+  } else if (opts?.resetFitState) {
+    clearAutoFitState(stripId)
+    adoptSectionStripFitBaseline(stripId)
+  }
+  // else: size-only re-apply (layout/profile / duplicate watcher) — keep locks
 }
 
-/** Apply section strip-size mode to all strips here. */
-function applyHeaderStripSizeToStrips() {
+/** Apply section strip-size to all strips (user header cycle → lockManual). */
+function applyHeaderStripSizeToStrips(opts?: { lockManual?: boolean; resetFitState?: boolean }) {
   const size = headerStripSize.value
+  const lockManual = opts?.lockManual ?? true
   for (const strip of collectSectionStrips()) {
-    applyHeaderStripSizeToStrip(strip.id, size)
+    applyHeaderStripSizeToStrip(strip.id, size, {
+      lockManual,
+      resetFitState: opts?.resetFitState,
+    })
   }
 }
 
@@ -2917,8 +2939,6 @@ let autoFitSettleUntil = 0
 /** @param force skip settle lock (strip list / header height — intentional). */
 function scheduleAutoFitRecheck(force = false) {
   if (store.isPaperLook) return
-  // RTC: short equal-flex / free-Y sections must not compact strips (looks clipped)
-  if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
   // Header/height drag: overflow repacks every move — defer fit until drag end
@@ -2940,7 +2960,6 @@ function scheduleAutoFitRecheck(force = false) {
 
 async function runScheduledAutoFit() {
   if (store.isPaperLook) return
-  if (store.multiAirport) return
   if (stickBottomZone.value) return
   if (store.autoMovingStripIds.size > 0) return
   if (sectionLayoutDragging.value) return
@@ -2956,6 +2975,7 @@ async function runScheduledAutoFit() {
   if (!el) return
   // Flexible workspace: when strips can continue in the next bay, never shrink —
   // overflow packing owns the extra strips. Size-fit only when there is no path.
+  // (RUNWAY is excluded from overflow packing so it still size-fits in-bay.)
   void ws.overflowPack.value
   const overflowHandlesExtra =
     props.workspaceMode && !!sectionOverflowPlan.value?.hasOverflowPath
@@ -3036,7 +3056,8 @@ watch(
     for (const id of [...topIds, ...bottomIds]) {
       // First run (prev undefined): apply to every strip so load matches header.
       if (prev && prevSet.has(id)) continue
-      applyHeaderStripSizeToStrip(id, size)
+      // Soft ceiling, no manual lock — autofit may still shrink; grow won't undo compact defaults.
+      applyHeaderStripSizeToStrip(id, size, { lockManual: false, resetFitState: true })
     }
   },
   { flush: 'post' },
@@ -3045,6 +3066,7 @@ watch(
 /**
  * Layout restore / SAAB·ESSA profile switch: section.stripSize is per-layout, but
  * per-strip size mode is separate — re-apply when the divider's saved size changes.
+ * Size-only (no lock clear): divider click already locked; clearing here caused Compact→Normal snap.
  */
 watch(
   headerStripSize,
@@ -3052,7 +3074,7 @@ watch(
     if (!(props.workspaceMode || store.multiAirport || store.saabLayoutsMode)) return
     if (prev === undefined) return // first paint handled by strip-id watch above
     if (size === prev) return
-    applyHeaderStripSizeToStrips()
+    applyHeaderStripSizeToStrips({ lockManual: false })
     requestAnimationFrame(() => scheduleAutoFitRecheck(true))
   },
   { flush: 'post' },
