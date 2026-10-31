@@ -483,9 +483,6 @@ import {
   stripSectionIdsForWorkspace,
   serverBayIdForSection,
   workspaceMemberAcceptsStrip,
-  yamlSectionIdForWorkspace,
-  preferredSortFlowForWorkspaceSection,
-  type SortFlow,
 } from '@/workspace'
 import { useUiScalePercent } from '@/composables/useEfsUiScale'
 import SortFlowIcon from './SortFlowIcon.vue'
@@ -2030,39 +2027,12 @@ function baseTimeSortDir(): TimeSortDir {
 }
 
 /**
- * Built-in / preferred sort-flow for this section — natural baseline for
- * reversing TOBT/TSAT/EOBT time order. Do NOT read live layout.addFromTop:
- * onWorkspaceToggleFlow mutates that flag, which made natural === current
- * after one click so time sort never reversed (MAN-only reverse worked).
+ * Time order from the selected sort-flow only (no “natural” baseline).
+ * newestBottom = first/earliest on top (asc); newestTop = first at bottom (desc).
  */
-function sectionNaturalSortFlow(): SortFlow {
-  const id = props.section.id
-  const preferred = preferredSortFlowForWorkspaceSection({
-    sectionId: id,
-    title: props.section.title,
-  })
-  if (preferred) return preferred
-  const catalogMode = store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa'
-  const lookupIds = [...new Set([yamlSectionIdForWorkspace(id, catalogMode), id])]
-  for (const bay of store.layout.bays) {
-    for (const lookupId of lookupIds) {
-      const sec = bay.sections.find((s) => s.id === lookupId)
-      if (!sec) continue
-      // YAML default only (not runtime-mutated addFromTop after flow toggle)
-      if (sec.addFromTop === false) return 'newestBottom'
-      if (sec.addFromTop === true) return 'newestTop'
-      return baseTimeSortDir() === 'desc' ? 'newestTop' : 'newestBottom'
-    }
-  }
-  return baseTimeSortDir() === 'desc' ? 'newestTop' : 'newestBottom'
-}
-
 function activeTimeSortDir(): TimeSortDir {
-  const base = baseTimeSortDir()
-  if (!props.workspaceMode) return base
-  // Sort-flow toggles reverse the time order without switching TOBT/TSAT → MAN
-  if (workspaceSortFlow.value === sectionNaturalSortFlow()) return base
-  return base === 'asc' ? 'desc' : 'asc'
+  if (!props.workspaceMode) return baseTimeSortDir()
+  return workspaceSortFlow.value === 'newestTop' ? 'desc' : 'asc'
 }
 
 /**
@@ -2467,66 +2437,71 @@ const showGaps = computed(
 
 /** Same order topStrips shows. Used to predict where a drop will actually sit. */
 function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
+  /** ETA / TOBT–TSAT already honour workspaceSortFlow — do not reverse again. */
+  let flowAlreadyApplied = false
+  let ordered: FlightStripData[]
+
   // Paper KLARERING (above header): EOBT (+ CLR read at bottom) until user
   // drags — then sticky positions; new prints insert by EOBT without re-sort.
   if (paperPendingKlarering.value) {
-    if (preferManualOrder.value) {
-      return list.sort((a, b) => a.position - b.position)
-    }
-    return sortByEobtEarliestBottom(list)
-  }
-
-  // INBOUND APP: always ETA (drag reorder does not stick).
-  // newestBottom = “first on top” → earliest at top; newestTop → earliest at bottom.
-  if (etaSortEnabled.value) {
+    ordered = preferManualOrder.value
+      ? list.sort((a, b) => a.position - b.position)
+      : sortByEobtEarliestBottom(list)
+  } else if (etaSortEnabled.value) {
+    // INBOUND APP: always ETA (drag reorder does not stick).
+    // newestBottom = “first on top” → earliest at top; newestTop → earliest at bottom.
+    flowAlreadyApplied = true
     const useEtn = isInboundEtnSortTitle(props.section.title)
     if (props.workspaceMode) {
       if (useEtn) {
-        return workspaceSortFlow.value === 'newestBottom'
-          ? [...sortBySectorEntry(list)].reverse()
-          : sortBySectorEntry(list)
+        ordered =
+          workspaceSortFlow.value === 'newestBottom'
+            ? [...sortBySectorEntry(list)].reverse()
+            : sortBySectorEntry(list)
+      } else {
+        ordered =
+          workspaceSortFlow.value === 'newestBottom'
+            ? sortByEtaEarliestTop(list)
+            : sortByEta(list)
       }
-      return workspaceSortFlow.value === 'newestBottom'
-        ? sortByEtaEarliestTop(list)
-        : sortByEta(list)
-    }
-    // Paper stick-bottom: earliest at top of bottom-justified stack
-    if (useEtn) {
-      return stickBottomZone.value
+    } else if (useEtn) {
+      ordered = stickBottomZone.value
         ? [...sortBySectorEntry(list)].reverse()
         : sortBySectorEntry(list)
+    } else {
+      ordered = stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
     }
-    return stickBottomZone.value ? sortByEtaEarliestTop(list) : sortByEta(list)
+  } else if (rtcArrSortEnabled.value) {
+    // RTC ARR/CTR: ETA earliest at bottom; deps appended at bottom. Drag → sticky.
+    ordered = preferManualOrder.value
+      ? list.sort((a, b) => a.position - b.position)
+      : sortRtcArrCtrStack(list)
+  } else if (atdSortEnabled.value) {
+    // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
+    ordered = sortByAtd(list)
+  } else if (runwayLuSortEnabled.value) {
+    // RUNWAY: CFTO above LINEUP; sticky appearance within tier / for non-L/U
+    ordered = sortRunwayLuOrder(list)
+  } else if (isTaxiSectionId(props.section.id)) {
+    // TAXI / RTC TWY: ARR (taxi-in) above DEP (taxi-out); sticky within tier
+    ordered = sortTaxiMixedStack(list)
+  } else if (timeSortEnabled.value && !preferManualOrder.value) {
+    flowAlreadyApplied = true
+    ordered = sortByDepTime(list, activeTimeSortField(), activeTimeSortDir())
+  } else {
+    ordered = list.sort((a, b) => a.position - b.position)
   }
 
-  // RTC ARR/CTR: ETA earliest at bottom; deps appended at bottom. Drag → sticky.
-  if (rtcArrSortEnabled.value) {
-    if (preferManualOrder.value) {
-      return list.sort((a, b) => a.position - b.position)
-    }
-    return sortRtcArrCtrStack(list)
+  // Sort-flow is display-only from the selected flow (sequence positions unchanged).
+  // newestBottom = first of sequence on top; newestTop = first at bottom.
+  if (
+    props.workspaceMode &&
+    !flowAlreadyApplied &&
+    workspaceSortFlow.value === 'newestTop'
+  ) {
+    ordered = [...ordered].reverse()
   }
-
-  // CTR DEP: always ATD (earliest at top; no ATD → add sequence at bottom)
-  if (atdSortEnabled.value) {
-    return sortByAtd(list)
-  }
-
-  // RUNWAY: CFTO above LINEUP; sticky appearance within tier / for non-L/U
-  if (runwayLuSortEnabled.value) {
-    return sortRunwayLuOrder(list)
-  }
-
-  // TAXI / RTC TWY: ARR (taxi-in) above DEP (taxi-out); sticky within tier
-  if (isTaxiSectionId(props.section.id)) {
-    return sortTaxiMixedStack(list)
-  }
-
-  if (timeSortEnabled.value && !preferManualOrder.value) {
-    return sortByDepTime(list, activeTimeSortField(), activeTimeSortDir())
-  }
-
-  return list.sort((a, b) => a.position - b.position)
+  return ordered
 }
 
 /** Full visual order for this section (before overflow packing). */
@@ -2808,25 +2783,28 @@ const bottomStrips = computed(() => {
   return store.getBottomStrips(effectiveBayId.value, effectiveSectionId.value)
 })
 
-/** Sort-flow toggle: flip addFromTop and reverse every strip currently under this header. */
+/**
+ * Sort-flow toggle: which end is “first” (display) + where new strips insert.
+ * Do not reverse strip positions — that republishes stripview sequence.
+ * Exception: CD / TSAT / EOBT while sorting by TOBT/TSAT/EOBT — inserts stay
+ * time-ordered (UI), not bound to the flow end; only display flips.
+ */
 function onWorkspaceToggleFlow() {
   if (!props.workspaceInstanceId) return
-  // Capture visual order before the flow flip (ETA/time sections re-sort from the new dir)
-  const topIds = allTopStrips.value.map((s) => s.id)
-  const bottomIds = bottomStrips.value.map((s) => s.id)
-  // Snapshot before toggle — preferManualOrder would still be true after if we reversed
-  const keepTimeSort = timeSortEnabled.value && !preferManualOrder.value
   ws.toggleSortFlow(props.workspaceInstanceId)
-  // Keep server insert end in sync with the button (YAML addFromTop alone ignored the toggle)
+
+  const cdTimeSortActive =
+    timeSortEnabled.value &&
+    !preferManualOrder.value &&
+    (store.isModeToggleSectionId(props.section.id) ||
+      sectionIdsForStripMatch().some((id) => store.isModeToggleSectionId(id)))
+  if (cdTimeSortActive) return
+
   const flow = workspaceSection.value?.sortFlow ?? 'newestBottom'
   const addFromTop = flow === 'newestTop'
   for (const sid of sectionIdsForStripMatch()) {
     store.setSectionAddFromTop(effectiveBayId.value, sid, addFromTop)
   }
-  // INBOUND APP / TOBT / TSAT / EOBT auto-sort: direction follows sortFlow — never enter MAN
-  if (etaSortEnabled.value || keepTimeSort) return
-  store.reverseSectionStripOrder(topIds)
-  store.reverseSectionStripOrder(bottomIds)
 }
 
 const hasPinnedZoneContent = computed(
