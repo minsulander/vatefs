@@ -1214,6 +1214,10 @@ if (cliArgs.mock) {
     if (isEssaRolesConfig(staticConfig)) {
         setEssaRoles(["CD", "GND-E", "GND-N", "GND-W", "TWR-E", "TWR-W"], true)
         console.log(`Mock ESSA roles: ${(staticConfig.essaRoles ?? []).join(", ")}`)
+        // Split GND (2 positions) so HP menu offers ZH/ZK prefs in mock
+        updateOnlineController("ESSA_E_GND", 121.7, staticConfig.myAirports, "AGE")
+        updateOnlineController("ESSA_W_GND", 121.925, staticConfig.myAirports, "AGW")
+        console.log("Mock ESSA online GND: ESSA_E_GND, ESSA_W_GND (split → ZH/ZK HP prefs)")
     }
 
     // Start ATIS polling for mock mode

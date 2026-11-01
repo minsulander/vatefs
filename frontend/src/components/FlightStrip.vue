@@ -276,6 +276,14 @@
   <CflMenu v-model="cflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <XflMenu v-model="xflMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
   <AhdMenu v-model="ahdMenuOpen" :strip="strip" :target="menuPosition" :z-index="overlayMenuZ" />
+  <HpMenu
+    v-model="hpMenuOpen"
+    :strip="strip"
+    :target="hpMenuAnchor"
+    :z-index="overlayMenuZ"
+    @select="onHpMenuSelect"
+    @clear="onHpMenuClear"
+  />
 
   <div
     ref="stripHostEl"
@@ -1006,13 +1014,6 @@
               v-if="!store.multiAirport"
               type="button"
               class="exp-chip"
-              :class="{ active: hasSlowFlag }"
-              @click.stop="onExpSlow"
-            >SLOW</button>
-            <button
-              v-if="!store.multiAirport"
-              type="button"
-              class="exp-chip"
               :class="{ active: hasUrnavRemark }"
               @click.stop="onExpUrnav"
             >URNAV</button>
@@ -1336,7 +1337,7 @@
               editable: canEditAssignedData,
             }"
             :title="hpCellTitle"
-            @click.stop="onHpClick"
+            @click.stop="onHpClick($event)"
           >
             <input
               v-if="hpEditing"
@@ -1654,7 +1655,6 @@ import {
   formatStripAltitude,
   formatTrackSidDisplay,
   getEssaRwyCombination,
-  hasSlowRemark,
   hasVectRemark,
   isHeavyAsLeaderAircraftType,
   isThickAtypBorderAircraftType,
@@ -1668,7 +1668,6 @@ import {
   requiresAccCoordination,
   sidFieldLabel,
   withPobInRemarks,
-  withSlowRemark,
   withVectRemark,
 } from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
@@ -1721,6 +1720,7 @@ import CflMenu from './CflMenu.vue'
 import XflMenu from './XflMenu.vue'
 import TobtMenu, { type TobtMenuKind } from './TobtMenu.vue'
 import AhdMenu from './AhdMenu.vue'
+import HpMenu from './HpMenu.vue'
 import StripZoomOverlay from './StripZoomOverlay.vue'
 import StripCloseButton from './StripCloseButton.vue'
 
@@ -2050,6 +2050,9 @@ const rwyMenuOpen = ref(false)
 const cflMenuOpen = ref(false)
 const xflMenuOpen = ref(false)
 const ahdMenuOpen = ref(false)
+const hpMenuOpen = ref(false)
+/** HP cell element — prefs menu anchors below it (not over the text field). */
+const hpMenuAnchor = ref<HTMLElement | undefined>()
 const transferMenuOpen = ref(false)
 const groundStateMenuOpen = ref(false)
 const sizeMenuOpen = ref(false)
@@ -3985,28 +3988,6 @@ function onExpMet() {
   store.sendStripAction(props.strip.id, 'WEATHER')
 }
 
-/** SLOW chip highlight = remarks flag only (slow ATYP is framed separately on DEP). */
-const hasSlowFlag = computed(() => hasSlowRemark(props.strip.remarks))
-
-async function onExpSlow() {
-  if (!canEditAssignedData.value) return
-  // V / Z: no SLOW SID rules / auto flag
-  if (!isIfrSidEligible(props.strip.flightRules)) return
-  // Toggle remarks token
-  const enable = !hasSlowRemark(props.strip.remarks)
-  if (enable) {
-    // Recompute preferred track SID even if letter SID/rwy already in FPL
-    await store.preferSidForStrip(props.strip.id, true, { ignoreForcedRoute: true })
-    // Assign track SID first — AmendFlightPlan often clears scratch, so set SLOW after
-    store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
-  } else {
-    store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, false))
-    // Drop track SID and switch preferred to letter-group (non-slow) selection
-    store.clearTrackSidForStrip(props.strip.id)
-    await store.preferSidForStrip(props.strip.id, false, { ignoreForcedRoute: true })
-  }
-}
-
 /** Highlight when URNAV appears anywhere in remarks/scratchpad (e.g. .URNAV, FOO URNAV BAR) */
 const hasUrnavRemark = computed(() => /URNAV/i.test(props.strip.remarks || ''))
 
@@ -4082,19 +4063,15 @@ const hpCellTitle = computed(() => {
   if (props.strip.hp && props.strip.hpScratchCleared) {
     return 'Holding point (click to clear)'
   }
+  if (store.essaRolesMode) {
+    return 'Holding point (type in cell / preferences)'
+  }
   return 'Holding point (scratchpad /)'
 })
 
-function onHpClick() {
-  if (clearScribblesInCell('.cell-hp')) return
-  if (!canEditAssignedData.value) return
+function startHpCellEdit() {
   if (hpEditing.value) {
     nextTick(() => hpInput.value?.focus())
-    return
-  }
-  // Retained after scratch clear: first click clears; next click opens entry
-  if (props.strip.hp && props.strip.hpScratchCleared) {
-    store.updateHp(props.strip.id, '')
     return
   }
   hpEditText.value = props.strip.hp?.trim() || ''
@@ -4103,6 +4080,52 @@ function onHpClick() {
     hpInput.value?.focus()
     hpInput.value?.select()
   })
+}
+
+function finishHpCellEdit() {
+  if (!hpEditing.value) return
+  const value = hpEditText.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+  hpEditing.value = false
+  hpMenuOpen.value = false
+  if (value !== (props.strip.hp || '')) {
+    store.updateHp(props.strip.id, value)
+  }
+}
+
+function onHpClick(event?: MouseEvent) {
+  if (clearScribblesInCell('.cell-hp')) return
+  if (!canEditAssignedData.value) return
+  // Retained after scratch clear: first click clears; next click opens entry/menu
+  if (props.strip.hp && props.strip.hpScratchCleared) {
+    store.updateHp(props.strip.id, '')
+    return
+  }
+  // Always edit in the strip cell; ESSA prefs menu below (CLEAR-only when no quick selects)
+  startHpCellEdit()
+  if (store.essaRolesMode) {
+    const cell = (event?.currentTarget as HTMLElement | null) ?? undefined
+    hpMenuAnchor.value = cell
+    closeAssignmentMenus()
+    hpMenuOpen.value = true
+  }
+}
+
+function onHpMenuSelect(hp: string) {
+  hpEditText.value = hp
+  hpEditing.value = false
+  hpMenuOpen.value = false
+  if (hp !== (props.strip.hp || '')) {
+    store.updateHp(props.strip.id, hp)
+  }
+}
+
+function onHpMenuClear() {
+  hpEditText.value = ''
+  hpEditing.value = false
+  hpMenuOpen.value = false
+  if (props.strip.hp) {
+    store.updateHp(props.strip.id, '')
+  }
 }
 
 function onHpInput(event: Event) {
@@ -4120,16 +4143,19 @@ function onHpInput(event: Event) {
 
 function onHpEditCancel() {
   hpEditing.value = false
+  hpMenuOpen.value = false
 }
 
 function onHpEditBlur() {
-  if (!hpEditing.value) return
-  const value = hpEditText.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
-  hpEditing.value = false
-  if (value !== (props.strip.hp || '')) {
-    store.updateHp(props.strip.id, value)
-  }
+  // One leave of the HP cell closes text entry and the prefs menu together.
+  // Prefs items use mousedown.prevent so picking one does not blur first.
+  finishHpCellEdit()
 }
+
+// Prefs menu closed from outside (or after select already ended edit): ensure cell edit ends
+watch(hpMenuOpen, (open) => {
+  if (!open && hpEditing.value) finishHpCellEdit()
+})
 
 /** TMA exit — first FPL point after ADEP/rwy or SID/rwy */
 const tmaExitPoint = computed(
@@ -6185,6 +6211,7 @@ function closeAssignmentMenus() {
   cflMenuOpen.value = false
   xflMenuOpen.value = false
   ahdMenuOpen.value = false
+  hpMenuOpen.value = false
 }
 
 function onSidClick(event: MouseEvent) {

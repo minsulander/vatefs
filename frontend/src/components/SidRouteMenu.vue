@@ -699,15 +699,13 @@ function onSelect(sid: string) {
     store.sendAssignment(props.strip.id, 'assignDirect', '')
   }
   store.sendAssignment(props.strip.id, 'assignSid', sid)
-  // Vector SIDs are normal RNAV (5000 ft) — never auto-set SLOW
-  // V / Z: never auto-add SLOW flag from SID selection
-  if (
-    isIfrSidEligible(props.strip.flightRules) &&
-    isSlowSid(sid) &&
-    !isVectorSidName(sid) &&
-    !hasSlowRemark(props.strip.remarks)
-  ) {
-    store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
+  // Couple SLOW remarks flag to SID choice (IFR / Y only):
+  // Slow-SID → add SLOW; any other SID → remove SLOW. Vector SIDs are RNAV.
+  if (isIfrSidEligible(props.strip.flightRules)) {
+    const wantSlow = isSlowSid(sid) && !isVectorSidName(sid)
+    if (wantSlow !== hasSlowRemark(props.strip.remarks)) {
+      store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, wantSlow))
+    }
   }
   close()
 }

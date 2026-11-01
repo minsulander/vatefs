@@ -167,6 +167,7 @@ import {
   hasSlowRemark,
   hasVectRemark,
   isIfrSidEligible,
+  isSlowSid,
   isTrackSidName,
   parseRflToFeet,
   resolveEssaHeavyPreferredDepRwy,
@@ -382,15 +383,11 @@ function sidIsTrack(sid: string | undefined | null): boolean {
   return isTrackSidName(sid) || !!formatTrackSidDisplay(sid)
 }
 
-/** Hide AHDG when a slow/track SID is set or expected, unless a heading is already assigned. */
+/** AHDG available with Slow-SID (no auto-VECT). Hide only when DCT is shown on SID/DCT. */
 const showAhdgRow = computed(() => {
-  // DCT is shown on the SID/DCT row — do not open AHDG for directs alone
   if (props.strip.assignedHeading) return true
+  // DCT is shown on the SID/DCT row — do not open AHDG for directs alone
   if ((props.strip.direct || '').trim()) return false
-  if (isSlowForClr()) return false
-  if (sidIsTrack(clearanceSidName.value) || sidIsTrack(props.strip.sid)) return false
-  if (sidIsTrack(preferredSidMatched.value)) return false
-  if (preferredSidSortGroup.value.some((n) => sidIsTrack(n))) return false
   return true
 })
 
@@ -482,12 +479,12 @@ async function applyPreferredSid(): Promise<string | undefined> {
       }
       // Wrong / missing ES SID — force preferred SID into the flight plan
       store.sendAssignment(props.strip.id, 'assignSid', data.sid)
-      if (
-        isIfrSidEligible(props.strip.flightRules) &&
-        sidIsTrack(data.sid) &&
-        !hasSlowRemark(props.strip.remarks)
-      ) {
-        store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, true))
+      // Couple SLOW flag to SID: Slow-SID → add; other preferred SID → remove
+      if (isIfrSidEligible(props.strip.flightRules)) {
+        const wantSlow = isSlowSid(data.sid)
+        if (wantSlow !== hasSlowRemark(props.strip.remarks)) {
+          store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, wantSlow))
+        }
       }
       return data.sid
     }

@@ -24,6 +24,7 @@ import {
     isEsmsAutoCoordReplyAltitude,
     isEsmsAutoCoordSid,
     isIfrSidEligible,
+    isSlowSid,
     isTrackSidName,
     isLopFprDepAirport,
     fprDepDisplayFix,
@@ -2586,8 +2587,16 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     /**
+     * Slow/track SID selected: keep SLOW flag and do not enter VECT mode when AHD is set.
+     * Controller can still pick another SID/clearance manually.
+     */
+    function isSlowSidSelected(strip: FlightStrip): boolean {
+        return isSlowSid(strip.sid)
+    }
+
+    /**
      * Set/clear AHD. For IFR DEP/local on ground: clear SID + add VECT (SID cell → ve{exit}).
-     * Arrivals / airborne: heading only (no VECT).
+     * Exception: Slow-SID kept → no VECT, SLOW flag stays. Arrivals / airborne: heading only.
      */
     function applyAssignedHeading(stripId: string, heading: string) {
         const strip = strips.value.get(stripId)
@@ -2595,7 +2604,8 @@ export const useEfsStore = defineStore("efs", () => {
 
         const padded = heading.trim()
         const clearing = !padded || padded === '0' || padded === '000'
-        const autoVect = shouldAutoVectOnAhd(strip)
+        // Slow-SID + AHDG: keep SID/SLOW, never auto-add VECT
+        const autoVect = shouldAutoVectOnAhd(strip) && !isSlowSidSelected(strip)
 
         if (clearing) {
             sendAssignment(stripId, 'assignHeading', '0')

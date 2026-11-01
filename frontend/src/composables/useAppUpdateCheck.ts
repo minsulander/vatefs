@@ -3,13 +3,18 @@
  * Compares both the app (@vatefs/common) version and the loaded EuroScope
  * plugin version (myselfUpdate). Self-update of the DLL requires the user
  * to unload the plugin first — we only surface a link.
+ *
+ * Note: all VatEFS GitHub releases are currently marked prerelease, so
+ * `/releases/latest` returns 404. We list releases and pick the newest
+ * non-draft (preferring a full release when one exists).
  */
 
 import { onMounted, ref, watch } from 'vue'
 import { constants } from '@vatefs/common'
 import { useEfsStore } from '@/store/efs'
 
-const RELEASES_API = 'https://api.github.com/repos/minsulander/vatefs/releases/latest'
+const RELEASES_LIST_API =
+  'https://api.github.com/repos/minsulander/vatefs/releases?per_page=20'
 const DISMISS_KEY = 'efs/updateBannerDismissedVersion'
 
 export type UpdateInfo = {
@@ -20,6 +25,13 @@ export type UpdateInfo = {
   currentPluginVersion?: string
   appOutdated: boolean
   pluginOutdated: boolean
+}
+
+type GhRelease = {
+  tag_name?: string
+  html_url?: string
+  draft?: boolean
+  prerelease?: boolean
 }
 
 function normalizeVersion(raw: string): string {
@@ -45,6 +57,21 @@ export function isComparablePluginVersion(raw: string | undefined | null): boole
   if (!v) return false
   if (/^mock$/i.test(v)) return false
   return /^\d/.test(v)
+}
+
+/** Newest usable release from GitHub list (API returns newest-first). */
+export function pickLatestRelease(
+  releases: GhRelease[],
+): { tag: string; latest: string; htmlUrl: string } | null {
+  const usable = releases.filter((r) => !r.draft && r.tag_name && r.html_url)
+  if (!usable.length) return null
+  const full = usable.find((r) => !r.prerelease)
+  const chosen = full ?? usable[0]
+  const tag = (chosen.tag_name || '').trim()
+  const latest = normalizeVersion(tag)
+  const htmlUrl = (chosen.html_url || '').trim()
+  if (!latest || !htmlUrl) return null
+  return { tag, latest, htmlUrl }
 }
 
 const updateInfo = ref<UpdateInfo | null>(null)
@@ -114,15 +141,15 @@ export function useAppUpdateCheck() {
       return
     }
     try {
-      const res = await fetch(RELEASES_API, {
+      const res = await fetch(RELEASES_LIST_API, {
         headers: { Accept: 'application/vnd.github+json' },
       })
       if (!res.ok) return
-      const json = (await res.json()) as { tag_name?: string; html_url?: string }
-      const tag = (json.tag_name || '').trim()
-      const latest = normalizeVersion(tag)
-      if (!latest || !json.html_url) return
-      latestRelease = { tag, latest, htmlUrl: json.html_url }
+      const json = (await res.json()) as GhRelease[]
+      if (!Array.isArray(json)) return
+      const picked = pickLatestRelease(json)
+      if (!picked) return
+      latestRelease = picked
       applyUpdateState(efs.pluginVersion)
     } catch {
       // Offline / rate limit — stay quiet

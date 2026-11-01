@@ -1764,6 +1764,12 @@ const topAtisEntries = computed((): TopAtisEntry[] => {
   const arr = (info.arrAtis || '').trim().toUpperCase()
   const dep = (info.depAtis || '').trim().toUpperCase()
 
+  // ESSA menubar: DEP ATIS letter only (never ARR)
+  if (efs.essaRolesMode) {
+    if (dep) return [{ letter: dep, kind: 'single' }]
+    return single ? [{ letter: single, kind: 'single' }] : []
+  }
+
   if (hasTwrRole.value) {
     // TWR: colour ARR/DEP only when both letters are present
     if (arr && dep) return [{ letter: arr, kind: 'arr' }, { letter: dep, kind: 'dep' }]
@@ -1782,6 +1788,10 @@ const topAtisTitle = computed(() => {
   if (!info) return 'ATIS'
   if (efs.isPaperLook) {
     return info.atis ? `ATIS ${info.atis}` : 'ATIS'
+  }
+  // ESSA: DEP ATIS only in the top bar
+  if (efs.essaRolesMode) {
+    return `DEP ATIS ${info.depAtis || info.atis || '-'}`
   }
   if (hasTwrRole.value) {
     const parts: string[] = []
