@@ -64,12 +64,11 @@ export function pickLatestRelease(
   releases: GhRelease[],
 ): { tag: string; latest: string; htmlUrl: string } | null {
   const usable = releases.filter((r) => !r.draft && r.tag_name && r.html_url)
-  if (!usable.length) return null
-  const full = usable.find((r) => !r.prerelease)
-  const chosen = full ?? usable[0]
-  const tag = (chosen.tag_name || '').trim()
+  const chosen = usable.find((r) => !r.prerelease) ?? usable[0]
+  if (!chosen?.tag_name || !chosen.html_url) return null
+  const tag = chosen.tag_name.trim()
   const latest = normalizeVersion(tag)
-  const htmlUrl = (chosen.html_url || '').trim()
+  const htmlUrl = chosen.html_url.trim()
   if (!latest || !htmlUrl) return null
   return { tag, latest, htmlUrl }
 }
