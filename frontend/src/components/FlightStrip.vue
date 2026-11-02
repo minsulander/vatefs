@@ -624,10 +624,22 @@
               :title="isArrLayout ? undefined : paperTip('TAS', 'Filed TAS')"
             >{{ isArrLayout ? '' : paperTas }}</div>
             <div class="pg-meta">
-              <span class="pg-frul">{{ isPaperEmptyFlightHolder ? '' : (strip.flightRules || 'I') }}</span>
-              <span class="pg-atyp-wtc" :class="{ ghost: !strip.aircraftType?.trim() }">{{ strip.aircraftType?.trim() || '' }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence && strip.aircraftType?.trim()"> <span
+              <span
+                class="pg-frul"
+                :title="isPaperEmptyFlightHolder ? undefined : paperTip('FRUL', 'Flight rules')"
+              >{{ isPaperEmptyFlightHolder ? '' : (strip.flightRules || 'I') }}</span>
+              <span
+                class="pg-atyp-wtc"
+                :class="{ ghost: !strip.aircraftType?.trim() }"
+                :title="
+                  isPaperEmptyFlightHolder
+                    ? undefined
+                    : paperTip('ATYP', strip.aircraftType?.trim() ? `Aircraft type ${strip.aircraftType.trim()}` : 'Aircraft type')
+                "
+              >{{ strip.aircraftType?.trim() || '' }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence && strip.aircraftType?.trim()"> <span
                   class="pg-wtc"
                   :class="{ 'pg-wtc-circled': wtcPaperCircled, 'pg-wtc-yellow': wtcYellowHighlight }"
+                  :title="paperTip('WTC', `Wake turbulence ${strip.wakeTurbulence}`)"
                 ><svg
                     v-if="wtcPaperCircled"
                     class="pg-wtc-scribble"
@@ -1040,7 +1052,7 @@
             class="exp-chip exp-dep-btn"
             :class="{ 'exp-dep-green': isDepDeparted }"
             :disabled="!canEditAssignedData"
-            title="DEP — enter ATD then cleared for takeoff"
+            title="DEP - enter ATD then cleared for takeoff"
             @click.stop="onExpDep"
           >DEP</button>
           <button
@@ -1173,7 +1185,7 @@
           <template v-if="!isCompactBay">
             <span
               class="ctrl-ident fit-font"
-              title="Toggle menus"
+              :title="`Flight rules (${strip.flightRules || 'I'}) - toggle menus`"
               @click.stop="onFrulClick"
             >{{ strip.flightRules || 'I' }}</span>
             <span
@@ -1184,7 +1196,11 @@
                 'atyp-yellow': atypYellowHighlight,
                 ghost: !strip.aircraftType?.trim(),
               }"
-              title="Compact size"
+              :title="
+                strip.aircraftType?.trim()
+                  ? `Aircraft type ${strip.aircraftType.trim()} - compact size`
+                  : 'Aircraft type - compact size'
+              "
               @click.stop="onSizeCompact"
             >{{ strip.aircraftType?.trim() || 'ATYP' }}</span>
             <span
@@ -1194,7 +1210,11 @@
                 plain: !wtcRtcBorder && !wtcYellowHighlight,
                 'wtc-yellow': wtcYellowHighlight,
               }"
-              title="Compact size"
+              :title="
+                strip.wakeTurbulence
+                  ? `Wake turbulence ${strip.wakeTurbulence} - compact size`
+                  : 'Wake turbulence - compact size'
+              "
               @click.stop="onSizeCompact"
             >{{ strip.wakeTurbulence }}</span>
 
@@ -1534,7 +1554,7 @@
                 'action-pm-blink': action === 'CONTACTME' && store.isPmBlinking('contactme', strip.callsign),
               },
             ]"
-            :title="action === 'CONTACTME' ? 'EuroScope .contactme (needs ES window focus)' : undefined"
+            :title="actionTitle(action)"
             @click.stop="() => onActionClick(action)"
             @pointerup.stop="(e: PointerEvent) => onActionPointerUp(e, action)"
             @touchend.stop="(e) => onActionTouch(e, action)"
@@ -1555,8 +1575,8 @@
             :title="showTsacStaleArrow ? 'TSAT changed - click TSAC box to update' : 'Close bottom menu'"
             @click.stop="onCollapseBottomExpander"
           ><span class="arrow-glyph">▼</span></button>
-          <button type="button" class="exp-chip" @click.stop="onRemarksClick">RMK</button>
-          <button type="button" class="exp-chip" @click.stop="onFplClick">FPL</button>
+          <button type="button" class="exp-chip" title="Remarks" @click.stop="onRemarksClick">RMK</button>
+          <button type="button" class="exp-chip" title="Flight plan" @click.stop="onFplClick">FPL</button>
         </div>
         <div class="exp-bottom-main" :class="isArrLayout ? 'exp-bottom-main-arr' : 'exp-bottom-main-dep'">
           <span
@@ -1591,13 +1611,19 @@
             :class="{ ghost: !strip.ades || strip.ades === '????' || strip.ades === 'ZZZZ' }"
             :title="strip.adesName ? `${strip.ades} - ${strip.adesName}` : 'ADES'"
           >{{ strip.ades && strip.ades !== '????' ? strip.ades : '----' }}</span>
-          <div class="exp-rmk" :class="{ ghost: !strip.remarks?.trim() }" @click.stop="onRemarksClick">
+          <div
+            class="exp-rmk"
+            :class="{ ghost: !strip.remarks?.trim() }"
+            title="Remarks"
+            @click.stop="onRemarksClick"
+          >
             <input
               v-if="remarksEditing"
               ref="remarksInput"
               v-model="remarksText"
               class="remarks-input"
               placeholder="RMK"
+              title="Remarks"
               @click.stop
               @input="onRemarksInput"
               @blur="onRemarksBlur"
@@ -3706,21 +3732,21 @@ const levelCellPlaceholder = computed(() => (isArrLayout.value ? 'PEL' : 'XFL'))
 const xflCellTitle = computed(() => {
   if (isArrLayout.value) {
     if (showArrCoordPendingC.value) {
-      return 'ACC PEL proposal — click to Accept/Reject'
+      return 'ACC PEL proposal - click to Accept/Reject'
     }
     return 'EuroScope PEL'
   }
   if (!isRtcCoordUi.value) return 'EuroScope XFL'
   if (props.strip.exitCoordPending) {
-    return 'ACC XFL proposal — click to Accept/Reject'
+    return 'ACC XFL proposal - click to Accept/Reject'
   }
   if (props.strip.exitCoordOutbound) {
     return 'Outbound XFL coordination pending'
   }
   if (props.strip.exitCoordRefused) {
-    return 'Outbound XFL coordination refused — set Departure Coordination or re-coordinate'
+    return 'Outbound XFL coordination refused - set Departure Coordination or re-coordinate'
   }
-  return 'EuroScope XFL — click to request exit coordination'
+  return 'EuroScope XFL - click to request exit coordination'
 })
 /**
  * Top-expander CLR chip colors.
@@ -3883,17 +3909,17 @@ const canStampAtisQnh = computed(
 
 const atisChipTitle = computed(() => {
   if (atisStale.value) {
-    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) — click to acknowledge`
+    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) - click to acknowledge`
   }
-  if (atisGivenMatches.value) return `ATIS ${currentAtisLetter.value} given — click to clear`
+  if (atisGivenMatches.value) return `ATIS ${currentAtisLetter.value} given - click to clear`
   return `ATIS ${currentAtisLetter.value || ''}`
 })
 
 const qnhChipTitle = computed(() => {
   if (qnhStale.value) {
-    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) — click to acknowledge`
+    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) - click to acknowledge`
   }
-  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given — click to clear`
+  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given - click to clear`
   return currentQnh.value != null ? `QNH ${currentQnh.value}` : 'QNH'
 })
 
@@ -4206,9 +4232,9 @@ function openDepCoordDialog() {
 const cooCellTitle = computed(() => {
   if (props.strip.exitCoordPending) {
     if (isEssbEsmsAdep()) {
-      return 'ACC coordination proposal — click to Accept/Reject · hold: Departure Coordination · right-click: Departure Coordination'
+      return 'ACC coordination proposal - click to Accept/Reject · hold: Departure Coordination · right-click: Departure Coordination'
     }
-    return 'ACC coordination proposal — click to Accept/Reject · hold/right-click: Departure Coordination'
+    return 'ACC coordination proposal - click to Accept/Reject · hold/right-click: Departure Coordination'
   }
   if (isEssbEsmsAdep()) {
     return 'Left-click: XFL coordination to ACC · Hold: Departure Coordination · Right-click: Departure Coordination'
@@ -4815,10 +4841,10 @@ const secondaryTimeTitle = computed(() => {
     return flsTooltip(cdmStatus.value?.raw || 'FLS', cdmStatus.value?.flsType)
   }
   if (secondaryTimeKind.value === 'srm') {
-    return 'SRM — Slot Revision Message (CTOT revised)'
+    return 'SRM - Slot Revision Message (CTOT revised)'
   }
   if (secondaryTimeKind.value === 'slc') {
-    return 'SLC — Slot Cancellation Message. (CTOT not applicable anymore)'
+    return 'SLC - Slot Cancellation Message. (CTOT not applicable anymore)'
   }
   if (secondaryTimeKind.value === 'assr') return assrTitle.value
   if (secondaryTimeKind.value === 'ctot' || secondaryTimeKind.value === 'scl') return ctocTooltip.value
@@ -4951,7 +4977,7 @@ const cdmPmMenuLabel = computed(() =>
 )
 const cdmPmMenuTitle = computed(() =>
   props.strip.cdmInformed
-    ? 'vIFF CDM PM already sent — click to resend (needs ES window focus)'
+    ? 'vIFF CDM PM already sent - click to resend (needs ES window focus)'
     : 'EuroScope .msg CDM flow PM (needs ES window focus)',
 )
 
@@ -5557,6 +5583,53 @@ function actionLabel(action: string): string {
       return store.essaRolesMode ? 'START\nUP' : 'S/U'
     case 'PUSH': return 'PUSH'
     default: return action
+  }
+}
+
+/** Hover titles for action keys (always long form). */
+function actionTitle(action: string): string {
+  switch (action) {
+    case 'CLNC':
+      if (props.strip.dclRequestHasRemarks && props.strip.dclStatus === 'REQUEST') {
+        return 'Data-link clearance (remarks)'
+      }
+      return showAckClrLabel.value ? 'Acknowledge clearance' : 'Clearance'
+    case 'TXO':
+      return rtoChoiceOpen.value ? 'Taxi out' : 'Taxi'
+    case 'TXI':
+      return rtoChoiceOpen.value ? 'Taxi in' : 'Taxi'
+    case 'TAXI':
+      return 'Taxi'
+    case 'LU':
+      return 'Line up'
+    case 'ASSUME':
+      return 'Assume'
+    case 'CONTACTME':
+      return 'EuroScope .contactme (needs ES window focus)'
+    case 'CTO':
+      return 'Cleared for takeoff'
+    case 'RTO':
+      return 'Rejected takeoff'
+    case 'XFER':
+      return 'Transfer'
+    case 'READY':
+      return 'Ready'
+    case 'REFUSE':
+      return 'Refuse transfer'
+    case 'ROF':
+      return 'Request on frequency'
+    case 'PARK':
+      return 'Terminate / park'
+    case 'GOA':
+      return 'Go-around'
+    case 'STUP':
+      return 'Start-up'
+    case 'PUSH':
+      return 'Pushback'
+    case 'CTL':
+      return 'Cleared to land'
+    default:
+      return action
   }
 }
 

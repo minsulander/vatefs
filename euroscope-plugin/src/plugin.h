@@ -5,6 +5,7 @@
 #pragma warning(pop)
 
 #include "json.hpp"
+#include <cstdint>
 #include <ctime>
 #include <map>
 #include <set>
@@ -263,8 +264,12 @@ class VatEFSPlugin : public EuroScopePlugIn::CPlugIn
     void* backendLogFile; // HANDLE to VatEFS-YYMMDD-HHMM.log
     std::string backendLineBuf; // partial line buffer for pipe reads
     bool backendAutoRestartUsed; // true after one automatic restart attempt
+    /** GetTickCount64 of last `.efs restart` / restartBackend UDP (cooldown) */
+    uint64_t lastBackendRestartTick;
     void StartBackend();
     void StopBackend();
+    /** Stop+Start with 5-minute cooldown (chat + UDP restartBackend) */
+    void RestartBackend(const char *source);
     void CleanupBackendHandles();
     void PollBackendOutput();
 

@@ -198,6 +198,7 @@ VatEFSPlugin::VatEFSPlugin()
     backendOutputRead = nullptr;
     backendLogFile = nullptr;
     backendAutoRestartUsed = false;
+    lastBackendRestartTick = 0;
 
     GetModuleFileNameA(HINSTANCE(&__ImageBase), DllPathFile, sizeof(DllPathFile));
     std::string settingsPath = DllPathFile;
@@ -1257,9 +1258,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         return true;
     } else if (subcommand == "restart") {
         // Same as stop then start — recover half-dead UDP / ownership after position change
-        backendAutoRestartUsed = false;
-        StopBackend();
-        StartBackend();
+        RestartBackend(".efs restart");
         return true;
     } else if (subcommand == "status") {
         if (backendProcess == nullptr) {
@@ -3555,6 +3554,9 @@ void VatEFSPlugin::ReceiveUdpMessages()
                     EnqueueRouteExpand(callsign);
                 } else if (message["type"] == "refresh") {
                     Refresh();
+                } else if (message["type"] == "restartBackend") {
+                    // EFS UI after position change — same as `.efs restart` (5 min cooldown)
+                    RestartBackend("UDP restartBackend");
                 } else if (message["type"] == "assume") {
                     auto callsign = message["callsign"].get<std::string>();
                     for (auto &c : callsign)
@@ -6170,6 +6172,25 @@ static void PruneVatEfsLogs(const std::string &dir)
     });
     for (size_t i = kKeep; i < names.size(); ++i)
         DeleteFileA((dir + "\\" + names[i]).c_str());
+}
+
+void VatEFSPlugin::RestartBackend(const char *source)
+{
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG cooldownMs = 5ull * 60ull * 1000ull;
+    if (lastBackendRestartTick != 0 && now - lastBackendRestartTick < cooldownMs) {
+        const unsigned leftSec =
+            (unsigned)((cooldownMs - (now - lastBackendRestartTick) + 999) / 1000);
+        DisplayMessage(
+            std::string("VatEFS restart ignored (") + (source ? source : "restart") +
+            ") — try again in " + std::to_string(leftSec) + "s");
+        return;
+    }
+    lastBackendRestartTick = now;
+    backendAutoRestartUsed = false;
+    DisplayMessage(std::string("VatEFS restarting (") + (source ? source : "restart") + ")…");
+    StopBackend();
+    StartBackend();
 }
 
 void VatEFSPlugin::StartBackend()

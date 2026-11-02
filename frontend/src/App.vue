@@ -7,6 +7,25 @@
             </a>
             <button type="button" class="efs-update-dismiss" @click="dismissBanner">Dismiss</button>
         </div>
+        <div v-if="efs.pluginDesyncVisible" class="efs-desync-banner" role="alert">
+            <span>{{ pluginDesyncBannerText }}</span>
+            <button
+                type="button"
+                class="efs-desync-restart"
+                :disabled="!efs.pluginDesyncCanRestart"
+                :title="
+                    efs.pluginDesyncCanRestart
+                        ? 'Same as .efs restart in EuroScope'
+                        : `Restart available in ${efs.pluginDesyncCooldownSec}s`
+                "
+                @click="efs.requestPluginRestart()"
+            >
+                Restart
+            </button>
+            <button type="button" class="efs-desync-dismiss" @click="efs.dismissPluginDesync()">
+                Dismiss
+            </button>
+        </div>
         <router-view />
         <CidDialog />
         <VatIrisSignInDialog />
@@ -39,6 +58,15 @@ const updateBannerText = computed(() => {
     outdated.push(`ES plugin ${info.currentPluginVersion} is outdated`)
   }
   return `${outdated.join('. ')}. VatEFS ${info.latestVersion} is available. ${dllHint}`
+})
+
+const pluginDesyncBannerText = computed(() => {
+  const base =
+    'Position changed - EuroScope sync may be stale. Run .efs restart in EuroScope, or click Restart.'
+  if (!efs.pluginDesyncCanRestart && efs.pluginDesyncCooldownSec > 0) {
+    return `${base} (Restart cooldown ${efs.pluginDesyncCooldownSec}s)`
+  }
+  return base
 })
 // ESSA keeps cold grey bay bg; RTC uses warm grey palette
 watch(
@@ -88,6 +116,44 @@ watch(
     border: 1px solid #8a7a40;
     background: transparent;
     color: #f5e6b8;
+    padding: 2px 10px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.efs-desync-banner {
+    position: relative;
+    z-index: 3000;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 8px 12px;
+    background: #3a2020;
+    color: #f5d0d0;
+    font: 600 13px/1.35 system-ui, "Segoe UI", sans-serif;
+    border-bottom: 1px solid #6a3030;
+}
+.efs-desync-restart {
+    appearance: none;
+    border: 1px solid #c07070;
+    background: #5a2828;
+    color: #ffe0e0;
+    padding: 2px 12px;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+}
+.efs-desync-restart:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.efs-desync-dismiss {
+    margin-left: auto;
+    appearance: none;
+    border: 1px solid #8a5050;
+    background: transparent;
+    color: #f5d0d0;
     padding: 2px 10px;
     cursor: pointer;
     font: inherit;

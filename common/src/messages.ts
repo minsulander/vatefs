@@ -310,6 +310,28 @@ export interface NotifyMessage {
     text: string
 }
 
+/**
+ * After EuroScope position change (CT0 / login callsign change), warn that
+ * command sync may be stale — offer `.efs restart` or one-shot Restart button.
+ */
+export interface PluginDesyncMessage {
+    type: 'pluginDesync'
+    reason: string
+    canRestart: boolean
+    /** Seconds until Restart is allowed again (when canRestart is false) */
+    cooldownSec?: number
+}
+
+/** User clicked Restart on the plugin-desync banner */
+export interface RequestPluginRestartMessage {
+    type: 'requestPluginRestart'
+}
+
+/** User dismissed the plugin-desync banner */
+export interface DismissPluginDesyncMessage {
+    type: 'dismissPluginDesync'
+}
+
 /** Plugin confirmed contactme / CDM (VDGS) PM send — or focus failure */
 export interface PmResultMessage {
     type: 'pmResult'
@@ -445,7 +467,7 @@ export interface StandMenuMessage {
     aprons: StandMenuApron[]
 }
 
-export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | CdmMasterStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | WorkspaceStoreMessage | NotifyMessage | PmResultMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage | StandMenuMessage
+export type ServerMessage = LayoutMessage | StripMessage | StripDeleteMessage | GapMessage | GapDeleteMessage | SectionMessage | RefreshMessage | StatusMessage | DclStatusMessage | CdmMasterStatusMessage | HoppieMessage | AtisUpdateMessage | EssaSepIndicatorsMessage | ConfigListMessage | ControllersMessage | UserSettingsMessage | WorkspaceStoreMessage | NotifyMessage | PluginDesyncMessage | PmResultMessage | DeletedStripsMessage | PendingPrintListMessage | AupR16Message | RwyFlagsMessage | ScribbleUpdateMessage | OpenCidDialogMessage | CidSuggestMessage | OpenVatIrisSignInMessage | HandoverAssistantResultMessage | StandMenuMessage
 
 // Client -> Server messages
 
@@ -951,7 +973,7 @@ export interface GrpStandMessage {
     action: 'assign' | 'auto' | 'publish' | 'clear'
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | SetSectionAddFromTopMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | CdmMasterToggleMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | UpdateWorkspaceStoreMessage | SetEssaRolesMessage | SetEssaRwyConfigMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage | RequestStandMenuMessage | GrpStandMessage
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | SetSectionAddFromTopMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | CdmMasterToggleMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | UpdateWorkspaceStoreMessage | SetEssaRolesMessage | SetEssaRwyConfigMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage | RequestStandMenuMessage | GrpStandMessage | RequestPluginRestartMessage | DismissPluginDesyncMessage
 
 // Type guards for message parsing
 
@@ -964,7 +986,8 @@ export function isServerMessage(data: unknown): data is ServerMessage {
            type === 'gap' || type === 'gapDelete' || type === 'section' ||
            type === 'refresh' || type === 'status' || type === 'dclStatus' || type === 'cdmMasterStatus' ||
            type === 'hoppieMessage' || type === 'atisUpdate' || type === 'essaSepIndicators' || type === 'configList' ||
-           type === 'controllers' || type === 'userSettings' || type === 'workspaceStore' || type === 'notify' || type === 'pmResult' ||
+           type === 'controllers' || type === 'userSettings' || type === 'workspaceStore' || type === 'notify' ||
+           type === 'pluginDesync' || type === 'pmResult' ||
            type === 'deletedStrips' || type === 'pendingPrintList' || type === 'aupR16' || type === 'rwyFlags' ||
            type === 'scribbleUpdate' || type === 'openCidDialog' || type === 'cidSuggest' ||
            type === 'openVatIrisSignIn' || type === 'handoverAssistantResult' ||
@@ -976,5 +999,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'setSectionAddFromTop' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'cdmMasterToggle' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'switchSaabLayout' || type === 'saabEnsureSection' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'updateWorkspaceStore' || type === 'setEssaRoles' || type === 'setEssaRwyConfig' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest' || type === 'requestStandMenu' || type === 'grpStand'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'setSectionAddFromTop' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'cdmMasterToggle' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'switchSaabLayout' || type === 'saabEnsureSection' || type === 'createStrip' || type === 'updateNote' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'updateWorkspaceStore' || type === 'setEssaRoles' || type === 'setEssaRwyConfig' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest' || type === 'requestStandMenu' || type === 'grpStand' || type === 'requestPluginRestart' || type === 'dismissPluginDesync'
 }

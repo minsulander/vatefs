@@ -547,6 +547,34 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
+    /** Position-change → suggest `.efs restart` (sticky until dismiss / restart) */
+    const pluginDesyncVisible = ref(false)
+    const pluginDesyncReason = ref('')
+    const pluginDesyncCanRestart = ref(true)
+    const pluginDesyncCooldownSec = ref(0)
+
+    function applyPluginDesync(message: {
+        reason: string
+        canRestart: boolean
+        cooldownSec?: number
+    }) {
+        pluginDesyncReason.value = message.reason || ''
+        pluginDesyncCanRestart.value = !!message.canRestart
+        pluginDesyncCooldownSec.value = message.cooldownSec ?? 0
+        pluginDesyncVisible.value = true
+    }
+
+    function dismissPluginDesync() {
+        pluginDesyncVisible.value = false
+        sendMessage({ type: 'dismissPluginDesync' })
+    }
+
+    function requestPluginRestart() {
+        if (!pluginDesyncCanRestart.value) return
+        sendMessage({ type: 'requestPluginRestart' })
+        pluginDesyncVisible.value = false
+    }
+
     /** contactme / cdmPm success blink + 2s click cooldown (`kind:CALLSIGN`) */
     const PM_FEEDBACK_MS = 2000
     const pmBlinkKeys = ref<Record<string, true>>({})
@@ -1316,6 +1344,9 @@ export const useEfsStore = defineStore("efs", () => {
                         break
                     case 'notify':
                         showNotify(message.text, message.level)
+                        break
+                    case 'pluginDesync':
+                        applyPluginDesync(message)
                         break
                     case 'pmResult':
                         notePmResult(message.kind, message.callsign, message.ok)
@@ -3824,6 +3855,12 @@ export const useEfsStore = defineStore("efs", () => {
         notifyVisible,
         showNotify,
         dismissNotify,
+        pluginDesyncVisible,
+        pluginDesyncReason,
+        pluginDesyncCanRestart,
+        pluginDesyncCooldownSec,
+        dismissPluginDesync,
+        requestPluginRestart,
         isPmBlinking,
         isPmOnCooldown,
         notePmResult,

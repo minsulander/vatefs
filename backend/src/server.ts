@@ -1017,6 +1017,8 @@ type OutboundPluginCommand =
     | { type: "expandRoute"; callsign: string }
     /** Full FP+CAD dump (same as .efs refresh) — used when DEP PREP waits for ASSR/CFL */
     | { type: "refresh" }
+    /** Same as EuroScope chat `.efs restart` — plugin StopBackend + StartBackend */
+    | { type: "restartBackend" }
     | {
           type: "amendFlightPlan"
           callsign: string
@@ -1385,6 +1387,110 @@ let lastStatusFeedsFp = ""
 /** Set after services are constructed (avoids TDZ in buildFeedsStatus). */
 let getViffHealth: () => FeedStatusItem = () => ({ ok: false, detail: "Not started" })
 let forceViffPoll: () => void = () => {}
+
+/** Position-change → prompt for `.efs restart` (command path may be stale). */
+const PLUGIN_RESTART_COOLDOWN_MS = 10 * 60_000
+const POST_RECONNECT_WATCH_MS = 120_000
+let lastPluginRestartAt = 0
+let pluginDesyncBannerActive = false
+let pluginDesyncDismissed = false
+let postReconnectWatchUntil = 0
+let assumeFailReraiseUsed = false
+/** ASSUME callsigns awaiting ES ownership confirm during post-reconnect watch */
+const pendingAssumeConfirm = new Map<string, ReturnType<typeof setTimeout>>()
+
+function pluginRestartCooldownRemainingSec(): number {
+    const elapsed = Date.now() - lastPluginRestartAt
+    if (lastPluginRestartAt <= 0 || elapsed >= PLUGIN_RESTART_COOLDOWN_MS) return 0
+    return Math.ceil((PLUGIN_RESTART_COOLDOWN_MS - elapsed) / 1000)
+}
+
+function canRequestPluginRestart(): boolean {
+    return pluginRestartCooldownRemainingSec() === 0
+}
+
+function broadcastPluginDesync(reason: string) {
+    if (pluginDesyncBannerActive) return
+    pluginDesyncBannerActive = true
+    pluginDesyncDismissed = false
+    const cooldownSec = pluginRestartCooldownRemainingSec()
+    const canRestart = cooldownSec === 0
+    console.log(
+        `[DESYNC] position change prompt (${reason}) canRestart=${canRestart}` +
+            (cooldownSec > 0 ? ` cooldownSec=${cooldownSec}` : ""),
+    )
+    broadcast({
+        type: "pluginDesync",
+        reason,
+        canRestart,
+        ...(cooldownSec > 0 ? { cooldownSec } : {}),
+    })
+}
+
+function notePositionChangeForDesync(reason: string) {
+    postReconnectWatchUntil = Date.now() + POST_RECONNECT_WATCH_MS
+    assumeFailReraiseUsed = false
+    broadcastPluginDesync(reason)
+}
+
+function clearPendingAssumeConfirm(callsign: string) {
+    const t = pendingAssumeConfirm.get(callsign)
+    if (t) clearTimeout(t)
+    pendingAssumeConfirm.delete(callsign)
+}
+
+function trackAssumeForDesync(callsign: string, deadlineMs: number) {
+    if (Date.now() >= postReconnectWatchUntil) return
+    clearPendingAssumeConfirm(callsign)
+    const delay = Math.max(50, deadlineMs - Date.now())
+    const timer = setTimeout(() => {
+        pendingAssumeConfirm.delete(callsign)
+        if (Date.now() >= postReconnectWatchUntil) return
+        // Only re-raise after user dismissed the position-change banner
+        if (!pluginDesyncDismissed || assumeFailReraiseUsed) return
+        const flight = flightStore.getFlight(callsign)
+        if (!flight) return
+        // ES confirmed StartTracking → ownershipOptimisticUntil cleared
+        if (flight.ownershipOptimisticUntil === undefined) return
+        assumeFailReraiseUsed = true
+        pluginDesyncBannerActive = false
+        console.log(`[DESYNC] assume not confirmed after dismiss (${callsign})`)
+        broadcastPluginDesync(`assume-fail:${callsign}`)
+    }, delay)
+    pendingAssumeConfirm.set(callsign, timer)
+}
+
+function handleRequestPluginRestart() {
+    const cooldownSec = pluginRestartCooldownRemainingSec()
+    if (cooldownSec > 0) {
+        console.log(`[DESYNC] restartBackend suppressed (cooldown ${cooldownSec}s)`)
+        broadcast({
+            type: "pluginDesync",
+            reason: "cooldown",
+            canRestart: false,
+            cooldownSec,
+        })
+        return
+    }
+    lastPluginRestartAt = Date.now()
+    pluginDesyncBannerActive = false
+    pluginDesyncDismissed = false
+    postReconnectWatchUntil = 0
+    for (const cs of [...pendingAssumeConfirm.keys()]) clearPendingAssumeConfirm(cs)
+    console.log("[DESYNC] restartBackend sent")
+    sendUdp(JSON.stringify({ type: "restartBackend" } satisfies OutboundPluginCommand))
+    broadcast({
+        type: "notify",
+        level: "info",
+        text: "Restart requested — EuroScope is restarting VatEFS (same as .efs restart).",
+    })
+}
+
+function handleDismissPluginDesync() {
+    pluginDesyncBannerActive = false
+    pluginDesyncDismissed = true
+    console.log("[DESYNC] banner dismissed")
+}
 
 function notePluginUdp() {
     lastPluginUdpAt = Date.now()
@@ -4662,6 +4768,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             void pollRemote()
             break
 
+        case "requestPluginRestart":
+            handleRequestPluginRestart()
+            break
+
+        case "dismissPluginDesync":
+            handleDismissPluginDesync()
+            break
+
         case "reorderStrips": {
             // Freeze client visual order into store + flightStore (MAN sort / sticky drag prep)
             const reordered = store.reorderTopStrips(
@@ -6365,6 +6479,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         flight.handoffTargetController = ""
                         flight.handoffOptimisticUntil = undefined
                         flight.ownershipOptimisticUntil = Date.now() + 5000
+                        trackAssumeForDesync(strip.callsign, flight.ownershipOptimisticUntil)
                         // Cancel own READY→GND: restore pre-RDY groundstate (not always ONFREQ)
                         // (do not clear when GND assumes an inbound READY transfer)
                         if (cancelingReadyXfer) {
@@ -9692,6 +9807,8 @@ udpIn.on("message", (msg, rinfo) => {
                 }
                 broadcastStatus()
                 broadcastRefresh("Connection lost")
+                // Prompt for .efs restart — CT0 often precedes a position switch
+                notePositionChangeForDesync("CT0")
 
                 // Disconnect Hoppie and reset DCL status
                 if (hoppieService) {
@@ -9832,6 +9949,12 @@ udpIn.on("message", (msg, rinfo) => {
                 setMyCallsign(msg.callsign)
                 removeOnlineController(msg.callsign)
                 console.log(`My callsign set to: ${msg.callsign}`)
+                // Real login position switch (ignore empty clear during CT0)
+                if (previousCallsign && msg.callsign) {
+                    notePositionChangeForDesync(
+                        `callsign ${previousCallsign} → ${msg.callsign}`,
+                    )
+                }
             }
 
             setIsController(msg.controller)
