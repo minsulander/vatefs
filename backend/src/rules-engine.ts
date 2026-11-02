@@ -22,7 +22,11 @@ import { findNearestAirport, isWithinRangeOfAnyAirport, isWithinStripVisibilityR
 import { minutesUntilFlightEta } from "./hhmm-utils.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
-import { parseControllerRole, isParallelTwr } from "./static-config.js"
+import {
+    parseControllerRole,
+    isParallelTwr,
+    controllerCallsignsEqual,
+} from "./static-config.js"
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
 import { essaRunwaySectionId, isEssaDynamicRunwaySectionId } from "@vatefs/common"
 import {
@@ -248,8 +252,7 @@ export function getFieldElevationForFlight(
 }
 
 function callsignsEqual(a: string | undefined, b: string | undefined): boolean {
-    if (!a || !b) return false
-    return a.toUpperCase() === b.toUpperCase()
+    return controllerCallsignsEqual(a, b)
 }
 
 /**

@@ -59,6 +59,8 @@ export {
     restoreEsggRolesFromSettings,
     hasEsggPositionRole,
     getActingControllerRole,
+    normalizeControllerCallsign,
+    controllerCallsignsEqual,
 } from "./static-config.js"
 
 export type { EsggPositionRole } from "./esgg-roles.js"

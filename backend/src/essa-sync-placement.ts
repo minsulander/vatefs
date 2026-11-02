@@ -133,12 +133,12 @@ export function mapEssaRemotePlacement(
             return null
         }
         const gs = (flight?.groundstate || "").toUpperCase()
-        const vacated =
+        // TAXIWAY ARR only after TAXI IN — do not remap on ARR/vacate alone
+        const taxiIn =
             flight &&
             !flight.airborne &&
-            (gs === "ARR" || gs === "TXIN" || gs === "TAXI")
-        if (vacated && (strip.stripType === "arrival" || strip.stripType === "local")) {
-            // Prefer TAXIWAY ARR for vacated arrivals instead of peer INBOUND
+            gs === "TXIN"
+        if (taxiIn && (strip.stripType === "arrival" || strip.stripType === "local")) {
             if (layoutHasSection(config, "taxi_arr")) {
                 sectionId = "taxi_arr"
                 bayId = bayIdForSection(config, "taxi_arr") || bayId

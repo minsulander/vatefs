@@ -341,6 +341,7 @@ class EfsStore {
         clearScratchpadDelayMs?: number
         refreshCallsigns?: string[]
         transferSound?: ProcessMessageResult['transferSound']
+        efsRofSound?: boolean
         multiUpdates?: ProcessMessageResult['multiUpdates']
         cleanReprint?: boolean
         unsetEfsGoAround?: boolean
@@ -349,6 +350,7 @@ class EfsStore {
     } {
         const result = flightStore.processMessage(message)
         const transferSound = result.transferSound
+        const efsRofSound = result.efsRofSound
         const scratchClear = {
             clearScratchpadCallsign: result.clearScratchpadCallsign,
             clearScratchpadDelayMs: result.clearScratchpadDelayMs,
@@ -362,6 +364,7 @@ class EfsStore {
         const autoAssumeSpread = result.autoAssumeCallsigns?.length
             ? { autoAssumeCallsigns: result.autoAssumeCallsigns }
             : {}
+        const efsRofSpread = efsRofSound ? { efsRofSound: true as const } : {}
 
         // Multi-airport: apply each update
         if (result.multiUpdates && result.multiUpdates.length > 0) {
@@ -438,6 +441,7 @@ class EfsStore {
                 ...scratchClear,
                 ...goaReprint,
                 ...autoAssumeSpread,
+                ...efsRofSpread,
                 ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
                 transferSound,
                 multiUpdates: result.multiUpdates
@@ -455,14 +459,14 @@ class EfsStore {
                 }
             }
             return changed.length > 0
-                ? { strips: changed, transferSound, ...scratchClear, ...autoAssumeSpread }
-                : { transferSound, ...scratchClear, ...autoAssumeSpread }
+                ? { strips: changed, transferSound, ...scratchClear, ...autoAssumeSpread, ...efsRofSpread }
+                : { transferSound, ...scratchClear, ...autoAssumeSpread, ...efsRofSpread }
         }
 
         if (result.deleteStripId && !result.softDeleted) {
             this.strips.delete(result.deleteStripId)
             this.deletedStrips.delete(result.deleteStripId)
-            return { deleteStripId: result.deleteStripId, transferSound, ...scratchClear }
+            return { deleteStripId: result.deleteStripId, transferSound, ...scratchClear, ...efsRofSpread }
         }
 
         if (result.deletedStripIds && result.deletedStripIds.length > 0 && !result.softDeleted) {
@@ -475,6 +479,7 @@ class EfsStore {
                 deleteStripId: result.deletedStripIds[0],
                 transferSound,
                 ...scratchClear,
+                ...efsRofSpread,
             }
         }
 
@@ -498,6 +503,7 @@ class EfsStore {
                     transferSound,
                     ...scratchClear,
                     ...goaReprint,
+                    ...efsRofSpread,
                 }
             }
             if (result.flight) {
@@ -515,10 +521,11 @@ class EfsStore {
                         transferSound,
                         ...scratchClear,
                         ...goaReprint,
+                        ...efsRofSpread,
                     }
                 }
             }
-            return { softDeleted: true, transferSound, ...scratchClear, ...goaReprint }
+            return { softDeleted: true, transferSound, ...scratchClear, ...goaReprint, ...efsRofSpread }
         }
 
         // Handle restore: move strip back from deletedStrips
@@ -538,6 +545,7 @@ class EfsStore {
             if (!stripChanged && !result.sectionChanged && !result.restored) {
                 if (
                     transferSound ||
+                    efsRofSound ||
                     scratchClear.clearScratchpadCallsign ||
                     refreshCallsigns?.length ||
                     result.autoAssumeCallsigns?.length ||
@@ -548,6 +556,7 @@ class EfsStore {
                         setScratchValue: result.setScratchValue,
                         ...scratchClear,
                         ...autoAssumeSpread,
+                        ...efsRofSpread,
                         ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
                     }
                 }
@@ -617,6 +626,7 @@ class EfsStore {
                 ...scratchClear,
                 ...goaReprint,
                 ...autoAssumeSpread,
+                ...efsRofSpread,
                 ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
                 transferSound
             }
@@ -624,6 +634,7 @@ class EfsStore {
 
         if (
             transferSound ||
+            efsRofSound ||
             scratchClear.clearScratchpadCallsign ||
             result.clearHs ||
             refreshCallsigns?.length ||
@@ -636,6 +647,7 @@ class EfsStore {
                 setScratchValue: result.setScratchValue,
                 ...scratchClear,
                 ...autoAssumeSpread,
+                ...efsRofSpread,
                 ...(refreshCallsigns?.length ? { refreshCallsigns } : {}),
             }
         }

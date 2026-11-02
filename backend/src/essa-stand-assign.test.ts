@@ -18,6 +18,7 @@ import {
     _testSetAircraft,
     _testMarkLoaded,
 } from "./essa-stand-assign.js"
+import { _setMapBlocksForTests, _resetGrpMapsForTests } from "./grp-maps.js"
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -574,6 +575,8 @@ check("airborne arrival assigned stand is Planned (Inbound)", () => {
             {
                 callsign: "FIN1TC",
                 stand: "01",
+                latitude: 59.65,
+                longitude: 17.93,
                 airborne: true,
                 departure: false,
                 dims: resolveAircraftDims("A320", "M", "FIN1TC"),
@@ -586,6 +589,71 @@ check("airborne arrival assigned stand is Planned (Inbound)", () => {
     assert.equal(s01.occupied?.kind, "assigned")
     assert.equal(s01.occupied?.label, "FIN1TC")
     assert.equal(s01.occupied?.airborne, true)
+})
+
+check("far-out arrival assigned stand is not Planned (> AutoAssignDist)", () => {
+    // ~80 nm south of ESSA — must not clutter stand menu as Inbound/Planned
+    const menu = buildEssaStandMenu({
+        stripId: "DLH4LW",
+        callsign: "DLH4LW",
+        origin: "EDDF",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [
+            {
+                callsign: "SAS1430",
+                stand: "01",
+                latitude: 58.3,
+                longitude: 17.93,
+                airborne: true,
+                departure: false,
+                dims: resolveAircraftDims("A320", "M", "SAS1430"),
+                assigned: true,
+            },
+        ],
+    })
+    assert.ok(menu)
+    const s01 = menu!.aprons[0]!.stands.find((s) => s.name === "01")!
+    assert.equal(s01.occupied, undefined)
+})
+
+check("active GRpluginMaps BLOCKS shows closed colour and skips Auto", () => {
+    _resetGrpMapsForTests()
+    _setMapBlocksForTests([
+        {
+            name: "STD 52",
+            airport: "ESSA",
+            stands: ["F34"],
+            actives: [{ always: true }],
+        },
+    ])
+    const menu = buildEssaStandMenu({
+        stripId: "SAS1",
+        callsign: "SAS1",
+        origin: "ENGM",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [],
+    })
+    assert.ok(menu)
+    const f34 = menu!.aprons.flatMap((a) => a.stands).find((s) => s.name === "F34")
+    assert.ok(f34)
+    assert.equal(f34!.occupied?.kind, "closed")
+    assert.equal(f34!.occupied?.label, "STD 52")
+    assert.equal(f34!.selectable, true)
+    const picked = pickEssaAutoStand({
+        stripId: "SAS1",
+        callsign: "SAS1",
+        origin: "ENGM",
+        destination: "ESSA",
+        aircraftType: "A320",
+        wakeTurbulence: "M",
+        traffic: [],
+    })
+    assert.notEqual(picked, "F34")
+    _resetGrpMapsForTests()
 })
 
 check("airborne departure strip stand is not Planned", () => {
@@ -980,6 +1048,52 @@ check("assigned stand blocked by neighbour is flagged", () => {
                 assigned: true,
                 departure: false,
                 dims: resolveAircraftDims("A320", "M", "DLH400"),
+            },
+        ]),
+        false,
+    )
+})
+
+check("same stand occupied (PARK) by other a/c ambers STD", () => {
+    assert.equal(
+        isEssaStandBlocked("01", "SAS123", [
+            {
+                callsign: "DLH7EW",
+                stand: "01",
+                groundstate: "PARK",
+                assigned: true,
+                departure: false,
+                airborne: false,
+                dims: resolveAircraftDims("A320", "M", "DLH7EW"),
+            },
+        ]),
+        true,
+    )
+})
+
+check("same stand planned on ground ambers STD; airborne planned does not", () => {
+    assert.equal(
+        isEssaStandBlocked("01", "SAS123", [
+            {
+                callsign: "DLH7EW",
+                stand: "01",
+                assigned: true,
+                departure: false,
+                airborne: false,
+                dims: resolveAircraftDims("A320", "M", "DLH7EW"),
+            },
+        ]),
+        true,
+    )
+    assert.equal(
+        isEssaStandBlocked("01", "SAS123", [
+            {
+                callsign: "DLH7EW",
+                stand: "01",
+                assigned: true,
+                departure: false,
+                airborne: true,
+                dims: resolveAircraftDims("A320", "M", "DLH7EW"),
             },
         ]),
         false,

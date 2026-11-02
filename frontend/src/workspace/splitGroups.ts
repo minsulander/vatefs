@@ -130,7 +130,7 @@ export const ESSA_SPLIT_GROUPS: SplitGroupDef[] = [
   },
   {
     id: 'push_start',
-    mergedTitle: 'PUSH BACK / START UP',
+    mergedTitle: 'PUSH BACK / START-UP',
     mergedSectionIds: ['push_start'],
     members: [
       {
@@ -420,7 +420,7 @@ export function workspaceMemberAcceptsStrip(
     return true
   }
 
-  // PUSH BACK / START UP
+  // PUSH BACK / START-UP
   if (g === 'push_start' || sid === 'push_back' || sid === 'start_up') {
     const gs = (strip.groundstate || '').toUpperCase()
     if (member === 'push' || sid === 'push_back') return gs === 'PUSH'

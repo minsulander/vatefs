@@ -72,29 +72,29 @@ setMyCallsign("ESSA_W_GND")
 setMyRole("GND")
 setEssaRoles(["GND-W"], true)
 
-check("ARR / TXIN / TAXI all stay in taxi_arr for GND", () => {
+check("TXIN goes to taxi_arr; ARR / empty stay inbound until TAXI IN", () => {
     assert.deepEqual(staticConfig.myAirports, ["ESSA"])
-    const flight = arrivalFlight("TST1", "ARR")
-    assert.equal(flight.destination, "ESSA")
     assert.ok(
         staticConfig.sectionRules.some((r) => r.id === "taxi_arr"),
         "taxi_arr rule present"
     )
-    for (const gs of ["ARR", "TXIN", "TAXI", ""] as const) {
+    const txin = determineSectionForFlight(arrivalFlight("TST1", "TXIN"), staticConfig)
+    assert.equal(txin?.sectionId, "taxi_arr", `TXIN rule=${txin?.ruleId}`)
+    for (const gs of ["ARR", ""] as const) {
         const section = determineSectionForFlight(arrivalFlight("TST1", gs), staticConfig)
-        assert.equal(section?.sectionId, "taxi_arr", `gs=${gs} rule=${section?.ruleId}`)
+        assert.equal(section?.sectionId, "inbound", `gs=${gs} rule=${section?.ruleId}`)
     }
 })
 
-check("same-section TXIN/TAXI keep store position when flightStore assignment is stale", () => {
-    for (const nextGs of ["TXIN", "TAXI"] as const) {
+check("same-section TXIN keep store position when flightStore assignment is stale", () => {
+    for (const nextGs of ["TXIN"] as const) {
         store.loadMockData(false)
         flightStore.clear()
 
         // Visual order in store: AAA=0, BBB=1, CCC=2
-        seedTaxiArrStrip("AAA", 0)
-        seedTaxiArrStrip("BBB", 1)
-        seedTaxiArrStrip("CCC", 2)
+        seedTaxiArrStrip("AAA", 0, "TXIN")
+        seedTaxiArrStrip("BBB", 1, "TXIN")
+        seedTaxiArrStrip("CCC", 2, "TXIN")
 
         // Stale flightStore: BBB wrongly at 0 (desync after reorder / shift)
         flightStore.setStripAssignment("BBB", {

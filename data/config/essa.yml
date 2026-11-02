@@ -55,8 +55,8 @@ layout:
           title: TAXIWAY ARR
           # First at bottom (newest inserts on top).
           addFromTop: true
-          # TWR-only: still-on-RWY hold; once vacated → TAXI ARR + XFER to GND.
-          # With GND selected, TWR uses this for assumed taxi-in as usual.
+          # GND boards (and solo TWR covering GND). Hidden on TWR-only when a
+          # separate GND is online — filterEssaLayout / shouldShowTaxiArr.
           visibleFor: [GND, TWR]
 
     bay2:
@@ -152,6 +152,7 @@ sectionRules:
 
   # ESSA: CA/VA/CAT/OS → CTR ARR (skips TMA). Outer bay is unassumed-only;
   # approach clearance moves even outside the zone. ESGG keeps CA on INBOUND.
+  # GND-only: leave CA on INBOUND (ctr_arr is TWR-visible); TWR/APP/CTR only.
   ctr_arr_approach_clearance_other:
     sectionId: ctr_arr
     direction: arrival
@@ -159,6 +160,7 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     controller: not_myself
     approachClearance: true
+    myRole: [TWR, APP, CTR]
     priority: 85
 
   # Disable common-rules within-CTR / pending-handoff pulls — unassumed stay on
@@ -271,27 +273,28 @@ sectionRules:
     notEssaFamilies: [GND]
     priority: 70
 
+  # TAXIWAY ARR only after TAXI IN (TXIN) — not on mere vacate / ARR.
   taxi_arr_local:
     sectionId: taxi_arr
     direction: local
     airborne: false
-    groundstates: [ARR, TXIN]
+    groundstates: [TXIN]
     priority: 35
 
   taxi_arr:
     sectionId: taxi_arr
     direction: arrival
     airborne: false
-    groundstates: ['', NSTS, ARR, TAXI, TXIN]
+    groundstates: [TXIN]
     priority: 30
 
-  # EoR / DEP RWY arrival vacated → TAXIWAY ARR (not INBOUND APP)
+  # EoR / DEP RWY: only after TXIN (no auto hop on vacate alone)
   taxi_arr_vacated_dep_rwy:
     sectionId: taxi_arr
     direction: arrival
     airborne: false
     onRunway: false
-    groundstates: ['', NSTS, ARR, TXIN]
+    groundstates: [TXIN]
     depRunway: true
     priority: 108
 
@@ -300,34 +303,22 @@ sectionRules:
     direction: local
     airborne: false
     onRunway: false
-    groundstates: [ARR, TXIN]
+    groundstates: [TXIN]
     depRunway: true
     priority: 108
 
-  # GND: pending inbound transfer from TWR → hop to TAXI ARR (before assume)
+  # GND: pending inbound transfer stays on INBOUND until TXIN (disabled hop to TAXI ARR)
   taxi_arr_pending_inbound_transfer:
     sectionId: taxi_arr
-    direction: arrival
-    airborne: false
-    onRunway: false
-    controller: not_myself
-    handoffToMyself: true
-    myRole: [GND]
-    notMyRole: [TWR]
+    myRole: []
     priority: 115
 
   taxi_arr_pending_inbound_transfer_local:
     sectionId: taxi_arr
-    direction: local
-    airborne: false
-    onRunway: false
-    controller: not_myself
-    handoffToMyself: true
-    myRole: [GND]
-    notMyRole: [TWR]
+    myRole: []
     priority: 115
 
-  # GND: after assuming a vacated arrival, move INBOUND → TAXI ARR
+  # GND: assumed vacated arrival → TAXIWAY ARR only when TXIN is set
   # clearedToLand: false — keep CTL traffic on runway even if airborne flickers false on short final
   taxi_arr_assumed_gnd:
     sectionId: taxi_arr
@@ -335,22 +326,45 @@ sectionRules:
     airborne: false
     onRunway: false
     clearedToLand: false
+    groundstates: [TXIN]
     controller: myself
     myRole: [GND]
     priority: 105
 
-  # Post-landing local only (ARR/TXIN). Without GS gate, assumed locals in CD/TSAT
-  # jumped to TAXIWAY ARR (OSY11F ACK CLR / ASSUME).
+  # Assumed local → TAXIWAY ARR only on TXIN (not ARR alone)
   taxi_arr_assumed_local_gnd:
     sectionId: taxi_arr
     direction: local
     airborne: false
     onRunway: false
     clearedToLand: false
-    groundstates: [ARR, TXIN]
+    groundstates: [TXIN]
     controller: myself
     myRole: [GND]
     priority: 105
+
+  # GND assumed / vacated but not yet TXIN — stay on INBOUND TWR until TAXI IN
+  inbound_assumed_vacated_arr_gnd:
+    sectionId: inbound
+    direction: arrival
+    airborne: false
+    onRunway: false
+    clearedToLand: false
+    groundstates: ['', NSTS, ARR]
+    controller: myself
+    myRole: [GND]
+    priority: 104
+
+  inbound_assumed_vacated_local_gnd:
+    sectionId: inbound
+    direction: local
+    airborne: false
+    onRunway: false
+    clearedToLand: false
+    groundstates: [ARR]
+    controller: myself
+    myRole: [GND]
+    priority: 104
 
   # GND (not covering TWR): only tower-bound traffic under INBOUND TWR —
   # same moments TWR would see CTR ARR / ARR RWY (APP→TWR transfer, CTR, runway).
@@ -411,6 +425,23 @@ sectionRules:
     myRole: [GND]
     notMyRole: [TWR]
     priority: 210
+
+  # GND (not covering TWR): keep on-runway deps in TAXIWAY DEP — dep_runway is TWR-only
+  taxi_dep_on_runway_dep_gnd:
+    sectionId: taxi_dep
+    direction: departure
+    onRunway: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 202
+
+  taxi_dep_on_runway_local_gnd:
+    sectionId: taxi_dep
+    direction: local
+    onRunway: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 202
 
   # GND (not covering TWR): keep other-owned vacated arrivals in INBOUND until GND assumes
   inbound_vacated_arr_gnd:
@@ -497,7 +528,7 @@ sectionRules:
     priority: 95
 
   # === TWR-ONLY + separate GND: hold on RWY while still geographically on runway ===
-  # Once vacated → taxi_arr (priority 30) + XFER to GND. Do not hold until GND assumes.
+  # Vacate does not auto-pull to TAXIWAY ARR (TXIN only). Soft-delete once GND assumes off-RWY.
 
   runway_hold_twr_only_arr:
     sectionId: arr_runway
@@ -684,11 +715,10 @@ deleteRules:
     priority: 110
 
   # TWR with separate GND online (not covering GND, GND family not selected):
-  # hide arrival once GND has assumed and taxi-in is set (TXIN / TAXI).
-  # Solo TWR covering GND, or combined GND+TWR picker, does not match.
+  # soft-delete as soon as GND assumes — even if still on the runway
+  # (TAXIWAY ARR is hidden on TWR-only). Solo TWR covering GND / GND+TWR picker: no match.
   delete_arr_gnd_assumed_taxi:
     direction: arrival
-    groundstates: [TXIN, TAXI]
     airborne: false
     controller: not_myself
     ownerRole: [GND]

@@ -377,6 +377,21 @@ export function shouldShowInboundGnd(
     return isEssaTwrOnly(roles)
 }
 
+/**
+ * TAXIWAY ARR: shown for GND (and combined GND+TWR). Hidden on TWR-only boards
+ * when a separate GND is online — vacated arrivals soft-delete once GND assumes.
+ * Solo TWR covering GND (no online GND peer) still sees the section.
+ */
+export function shouldShowTaxiArr(
+    roles: EssaPositionRole[],
+    activeGndPeers?: EssaPositionRole[]
+): boolean {
+    const families = familiesFromRoles(roles)
+    if (families.has("GND")) return true
+    if (!families.has("TWR")) return false
+    return !activeGndPeers || activeGndPeers.length === 0
+}
+
 /** Max visible ESSA columns; CD ALL + TSAT share a column when this would be exceeded */
 const ESSA_MAX_COLUMNS = 4
 
@@ -470,6 +485,9 @@ export function filterEssaLayout(
                     .filter(section => {
                         if (section.id === 'inbound_gnd') {
                             return shouldShowInboundGnd(roles, activeGndPeers)
+                        }
+                        if (section.id === 'taxi_arr') {
+                            return shouldShowTaxiArr(roles, activeGndPeers)
                         }
                         // APP covering approach: hide INBOUND APP (inbound-from-yourself)
                         if (section.id === 'inbound' && families.has('APP')) {

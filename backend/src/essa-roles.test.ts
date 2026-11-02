@@ -218,6 +218,52 @@ check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
     )
 })
 
+check("TWR-only with separate GND hides TAXIWAY ARR", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay1",
+                sections: [
+                    { id: "ctr_arr", title: "CTR ARR" },
+                    { id: "taxi_arr", title: "TAXIWAY ARR" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["ctr_arr", ["TWR", "APP"]],
+        ["taxi_arr", ["GND", "TWR"]],
+    ])
+    const out = filterEssaLayout(layout, ["TWR-W"], visibleFor, ["TWR-W"], ["GND-W"])
+    assert.deepEqual(
+        out.bays[0]!.sections.map((s) => s.id),
+        ["ctr_arr"]
+    )
+})
+
+check("TWR-only solo (no GND peer) keeps TAXIWAY ARR", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay1",
+                sections: [
+                    { id: "ctr_arr", title: "CTR ARR" },
+                    { id: "taxi_arr", title: "TAXIWAY ARR" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["ctr_arr", ["TWR", "APP"]],
+        ["taxi_arr", ["GND", "TWR"]],
+    ])
+    const out = filterEssaLayout(layout, ["TWR-W"], visibleFor, ["TWR-W"], [])
+    assert.deepEqual(
+        out.bays[0]!.sections.map((s) => s.id),
+        ["ctr_arr", "taxi_arr"]
+    )
+})
+
 check("computeAutoEssaRoles APP login selects APP family", () => {
     const roles = computeAutoEssaRoles("ESSA_APP", ["APP"], ["ESSA_APP", "ESSA_E_TWR"])
     assert.ok(roles.includes("APP"))

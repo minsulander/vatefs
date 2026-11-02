@@ -111,12 +111,36 @@ check("GND taxi_dep → TWR inbound_gnd when unassumed", () => {
     assert.equal(mapped!.sectionId, "inbound_gnd")
 })
 
-check("vacated arrival peer inbound → taxi_arr", () => {
+check("ARR vacated peer inbound stays inbound (not taxi_arr until TXIN)", () => {
     const twr = baseConfig(["TWR-W"])
     const flight = {
         callsign: "SAS884",
         airborne: false,
         groundstate: "ARR",
+    } as Flight
+    const mapped = mapEssaRemotePlacement(
+        twr,
+        "bay1",
+        "inbound",
+        strip({
+            id: "SAS884",
+            callsign: "SAS884",
+            stripType: "arrival",
+            sectionId: "inbound",
+            bayId: "bay1",
+        }),
+        flight,
+    )
+    assert.ok(mapped)
+    assert.equal(mapped!.sectionId, "inbound")
+})
+
+check("TXIN peer inbound → taxi_arr", () => {
+    const twr = baseConfig(["TWR-W"])
+    const flight = {
+        callsign: "SAS884",
+        airborne: false,
+        groundstate: "TXIN",
     } as Flight
     const mapped = mapEssaRemotePlacement(
         twr,

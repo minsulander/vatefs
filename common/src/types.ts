@@ -102,6 +102,7 @@ export interface FlightStrip {
      * ESSA arrival: assigned stand is BLOCKS/LIMITS-blocked by a neighbour.
      * Frontend ambers the STD cell.
      */
+    /** Amber STD: stand occupied/planned by other ground traffic, or neighbour BLOCKS/closed */
     standBlocked?: boolean
     runway?: string            // Assigned runway
     remarks?: string           // Controller remarks/annotations (scratchpad .TEXT)
@@ -417,6 +418,11 @@ export interface UiSettings {
     /** Play EuroScope handoff sounds for transfer request / accept / refuse */
     transferSoundsEnabled: boolean
     /**
+     * Play TopSkySoundCoord.wav on the EuroScope PC for new incoming EFS `/EFSROF/` requests.
+     * Distinct from transfer/XFL coordination sounds.
+     */
+    rofSoundEnabled: boolean
+    /**
      * Force display XC frequencies: always show ideal SI+freq on XFER, even when the covering
      * controller is not AFV-monitoring that frequency. Auto XC detection still applies when off.
      */
@@ -518,6 +524,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     showStripOwnership: true,
     dimOtherOwnedStrips: true,
     transferSoundsEnabled: false,
+    rofSoundEnabled: true,
     showAppDepXcFrequency: false,
     autoParkEnabled: true,
     autoLopSsr: 'instant',

@@ -5,6 +5,14 @@
 
 import fs from "fs"
 import path from "path"
+import { getAirportCoords } from "./airport-data.js"
+import { calculateDistanceNm } from "./geo-utils.js"
+import {
+    getActiveMapClosedStands,
+    getAutoAssignDistNm,
+    loadGrpAutoAssignDist,
+    loadGrpMapsBlocks,
+} from "./grp-maps.js"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -13,8 +21,11 @@ export type StandFitStatus = "preferred" | "allowed" | "notAllowed"
 export interface StandOccupancy {
     /** Callsign of the aircraft on / planned for / blocking this stand */
     label: string
-    /** occupied = radar on stand; assigned = planned; blocked = GRP BLOCKS/LIMITS neighbour */
-    kind: "occupied" | "assigned" | "blocked"
+    /**
+     * occupied = radar on stand; assigned = planned; blocked = GRP BLOCKS/LIMITS neighbour;
+     * closed = active GRpluginMaps WIP BLOCKS (auto-assign excluded).
+     */
+    kind: "occupied" | "assigned" | "blocked" | "closed"
     /**
      * For kind=blocked only: whether the related stand is physically occupied
      * (red style) or only planned/assigned (amber planned style).
@@ -859,6 +870,9 @@ export function loadEssaStandAssign(euroscopeDir: string, packageFilter = "ESAA"
     standLists = []
     groups = new Map()
 
+    loadGrpAutoAssignDist(euroscopeDir, packageFilter)
+    loadGrpMapsBlocks(euroscopeDir, packageFilter)
+
     const standFile = findPluginFile(euroscopeDir, "GRpluginStands.txt", packageFilter)
     if (!standFile) {
         console.warn("[ESSA stands] GRpluginStands.txt not found")
@@ -1260,6 +1274,45 @@ function resolveStandKey(stand: string): string {
     return resolveStandRef(sn)
 }
 
+/**
+ * True when an ESSA arrival with a stand may show as Planned/Inbound and count for
+ * auto-assign occupancy. Matches GRP System_AutoAssignDist (default 30 nm).
+ * Missing position → not planned (avoids far-out FP clutter); Occupied still uses GPS/PARK.
+ */
+/** Fallback when airports.csv not loaded yet (tests / early boot). */
+const ESSA_COORDS_FALLBACK = { latitude: 59.64849, longitude: 17.928829 }
+
+export function isWithinEssaStandAssignDist(
+    latitude: number | undefined,
+    longitude: number | undefined,
+    airport = "ESSA",
+): boolean {
+    if (latitude === undefined || longitude === undefined) return false
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false
+    const coords =
+        getAirportCoords(airport) ??
+        (airport.toUpperCase() === "ESSA" ? ESSA_COORDS_FALLBACK : undefined)
+    if (!coords) return false
+    const limit = getAutoAssignDistNm(airport)
+    if (limit <= 0) return false
+    const nm = calculateDistanceNm(latitude, longitude, coords.latitude, coords.longitude)
+    return nm <= limit
+}
+
+/** Resolve map BLOCKS stand refs (may be unpadded) → canonical keys + map name. */
+function activeClosedStandMap(airport = "ESSA", now?: Date): Map<string, string> {
+    const raw = getActiveMapClosedStands(airport, now)
+    const out = new Map<string, string>()
+    for (const [stand, mapName] of raw) {
+        const key = resolveStandKey(stand)
+        if (!out.has(key)) out.set(key, mapName)
+        // Also keep raw upper key for lookup when variant missing
+        const up = stand.trim().toUpperCase()
+        if (!out.has(up)) out.set(up, mapName)
+    }
+    return out
+}
+
 /** Apron areas that accept several simultaneous assignments (count only, no Occ/Plan style). */
 const MULTI_ASSIGN_STANDS = new Set(["APNH", "APNJ", "APNL", "APNP"])
 
@@ -1323,6 +1376,8 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
     const assignedBy = new Map<string, OccupierInfo>()
     /** Multi-assign apron areas: unique callsigns on/assigned (count only). */
     const multiAssignCs = new Map<string, Set<string>>()
+    /** Active GRpluginMaps WIP BLOCKS → map name */
+    const closedByMap = activeClosedStandMap("ESSA")
 
     const bumpMulti = (stand: string, callsign: string) => {
         const key = stand.toUpperCase()
@@ -1354,10 +1409,15 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
 
         const assignedKey = t.stand ? resolveStandKey(t.stand) : undefined
         const parked = gs === "PARK"
+        // When radar position is known, Planned/Inbound only within GRP AutoAssignDist.
+        // No position → keep prior behaviour (cannot apply the nm gate).
+        const hasPos = t.latitude !== undefined && t.longitude !== undefined
+        const plannedOk =
+            !hasPos || isWithinEssaStandAssignDist(t.latitude, t.longitude, "ESSA")
 
         if (assignedKey) {
             if (isMultiAssignStand(assignedKey)) {
-                if (t.assigned || parked || positionStand === assignedKey) {
+                if ((t.assigned && plannedOk) || parked || positionStand === assignedKey) {
                     bumpMulti(assignedKey, t.callsign)
                 }
             } else if (positionStand && positionStand !== assignedKey) {
@@ -1371,6 +1431,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                 } else if (
                     !t.departure &&
                     t.assigned &&
+                    plannedOk &&
                     !assignedBy.has(assignedKey) &&
                     !occupiedBy.has(assignedKey)
                 ) {
@@ -1567,6 +1628,15 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                             ? { tsat: limBy.tsat, tobt: limBy.tobt, eobt: limBy.eobt }
                             : {}),
                     }
+                } else {
+                    // Active GRpluginMaps WIP BLOCKS — distinct colour; still manually selectable
+                    const mapName = closedByMap.get(name) ?? closedByMap.get(name.toUpperCase())
+                    if (mapName) {
+                        occupied = {
+                            label: mapName,
+                            kind: "closed",
+                        }
+                    }
                 }
             }
 
@@ -1577,6 +1647,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
                 occupied,
                 assignedCount,
                 area,
+                // GRP maps BLOCKS only exclude auto-assign; manual pick still allowed
                 selectable: true,
             })
         }
@@ -1591,8 +1662,9 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
 }
 
 /**
- * True when `stand` is BLOCKS/LIMITS-blocked by other traffic (GRP neighbour rules).
- * Used to amber-highlight the STD cell on the arrival strip.
+ * True when another aircraft has this stand occupied/planned on the ground, or
+ * BLOCKS/LIMITS/closed — amber-highlight the STD cell on the other arrival strip.
+ * Airborne planned arrivals do not trigger amber (Inbound shade only in the menu).
  */
 export function isEssaStandBlocked(
     stand: string | undefined,
@@ -1613,7 +1685,13 @@ export function isEssaStandBlocked(
     for (const apron of menu.aprons) {
         for (const s of apron.stands) {
             if (s.name !== key && s.name.toUpperCase() !== stand.trim().toUpperCase()) continue
-            return s.occupied?.kind === "blocked"
+            const occ = s.occupied
+            if (!occ) return false
+            if (occ.kind === "blocked" || occ.kind === "closed") return true
+            if (occ.kind === "occupied") return true
+            // Planned / assigned: only when the other aircraft is on the ground
+            if (occ.kind === "assigned" && !occ.airborne) return true
+            return false
         }
     }
     return false

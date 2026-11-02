@@ -11,7 +11,6 @@ import { shouldDeleteFlight } from "./rules-engine.js"
 const DELETE_RULE: DeleteRule = {
     id: "delete_arr_gnd_assumed_taxi",
     direction: "arrival",
-    groundstates: ["TXIN", "TAXI"],
     airborne: false,
     controller: "not_myself",
     ownerRole: ["GND"],
@@ -76,14 +75,22 @@ function check(name: string, fn: () => void) {
 
 console.log("delete_arr_gnd_assumed_taxi")
 
-check("hides when TWR + separate GND, GND assumed, TXIN", () => {
+check("hides when TWR + separate GND, GND assumed (TXIN)", () => {
     const r = shouldDeleteFlight(arrivalFlight(), baseConfig())
     assert.equal(r.shouldDelete, true)
     assert.equal(r.ruleId, "delete_arr_gnd_assumed_taxi")
 })
 
-check("hides for TAXI groundstate too", () => {
-    const r = shouldDeleteFlight(arrivalFlight({ groundstate: "TAXI" }), baseConfig())
+check("hides for ARR once GND assumed — even still on RWY", () => {
+    const r = shouldDeleteFlight(
+        arrivalFlight({
+            groundstate: "ARR",
+            latitude: 59.651,
+            longitude: 17.939,
+            currentAltitude: 100,
+        }),
+        baseConfig(),
+    )
     assert.equal(r.shouldDelete, true)
 })
 
@@ -105,11 +112,6 @@ check("does not hide when GND+TWR both selected (combined)", () => {
             essaRoles: ["TWR-E", "GND-E"],
         }),
     )
-    assert.equal(r.shouldDelete, false)
-})
-
-check("does not hide when still ARR (no taxi state)", () => {
-    const r = shouldDeleteFlight(arrivalFlight({ groundstate: "ARR" }), baseConfig())
     assert.equal(r.shouldDelete, false)
 })
 

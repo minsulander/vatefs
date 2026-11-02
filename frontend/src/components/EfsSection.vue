@@ -2492,15 +2492,11 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
     ordered = list.sort((a, b) => a.position - b.position)
   }
 
-  // Sort-flow is display-only from the selected flow (sequence positions unchanged).
-  // newestBottom = first of sequence on top; newestTop = first at bottom.
-  if (
-    props.workspaceMode &&
-    !flowAlreadyApplied &&
-    workspaceSortFlow.value === 'newestTop'
-  ) {
-    ordered = [...ordered].reverse()
-  }
+  // Appearance-order sections: sort-flow controls insert via setSectionAddFromTop
+  // (newestTop → addFromTop true). Do not reverse the position-sorted list here —
+  // that double-reverses against backend addFromTop and puts new strips at the bottom.
+  // Time-sort / ETA paths set flowAlreadyApplied and already honour workspaceSortFlow.
+  void flowAlreadyApplied
   return ordered
 }
 
@@ -2661,7 +2657,7 @@ function toggleSortMode() {
 
 /**
  * Section id sent on moveStrip for this drop.
- * PUSH BACK / START UP use the header id (server sets GS, stores as push_start).
+ * PUSH BACK / START-UP use the header id (server sets GS, stores as push_start).
  * RTC bayN_push_start is canonicalized to bayN_dep (STUP/PUSH stay in DEP).
  * Merged DEP keeps pending vs cleared membership when already in-family.
  */

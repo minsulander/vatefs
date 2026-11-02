@@ -812,6 +812,7 @@ export const useEfsStore = defineStore("efs", () => {
     const showStripOwnership = ref(DEFAULT_UI_SETTINGS.showStripOwnership)
     const dimOtherOwnedStrips = ref(DEFAULT_UI_SETTINGS.dimOtherOwnedStrips)
     const transferSoundsEnabled = ref(DEFAULT_UI_SETTINGS.transferSoundsEnabled)
+    const rofSoundEnabled = ref(DEFAULT_UI_SETTINGS.rofSoundEnabled)
     const showAppDepXcFrequency = ref(DEFAULT_UI_SETTINGS.showAppDepXcFrequency)
     const autoParkEnabled = ref(DEFAULT_UI_SETTINGS.autoParkEnabled)
     const autoLopSsr = ref<AutoLopSsrMode>(DEFAULT_UI_SETTINGS.autoLopSsr)
@@ -879,6 +880,10 @@ export const useEfsStore = defineStore("efs", () => {
         showStripOwnership.value = settings.showStripOwnership
         dimOtherOwnedStrips.value = settings.dimOtherOwnedStrips
         transferSoundsEnabled.value = settings.transferSoundsEnabled
+        rofSoundEnabled.value =
+            typeof settings.rofSoundEnabled === 'boolean'
+                ? settings.rofSoundEnabled
+                : DEFAULT_UI_SETTINGS.rofSoundEnabled
         showAppDepXcFrequency.value = settings.showAppDepXcFrequency
         autoParkEnabled.value =
             typeof settings.autoParkEnabled === 'boolean'
@@ -963,6 +968,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.showStripOwnership === 'boolean') showStripOwnership.value = partial.showStripOwnership
         if (typeof partial.dimOtherOwnedStrips === 'boolean') dimOtherOwnedStrips.value = partial.dimOtherOwnedStrips
         if (typeof partial.transferSoundsEnabled === 'boolean') transferSoundsEnabled.value = partial.transferSoundsEnabled
+        if (typeof partial.rofSoundEnabled === 'boolean') rofSoundEnabled.value = partial.rofSoundEnabled
         if (typeof partial.showAppDepXcFrequency === 'boolean') showAppDepXcFrequency.value = partial.showAppDepXcFrequency
         if (typeof partial.autoParkEnabled === 'boolean') autoParkEnabled.value = partial.autoParkEnabled
         if (isAutoLopSsrMode(partial.autoLopSsr)) autoLopSsr.value = partial.autoLopSsr
@@ -1148,6 +1154,14 @@ export const useEfsStore = defineStore("efs", () => {
             suppressStripPrintSounds(2500)
             // Re-request trash in case the connect snapshot raced; localStorage already hydrated
             listDeletedStrips()
+            // Re-sync ESSA RWY manual lock so preferred-SID force matches the UI
+            if (essaRwyConfigManual.value && essaRwyConfigId.value) {
+                sendMessage({
+                    type: 'setEssaRwyConfig',
+                    configId: essaRwyConfigId.value,
+                    manual: true,
+                })
+            }
         }
         socket.onclose = () => {
             console.log("socket closed")
@@ -3022,6 +3036,7 @@ export const useEfsStore = defineStore("efs", () => {
     /**
      * Set ESSA RWY combination manually, or pass manual=false for auto
      * (ES runways + night/day letter selection).
+     * Syncs lock to backend so preferred-SID force uses the same config id.
      */
     function setEssaRwyConfig(configId: string | null, manual: boolean) {
         if (manual && configId) {
@@ -3031,6 +3046,11 @@ export const useEfsStore = defineStore("efs", () => {
             essaRwyConfigId.value = null
             essaRwyConfigManual.value = false
         }
+        sendMessage({
+            type: 'setEssaRwyConfig',
+            configId: manual && configId ? configId : null,
+            manual: !!(manual && configId),
+        })
         // Preferred SIDs refresh via watch(essaRwyConfigIdResolved)
     }
 
@@ -3042,6 +3062,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (essaRwyConfigManual.value) {
             essaRwyConfigId.value = null
             essaRwyConfigManual.value = false
+            sendMessage({ type: 'setEssaRwyConfig', configId: null, manual: false })
         }
         // Preferred SIDs refresh via watch(essaRwyConfigIdResolved) when id changes
     }
@@ -4003,6 +4024,7 @@ export const useEfsStore = defineStore("efs", () => {
         showStripOwnership,
         dimOtherOwnedStrips,
         transferSoundsEnabled,
+        rofSoundEnabled,
         showAppDepXcFrequency,
         autoParkEnabled,
         autoLopSsr,

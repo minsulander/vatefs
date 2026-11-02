@@ -65,6 +65,7 @@ export interface UserSettings {
     showStripOwnership?: boolean
     dimOtherOwnedStrips?: boolean
     transferSoundsEnabled?: boolean
+    rofSoundEnabled?: boolean
     showAppDepXcFrequency?: boolean
     autoParkEnabled?: boolean
     /** @deprecated Prefer autoLopSsr; true→instant, false→manual */
@@ -185,6 +186,10 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.transferSoundsEnabled === "boolean"
                 ? saved.transferSoundsEnabled
                 : DEFAULT_UI_SETTINGS.transferSoundsEnabled,
+        rofSoundEnabled:
+            typeof saved.rofSoundEnabled === "boolean"
+                ? saved.rofSoundEnabled
+                : DEFAULT_UI_SETTINGS.rofSoundEnabled,
         showAppDepXcFrequency:
             typeof saved.showAppDepXcFrequency === "boolean"
                 ? saved.showAppDepXcFrequency

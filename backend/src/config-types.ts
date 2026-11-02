@@ -418,6 +418,12 @@ export interface DeleteRule {
 
     /** Whether the aircraft is airborne */
     airborne?: boolean
+
+    /**
+     * Geographic runway: true = still on runway; false = vacated.
+     * Same semantics as section/action rules (evaluateOnRunwayCondition).
+     */
+    onRunway?: boolean
 }
 
 /**

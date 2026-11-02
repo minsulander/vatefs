@@ -6072,6 +6072,12 @@ function onActionPointerUp(e: PointerEvent, action: string) {
   onActionClick(action)
 }
 
+/** Voice ACK CLR also stamps current QNH(+ATIS) green (same as onExpAtis ack path). */
+function stampQnhAtisOnAckClr() {
+  if (currentQnh.value == null || !currentAtisLetter.value) return
+  store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
+}
+
 // Action button handlers
 function onActionClick(action: string) {
   if (Date.now() < actionTouchGuardUntil) return
@@ -6087,6 +6093,7 @@ function onActionClick(action: string) {
     if (showAckClrLabel.value) {
       // Explicit set-true — networked/touch doubles must not toggle CLR off
       store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
+      stampQnhAtisOnAckClr()
       return
     }
     clncDialogOpen.value = true
@@ -6119,6 +6126,7 @@ function onActionTouch(event: TouchEvent, action: string) {
     if (!canEditAssignedData.value) return
     if (showAckClrLabel.value) {
       store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
+      stampQnhAtisOnAckClr()
       return
     }
     clncDialogOpen.value = true
@@ -6232,7 +6240,7 @@ const canOpenStandMenu = computed(
 )
 
 const standCellTitle = computed(() => {
-  if (props.strip.standBlocked) return 'Stand blocked by neighbour'
+  if (props.strip.standBlocked) return 'Stand occupied / planned by other traffic'
   if (canOpenStandMenu.value) return 'Stand'
   return undefined
 })
@@ -9205,7 +9213,7 @@ button.tobt-setby-pm:hover {
 .cell-std:not(.ghost) {
   font-size: var(--fs-mid);
 }
-/* Assigned stand BLOCKS/LIMITS-blocked by neighbour — planned amber fill */
+/* Stand occupied/planned by other ground traffic, or BLOCKS/closed — amber fill */
 .strip-main .cell-std.stand-blocked {
   color: #000;
   isolation: isolate;

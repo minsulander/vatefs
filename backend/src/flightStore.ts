@@ -29,6 +29,7 @@ import {
     getControllerCallsign,
     getCallsignForPositionId,
     parseControllerRole,
+    controllerCallsignsEqual,
 } from "./config.js"
 import {
     formatEsggAppSi,
@@ -355,6 +356,9 @@ export interface ProcessMessageResult {
     /** Transfer sound to play (handoff request / accept / refuse) */
     transferSound?: 'request' | 'accept' | 'refuse'
 
+    /** Play EFS ROF sound (new `/EFSROF/` only — not TopSky LAM ROF / re-flash) */
+    efsRofSound?: boolean
+
     /**
      * Handover Assistant: auto-ASSUME these callsigns (inbound HA transfers).
      * May include the primary flight plus any deferred when EFSHO arrived after handoff.
@@ -409,17 +413,18 @@ function detectTransferSound(
     const nextCtrl = nextController || ''
     const prevHo = prevHandoff || ''
     const nextHo = nextHandoff || ''
+    const isMe = (cs: string) => controllerCallsignsEqual(cs, myCallsign)
 
     // Inbound handoff request to me
-    if (nextHo === myCallsign && prevHo !== myCallsign) {
+    if (isMe(nextHo) && !isMe(prevHo)) {
         return 'request'
     }
 
-    const hadOutbound = prevCtrl === myCallsign && prevHo !== '' && prevHo !== myCallsign
+    const hadOutbound = isMe(prevCtrl) && prevHo !== '' && !isMe(prevHo)
     if (!hadOutbound) return undefined
 
     // Other controller assumed our outbound transfer (controller may briefly be empty)
-    if (nextCtrl !== myCallsign) {
+    if (!isMe(nextCtrl)) {
         return 'accept'
     }
 
@@ -1068,10 +1073,12 @@ class FlightStore {
      * Persist an incoming ROF requester (TopSky /LAM/ROF/… or EFS /EFSROF/…/…).
      * Caller should clear the scratchpad after this when needed.
      * Flash for 1 minute; request itself stays until transfer.
+     * @returns true when this is a new requester (not a same-requester re-flash)
      */
-    setRofRequest(flight: Flight, requester: string): void {
+    setRofRequest(flight: Flight, requester: string): boolean {
         const from = requester.trim().toUpperCase()
-        if (!from) return
+        if (!from) return false
+        const isNew = flight.rofRequestFrom !== from
         flight.rofRequestFrom = from
         flight.rofFlashUntil = Date.now() + ROF_FLASH_MS
         const key = flight.callsign.toUpperCase()
@@ -1086,6 +1093,7 @@ class FlightStore {
         }, ROF_FLASH_MS)
         this.rofFlashTimers.set(key, timer)
         console.log(`[ROF] ${flight.callsign} request from ${from}`)
+        return isNew
     }
 
     /**
@@ -1437,7 +1445,7 @@ class FlightStore {
 
         // Must be assumed by me
         const myCallsign = this.config.myCallsign
-        if (!myCallsign || flight.controller !== myCallsign) {
+        if (!myCallsign || !controllerCallsignsEqual(flight.controller, myCallsign)) {
             clearDwell()
             return
         }
@@ -3198,7 +3206,8 @@ class FlightStore {
                 !!flight.handoffTargetController &&
                 flight.handoffOptimisticUntil !== undefined &&
                 Date.now() < flight.handoffOptimisticUntil &&
-                (flight.controller === this.config.myCallsign || flight.controller === undefined)
+                (controllerCallsignsEqual(flight.controller, this.config.myCallsign) ||
+                    flight.controller === undefined)
             if (!protectOptimistic) {
                 flight.handoffTargetController = message.handoffTargetController
                 if (!message.handoffTargetController) flight.handoffTargetControllerId = undefined
@@ -3492,7 +3501,7 @@ class FlightStore {
             message.trackedByMe === false &&
             !ownershipOptimistic &&
             !!this.config.myCallsign &&
-            (flight.controller || '').toUpperCase() === this.config.myCallsign.toUpperCase()
+            controllerCallsignsEqual(flight.controller, this.config.myCallsign)
         ) {
             console.log(`[OWN] ${callsign} trackedByMe=false while controller still me — clearing ownership (remote accept)`)
             flight.controller = ''
@@ -3815,6 +3824,7 @@ class FlightStore {
         let clearScratchpadCallsign: string | undefined
         let clearScratchpadDelayMs: number | undefined
         let refreshCallsigns: string[] | undefined
+        let efsRofSound = false
         // Re-clear MISAP_ while CTL hold is active (stale CAD after CTL/CTL_GS)
         if (rejectMisapForCtlHold) {
             clearScratchpadCallsign = callsign
@@ -3825,6 +3835,7 @@ class FlightStore {
             const lamRof = scratch.match(/^\/LAM\/ROF\/([^/]+)/i)
             const efsRof = scratch.match(/^\/EFSROF\/([^/]+)\/([^/]+)/i)
             if (lamRof?.[1]) {
+                // TopSky already audibles LAM ROF — UI state only here
                 this.setRofRequest(flight, lamRof[1])
                 clearScratchpadCallsign = callsign
                 clearScratchpadDelayMs = 100
@@ -3835,7 +3846,10 @@ class FlightStore {
                 const targetFlight =
                     targetCs === callsign.toUpperCase() ? flight : this.flights.get(targetCs)
                 if (targetFlight) {
-                    this.setRofRequest(targetFlight, requester)
+                    // Sound only on new requester (not same-requester re-flash)
+                    if (this.setRofRequest(targetFlight, requester)) {
+                        efsRofSound = true
+                    }
                     if (targetCs !== callsign.toUpperCase()) {
                         refreshCallsigns = [targetCs]
                     }
@@ -3993,6 +4007,7 @@ class FlightStore {
             this.queueAutoAssume(result, flight)
         }
         if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
+        if (efsRofSound) result.efsRofSound = true
         if (clearScratchpadCallsign) {
             result.clearScratchpadCallsign = clearScratchpadCallsign
             result.clearScratchpadDelayMs = clearScratchpadDelayMs
@@ -4442,9 +4457,7 @@ class FlightStore {
         const my = this.config.myCallsign
         const mySi = this.config.myPositionId?.toUpperCase()
         return (
-            (!!flight.handoffTargetController &&
-                !!my &&
-                flight.handoffTargetController.toUpperCase() === my.toUpperCase()) ||
+            controllerCallsignsEqual(flight.handoffTargetController, my) ||
             (!!mySi &&
                 !!flight.handoffTargetControllerId &&
                 flight.handoffTargetControllerId.toUpperCase() === mySi)
@@ -4476,8 +4489,7 @@ class FlightStore {
 
     /** True when flight is assumed / owned by me (EuroScope accept — callsign or SI). */
     private isControlledByMe(flight: Flight): boolean {
-        const my = this.config.myCallsign
-        if (my && flight.controller && flight.controller.toUpperCase() === my.toUpperCase()) {
+        if (controllerCallsignsEqual(flight.controller, this.config.myCallsign)) {
             return true
         }
         const mySi = (this.config.myPositionId || '').toUpperCase()
@@ -5381,19 +5393,17 @@ class FlightStore {
         // Determine actions based on controller status
         let actions: string[] | undefined
         const myCallsign = actionConfig.myCallsign
-        const csEq = (a: string | undefined, b: string | undefined) =>
-            !!a && !!b && a.toUpperCase() === b.toUpperCase()
         const mySi = (actionConfig.myPositionId || '').toUpperCase()
         const ownerSiRaw = (flight.controllerId || '').toUpperCase()
         const isTrackedByMe =
-            csEq(flight.controller, myCallsign) ||
+            controllerCallsignsEqual(flight.controller, myCallsign) ||
             (!!mySi && !!ownerSiRaw && mySi === ownerSiRaw)
         // Owned if ES reports tracking callsign OR SI (callsign is often blank at TWR)
         const isUntracked =
             (!flight.controller || flight.controller === '') &&
             (!flight.controllerId || flight.controllerId === '')
         const isHandoffToMe =
-            csEq(flight.handoffTargetController, myCallsign) ||
+            controllerCallsignsEqual(flight.handoffTargetController, myCallsign) ||
             (!!actionConfig.myPositionId &&
                 !!flight.handoffTargetControllerId &&
                 actionConfig.myPositionId.toUpperCase() === flight.handoffTargetControllerId.toUpperCase())

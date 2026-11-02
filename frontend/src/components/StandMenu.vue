@@ -368,13 +368,14 @@ function standItemClass(stand: StandMenuStand) {
   const blockedAsOccupied = occKind === 'blocked' && occ?.blockFrom !== 'assigned'
   const blockedAsPlanned = occKind === 'blocked' && occ?.blockFrom === 'assigned'
   const planned = occKind === 'assigned' || blockedAsPlanned
-  // Fill = availability (amber/red/grey/default). Green left edge = preferred (exit-match).
+  // Fill = availability (amber/red/purple WIP/grey/default). Green left edge = preferred.
   return {
     selected: !!currentStand.value && currentStand.value.toUpperCase() === stand.name.toUpperCase(),
     'exit-match': stand.fit === 'preferred' && !notAllowed,
     'stand-occupied': !notAllowed && (occKind === 'occupied' || blockedAsOccupied),
     'stand-planned': !notAllowed && planned,
     'stand-planned-air': !notAllowed && planned && !!occ?.airborne,
+    'stand-closed': !notAllowed && occKind === 'closed',
     'stand-not-allowed': notAllowed,
   }
 }
@@ -387,9 +388,10 @@ function isAirbornePlanned(stand: StandMenuStand): boolean {
   return occ.kind === 'blocked' && occ.blockFrom === 'assigned'
 }
 
-/** occupied = on stand; assigned = planned; blocked = GRP BLOCKS/LIMITS neighbour */
+/** occupied = on stand; assigned = planned; blocked = neighbour; closed = maps WIP */
 function occupiedKindLabel(stand: StandMenuStand): string {
   if (!stand.occupied) return ''
+  if (stand.occupied.kind === 'closed') return 'Closed'
   // Neighbour blocked by a planned aircraft → same wording as that plan (Inbound / Planned)
   if (stand.occupied.kind === 'assigned' || stand.occupied.blockFrom === 'assigned') {
     return stand.occupied.airborne ? 'Inbound' : 'Planned'
@@ -398,10 +400,11 @@ function occupiedKindLabel(stand: StandMenuStand): string {
   return 'Occupied'
 }
 
-/** Status MDI — plan/inbound/block; occupied dep = takeoff, arr = parking. */
+/** Status MDI — plan/inbound/block/closed; occupied dep = takeoff, arr = parking. */
 function occupiedStatusIcon(stand: StandMenuStand): string | undefined {
   const occ = stand.occupied
   if (!occ) return undefined
+  if (occ.kind === 'closed') return 'mdi-barrier-block'
   if (occ.kind === 'assigned' || occ.blockFrom === 'assigned') {
     return occ.airborne ? 'mdi-airplane-landing' : 'mdi-map-marker-outline'
   }
@@ -434,10 +437,11 @@ function depTimeText(stand: StandMenuStand): string {
   return ''
 }
 
-/** Bottom-right key line: related stand when blocked, else dep time. */
+/** Bottom-right key line: related stand when blocked, map name when closed, else dep time. */
 function standKeySubText(stand: StandMenuStand): string {
   const occ = stand.occupied
   if (!occ) return ''
+  if (occ.kind === 'closed') return occ.label || ''
   if (occ.kind === 'blocked') return occ.relatedStand ?? ''
   return depTimeText(stand)
 }
@@ -450,6 +454,9 @@ function showBlockedByIcon(stand: StandMenuStand): boolean {
 
 function occupiedText(stand: StandMenuStand): string {
   if (!stand.occupied) return ''
+  if (stand.occupied.kind === 'closed') {
+    return `Closed ${stand.occupied.label}`.trim()
+  }
   const rel = stand.occupied.relatedStand ? ` ${stand.occupied.relatedStand}` : ''
   const time = depTimeText(stand)
   return `${occupiedKindLabel(stand)}${rel} ${stand.occupied.label}${time ? ` ${time}` : ''}`.trim()
@@ -759,6 +766,13 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
+/* GRpluginMaps WIP BLOCKS — distinct from occupied (red) / planned (amber) */
+.sid-route-item.stand-closed {
+  background: #d4c4e8;
+  color: #3a2048;
+  box-shadow: inset 0 0 0 1px #9070b0;
+}
+
 /* Preferred = green left edge only (fill stays availability colour) */
 .sid-route-item.exit-match {
   box-shadow: inset 8px 0 0 #33ae35;
@@ -775,6 +789,10 @@ onBeforeUnmount(() => {
 .sid-route-item.exit-match.stand-occupied,
 .sid-route-item.exit-match.stand-blocked {
   box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b07070;
+}
+
+.sid-route-item.exit-match.stand-closed {
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #9070b0;
 }
 
 .sid-route-item.stand-not-allowed {
@@ -807,6 +825,7 @@ onBeforeUnmount(() => {
 
 .sid-route-item.stand-occupied:not(:disabled):hover,
 .sid-route-item.stand-blocked:not(:disabled):hover,
+.sid-route-item.stand-closed:not(:disabled):hover,
 .sid-route-item.stand-planned:not(:disabled):hover,
 .sid-route-item.stand-planned.stand-planned-air:not(:disabled):hover {
   background: #1a3a6e;
@@ -1208,6 +1227,12 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
+.sid-route-overlay .sid-route-item.stand-closed {
+  background: #d4c4e8;
+  color: #3a2048;
+  box-shadow: inset 0 0 0 1px #9070b0;
+}
+
 .sid-route-overlay .sid-route-item.exit-match.stand-planned.stand-planned-air {
   box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #c0b8a8;
 }
@@ -1219,6 +1244,10 @@ onBeforeUnmount(() => {
 .sid-route-overlay .sid-route-item.exit-match.stand-occupied,
 .sid-route-overlay .sid-route-item.exit-match.stand-blocked {
   box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #b07070;
+}
+
+.sid-route-overlay .sid-route-item.exit-match.stand-closed {
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #9070b0;
 }
 
 .sid-route-overlay .sid-route-item.stand-not-allowed {

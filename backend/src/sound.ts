@@ -64,6 +64,7 @@ function resolveEuroscopeSound(euroscopeDir: string, fileName: string): string |
 }
 
 let dclSoundPath: string | null = null
+let rofSoundPath: string | null = null
 let transferRequestSoundPath: string | null = null
 let transferAcceptSoundPath: string | null = null
 let transferRefuseSoundPath: string | null = null
@@ -79,6 +80,21 @@ export function loadDclSound(euroscopeDir: string) {
     } else {
         console.log(
             `DCL sound file not found under ESAA/Plugins (looked for TopSkySoundCPDLC.wav)`,
+        )
+    }
+}
+
+/**
+ * Load the EFS ROF coordination sound from EuroScope directory.
+ * Expected location: ESAA/Plugins/TopSkySoundCoord.wav (same folder search as CPDLC).
+ */
+export function loadRofSound(euroscopeDir: string) {
+    rofSoundPath = resolvePluginSound(euroscopeDir, "TopSkySoundCoord.wav")
+    if (rofSoundPath) {
+        console.log(`ROF sound loaded: ${rofSoundPath}`)
+    } else {
+        console.log(
+            `ROF sound file not found under ESAA/Plugins (looked for TopSkySoundCoord.wav)`,
         )
     }
 }
@@ -113,6 +129,14 @@ export function loadTransferSounds(euroscopeDir: string) {
  */
 export function playDclSound() {
     playWav(dclSoundPath, "DCL")
+}
+
+/**
+ * Play the EFS ROF coordination sound (fire and forget).
+ * Does nothing if the sound file was not found.
+ */
+export function playRofSound() {
+    playWav(rofSoundPath, "ROF")
 }
 
 /**

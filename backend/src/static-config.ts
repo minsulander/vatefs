@@ -341,6 +341,23 @@ export function setMyAirports(airports: string[], opts?: { force?: boolean }): s
 }
 
 /**
+ * Collapse VATSIM login underscores for ownership compares.
+ * ESGG__TWR (empty facility token) must match ESGG_TWR on strips/handoffs.
+ */
+export function normalizeControllerCallsign(callsign: string): string {
+    return callsign.toUpperCase().replace(/_/g, "")
+}
+
+/** True when two controller callsigns refer to the same login (underscore-insensitive). */
+export function controllerCallsignsEqual(
+    a: string | undefined,
+    b: string | undefined,
+): boolean {
+    if (!a || !b) return false
+    return normalizeControllerCallsign(a) === normalizeControllerCallsign(b)
+}
+
+/**
  * Update my callsign (called when myselfUpdate is received or from CLI)
  */
 export function setMyCallsign(callsign: string) {

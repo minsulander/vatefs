@@ -49,9 +49,11 @@ import {
     parseAltitudeToFeet,
     parseGapKey,
     resolveEssaRwyConfigId,
+    getEssaRwyCombination,
     computeEssaSepIndicators,
     mergeEssaSepIndicators,
     ESSA_SEP_CYCLE,
+    normalizeSidName,
 } from "@vatefs/common"
 
 console.log(`VatEFS backend version: ${constants.version}`)
@@ -152,7 +154,7 @@ import {
     resolveEsaaPluginsDir,
     resolveIcaoAirlinesFile,
 } from "./euroscope-paths.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole, controllerCallsignsEqual } from "./config.js"
 import type { ControllerRole, EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
     normalizeEssaRoles,
@@ -201,6 +203,7 @@ import {
     getSidsForRunway,
     resolveSidAltitude,
     pickEseSidForRouteExit,
+    hasSidInEse,
 } from "./sid-data.js"
 import { isSlowAircraft, isPropellerEngine } from "./slow-aircraft.js"
 import {
@@ -295,7 +298,14 @@ import {
     cdmPluginVersionAtLeast,
     CDM_MASTER_CLICK_MIN_VERSION,
 } from "./cdm-plugin-version.js"
-import { loadDclSound, playDclSound, loadTransferSounds, playTransferSound } from "./sound.js"
+import {
+    loadDclSound,
+    playDclSound,
+    loadRofSound,
+    playRofSound,
+    loadTransferSounds,
+    playTransferSound,
+} from "./sound.js"
 import { loadIcaoAirports, getIcaoAirportName, getIcaoAirportInfo } from "./icao-airports.js"
 import { loadIcaoAirlines } from "./icao-airlines.js"
 import { loadSlowAircraft } from "./slow-aircraft.js"
@@ -562,6 +572,7 @@ if (EUROSCOPE_DIR) {
     }
     // Load DCL notification sound
     loadDclSound(EUROSCOPE_DIR)
+    loadRofSound(EUROSCOPE_DIR)
     loadTransferSounds(EUROSCOPE_DIR)
     // Initialize user settings + shared workspace Catalog persistence
     initUserSettings(EUROSCOPE_DIR)
@@ -1779,14 +1790,74 @@ function isValidEssaSepOverride(field: EssaSepField, value: string): boolean {
     return (ESSA_SEP_CYCLE[field] as readonly (string | null)[]).some((v) => v === value)
 }
 
-/** ESSA bankonfig id from ES ARR/DEP (+ AUP prefer), e.g. "9A". */
+/**
+ * Client-synced ESSA RWY combination lock (mirrors frontend `essaRwyConfigManual`).
+ * Manual picker wins over AUP prefer / dayRank for preferred-SID force.
+ */
+let essaRwyConfigManual = false
+let essaRwyConfigManualId: string | null = null
+
+/** Apply UI manual RWY config lock (or clear to AUTO). */
+function setEssaRwyConfigFromClient(configId: string | null, manual: boolean): void {
+    if (manual && configId && getEssaRwyCombination(configId)) {
+        essaRwyConfigManual = true
+        essaRwyConfigManualId = configId
+        console.log(`[ESSA] RWY config manual lock: ${configId}`)
+        return
+    }
+    if (essaRwyConfigManual || essaRwyConfigManualId) {
+        console.log(`[ESSA] RWY config → AUTO (was ${essaRwyConfigManualId ?? "?"})`)
+    }
+    essaRwyConfigManual = false
+    essaRwyConfigManualId = null
+}
+
+/** Drop manual lock when ES ARR/DEP change (same as frontend syncEssaRwyConfigFromEs). */
+function clearEssaRwyConfigManualIfNeeded(): void {
+    if (!essaRwyConfigManual && !essaRwyConfigManualId) return
+    console.log(`[ESSA] RWY config manual cleared (ES ARR/DEP changed)`)
+    essaRwyConfigManual = false
+    essaRwyConfigManualId = null
+}
+
+/**
+ * ESSA bankonfig id matching the UI: manual lock, else ES ARR/DEP + AUP prefer
+ * (e.g. R16 → 9C/15C so dayRank does not prefer A/Q over C/E).
+ */
 function resolveCurrentEssaConfigId(): string | null {
     if (!isEssaRolesConfig(staticConfig)) return null
+    if (essaRwyConfigManual && essaRwyConfigManualId) return essaRwyConfigManualId
     const ops = getEssaOps()
-    const prefer = getAupR16Status().suggestConfigId
+    // Ignore AUP prefer while manually locked (same as frontend essaRwyAutoPreferId)
+    const prefer = essaRwyConfigManual ? null : getAupR16Status().suggestConfigId
     return resolveEssaRwyConfigId(ops?.arr ?? [], ops?.dep ?? [], new Date(), {
         preferConfigId: prefer,
     })
+}
+
+/** Named RNAV SID exit prefix (PETEV from PETEV2E) — for same-exit force skip. */
+function namedSidExitPrefix(sid: string | undefined | null): string | undefined {
+    const n = normalizeSidName(sid)
+    if (!n || isTrackSidName(n)) return undefined
+    const m = n.match(/^([A-Z]{2,})(?=\d)/)
+    return m?.[1]
+}
+
+/**
+ * True when ESE already has a valid SID for the same TMA exit as preferred —
+ * do not re-force preferred letter/variant over it (e.g. PETEV2G vs PETEV2E).
+ */
+function isValidSameExitEseSid(
+    airport: string,
+    currentSid: string | undefined,
+    preferred: string,
+    runway?: string,
+): boolean {
+    if (!currentSid || sidsMatch(currentSid, preferred)) return false
+    const curExit = namedSidExitPrefix(currentSid)
+    const prefExit = namedSidExitPrefix(preferred)
+    if (!curExit || !prefExit || curExit !== prefExit) return false
+    return hasSidInEse(airport, currentSid, runway)
 }
 
 /** Build ESSA SEP/DLV/DEP GAP message (roles mode + ESSA ops only). */
@@ -2618,8 +2689,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             engineType: flight.engineType,
         }).sid
     } else {
-        const essa = staticConfig.activeRunways?.["ESSA"]
-        const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
+        const configId = resolveCurrentEssaConfigId()
         if (!configId) return
         const prefResult = resolvePreferredSid({
             airport,
@@ -2659,7 +2729,10 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
 
         f.depRwy = runway
         const esSid = f.sid
-        const needForce = !sidsMatch(esSid, sid)
+        // Keep an already-valid same-exit ESE SID (e.g. after clearance prep)
+        const keepSameExit =
+            !!esSid && isValidSameExitEseSid(airport, esSid, sid, runway)
+        const needForce = !sidsMatch(esSid, sid) && !keepSameExit
         if (needForce) {
             f.sidDisplayOverride = sid
             f.sid = sid
@@ -2667,7 +2740,11 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             console.log(`[ASSIGN] Force SID ${sid} (ES had ${esSid || "(none)"}) for ${callsign}`)
         } else {
             f.sidDisplayOverride = undefined
-            console.log(`[ASSIGN] ES SID ${esSid} already matches preferred — not forcing FPL`)
+            console.log(
+                keepSameExit
+                    ? `[ASSIGN] ES SID ${esSid} same-exit as preferred ${sid} — not forcing FPL`
+                    : `[ASSIGN] ES SID ${esSid} already matches preferred — not forcing FPL`,
+            )
         }
 
         const assignSlow = slow || isSlowSid(sid)
@@ -2734,8 +2811,8 @@ function resolvePreferredSidForFlight(flight: Flight): string | undefined {
         )
     }
 
-    const essa = staticConfig.activeRunways?.["ESSA"]
-    const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
+    // Same locked/current config id as the UI (manual lock + AUP prefer)
+    const configId = resolveCurrentEssaConfigId()
     if (!configId) return undefined
     return (
         resolvePreferredSid({
@@ -3118,10 +3195,12 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
 
     // Force SID only when ES already has a GetSid/ESE designator that mismatches preferred.
     // Empty SID → leave for ESE prio; do not invent an assignSid.
+    // Skip when ESE already has a valid same-exit SID (e.g. clearance already prepared).
     if (
         preferred &&
         !!flight.sid &&
         !sidsMatch(flight.sid, preferred) &&
+        !isValidSameExitEseSid(flight.origin || "", flight.sid, preferred, flight.depRwy) &&
         !isVectorDeparture(flight) &&
         !hasForcedSidInRoute(flight.route) &&
         !isSlowSid(flight.sid) &&
@@ -3153,8 +3232,7 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
     ) {
         let prefCfl: number | undefined
         if (cflSlow && (flight.origin || "").toUpperCase() === "ESSA") {
-            const essa = staticConfig.activeRunways?.["ESSA"]
-            const configId = resolveEssaRwyConfigId(essa?.arr ?? [], essa?.dep ?? [])
+            const configId = resolveCurrentEssaConfigId()
             if (configId) {
                 const tokens = (flight.route || "").trim().split(/\s+/).filter(Boolean)
                 if (tokens[0]?.includes("/")) tokens.shift()
@@ -3245,9 +3323,10 @@ function isTrackedByMeFlight(flight: Flight): boolean {
     const mySi = (staticConfig.myPositionId || "").toUpperCase()
     const ownerCs = flight.controller
     const ownerSi = (flight.controllerId || "").toUpperCase()
-    const csEq = (a: string | undefined, b: string | undefined) =>
-        !!a && !!b && a.toUpperCase() === b.toUpperCase()
-    return csEq(ownerCs, myCs) || (!!mySi && !!ownerSi && mySi === ownerSi)
+    return (
+        controllerCallsignsEqual(ownerCs, myCs) ||
+        (!!mySi && !!ownerSi && mySi === ownerSi)
+    )
 }
 
 /**
@@ -7133,6 +7212,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 currentUiSettings.transferSoundsEnabled = incoming.transferSoundsEnabled
                 update.transferSoundsEnabled = incoming.transferSoundsEnabled
             }
+            if (typeof incoming.rofSoundEnabled === "boolean") {
+                currentUiSettings.rofSoundEnabled = incoming.rofSoundEnabled
+                update.rofSoundEnabled = incoming.rofSoundEnabled
+            }
             if (typeof incoming.showAppDepXcFrequency === "boolean") {
                 currentUiSettings.showAppDepXcFrequency = incoming.showAppDepXcFrequency
                 update.showAppDepXcFrequency = incoming.showAppDepXcFrequency
@@ -7398,6 +7481,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 broadcastLayout()
                 broadcastEssaSepIndicators()
                 broadcastRefresh("ESSA roles changed")
+            }
+            break
+        }
+
+        case "setEssaRwyConfig": {
+            if (!isEssaRolesConfig(staticConfig)) break
+            const prev = resolveCurrentEssaConfigId()
+            setEssaRwyConfigFromClient(
+                typeof message.configId === "string" ? message.configId : null,
+                !!message.manual,
+            )
+            const next = resolveCurrentEssaConfigId()
+            if (prev !== next) {
+                broadcastEssaSepIndicators()
+                console.log(`[ESSA] RWY config id ${prev ?? "?"} → ${next ?? "?"}`)
             }
             break
         }
@@ -9578,9 +9676,20 @@ udpIn.on("message", (msg, rinfo) => {
                 setMyPositionId(undefined)
                 clearOnlineControllers()
                 pendingPluginRefreshAfterReconnect = true
-                pluginConnected = false
-                lastPluginUdpAt = 0
-                reportedPluginVersion = undefined
+                // Position change briefly emits CT0 while the plugin stays loaded.
+                // Keep UDP "connected" when recent traffic proves ES is still talking;
+                // only mark disconnected when UDP was already stale (plugin unloaded).
+                const udpFresh =
+                    lastPluginUdpAt > 0 && Date.now() - lastPluginUdpAt < PLUGIN_STALE_MS
+                if (!udpFresh) {
+                    pluginConnected = false
+                    lastPluginUdpAt = 0
+                    reportedPluginVersion = undefined
+                } else {
+                    console.log(
+                        "CT0 with fresh plugin UDP — keeping pluginConnected (await myselfUpdate refresh)",
+                    )
+                }
                 broadcastStatus()
                 broadcastRefresh("Connection lost")
 
@@ -9867,6 +9976,8 @@ udpIn.on("message", (msg, rinfo) => {
                 // Re-broadcast layout + ATIS (includes arr/dep runways for ESSA RWY label)
                 if (runwaysChanged) {
                     console.log(`Active runways changed: ${JSON.stringify(activeRunways)}`)
+                    // Match frontend: drop manual RWY lock when ES ARR/DEP change
+                    clearEssaRwyConfigManualIfNeeded()
                     if (!maybeRefreshEssaRunwayHeaders()) {
                         broadcastLayout()
                     }
@@ -10001,6 +10112,9 @@ udpIn.on("message", (msg, rinfo) => {
             // Plugin message was processed - only broadcast/log if there was an actual change
             if (result.transferSound && currentUiSettings.transferSoundsEnabled) {
                 playTransferSound(result.transferSound)
+            }
+            if (result.efsRofSound && currentUiSettings.rofSoundEnabled) {
+                playRofSound()
             }
             if (result.deletedStripIds && result.deletedStripIds.length > 0) {
                 for (const id of result.deletedStripIds) {

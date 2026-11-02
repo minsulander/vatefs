@@ -344,7 +344,7 @@ function essaDefaultColumnPlan(
     }
   }
 
-  // TWR alone — INBOUND APP own column; TAXI DEP above INBOUND GND
+  // TWR alone — no TAXIWAY ARR (soft-delete when separate GND assumes vacated ARR)
   if (!hasCd && !hasGnd && hasTwr) {
     return {
       columnCount: 4,
@@ -353,7 +353,6 @@ function essaDefaultColumnPlan(
         [
           { sectionId: 'ctr_arr' },
           ...runwayDrafts(runways.arr),
-          { sectionId: 'taxi_arr' },
         ],
         [
           { sectionId: 'ctr_dep', addFromTop: false },
@@ -567,7 +566,14 @@ export function annotateCatalogSection(
       }
     }
     if (sectionId === 'push_start') {
-      return { groupId: 'push_start', title: title.trim() || 'PUSH BACK / START UP' }
+      const t = title.trim()
+      // Never keep the raw section id (CSS uppercase → "PUSH_START" on the divider)
+      const looksLikeId =
+        !t || t === 'push_start' || t.toUpperCase().replace(/\s+/g, '_') === 'PUSH_START'
+      return {
+        groupId: 'push_start',
+        title: looksLikeId ? 'PUSH BACK / START-UP' : t,
+      }
     }
     // Never keep the bare YAML placeholder — catalog / defaults use INBOUND APP.
     // Merged / split INBOUND TWR-* forms use inbound_twr.
@@ -706,7 +712,10 @@ export function annotateCatalogSection(
       return { title: g.mergedTitle || title }
     }
     if (g.id === 'push_start') {
-      return { groupId: g.id, title: title || g.mergedTitle }
+      const t = (title || '').trim()
+      const looksLikeId =
+        !t || t === 'push_start' || t.toUpperCase().replace(/\s+/g, '_') === 'PUSH_START'
+      return { groupId: g.id, title: looksLikeId ? g.mergedTitle || 'PUSH BACK / START-UP' : t }
     }
     return { groupId: g.id, title: g.mergedTitle || title }
   }

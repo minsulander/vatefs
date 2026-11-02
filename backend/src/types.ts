@@ -215,8 +215,8 @@ export interface Flight {
 
     // Backend-managed state flags
     /**
-     * Cached ESSA STD conflict: assigned stand is BLOCKS/LIMITS-blocked.
-     * Mirrored onto FlightStrip.standBlocked for the amber STD cell.
+     * Cached ESSA STD conflict: stand occupied/planned by other ground traffic,
+     * or BLOCKS/LIMITS/closed. Mirrored onto FlightStrip.standBlocked (amber STD).
      */
     standBlocked?: boolean
     /** Cleared to land — VCH strip annotation 3 ("CTL") */

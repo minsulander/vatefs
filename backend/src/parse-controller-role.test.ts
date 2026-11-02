@@ -3,7 +3,7 @@
  * Run: npx tsx src/parse-controller-role.test.ts
  */
 import assert from "node:assert/strict"
-import { parseControllerRole } from "./static-config.js"
+import { parseControllerRole, controllerCallsignsEqual } from "./static-config.js"
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -46,6 +46,14 @@ check("ESSA APP with flexible underscores → APP", () => {
     assert.equal(parseControllerRole("ESSA__E_APP", []), "APP")
     assert.equal(parseControllerRole("ESSA_E__APP", []), "APP")
     assert.equal(parseControllerRole("ESSA_R_APP", []), "TWR")
+})
+
+check("controllerCallsignsEqual collapses underscores", () => {
+    assert.equal(controllerCallsignsEqual("ESGG__TWR", "ESGG_TWR"), true)
+    assert.equal(controllerCallsignsEqual("ESGG_TWR", "ESGG__TWR"), true)
+    assert.equal(controllerCallsignsEqual("ESGG_E_TWR", "ESGG__TWR"), false)
+    assert.equal(controllerCallsignsEqual("ESGG_TWR", "ESGG_GND"), false)
+    assert.equal(controllerCallsignsEqual(undefined, "ESGG_TWR"), false)
 })
 
 console.log(`${passed} passed`)

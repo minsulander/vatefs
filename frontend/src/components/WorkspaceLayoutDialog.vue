@@ -175,6 +175,12 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const folderOpen = ref<Record<string, boolean>>({})
 /** Snapshot when dialog opens — menu Cancel restores this after live preview */
 const layoutBeforeOpen = ref<WorkspaceLayout | null>(null)
+/**
+ * True after the user clicks a layout row (live preview). Menu open must NOT
+ * preview/reset the board — otherwise "Save current" is fighting a wiped layout.
+ * Matches SaabLayoutDialog didPick behaviour.
+ */
+const didPick = ref(false)
 
 const mustConfirm = computed(() => reason.value === 'role-change')
 
@@ -347,6 +353,7 @@ function previewSelectedOnBoard() {
 
 function selectLayout(id: string) {
   selectedId.value = id
+  didPick.value = true
   previewSelectedOnBoard()
 }
 
@@ -355,20 +362,28 @@ function snapshotLayoutBeforeOpen() {
   layoutBeforeOpen.value = active ? sanitizeWorkspaceLayout(active) : null
 }
 
-/** Select default for current roles and expand that folder (close the others). */
-function syncSelectionAndFolders() {
+/**
+ * Highlight a row + expand the current-role folder.
+ * Does not touch the board — caller decides whether to live-preview.
+ */
+function syncSelectionAndFolders(opts?: { preview?: boolean }) {
   savedTick.value++
+  const loadedId = ws.activeLayout.value?.sourceSavedId?.trim()
   const def = userDefaultId.value
-  selectedId.value =
-    def && allSaved.value.some((l) => l.id === def)
-      ? def
-      : builtinLayoutSelectionId(roleKey.value)
+  // Prefer what's actually on the board (so Save current matches the highlight)
+  if (loadedId && allSaved.value.some((l) => l.id === loadedId)) {
+    selectedId.value = loadedId
+  } else if (def && allSaved.value.some((l) => l.id === def)) {
+    selectedId.value = def
+  } else {
+    selectedId.value = builtinLayoutSelectionId(roleKey.value)
+  }
   const openMap: Record<string, boolean> = {}
   for (const f of roleFolders.value) {
     openMap[f.roleKey] = f.roleKey === roleKey.value
   }
   folderOpen.value = openMap
-  previewSelectedOnBoard()
+  if (opts?.preview) previewSelectedOnBoard()
 }
 
 // immediate: dialog often mounts with open already true (Ctrl+F5 / role prompt)
@@ -376,8 +391,11 @@ watch(
   open,
   (isOpen) => {
     if (!isOpen) return
+    didPick.value = false
     snapshotLayoutBeforeOpen()
-    syncSelectionAndFolders()
+    // role-change: preview the default so the board matches the choice they'll confirm.
+    // menu: keep the working board intact so dividers/heights can be saved as a new preset.
+    syncSelectionAndFolders({ preview: reason.value === 'role-change' })
   },
   { immediate: true },
 )
@@ -385,16 +403,17 @@ watch(
 // Roles can arrive after the dialog is already open — keep present-roles folder expanded
 watch(roleKey, () => {
   if (!open.value) return
-  syncSelectionAndFolders()
+  syncSelectionAndFolders({ preview: reason.value === 'role-change' || didPick.value })
 })
 
-/** Menu Cancel — restore board layout snapshot and close. Disabled when must confirm. */
+/** Menu Cancel — restore board only if a row preview changed it. Disabled when must confirm. */
 function closeOnly() {
   if (mustConfirm.value) return
-  if (layoutBeforeOpen.value) {
+  if (didPick.value && layoutBeforeOpen.value) {
     ws.previewLayout(layoutBeforeOpen.value)
   }
   layoutBeforeOpen.value = null
+  didPick.value = false
   open.value = false
 }
 
@@ -407,7 +426,14 @@ function onScrim() {
 function onApply() {
   const roles = [...store.essaRoles]
   const key = essaRoleKey(roles)
+  // Menu opened only to save/browse — no row click → keep working board, just close
+  if (!mustConfirm.value && !didPick.value) {
+    layoutBeforeOpen.value = null
+    open.value = false
+    return
+  }
   layoutBeforeOpen.value = null
+  didPick.value = false
   // Board already shows the selection from live preview; re-apply confirms + closes
   try {
     const builtinKey = parseBuiltinLayoutSelectionId(selectedId.value)

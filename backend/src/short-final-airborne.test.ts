@@ -177,7 +177,7 @@ check("short final stays on the arrival runway", () => {
     assert.notEqual(assignment?.sectionId, "taxi_arr")
 })
 
-check("threshold then vacate moves to taxi only after the pavement", () => {
+check("threshold then vacate leaves runway; TAXIWAY ARR only after TXIN", () => {
     const flight = seedArrival("SF2")
     radar("SF2", SHORT)
     assert.equal(flight.airborne, true)
@@ -186,8 +186,10 @@ check("threshold then vacate moves to taxi only after the pavement", () => {
     assert.equal(flightStore.getStripAssignment("SF2")?.sectionId === "taxi_arr", false)
     radar("SF2", OFF_RWY)
     assert.equal(flight.airborne, false)
-    const section = determineSectionForFlight(flight, staticConfig)
-    assert.equal(section?.ruleId, "taxi_arr")
+    // Vacate alone must not auto-pull to TAXIWAY ARR (TXIN required)
+    assert.notEqual(determineSectionForFlight(flight, staticConfig)?.sectionId, "taxi_arr")
+    flight.groundstate = "TXIN"
+    assert.equal(determineSectionForFlight(flight, staticConfig)?.sectionId, "taxi_arr")
 })
 
 check("go-around without touching the runway stays airborne on the next short final", () => {

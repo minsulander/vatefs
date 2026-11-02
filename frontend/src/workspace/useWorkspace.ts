@@ -1600,6 +1600,13 @@ export function useWorkspace() {
         let title = liveServerTitle
           ? (serverSec?.title ?? s.title ?? s.sectionId)
           : (s.title ?? serverSec?.title ?? s.sectionId)
+        // Prefer YAML / catalog wording — never show raw id as "PUSH_START"
+        if (s.sectionId === 'push_start') {
+          const u = (title || '').trim().toUpperCase().replace(/\s+/g, '_')
+          if (!title?.trim() || u === 'PUSH_START' || title.trim() === 'push_start') {
+            title = serverSec?.title?.trim() || 'PUSH BACK / START-UP'
+          }
+        }
         if (s.sectionId === 'inbound') {
           const wsU = (s.title || '').trim().toUpperCase()
           const isTwrForm =
