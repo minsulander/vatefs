@@ -1245,7 +1245,7 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         return true;
     } else if (subcommand == "help") {
         DisplayMessage(
-            ".efs start|stop|status|refresh|debug|cid|assume|transfer|apl|atyp  |  "
+            ".efs start|stop|restart|status|refresh|debug|cid|assume|transfer|apl|atyp  |  "
             "refresh also: set strip annotation 7 to EFSREF (not scratchpad)");
         return true;
     } else if (subcommand == "start") {
@@ -1254,6 +1254,12 @@ bool VatEFSPlugin::OnCompileCommand(const char *commandLine)
         return true;
     } else if (subcommand == "stop") {
         StopBackend();
+        return true;
+    } else if (subcommand == "restart") {
+        // Same as stop then start — recover half-dead UDP / ownership after position change
+        backendAutoRestartUsed = false;
+        StopBackend();
+        StartBackend();
         return true;
     } else if (subcommand == "status") {
         if (backendProcess == nullptr) {

@@ -1,5 +1,7 @@
 <template>
-  <div class="efs-top-bar text-body-2 text-grey">
+  <div ref="topBarEl" class="efs-top-bar text-body-2 text-grey">
+      <!-- Left/flexible chrome — may densify/clip; end cluster always stays visible -->
+      <div class="top-start-cluster">
       <!-- Left arrow: trash (recover / drop-to-delete) — RTC: per-column header -->
       <button
         v-if="!efs.multiAirport"
@@ -25,7 +27,7 @@
       />
 
       <!-- ESGG paper: RWY + covering roles (auto) -->
-      <div v-if="efs.esggRolesMode" class="top-status-cluster">
+      <div v-if="efs.esggRolesMode" class="top-status-cluster top-status-cluster--roles">
         <span
           class="essa-status-btn esgg-rwy-label"
           :title="esggRwyTitle"
@@ -33,11 +35,11 @@
         <span
           class="essa-status-btn esgg-roles-readonly"
           :title="esggRolesStatusTitle"
-        >Roles: {{ esggRolesLabel }}</span>
+        ><span v-if="!hideRolesPrefix">Roles: </span>{{ esggRolesLabel }}</span>
       </div>
 
       <!-- ESSA status indicators (also editable via menu) -->
-      <div v-if="efs.essaRolesMode" class="top-status-cluster">
+      <div v-if="efs.essaRolesMode" class="top-status-cluster top-status-cluster--roles">
         <button
           type="button"
           class="essa-status-btn"
@@ -51,12 +53,12 @@
         </button>
         <button
           type="button"
-          class="essa-status-btn"
+          class="essa-status-btn essa-status-btn--roles"
           :class="{ 'is-manual': efs.essaRolesManual }"
           :title="essaRolesStatusTitle"
           @click="openEssaRolesDialog"
         >
-          Roles: {{ essaRolesLabel }}
+          <span v-if="!hideRolesPrefix" class="essa-roles-prefix">Roles:</span>{{ hideRolesPrefix ? '' : ' ' }}{{ essaRolesLabel }}
         </button>
       </div>
 
@@ -220,8 +222,9 @@
       <span v-if="efs.multiAirport && efs.pendingIdleSwap" class="idle-hint ml-2">
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
-      <div v-if="showDclControls" class="top-status-cluster">
+      <div v-if="showDclControls && !hideDclVoiceChrome" class="top-status-cluster">
         <v-btn
+          v-if="!dclModeCompact"
           variant="text"
           size="small"
           class="dcl-btn"
@@ -244,12 +247,16 @@
             <v-btn
               variant="text"
               size="small"
-              class="dcl-mode-btn text-grey"
+              class="dcl-mode-btn"
+              :class="dclModeCompact ? 'text-green' : 'text-grey'"
               v-bind="props"
-              :title="`DCL mode: ${efs.dclMode.toUpperCase()}`"
+              :title="dclModeCompact ? `DCL mode ${efs.dclMode.toUpperCase()} (menu: change / disconnect)` : `DCL mode: ${efs.dclMode.toUpperCase()}`"
             >
-              {{ efs.dclMode.toUpperCase() }}
-              <v-icon end size="x-small">mdi-chevron-down</v-icon>
+              <template v-if="dclModeCompact">DCL: {{ dclModeLetter }}</template>
+              <template v-else>
+                {{ efs.dclMode.toUpperCase() }}
+                <v-icon end size="x-small">mdi-chevron-down</v-icon>
+              </template>
             </v-btn>
           </template>
           <div class="efs-popup-menu" @click.stop>
@@ -264,6 +271,12 @@
                 @click="efs.dclSetMode(mode.value)"
               >{{ mode.label }}</button>
             </div>
+            <button
+              v-if="dclModeCompact"
+              type="button"
+              class="efs-popup-item"
+              @click="onDclClick"
+            >Disconnect DCL</button>
           </div>
         </v-menu>
         <span
@@ -272,7 +285,9 @@
           :title="esggRwyTitle"
         >{{ esggRwyLabel }}</span>
       </div>
-      <v-spacer />
+      </div>
+      <!-- Config + everything to its right must never be clipped by long Roles/RWY text -->
+      <div class="top-end-cluster">
       <!-- ESSA CDM master — clickable only with CDM plugin ≥ 2.31; else indicator -->
       <v-btn
         v-if="showCdmMasterIndicator && efs.cdmMasterClickable"
@@ -284,13 +299,13 @@
         :disabled="!efs.isController || efs.cdmMasterPending"
         :title="cdmMasterTooltip"
         @click="onCdmMasterClick"
-      >{{ efs.cdmMasterLabel }}</v-btn>
+      >{{ cdmChromeLabel }}</v-btn>
       <span
         v-else-if="showCdmMasterIndicator"
         class="cdm-master-status"
         :class="efs.cdmMasterIsMe ? 'text-green' : 'text-grey'"
         :title="cdmMasterTooltip"
-      >{{ efs.cdmMasterLabel }}</span>
+      >{{ cdmChromeLabel }}</span>
       <!-- Config selector (chevron only — name lives in the menu) -->
       <v-menu
         v-if="efs.availableConfigs.length > 1"
@@ -844,13 +859,17 @@
           </v-icon>
         </button>
       </div>
+      </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue"
 import { useEfsStore } from "../store/efs"
-import { useEfsChromeScaleValue } from "@/composables/useEfsUiScale"
+import {
+  useEfsChromeScaleValue,
+  registerTopBarChromeDensify,
+} from "@/composables/useEfsUiScale"
 import type { ConfigInfo, DclMode } from "@vatefs/common"
 import {
   ESSA_RWY_COMBINATIONS,
@@ -866,6 +885,10 @@ import {
   DTRANS_CATALOG,
   type DtransVariantId,
 } from "@/workspace"
+import {
+  compactEssaRolesLabel,
+  type EssaRolesCompactLevel,
+} from "@/workspace/roleLabel"
 import { useInfoStripMenu } from "@/composables/useInfoStrips"
 import {
   useRwyFlagMenu,
@@ -1305,9 +1328,31 @@ function sortEssaRolesDisplay(roles: string[]): string[] {
   return [...roles].sort((a, b) => (order.get(a as typeof ESSA_ROLE_ORDER[number]) ?? 99) - (order.get(b as typeof ESSA_ROLE_ORDER[number]) ?? 99))
 }
 
-const essaRolesLabel = computed(() => {
+/**
+ * Top-bar densify (before chrome-scale squash):
+ * 0 — full Roles / DCL Voice|MANUAL / CDM: MASTER
+ * 1 — Roles slash-collapse; DCL: M|A|S; hide DCL Voice; CDM → "CDM"
+ * 2 — shorter Roles (G-E/N); same DCL/CDM compact
+ * 3 — tightest Roles (drop "Roles:" prefix)
+ */
+const chromeDenseLevel = ref<EssaRolesCompactLevel>(0)
+
+const essaRolesFullLabel = computed(() => {
   const roles = sortEssaRolesDisplay(efs.essaRoles)
   return roles.length > 0 ? roles.join(', ') : '(none)'
+})
+
+const essaRolesLabel = computed(() =>
+  compactEssaRolesLabel(efs.essaRoles, chromeDenseLevel.value),
+)
+
+const hideRolesPrefix = computed(() => chromeDenseLevel.value >= 3)
+
+/** Connected mode letter for compact DCL: M / A / S */
+const dclModeLetter = computed(() => {
+  if (efs.dclMode === 'auto') return 'A'
+  if (efs.dclMode === 'semi') return 'S'
+  return 'M'
 })
 
 const essaRwyStatusTitle = computed(() => {
@@ -1316,24 +1361,41 @@ const essaRwyStatusTitle = computed(() => {
 })
 
 const essaRolesStatusTitle = computed(() => {
+  const full = essaRolesFullLabel.value
   return efs.essaRolesManual
-    ? `ESSA roles (manual override): ${essaRolesLabel.value}`
-    : 'ESSA roles (auto)'
+    ? `ESSA roles (manual override): ${full}`
+    : `ESSA roles (auto): ${full}`
 })
+
+const topBarEl = ref<HTMLElement | null>(null)
+
+async function setChromeDenseLevel(level: EssaRolesCompactLevel) {
+  chromeDenseLevel.value = level
+  await nextTick()
+}
 
 function sortEsggRolesDisplay(roles: string[]): string[] {
   const order = ['TWR', 'GND', 'CD']
   return [...roles].sort((a, b) => order.indexOf(a) - order.indexOf(b))
 }
 
-const esggRolesLabel = computed(() => {
+const esggRolesFullLabel = computed(() => {
   const roles = sortEsggRolesDisplay(efs.esggRoles)
   return roles.length ? roles.join(', ') : '-'
 })
 
+/** Densify ESGG covering: CD→C; drop commas at tightest level */
+const esggRolesLabel = computed(() => {
+  const roles = sortEsggRolesDisplay(efs.esggRoles).map((r) =>
+    chromeDenseLevel.value >= 1 && r === 'CD' ? 'C' : r,
+  )
+  if (!roles.length) return '-'
+  return chromeDenseLevel.value >= 3 ? roles.join(' ') : roles.join(', ')
+})
+
 const esggRolesStatusTitle = computed(
   () =>
-    `Covering (from your position + who is online below): ${esggRolesLabel.value}`,
+    `Covering (from your position + who is online below): ${esggRolesFullLabel.value}`,
 )
 
 /** Active ESGG runway(s) from ATIS / rwyconfig — only 03 / 21. */
@@ -1918,6 +1980,23 @@ const dclAirportTaken = computed(
   () => !dclConnected.value && !!efs.dclAirportStationOnline,
 )
 
+const dclModeCompact = computed(
+  () => chromeDenseLevel.value >= 1 && dclConnected.value,
+)
+
+/** Voice (not connected) takes space — hide when densifying; connected/error/OTHER stay */
+const hideDclVoiceChrome = computed(() => {
+  if (chromeDenseLevel.value < 1) return false
+  if (dclConnected.value) return false
+  if (dclAirportTaken.value) return false
+  if (efs.dclStatus === 'error') return false
+  return true
+})
+
+const cdmChromeLabel = computed(() =>
+  chromeDenseLevel.value >= 1 ? 'CDM' : efs.cdmMasterLabel,
+)
+
 /**
  * DCL chrome for CD/DEL — never in RTC.
  * Stay visible while Hoppie/DCL remains connected even if CD role is dropped.
@@ -2049,10 +2128,12 @@ onMounted(() => {
   essaRwyTickTimer = setInterval(() => {
     essaRwyNowTick.value = Date.now()
   }, 60_000)
+  registerTopBarChromeDensify({ setLevel: setChromeDenseLevel })
   void nextTick(() => bindAirportStripObserver())
 })
 
 onUnmounted(() => {
+  registerTopBarChromeDensify(null)
   if (essaRwyTickTimer) {
     clearInterval(essaRwyTickTimer)
     essaRwyTickTimer = null
@@ -2091,10 +2172,29 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* Prefer chrome-scale compression over flex-squashing text/controls.
-   Airport strip is the exception — it may shrink/scroll so config stays reachable. */
-.efs-top-bar > :not(.v-spacer):not(.top-airport-strip) {
+/* Start cluster shrinks/clips; end cluster (config+) never leaves the viewport */
+.top-start-cluster {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  gap: inherit;
+}
+
+.top-start-cluster > :not(.top-airport-strip):not(.top-status-cluster--roles) {
   flex-shrink: 0;
+}
+
+/* Config + CDM + ATIS/QNH/OK/Fullscreen — pinned to the right, never clipped */
+.top-end-cluster {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  gap: clamp(calc(4px * var(--tb)), 0.5vw, calc(10px * var(--tb)));
+  min-width: 0;
 }
 
 .top-airport-strip {
@@ -2115,12 +2215,32 @@ onUnmounted(() => {
   flex: 0 0 auto;
 }
 
-/* RWY / Roles cluster — roomier spacing when width allows */
+/* Default status cluster (e.g. DCL) — fixed size */
 .top-status-cluster {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: clamp(calc(8px * var(--tb)), 1.1vw, calc(22px * var(--tb)));
+  gap: clamp(calc(6px * var(--tb)), 0.8vw, calc(22px * var(--tb)));
+}
+
+/* RWY / Roles — may shrink; roles text densifies via JS */
+.top-status-cluster--roles {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.essa-status-btn--roles {
+  flex: 0 1 auto;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.essa-roles-prefix {
+  font-weight: inherit;
 }
 
 .top-menu-btn {

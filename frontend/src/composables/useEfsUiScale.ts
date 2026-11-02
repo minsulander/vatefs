@@ -56,6 +56,31 @@ function computeChromeScale(percent: number): number {
 /** Base chrome before overflow-fit compression */
 let baseChromeScale = 1
 let chromeFitRaf = 0
+let chromeFitGen = 0
+
+/**
+ * Optional top-bar densify hook (registered by EfsTopBar).
+ * Runs before chrome-scale compression: Roles suffixes, DCL M/A/S, CDM → "CDM".
+ */
+export type TopBarChromeDensify = {
+  /** Apply densify level 0..3; await Vue DOM update before measuring. */
+  setLevel: (level: 0 | 1 | 2 | 3) => Promise<void>
+}
+
+/** @deprecated use TopBarChromeDensify */
+export type TopBarRolesDensify = TopBarChromeDensify
+
+let topBarChromeDensify: TopBarChromeDensify | null = null
+
+export function registerTopBarChromeDensify(handler: TopBarChromeDensify | null): void {
+  topBarChromeDensify = handler
+  scheduleChromeFit()
+}
+
+/** @deprecated use registerTopBarChromeDensify */
+export function registerTopBarRolesDensify(handler: TopBarChromeDensify | null): void {
+  registerTopBarChromeDensify(handler)
+}
 
 function updateBarHeights(chrome: number): void {
   if (typeof document === 'undefined') return
@@ -115,14 +140,31 @@ function measureBarNeed(el: HTMLElement): number {
 /** Floor so overflow never collapses the menubar to “tiny until UI-scale poke”. */
 const CHROME_FIT_MIN = 0.72
 
+function worstBarFitRatio(bars: HTMLElement[]): number {
+  let worst = 1
+  for (const el of bars) {
+    const avail =
+      el.parentElement?.clientWidth ||
+      document.documentElement.clientWidth ||
+      el.clientWidth
+    if (avail < 80) continue
+    const need = measureBarNeed(el)
+    if (avail > 0 && need > avail + 1) {
+      worst = Math.min(worst, avail / need)
+    }
+  }
+  return worst
+}
+
 /**
- * If top/bottom bar content overflows the window width, compress --efs-chrome-scale
- * (fonts, padding, icon sizes via chrome) until it fits.
- * Airport strip may scroll (see .top-airport-strip); do not let one huge strip
- * squash chrome below CHROME_FIT_MIN.
+ * If top/bottom bar content overflows the window width:
+ * 1) densify ESSA Roles suffixes (-E/-N/-W) when registered
+ * 2) then compress --efs-chrome-scale until it fits (floor CHROME_FIT_MIN)
+ * Airport strip may scroll; do not let one huge strip squash chrome below the floor.
  */
-function fitChromeToWidth(): void {
+async function fitChromeToWidth(): Promise<void> {
   if (typeof document === 'undefined') return
+  const gen = ++chromeFitGen
   const root = document.documentElement
   const bars = [
     document.querySelector('.efs-top-bar') as HTMLElement | null,
@@ -137,31 +179,37 @@ function fitChromeToWidth(): void {
     return
   }
 
+  // Full wording + base chrome, then densify (Roles / DCL / CDM) before scale squash
+  root.style.setProperty('--efs-chrome-scale', String(baseChromeScale))
+  root.style.setProperty('--efs-chrome-fit', '1')
+  updateBarHeights(baseChromeScale)
+  if (topBarChromeDensify) {
+    await topBarChromeDensify.setLevel(0)
+    if (gen !== chromeFitGen) return
+    for (let level = 0; level < 3; level++) {
+      const worst = worstBarFitRatio(bars)
+      if (worst >= 0.999) break
+      await topBarChromeDensify.setLevel((level + 1) as 0 | 1 | 2 | 3)
+      if (gen !== chromeFitGen) return
+    }
+  }
+
   // Measure against uncompressed chrome, then refine (non-linear bits / subpixel)
   let fit = 1
   for (let pass = 0; pass < 3; pass++) {
+    if (gen !== chromeFitGen) return
     const chromeTry = baseChromeScale * fit
     root.style.setProperty('--efs-chrome-scale', String(chromeTry))
     root.style.setProperty('--efs-chrome-fit', String(fit))
     updateBarHeights(chromeTry)
 
-    let worst = 1
-    for (const el of bars) {
-      const avail =
-        el.parentElement?.clientWidth ||
-        document.documentElement.clientWidth ||
-        el.clientWidth
-      if (avail < 80) continue
-      const need = measureBarNeed(el)
-      if (avail > 0 && need > avail + 1) {
-        worst = Math.min(worst, avail / need)
-      }
-    }
+    const worst = worstBarFitRatio(bars)
     if (worst >= 0.999) break
     fit = Math.min(1, Math.max(CHROME_FIT_MIN, fit * worst * 0.98))
     if (fit <= CHROME_FIT_MIN + 0.001) break
   }
 
+  if (gen !== chromeFitGen) return
   const chrome = baseChromeScale * fit
   efsChromeScale.value = chrome
   root.style.setProperty('--efs-chrome-scale', String(chrome))
@@ -175,7 +223,7 @@ function scheduleChromeFit(): void {
   chromeFitRaf = requestAnimationFrame(() => {
     chromeFitRaf = requestAnimationFrame(() => {
       chromeFitRaf = 0
-      fitChromeToWidth()
+      void fitChromeToWidth()
     })
   })
 }

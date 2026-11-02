@@ -62,6 +62,67 @@ export function formatEssaRolesLabel(roles: string[]): string {
   return parts.join(', ')
 }
 
+/**
+ * Top-bar densify levels for ESSA covering roles (shorten -E/-N/-W when tight):
+ * 0 — full tokens: GND-E, GND-N, TWR-W
+ * 1 — slash suffixes + collapse complete families: GND-E/N, TWR, GND
+ * 2 — short family letter: G-E/N, T-W
+ * 3 — tightest: GE/N, TW
+ */
+export type EssaRolesCompactLevel = 0 | 1 | 2 | 3
+
+export function compactEssaRolesLabel(
+  roles: string[],
+  level: EssaRolesCompactLevel = 0,
+): string {
+  const sorted = sortEssaRoleList(roles)
+  if (sorted.length === 0) return '(none)'
+
+  const set = new Set(sorted)
+  const parts: string[] = []
+
+  if (set.has('CD')) parts.push(level >= 1 ? 'C' : 'CD')
+
+  const gndSuffixes = ALL_GND.filter((r) => set.has(r)).map((r) => r.slice(4))
+  if (gndSuffixes.length === ALL_GND.length && level >= 1) {
+    parts.push(level >= 2 ? 'G' : 'GND')
+  } else if (gndSuffixes.length) {
+    if (level === 0) {
+      for (const r of ALL_GND) if (set.has(r)) parts.push(r)
+    } else if (level === 1) {
+      parts.push(`GND-${gndSuffixes.join('/')}`)
+    } else if (level === 2) {
+      parts.push(`G-${gndSuffixes.join('/')}`)
+    } else {
+      parts.push(`G${gndSuffixes.join('/')}`)
+    }
+  }
+
+  const twrSuffixes = ALL_TWR.filter((r) => set.has(r)).map((r) => r.slice(4))
+  if (twrSuffixes.length === ALL_TWR.length && level >= 1) {
+    parts.push(level >= 2 ? 'T' : 'TWR')
+  } else if (twrSuffixes.length) {
+    if (level === 0) {
+      for (const r of ALL_TWR) if (set.has(r)) parts.push(r)
+    } else if (level === 1) {
+      parts.push(`TWR-${twrSuffixes.join('/')}`)
+    } else if (level === 2) {
+      parts.push(`T-${twrSuffixes.join('/')}`)
+    } else {
+      parts.push(`T${twrSuffixes.join('/')}`)
+    }
+  }
+
+  if (set.has('APP')) parts.push(level >= 3 ? 'A' : 'APP')
+
+  for (const r of sorted) {
+    if (r === 'CD' || r === 'APP' || r.startsWith('GND-') || r.startsWith('TWR-')) continue
+    parts.push(r)
+  }
+
+  return parts.join(level >= 3 ? ' ' : ', ')
+}
+
 export type EssaRoleCombination = {
   roles: string[]
   roleKey: string
