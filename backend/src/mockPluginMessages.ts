@@ -130,8 +130,8 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate("NAX254", "ESSA", "LIRF", "B738", {
         rfl: 38000,
         depRwy: "01L",
-        sid: "NOSLI6C",
-        route: "NOSLI",
+        sid: "TOVRI6C",
+        route: "TOVRI",
     }),
     ctrUpdate("NAX254", {
         squawk: "2234",
@@ -174,7 +174,8 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate("AFR1234", "ESSA", "LFPG", "A320", {
         rfl: 37000,
         depRwy: "01L",
-        sid: "NOSLI6C",
+        sid: "BABAP6C",
+        route: "BABAP",
         eobt: "1310",
     }),
     ctrUpdate("AFR1234", {
@@ -230,7 +231,8 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate("RYR123", "ESSA", "EIDW", "B738", {
         rfl: 38000,
         depRwy: "01L",
-        sid: "NOSLI6C",
+        sid: "TOVRI6C",
+        route: "TOVRI",
         eobt: "1305",
     }),
     ctrUpdate("RYR123", {
@@ -259,7 +261,8 @@ export const mockPluginMessages: PluginMessage[] = [
     fpUpdate("WZZ7890", "ESSA", "LHBP", "A321", {
         rfl: 37000,
         depRwy: "01L",
-        sid: "NOSLI6C",
+        sid: "BABAP6C",
+        route: "BABAP",
         eobt: "1255",
     }),
     ctrUpdate("WZZ7890", {

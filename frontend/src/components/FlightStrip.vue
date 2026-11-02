@@ -9388,6 +9388,17 @@ button.tobt-setby-pm:hover {
   bottom: calc(var(--frame-visual-pad-y) / 3);
   border: calc(2px * var(--strip-scale, 1)) solid #111;
 }
+/* Compact only: nudge short sides out toward the cell edges so the stroke
+   clears SID glyphs. Keep overflow:hidden so .fit-font sizing is unchanged;
+   top/bottom and stroke thickness stay put. */
+.flight-strip.strip-compact .strip-main .cell-sid.sid-mdi-box:not(.ghost)::after {
+  left: 0;
+  right: 0;
+}
+.flight-strip.strip-compact.rtc-layout .strip-main .cell-sid.sid-mdi-box:not(.ghost)::after {
+  left: 0;
+  right: 0;
+}
 /* Uncleared XFL/CFL/AHD/SID (value present) — same amber as pending transfer */
 .cell-xfl.clr-pending-hl:not(.ghost),
 .cell-cfl.clr-pending-hl:not(.ghost),
