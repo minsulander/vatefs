@@ -1,5 +1,5 @@
 /**
- * ESSA: GND soft-deletes TWR-owned LINEUP/DEPA deps (separate TWR online).
+ * ESSA: GND soft-deletes TWR-assumed deps when TWR is separate (not covering).
  * Run: npx tsx src/delete-dep-twr-lineup-gnd.test.ts
  */
 
@@ -9,12 +9,11 @@ import type { DeleteRule, EfsStaticConfig } from "./config-types.js"
 import { shouldDeleteFlight } from "./rules-engine.js"
 
 const DELETE_DEP: DeleteRule = {
-    id: "delete_dep_twr_lineup_gnd",
+    id: "delete_dep_twr_assumed_gnd",
     direction: "departure",
     airborne: false,
     controller: "not_myself",
     ownerRole: ["TWR"],
-    groundstates: ["LINEUP", "DEPA"],
     myRole: ["GND"],
     notMyRole: ["TWR"],
     essaFamilies: ["GND"],
@@ -23,12 +22,11 @@ const DELETE_DEP: DeleteRule = {
 }
 
 const DELETE_LOCAL: DeleteRule = {
-    id: "delete_dep_twr_lineup_local_gnd",
+    id: "delete_dep_twr_assumed_local_gnd",
     direction: "local",
     airborne: false,
     controller: "not_myself",
     ownerRole: ["TWR"],
-    groundstates: ["LINEUP", "DEPA"],
     myRole: ["GND"],
     notMyRole: ["TWR"],
     essaFamilies: ["GND"],
@@ -71,7 +69,7 @@ function depFlight(overrides: Partial<Flight> = {}): Flight {
         origin: "ESSA",
         destination: "ESGG",
         airborne: false,
-        groundstate: "LINEUP",
+        groundstate: "TAXI",
         controller: "ESSA_W__TWR",
         ...overrides,
     }
@@ -87,21 +85,32 @@ function check(name: string, fn: () => void) {
     }
 }
 
-console.log("delete_dep_twr_lineup_gnd")
+console.log("delete_dep_twr_assumed_gnd")
 
-check("hides TWR-owned LINEUP dep on separate GND", () => {
+check("hides TWR-assumed TAXI dep on separate GND", () => {
     const r = shouldDeleteFlight(depFlight(), baseConfig())
     assert.equal(r.shouldDelete, true)
-    assert.equal(r.ruleId, "delete_dep_twr_lineup_gnd")
+    assert.equal(r.ruleId, "delete_dep_twr_assumed_gnd")
 })
 
-check("hides TWR-owned DEPA dep on separate GND", () => {
+check("hides TWR-assumed LINEUP dep on separate GND", () => {
+    const r = shouldDeleteFlight(depFlight({ groundstate: "LINEUP" }), baseConfig())
+    assert.equal(r.shouldDelete, true)
+})
+
+check("hides TWR-assumed DEPA dep on separate GND", () => {
     const r = shouldDeleteFlight(depFlight({ groundstate: "DEPA" }), baseConfig())
     assert.equal(r.shouldDelete, true)
 })
 
-check("keeps TWR-owned TAXI dep visible on GND", () => {
-    const r = shouldDeleteFlight(depFlight({ groundstate: "TAXI" }), baseConfig())
+check("keeps pending XFER (GND still owns) visible", () => {
+    const r = shouldDeleteFlight(
+        depFlight({
+            controller: "ESSA_W_GND",
+            handoffTargetController: "ESSA_W__TWR",
+        }),
+        baseConfig(),
+    )
     assert.equal(r.shouldDelete, false)
 })
 
@@ -124,18 +133,18 @@ check("does not hide when GND covers TWR (combined roles)", () => {
     assert.equal(r.shouldDelete, false)
 })
 
-check("hides local LINEUP owned by TWR", () => {
+check("hides local TAXI owned by TWR", () => {
     const r = shouldDeleteFlight(
         depFlight({
             callsign: "ABC123",
             origin: "ESSA",
             destination: "ESSA",
-            groundstate: "LINEUP",
+            groundstate: "TAXI",
         }),
         baseConfig(),
     )
     assert.equal(r.shouldDelete, true)
-    assert.equal(r.ruleId, "delete_dep_twr_lineup_local_gnd")
+    assert.equal(r.ruleId, "delete_dep_twr_assumed_local_gnd")
 })
 
 console.log("\nall passed")

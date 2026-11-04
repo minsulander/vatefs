@@ -170,6 +170,47 @@ check("GND separate: after ASSUME (ARR) stay taxi_arr", () => {
     assert.equal(section?.ruleId, "taxi_arr_assumed_gnd_separate")
 })
 
+check("GND separate: ASSUME with CTL still set → taxi_arr (no TXI)", () => {
+    setRoles("ESSA_W_GND", "GND", ["GND-W"], ["GND"])
+    staticConfig.onlineControllers = new Map([
+        ["ESSA_W_TWR", { role: "TWR", frequency: 118.5, callsign: "ESSA_W_TWR" }],
+    ])
+    staticConfig.activeRunways = { ESSA: { arr: ["01L"], dep: ["01R"] } }
+    const section = determineSectionForFlight(
+        arrival({
+            controller: "ESSA_W_GND",
+            handoffTargetController: "",
+            clearedToLand: true,
+            groundstate: "ARR",
+            arrRwy: "01R",
+            depRwy: "01R",
+        }),
+        staticConfig,
+    )
+    assert.equal(section?.sectionId, "taxi_arr")
+    assert.equal(section?.ruleId, "taxi_arr_assumed_gnd_separate")
+})
+
+check("GND separate: ASSUME on RWY polygon without TXI → taxi_arr", () => {
+    setRoles("ESSA_W_GND", "GND", ["GND-W"], ["GND"])
+    staticConfig.onlineControllers = new Map([
+        ["ESSA_W_TWR", { role: "TWR", frequency: 118.5, callsign: "ESSA_W_TWR" }],
+    ])
+    const section = determineSectionForFlight(
+        arrival({
+            controller: "ESSA_W_GND",
+            handoffTargetController: "",
+            clearedToLand: true,
+            groundstate: "ARR",
+            ...ON_RWY,
+            currentAltitude: 50,
+        }),
+        staticConfig,
+    )
+    assert.equal(section?.sectionId, "taxi_arr")
+    assert.equal(section?.ruleId, "taxi_arr_assumed_gnd_separate")
+})
+
 check("Combined GND+TWR: TXIN (TAXI) → taxi_arr even on RWY", () => {
     setRoles("ESSA_E_TWR", "TWR", ["TWR-E", "GND-E"], ["GND", "TWR"])
     staticConfig.onlineControllers = new Map()

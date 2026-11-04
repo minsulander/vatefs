@@ -4,6 +4,7 @@ import {
   ESSA_RWY_COMBINATIONS,
   formatEssaRwyPdfName,
   getEssaRwyCombination,
+  isAtisLvpAirport,
   isEssaRnpStar,
   isEssaIlsLikeRnpLetter,
   parseEssaRnpOpText,
@@ -26,6 +27,91 @@ import {
   getEssa19LSidBriefing,
   getEssaTurnDepBriefing,
 } from '@/data/essa-briefing-info'
+import { getWorkspace } from '@/workspace'
+
+/** First painted section for ops strips (SVFR / LVP / R16) — prefer workspace display. */
+function defaultOpsHostTargets(): { bayId: string | null; sectionId: string | null } {
+  const store = useEfsStore()
+  const layout = store.layout
+  if (store.workspaceMode) {
+    try {
+      const ws = getWorkspace()
+      void ws.activeLayout.value
+      for (const bay of ws.buildDisplayBays(layout)) {
+        const sec = bay.sections[0]
+        if (!sec?.id) continue
+        const serverBay =
+          layout.bays.find((b) => b.sections.some((s) => s.id === sec.id)) ?? layout.bays[0]
+        return { bayId: serverBay?.id ?? null, sectionId: sec.id }
+      }
+    } catch {
+      /* workspace not ready */
+    }
+  }
+  return {
+    bayId: layout.bays[0]?.id ?? null,
+    sectionId: layout.bays[0]?.sections[0]?.id ?? null,
+  }
+}
+
+export type OpsAirportVariant = {
+  id: string
+  airport: string
+  text: string
+  auto: boolean
+}
+
+function normalizeOpsAirport(icao: string): string {
+  return icao.trim().toUpperCase()
+}
+
+/** Primary airport for single-board ESSA / OTHER catalogs. */
+export function primaryOpsAirport(): string {
+  const store = useEfsStore()
+  return normalizeOpsAirport(store.myAirports[0] || 'LOCAL')
+}
+
+/** RTC column bay for an ICAO, else first board bay. */
+export function bayIdForOpsAirport(icao: string): string | null {
+  const store = useEfsStore()
+  const u = normalizeOpsAirport(icao)
+  if (store.multiAirport) {
+    for (let i = 0; i < store.layout.bays.length; i++) {
+      const bay = store.layout.bays[i]
+      if (!bay) continue
+      const a = (store.columnAirports[i] ?? bay.airport ?? '').toUpperCase()
+      if (a === u) return bay.id
+    }
+    return null
+  }
+  return defaultOpsHostTargets().bayId
+}
+
+export function sectionIdForOpsBay(bayId: string | null): string | null {
+  if (!bayId) return defaultOpsHostTargets().sectionId
+  const store = useEfsStore()
+  const bay = store.layout.bays.find((b) => b.id === bayId)
+  if (store.workspaceMode) {
+    try {
+      const ws = getWorkspace()
+      void ws.activeLayout.value
+      const serverSecIds = new Set((bay?.sections ?? []).map((s) => s.id))
+      for (const db of ws.buildDisplayBays(store.layout)) {
+        for (const sec of db.sections) {
+          if (serverSecIds.has(sec.id)) return sec.id
+        }
+      }
+    } catch {
+      /* workspace not ready */
+    }
+  }
+  return bay?.sections[0]?.id ?? defaultOpsHostTargets().sectionId
+}
+
+function opsHostForAirport(icao: string): { bayId: string | null; sectionId: string | null } {
+  const bayId = bayIdForOpsAirport(icao)
+  return { bayId, sectionId: sectionIdForOpsBay(bayId) }
+}
 
 const DISMISS_KEY = 'efs/infoStrips/dismissed'
 const PLACEMENT_KEY = 'efs/infoStrips/placement'
@@ -52,6 +138,29 @@ export const SID19L_INFO_KIND = 'sid19l'
 /** Stable kind for AUP "R16 utökad" yellow strip; dismiss per active window (r16:<from>). */
 export const R16_INFO_KIND = 'r16'
 
+/** ESSA Speciell VFR reminder strip. */
+export const SVFR_INFO_KIND = 'svfr'
+
+/** ESSA "Bana 08/26 Tillhör: TWR-E/W" strip. */
+export const BANA0826_INFO_KIND = 'bana0826'
+
+/**
+ * LVP strip — only for airports whose LOP announces LVP via ATIS
+ * (ESGG, ESKN, ESMS, ESNN, ESSB); auto when ATIS text contains LVP.
+ */
+export const LVP_INFO_KIND = 'lvp'
+
+/** Arbetsområde — text (3 rows) or scribble; per airport in RTC. */
+export const ARBETS_OMRADE_INFO_KIND = 'arbetsOmrade'
+
+function isOpsAirportKind(kind: string): boolean {
+  return (
+    kind === SVFR_INFO_KIND ||
+    kind === LVP_INFO_KIND ||
+    kind === ARBETS_OMRADE_INFO_KIND
+  )
+}
+
 export const INFO_STRIP_KINDS = [
   BREAKOUT_INFO_KIND,
   MAP_INFO_KIND,
@@ -59,7 +168,99 @@ export const INFO_STRIP_KINDS = [
   TURN_DEP_INFO_KIND,
   SID19L_INFO_KIND,
   R16_INFO_KIND,
+  SVFR_INFO_KIND,
+  BANA0826_INFO_KIND,
+  LVP_INFO_KIND,
+  ARBETS_OMRADE_INFO_KIND,
 ] as const
+
+export type ArbetsOmradeMode = 'text' | 'scribble'
+
+/** Ink stroke in Arbetsområde scribble (viewBox 0 0 1000 250). */
+export type ArbetsOmradeStroke = {
+  points: string
+  color: 'blue' | 'red' | 'black'
+}
+
+export type ArbetsOmradeContent = {
+  mode: ArbetsOmradeMode
+  lines: [string, string, string]
+  strokes: ArbetsOmradeStroke[]
+}
+
+const ARBETS_CONTENT_KEY = 'efs/infoStrips/arbetsOmrade'
+
+function defaultArbetsContent(): ArbetsOmradeContent {
+  return { mode: 'text', lines: ['', '', ''], strokes: [] }
+}
+
+function parseArbetsStroke(raw: unknown): ArbetsOmradeStroke | null {
+  // ESSA scribbles are always black (legacy blue/red coerced)
+  if (typeof raw === 'string' && raw.trim()) {
+    return { points: raw, color: 'black' }
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as { points?: unknown; color?: unknown }
+  if (typeof o.points !== 'string' || !o.points.trim()) return null
+  return { points: o.points, color: 'black' }
+}
+
+function loadArbetsContentMap(): Record<string, ArbetsOmradeContent> {
+  try {
+    const raw = localStorage.getItem(ARBETS_CONTENT_KEY)
+    if (!raw) return {}
+    const obj = JSON.parse(raw) as Record<string, unknown>
+    const out: Record<string, ArbetsOmradeContent> = {}
+    for (const [k, v] of Object.entries(obj)) {
+      if (!v || typeof v !== 'object') continue
+      const o = v as Partial<ArbetsOmradeContent>
+      const mode: ArbetsOmradeMode = o.mode === 'scribble' ? 'scribble' : 'text'
+      const linesRaw = Array.isArray(o.lines) ? o.lines : ['', '', '']
+      const lines: [string, string, string] = [
+        String(linesRaw[0] ?? ''),
+        String(linesRaw[1] ?? ''),
+        String(linesRaw[2] ?? ''),
+      ]
+      const strokes = Array.isArray(o.strokes)
+        ? o.strokes.map(parseArbetsStroke).filter((s): s is ArbetsOmradeStroke => !!s)
+        : []
+      out[k] = { mode, lines, strokes }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+const arbetsContentByAirport = ref<Record<string, ArbetsOmradeContent>>(loadArbetsContentMap())
+
+function persistArbetsContent() {
+  try {
+    localStorage.setItem(ARBETS_CONTENT_KEY, JSON.stringify(arbetsContentByAirport.value))
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getArbetsOmradeContent(airport: string): ArbetsOmradeContent {
+  const a = normalizeOpsAirport(airport)
+  return arbetsContentByAirport.value[a] ?? defaultArbetsContent()
+}
+
+export function patchArbetsOmradeContent(
+  airport: string,
+  patch: Partial<ArbetsOmradeContent>,
+) {
+  const a = normalizeOpsAirport(airport)
+  const prev = getArbetsOmradeContent(a)
+  const next: ArbetsOmradeContent = {
+    mode: patch.mode ?? prev.mode,
+    lines: patch.lines ?? prev.lines,
+    strokes: patch.strokes ?? prev.strokes,
+  }
+  arbetsContentByAirport.value = { ...arbetsContentByAirport.value, [a]: next }
+  persistArbetsContent()
+}
 
 export type InfoStripPlacement = {
   bayId: string
@@ -397,7 +598,7 @@ export type InfoStripMenuEntry = {
   unavailableReason?: string
 }
 
-export type InfoCatalogFolderId = 'breakout' | 'map' | 'dep' | 'sid'
+export type InfoCatalogFolderId = 'breakout' | 'map' | 'dep' | 'sid' | 'ops'
 
 export type InfoCatalogFolder = {
   id: InfoCatalogFolderId
@@ -1053,9 +1254,9 @@ export function useR16InfoStrip() {
     return !dismissed.value.has(v.id)
   })
 
-  /** Default host: first section of the first bay (top of the EFS). */
-  const defaultBayId = computed(() => store.layout.bays[0]?.id ?? null)
-  const defaultSectionId = computed(() => store.layout.bays[0]?.sections[0]?.id ?? null)
+  /** Default host: first painted section (workspace display or server layout). */
+  const defaultBayId = computed(() => defaultOpsHostTargets().bayId)
+  const defaultSectionId = computed(() => defaultOpsHostTargets().sectionId)
 
   function dismiss() {
     const v = variant.value
@@ -1080,6 +1281,313 @@ export function useR16InfoStrip() {
   }
 }
 
+/** Active Speciell VFR strips — one per airport (RTC columns / board airport). */
+export function getActiveSvfrVariants(): OpsAirportVariant[] {
+  const store = useEfsStore()
+  const out: OpsAirportVariant[] = []
+  const seen = new Set<string>()
+  const add = (icao: string, auto: boolean) => {
+    const a = normalizeOpsAirport(icao)
+    if (!a || seen.has(a)) return
+    const id = `svfr:${a}`
+    // Only the per-airport id counts (ignore legacy svfr:manual / svfr:auto)
+    if (dismissed.value.has(id)) return
+    seen.add(a)
+    out.push({ id, airport: a, text: 'Speciell VFR', auto })
+  }
+
+  if (
+    store.essaRolesMode &&
+    store.myAirports.some((x) => x.toUpperCase() === 'ESSA') &&
+    store.essaRoles.some((r) => r === 'TWR-E' || r === 'TWR-W' || r.startsWith('TWR'))
+  ) {
+    add('ESSA', true)
+  }
+
+  for (const key of getInfoStripForcedKeys(SVFR_INFO_KIND)) {
+    if (key === 'manual') add(primaryOpsAirport(), false)
+    else add(key, false)
+  }
+  if (
+    manualKinds.value.has(SVFR_INFO_KIND) &&
+    getInfoStripForcedKeys(SVFR_INFO_KIND).length === 0
+  ) {
+    add(primaryOpsAirport(), false)
+  }
+  return out
+}
+
+export function dismissSvfrAirport(airport: string) {
+  const a = normalizeOpsAirport(airport)
+  dismissInfoStrip(`svfr:${a}`)
+  removeInfoStripForced(SVFR_INFO_KIND, a)
+  removeInfoStripForced(SVFR_INFO_KIND, 'manual')
+  if (getInfoStripForcedKeys(SVFR_INFO_KIND).length === 0) {
+    setInfoStripManual(SVFR_INFO_KIND, false)
+  }
+}
+
+/** Yellow "Speciell VFR" — pass airport for multi-instance (RTC). */
+export function useSvfrInfoStrip(airportSource?: MaybeRefOrGetter<string | undefined>) {
+  const autoVariant = computed(() => getActiveSvfrVariants().find((v) => v.auto) ?? null)
+
+  const variant = computed(() => {
+    const apt = toValue(airportSource)
+    if (apt) {
+      return getActiveSvfrVariants().find((v) => v.airport === normalizeOpsAirport(apt)) ?? null
+    }
+    return getActiveSvfrVariants()[0] ?? null
+  })
+
+  const instanceKey = computed(() => {
+    const v = variant.value
+    if (!v) return SVFR_INFO_KIND
+    return infoStripInstanceKey(SVFR_INFO_KIND, v.airport)
+  })
+
+  const placement = computed(
+    () => getInfoStripPlacement(instanceKey.value) ?? getInfoStripPlacement(SVFR_INFO_KIND),
+  )
+  const visible = computed(() => !!variant.value)
+  const host = computed(() =>
+    variant.value ? opsHostForAirport(variant.value.airport) : defaultOpsHostTargets(),
+  )
+  const defaultBayId = computed(() => host.value.bayId)
+  const defaultSectionId = computed(() => host.value.sectionId)
+
+  function dismiss() {
+    const v = variant.value
+    if (v) dismissSvfrAirport(v.airport)
+    else clearInfoStripForce(SVFR_INFO_KIND)
+  }
+
+  function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
+    setInfoStripPlacement(instanceKey.value, { bayId, sectionId, bottom, index })
+  }
+
+  return {
+    variant,
+    autoVariant,
+    visible,
+    placement,
+    instanceKey,
+    defaultBayId,
+    defaultSectionId,
+    dismiss,
+    moveTo,
+    kind: SVFR_INFO_KIND,
+  }
+}
+
+/** Yellow "Bana 08/26 Tillhör: TWR-E|W" — follows TS AOR owner. */
+export function useBana0826InfoStrip() {
+  const store = useEfsStore()
+
+  const autoVariant = computed(() => {
+    if (!store.essaRolesMode) return null
+    if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) return null
+    const owner = store.essa0826Owner
+    if (!owner) return null
+    // Physical EFS labels: map TWR-S → show as TWR-E (TS prio after E is S, but UI is E/W)
+    const label = owner === 'TWR-S' ? 'TWR-E' : owner
+    return {
+      id: `bana0826:${owner}`,
+      text: `Bana 08/26\nTillhör: ${label}`,
+      owner,
+    }
+  })
+
+  const variant = computed(() => {
+    if (autoVariant.value) return autoVariant.value
+    if (!manualKinds.value.has(BANA0826_INFO_KIND)) return null
+    if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) return null
+    const owner = store.essa0826Owner ?? 'TWR-E'
+    const label = owner === 'TWR-S' ? 'TWR-E' : owner
+    return {
+      id: 'bana0826:manual',
+      text: `Bana 08/26\nTillhör: ${label}`,
+      owner,
+    }
+  })
+
+  const placement = computed(() => getInfoStripPlacement(BANA0826_INFO_KIND))
+  const visible = computed(() => {
+    const v = variant.value
+    if (!v) return false
+    return !dismissed.value.has(v.id)
+  })
+  const defaultBayId = computed(() => defaultOpsHostTargets().bayId)
+  const defaultSectionId = computed(() => defaultOpsHostTargets().sectionId)
+
+  function dismiss() {
+    const v = variant.value
+    if (v) dismissInfoStrip(v.id)
+    clearInfoStripForce(BANA0826_INFO_KIND)
+    setInfoStripManual(BANA0826_INFO_KIND, false)
+  }
+
+  function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
+    setInfoStripPlacement(BANA0826_INFO_KIND, { bayId, sectionId, bottom, index })
+  }
+
+  return {
+    variant,
+    autoVariant,
+    visible,
+    placement,
+    defaultBayId,
+    defaultSectionId,
+    dismiss,
+    moveTo,
+    kind: BANA0826_INFO_KIND,
+  }
+}
+
+/** Active LVP strips — one per airport; auto when that airport's ATIS has LVP. */
+export function getActiveLvpVariants(): OpsAirportVariant[] {
+  const store = useEfsStore()
+  const out: OpsAirportVariant[] = []
+  const seen = new Set<string>()
+  const add = (icao: string, auto: boolean) => {
+    const a = normalizeOpsAirport(icao)
+    if (!a || seen.has(a)) return
+    const id = `lvp:${a}`
+    // Only the per-airport id counts (ignore legacy lvp:manual)
+    if (dismissed.value.has(id)) return
+    // RTC: only airports that have a column
+    if (store.multiAirport && !bayIdForOpsAirport(a)) return
+    seen.add(a)
+    out.push({ id, airport: a, text: 'LVP', auto })
+  }
+
+  const autoPool = store.essaRolesMode
+    ? store.myAirports.filter((x) => x.toUpperCase() === 'ESSA')
+    : store.multiAirport
+      ? store.columnAirports.filter((x): x is string => !!x)
+      : store.myAirports
+  for (const raw of autoPool) {
+    const icao = normalizeOpsAirport(raw)
+    if (!isAtisLvpAirport(icao)) continue
+    const info = store.atisInfo.find((a) => a.airport.toUpperCase() === icao)
+    if (info?.lvp) add(icao, true)
+  }
+
+  for (const key of getInfoStripForcedKeys(LVP_INFO_KIND)) {
+    if (key === 'manual') add(primaryOpsAirport(), false)
+    else add(key, false)
+  }
+  if (
+    manualKinds.value.has(LVP_INFO_KIND) &&
+    getInfoStripForcedKeys(LVP_INFO_KIND).length === 0
+  ) {
+    add(primaryOpsAirport(), false)
+  }
+  return out
+}
+
+export function dismissLvpAirport(airport: string) {
+  const a = normalizeOpsAirport(airport)
+  dismissInfoStrip(`lvp:${a}`)
+  removeInfoStripForced(LVP_INFO_KIND, a)
+  removeInfoStripForced(LVP_INFO_KIND, 'manual')
+  if (getInfoStripForcedKeys(LVP_INFO_KIND).length === 0) {
+    setInfoStripManual(LVP_INFO_KIND, false)
+  }
+}
+
+/** Active Arbetsområde strips — ESSA only (manual catalog). */
+export function getActiveArbetsOmradeVariants(): OpsAirportVariant[] {
+  const store = useEfsStore()
+  const out: OpsAirportVariant[] = []
+  const addEssa = () => {
+    if (dismissed.value.has('arbetsOmrade:ESSA')) return
+    if (store.multiAirport && !bayIdForOpsAirport('ESSA')) return
+    if (
+      !store.essaRolesMode &&
+      !store.multiAirport &&
+      !store.myAirports.some((a) => a.toUpperCase() === 'ESSA')
+    ) {
+      return
+    }
+    out.push({ id: 'arbetsOmrade:ESSA', airport: 'ESSA', text: 'Arbets\nområde', auto: false })
+  }
+  const keys = getInfoStripForcedKeys(ARBETS_OMRADE_INFO_KIND)
+  if (keys.some((k) => k === 'ESSA' || k === 'manual')) addEssa()
+  else if (manualKinds.value.has(ARBETS_OMRADE_INFO_KIND) && keys.length === 0) addEssa()
+  return out
+}
+
+export function dismissArbetsOmradeAirport(airport: string) {
+  const a = normalizeOpsAirport(airport)
+  dismissInfoStrip(`arbetsOmrade:${a}`)
+  removeInfoStripForced(ARBETS_OMRADE_INFO_KIND, a)
+  removeInfoStripForced(ARBETS_OMRADE_INFO_KIND, 'manual')
+  if (getInfoStripForcedKeys(ARBETS_OMRADE_INFO_KIND).length === 0) {
+    setInfoStripManual(ARBETS_OMRADE_INFO_KIND, false)
+  }
+}
+
+/** Yellow LVP — pass airport for multi-instance (RTC). */
+export function useLvpInfoStrip(airportSource?: MaybeRefOrGetter<string | undefined>) {
+  const eligibleAirports = computed(() => {
+    const store = useEfsStore()
+    const pool = store.essaRolesMode
+      ? store.myAirports.filter((a) => a.toUpperCase() === 'ESSA')
+      : store.myAirports
+    return [...new Set(pool.map((a) => a.toUpperCase()).filter((a) => isAtisLvpAirport(a)))]
+  })
+
+  const autoVariant = computed(() => getActiveLvpVariants().find((v) => v.auto) ?? null)
+
+  const variant = computed(() => {
+    const apt = toValue(airportSource)
+    if (apt) {
+      return getActiveLvpVariants().find((v) => v.airport === normalizeOpsAirport(apt)) ?? null
+    }
+    return getActiveLvpVariants()[0] ?? null
+  })
+
+  const instanceKey = computed(() => {
+    const v = variant.value
+    if (!v) return LVP_INFO_KIND
+    return infoStripInstanceKey(LVP_INFO_KIND, v.airport)
+  })
+
+  const placement = computed(
+    () => getInfoStripPlacement(instanceKey.value) ?? getInfoStripPlacement(LVP_INFO_KIND),
+  )
+  const visible = computed(() => !!variant.value)
+  const host = computed(() =>
+    variant.value ? opsHostForAirport(variant.value.airport) : defaultOpsHostTargets(),
+  )
+  const defaultBayId = computed(() => host.value.bayId)
+  const defaultSectionId = computed(() => host.value.sectionId)
+
+  function dismiss() {
+    const v = variant.value
+    if (v) dismissLvpAirport(v.airport)
+    else clearInfoStripForce(LVP_INFO_KIND)
+  }
+
+  function moveTo(bayId: string, sectionId: string, bottom: boolean, index: number) {
+    setInfoStripPlacement(instanceKey.value, { bayId, sectionId, bottom, index })
+  }
+
+  return {
+    variant,
+    autoVariant,
+    visible,
+    placement,
+    instanceKey,
+    defaultBayId,
+    defaultSectionId,
+    dismiss,
+    moveTo,
+    kind: LVP_INFO_KIND,
+    eligibleAirports,
+  }
+}
+
 function menuEntry(opts: {
   kind: string
   id: string
@@ -1094,7 +1602,8 @@ function menuEntry(opts: {
   const multi =
     opts.kind === MAP_INFO_KIND ||
     opts.kind === DEP_INFO_KIND ||
-    opts.kind === BREAKOUT_INFO_KIND
+    opts.kind === BREAKOUT_INFO_KIND ||
+    isOpsAirportKind(opts.kind)
   const placementKey = multi
     ? infoStripInstanceKey(opts.kind, opts.forceKey)
     : opts.kind
@@ -1123,10 +1632,14 @@ function configMenuLabel(configId: string): string {
 
 /**
  * Catalog / bottom-bar: auto strips + per-config manual add folders.
- * `forceEssaCatalog` — show ESSA info folders (RTC ESSA column).
+ * Ops (Speciell VFR / LVP) is always available; ESSA folders need essaRoles or
+ * `forceEssaCatalog` (RTC ESSA column).
+ * RTC: pass `airport` + `bayId` so Ops strips land on that column.
  */
 export function useInfoStripMenu(opts?: {
   forceEssaCatalog?: MaybeRefOrGetter<boolean>
+  airport?: MaybeRefOrGetter<string | null | undefined>
+  bayId?: MaybeRefOrGetter<string | null | undefined>
 }) {
   const store = useEfsStore()
   const breakout = useBreakoutInfoStrip()
@@ -1135,10 +1648,14 @@ export function useInfoStripMenu(opts?: {
   const turnDep = useTurnDepInfoStrip()
   const sid19l = useSid19LInfoStrip()
   const r16 = useR16InfoStrip()
+  const bana0826 = useBana0826InfoStrip()
 
   const folders = computed<InfoCatalogFolder[]>(() => {
     const essa = store.essaRolesMode || !!toValue(opts?.forceEssaCatalog)
-    if (!essa) return []
+    const scopeAirport = normalizeOpsAirport(toValue(opts?.airport) || '') || primaryOpsAirport()
+    const activeSvfr = getActiveSvfrVariants()
+    const activeLvp = getActiveLvpVariants()
+    const activeArbets = getActiveArbetsOmradeVariants()
 
     const activeBreakoutIds = new Set(getActiveBreakoutVariants().map((v) => v.id))
     const activeMapIds = new Set(getActiveMapVariants().map((v) => v.configId))
@@ -1248,12 +1765,75 @@ export function useInfoStripMenu(opts?: {
       )
     }
 
-    return [
-      { id: 'breakout', label: 'Breakout', items: breakoutItems },
-      { id: 'map', label: 'Missed APP', items: mapItems },
-      { id: 'dep', label: 'Dep', items: depItems },
-      { id: 'sid', label: 'SID', items: sidItems },
-    ]
+    const opsItems: InfoStripMenuEntry[] = []
+    {
+      const essaAirport = store.myAirports.some((a) => a.toUpperCase() === 'ESSA')
+      const columnAirport = normalizeOpsAirport(toValue(opts?.airport) || '')
+      const opsAvailable = store.multiAirport ? !!columnAirport : true
+      const svfrShown = activeSvfr.some((v) => v.airport === scopeAirport)
+      const lvpShown = activeLvp.some((v) => v.airport === scopeAirport)
+      opsItems.push(
+        menuEntry({
+          kind: SVFR_INFO_KIND,
+          id: `svfr:${scopeAirport}`,
+          label: 'Speciell VFR',
+          forceKey: scopeAirport,
+          available: opsAvailable,
+          auto: activeSvfr.some((v) => v.airport === scopeAirport && v.auto),
+          shown: svfrShown,
+          unavailableReason: opsAvailable ? undefined : 'Select airport',
+        }),
+      )
+      // Bana 08/26 + Arbetsområde — ESSA role board / RTC ESSA column only
+      if (essa) {
+        opsItems.push(
+          menuEntry({
+            kind: ARBETS_OMRADE_INFO_KIND,
+            id: 'arbetsOmrade:ESSA',
+            label: 'Arbetsområde',
+            forceKey: 'ESSA',
+            available: essaAirport,
+            auto: false,
+            shown: activeArbets.some((v) => v.airport === 'ESSA'),
+            unavailableReason: essaAirport ? undefined : 'ESSA only',
+          }),
+          menuEntry({
+            kind: BANA0826_INFO_KIND,
+            id: bana0826.variant.value?.id ?? 'bana0826:manual',
+            label: 'Bana 08/26 Tillhör',
+            forceKey: 'manual',
+            available: essaAirport,
+            auto: !!bana0826.autoVariant.value,
+            shown: bana0826.visible.value,
+            unavailableReason: essaAirport ? undefined : 'ESSA only',
+          }),
+        )
+      }
+      opsItems.push(
+        menuEntry({
+          kind: LVP_INFO_KIND,
+          id: `lvp:${scopeAirport}`,
+          label: 'LVP',
+          forceKey: scopeAirport,
+          available: opsAvailable,
+          auto: activeLvp.some((v) => v.airport === scopeAirport && v.auto),
+          shown: lvpShown,
+          unavailableReason: opsAvailable ? undefined : 'Select airport',
+        }),
+      )
+    }
+
+    const out: InfoCatalogFolder[] = []
+    if (essa) {
+      out.push(
+        { id: 'breakout', label: 'Breakout', items: breakoutItems },
+        { id: 'map', label: 'Missed APP', items: mapItems },
+        { id: 'dep', label: 'Dep', items: depItems },
+        { id: 'sid', label: 'SID', items: sidItems },
+      )
+    }
+    out.push({ id: 'ops', label: 'Ops', items: opsItems })
+    return out
   })
 
   /** Flat list for bottom-bar compatibility. */
@@ -1273,11 +1853,12 @@ export function useInfoStripMenu(opts?: {
 
   function showEntry(entry: InfoStripMenuEntry) {
     if (!entry.available || entry.shown) return
-    // MAP / DEP / Breakout: add alongside existing (one per config). Others: replace.
+    // MAP / DEP / Breakout / Ops-airport: add alongside existing instances.
     const multi =
       entry.kind === MAP_INFO_KIND ||
       entry.kind === DEP_INFO_KIND ||
-      entry.kind === BREAKOUT_INFO_KIND
+      entry.kind === BREAKOUT_INFO_KIND ||
+      isOpsAirportKind(entry.kind)
     if (multi) addInfoStripForced(entry.kind, entry.forceKey)
     else setInfoStripForced(entry.kind, entry.forceKey)
     setInfoStripManual(entry.kind, true)
@@ -1295,13 +1876,42 @@ export function useInfoStripMenu(opts?: {
       for (const rwy of BREAKOUT_RUNWAYS) restoreInfoStrip(`breakout:${rwy}`)
     }
     if (entry.kind === R16_INFO_KIND) restoreInfoStrip('r16:manual')
+    if (entry.kind === SVFR_INFO_KIND) {
+      restoreInfoStrip('svfr:manual')
+      restoreInfoStrip(`svfr:${entry.forceKey}`)
+    }
+    if (entry.kind === BANA0826_INFO_KIND) restoreInfoStrip('bana0826:manual')
+    if (entry.kind === LVP_INFO_KIND) {
+      restoreInfoStrip('lvp:manual')
+      restoreInfoStrip(`lvp:${entry.forceKey}`)
+    }
+    if (entry.kind === ARBETS_OMRADE_INFO_KIND) {
+      restoreInfoStrip(`arbetsOmrade:${entry.forceKey}`)
+    }
+    // Pin Ops strips to the catalog column (RTC) or default host bay
+    if (isOpsAirportKind(entry.kind) && entry.forceKey) {
+      // Drop legacy single-key placement so instance host wins
+      clearInfoStripPlacement(entry.kind)
+      const bayId =
+        toValue(opts?.bayId) || bayIdForOpsAirport(entry.forceKey) || defaultOpsHostTargets().bayId
+      const sectionId = sectionIdForOpsBay(bayId)
+      if (bayId && sectionId) {
+        setInfoStripPlacement(infoStripInstanceKey(entry.kind, entry.forceKey), {
+          bayId,
+          sectionId,
+          bottom: false,
+          index: 0,
+        })
+      }
+    }
   }
 
   function resetPlacement(entry: InfoStripMenuEntry) {
     const multi =
       entry.kind === MAP_INFO_KIND ||
       entry.kind === DEP_INFO_KIND ||
-      entry.kind === BREAKOUT_INFO_KIND
+      entry.kind === BREAKOUT_INFO_KIND ||
+      isOpsAirportKind(entry.kind)
     if (multi && entry.forceKey) {
       clearInfoStripPlacement(infoStripInstanceKey(entry.kind, entry.forceKey))
     }

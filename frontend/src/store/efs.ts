@@ -439,6 +439,8 @@ export const useEfsStore = defineStore("efs", () => {
     const essaRolesManual = ref(false)
     /** TWR AOR: runway ends we cover; null = all (solo / no split) */
     const essaCoveredRunways = ref<string[] | null>(null)
+    /** ESSA 08/26 (TS) owner among online TWRs — Bana Tillhör strip */
+    const essa0826Owner = ref<'TWR-E' | 'TWR-W' | 'TWR-S' | null>(null)
 
     // OTHER bay-profile mode (saab.yml + Layout / catalog; digital SAAB look)
     const saabLayoutsMode = ref(false)
@@ -1731,6 +1733,7 @@ export const useEfsStore = defineStore("efs", () => {
         esggRoles?: string[]
         esggRolesManual?: boolean
         essaCoveredRunways?: string[]
+        essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
         look?: StripLook
         saabLayoutsMode?: boolean
         saabLayoutId?: string | null
@@ -1813,6 +1816,10 @@ export const useEfsStore = defineStore("efs", () => {
             airportRxFrequencies.value = {}
         }
         essaCoveredRunways.value = message.essaCoveredRunways ?? null
+        essa0826Owner.value =
+            message.essaRolesMode && message.essa0826Owner
+                ? message.essa0826Owner
+                : null
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
         if (stripLook.value !== 'paper') {
             pendingPrintFlights.value = []
@@ -3892,6 +3899,7 @@ export const useEfsStore = defineStore("efs", () => {
         essaRoles,
         essaRolesManual,
         essaCoveredRunways,
+        essa0826Owner,
         saabLayoutsMode,
         saabLayoutId,
         saabLayouts,

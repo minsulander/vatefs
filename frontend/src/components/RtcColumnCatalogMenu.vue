@@ -21,33 +21,31 @@
           Reset layout
         </button>
 
-        <!-- ESSA info strips when this column is ESSA -->
-        <template v-if="isEssaColumn">
-          <template v-for="folder in infoCatalogFolders" :key="folder.id">
+        <!-- ESSA column: full info catalog; other airports: Ops (SVFR / LVP) -->
+        <template v-for="folder in infoCatalogFolders" :key="folder.id">
+          <button
+            type="button"
+            class="efs-popup-section efs-popup-folder"
+            :aria-expanded="!!folderOpen[folder.id]"
+            @click.stop="toggleFolder(folder.id)"
+          >
+            <span>{{ folder.label }}</span>
+            <span
+              class="efs-popup-folder-chevron"
+              :class="{ 'is-open': folderOpen[folder.id] }"
+              aria-hidden="true"
+            />
+          </button>
+          <template v-if="folderOpen[folder.id]">
             <button
+              v-for="entry in folder.items"
+              :key="`${entry.kind}:${entry.forceKey}`"
               type="button"
-              class="efs-popup-section efs-popup-folder"
-              :aria-expanded="!!folderOpen[folder.id]"
-              @click.stop="toggleFolder(folder.id)"
-            >
-              <span>{{ folder.label }}</span>
-              <span
-                class="efs-popup-folder-chevron"
-                :class="{ 'is-open': folderOpen[folder.id] }"
-                aria-hidden="true"
-              />
-            </button>
-            <template v-if="folderOpen[folder.id]">
-              <button
-                v-for="entry in folder.items"
-                :key="`${entry.kind}:${entry.forceKey}`"
-                type="button"
-                class="efs-popup-item"
-                :class="{ 'is-disabled': entry.shown || !entry.available }"
-                :disabled="entry.shown || !entry.available"
-                @click="onShowInfo(entry)"
-              >{{ entry.label }}</button>
-            </template>
+              class="efs-popup-item"
+              :class="{ 'is-disabled': entry.shown || !entry.available }"
+              :disabled="entry.shown || !entry.available"
+              @click="onShowInfo(entry)"
+            >{{ entry.label }}</button>
           </template>
         </template>
 
@@ -162,7 +160,11 @@ const open = ref(false)
 const sectionsOpen = ref(true)
 const folderOpen = reactive<Record<string, boolean>>({})
 const isEssaColumn = computed(() => (props.airport || '').toUpperCase() === 'ESSA')
-const infoMenu = useInfoStripMenu({ forceEssaCatalog: () => isEssaColumn.value })
+const infoMenu = useInfoStripMenu({
+  forceEssaCatalog: () => isEssaColumn.value,
+  airport: () => props.airport,
+  bayId: () => props.bay.id,
+})
 const infoCatalogFolders = computed(() => infoMenu.folders.value)
 
 const rwyFlags = useRwyFlagMenu(() => props.airport, () => props.bay.id)

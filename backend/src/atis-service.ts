@@ -5,7 +5,7 @@
  * ESSA RWY SCC from VatIRIS WX.AWOS (`/wx?viewId=arlanda-overview.html`).
  */
 
-import { parseEssaSccFromWxText } from "@vatefs/common"
+import { atisTextHasLvp, isAtisLvpAirport, parseEssaSccFromWxText } from "@vatefs/common"
 
 const VATSIM_DATA_URL = "https://data.vatsim.net/v3/vatsim-data.json"
 /** VatIRIS METAR proxy — same endpoint as VatIRIS metar store */
@@ -24,10 +24,12 @@ interface VatsimDataResponse {
     atis: VatsimAtisEntry[]
 }
 
-/** ATIS-sourced fields only (letter + optional QNH from ATIS text) */
+/** ATIS-sourced fields only (letter + optional QNH / LVP from ATIS text) */
 interface AtisOnlyCache {
     letter?: string
     qnh?: number
+    /** True when ATIS text contains LVP (ATIS_LVP_AIRPORTS only) */
+    lvp?: boolean
 }
 
 /**
@@ -90,7 +92,12 @@ export class AtisService {
     private pollTimer: ReturnType<typeof setTimeout> | null = null
     /** ATIS-only fields (letter + QNH parsed from ATIS) */
     private atisCache = new Map<string, AtisOnlyCache>()
-    private essaAtisCache: { arrLetter?: string; depLetter?: string; qnh?: number } = {}
+    private essaAtisCache: {
+        arrLetter?: string
+        depLetter?: string
+        qnh?: number
+        lvp?: boolean
+    } = {}
     /** Latest METAR QNH from VatIRIS (fallback when ATIS has no QNH) */
     private metarQnh = new Map<string, number>()
     /** Latest raw METAR line per airport (for ESSA IMC / SEP indicators) */
@@ -143,25 +150,33 @@ export class AtisService {
     /**
      * Merged ATIS (+ METAR QNH fallback) for a single-ATIS airport.
      */
-    getAtis(airport: string): { letter?: string; qnh?: number } {
+    getAtis(airport: string): { letter?: string; qnh?: number; lvp?: boolean } {
         const key = airport.toUpperCase()
         const atis = this.atisCache.get(key)
         const metar = this.metarQnh.get(key)
         return {
             letter: atis?.letter,
             qnh: atis?.qnh ?? metar,
+            lvp: isAtisLvpAirport(key) ? !!atis?.lvp : undefined,
         }
     }
 
     /**
      * ESSA split ATIS + METAR QNH fallback.
+     * LVP from ARR/DEP/combined ATIS text (same ATIS_LVP_AIRPORTS rule as others).
      */
-    getEssaAtis(): { arrLetter?: string; depLetter?: string; qnh?: number } {
+    getEssaAtis(): {
+        arrLetter?: string
+        depLetter?: string
+        qnh?: number
+        lvp?: boolean
+    } {
         const qnh = this.essaAtisCache.qnh ?? this.metarQnh.get("ESSA")
         return {
             arrLetter: this.essaAtisCache.arrLetter,
             depLetter: this.essaAtisCache.depLetter,
             qnh,
+            lvp: !!this.essaAtisCache.lvp,
         }
     }
 
@@ -360,10 +375,13 @@ export class AtisService {
 
         const letter = extractAtisCode(airport, entry.text_atis)
         const qnh = extractQnh(entry.text_atis)
+        const joined = entry.text_atis.join(" ")
+        const lvp = isAtisLvpAirport(airport) ? atisTextHasLvp(joined) : undefined
 
-        const changed = prev?.letter !== letter || prev?.qnh !== qnh
+        const changed =
+            prev?.letter !== letter || prev?.qnh !== qnh || prev?.lvp !== lvp
         if (changed) {
-            this.atisCache.set(airport, { letter, qnh })
+            this.atisCache.set(airport, { letter, qnh, lvp })
         }
         return changed
     }
@@ -378,14 +396,17 @@ export class AtisService {
         let depLetter: string | undefined
         let arrLetter: string | undefined
         let qnh: number | undefined
+        let lvp = false
 
         if (depEntry?.text_atis) {
             depLetter = extractAtisCode("ESSA", depEntry.text_atis)
             qnh = extractQnh(depEntry.text_atis)
+            lvp = lvp || atisTextHasLvp(depEntry.text_atis.join(" "))
         }
         if (arrEntry?.text_atis) {
             arrLetter = extractAtisCode("ESSA", arrEntry.text_atis)
             qnh = qnh ?? extractQnh(arrEntry.text_atis)
+            lvp = lvp || atisTextHasLvp(arrEntry.text_atis.join(" "))
         }
 
         // Fallback to combined ATIS
@@ -394,19 +415,27 @@ export class AtisService {
             depLetter = letter
             arrLetter = letter
             qnh = extractQnh(combinedEntry.text_atis)
+            lvp = lvp || atisTextHasLvp(combinedEntry.text_atis.join(" "))
+        } else if (combinedEntry?.text_atis) {
+            lvp = lvp || atisTextHasLvp(combinedEntry.text_atis.join(" "))
         }
 
         const prev = this.essaAtisCache
         const changed =
             prev.arrLetter !== arrLetter ||
             prev.depLetter !== depLetter ||
-            prev.qnh !== qnh
+            prev.qnh !== qnh ||
+            prev.lvp !== lvp
 
         if (changed) {
-            this.essaAtisCache = { arrLetter, depLetter, qnh }
+            this.essaAtisCache = { arrLetter, depLetter, qnh, lvp }
             // Also update the main cache for getAtis() fallback
-            if (depLetter || arrLetter || qnh != null) {
-                this.atisCache.set("ESSA", { letter: depLetter ?? arrLetter, qnh })
+            if (depLetter || arrLetter || qnh != null || lvp) {
+                this.atisCache.set("ESSA", {
+                    letter: depLetter ?? arrLetter,
+                    qnh,
+                    lvp,
+                })
             } else {
                 this.atisCache.delete("ESSA")
             }

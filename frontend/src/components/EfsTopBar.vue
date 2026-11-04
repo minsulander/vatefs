@@ -703,33 +703,31 @@
                   >+</button>
                 </span>
               </button>
-              <!-- ESSA-only info strips -->
-              <template v-if="efs.essaRolesMode">
-                <template v-for="folder in infoCatalogFolders" :key="folder.id">
+              <!-- ESSA: full info catalog; OTHER: Ops (SVFR / LVP) -->
+              <template v-for="folder in infoCatalogFolders" :key="folder.id">
+                <button
+                  type="button"
+                  class="efs-popup-section efs-popup-folder"
+                  :aria-expanded="!!catalogInfoFolderOpen[folder.id]"
+                  @click.stop="toggleInfoFolder(folder.id)"
+                >
+                  <span>{{ folder.label }}</span>
+                  <span
+                    class="efs-popup-folder-chevron"
+                    :class="{ 'is-open': catalogInfoFolderOpen[folder.id] }"
+                    aria-hidden="true"
+                  />
+                </button>
+                <template v-if="catalogInfoFolderOpen[folder.id]">
                   <button
+                    v-for="entry in folder.items"
+                    :key="`${entry.kind}:${entry.forceKey}`"
                     type="button"
-                    class="efs-popup-section efs-popup-folder"
-                    :aria-expanded="!!catalogInfoFolderOpen[folder.id]"
-                    @click.stop="toggleInfoFolder(folder.id)"
-                  >
-                    <span>{{ folder.label }}</span>
-                    <span
-                      class="efs-popup-folder-chevron"
-                      :class="{ 'is-open': catalogInfoFolderOpen[folder.id] }"
-                      aria-hidden="true"
-                    />
-                  </button>
-                  <template v-if="catalogInfoFolderOpen[folder.id]">
-                    <button
-                      v-for="entry in folder.items"
-                      :key="`${entry.kind}:${entry.forceKey}`"
-                      type="button"
-                      class="efs-popup-item"
-                      :class="{ 'is-disabled': entry.shown || !entry.available }"
-                      :disabled="entry.shown || !entry.available"
-                      @click="onShowInfoStrip(entry)"
-                    >{{ entry.label }}</button>
-                  </template>
+                    class="efs-popup-item"
+                    :class="{ 'is-disabled': entry.shown || !entry.available }"
+                    :disabled="entry.shown || !entry.available"
+                    @click="onShowInfoStrip(entry)"
+                  >{{ entry.label }}</button>
                 </template>
               </template>
               <template v-if="showRwyFlagTable">

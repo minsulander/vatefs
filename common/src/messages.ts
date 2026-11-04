@@ -148,6 +148,11 @@ export interface StatusMessage {
      * Undefined = all runways (solo / no split). Used to hide MAP/breakout for uncovered ARR.
      */
     essaCoveredRunways?: string[]
+    /**
+     * Who owns ESSA 08/26 (TS AOR) among online TWR logins — for
+     * "Bana 08/26 Tillhör: …" info strip. Null when ESSA roles inactive.
+     */
+    essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
     /** Strip chrome from active YAML (`look: paper` → paper; default saab) */
     look?: 'saab' | 'paper'
     /** OTHER bay-profile mode (saab.yml + Layout picker; digital SAAB strip look) */

@@ -143,6 +143,7 @@
             >
               <span class="print-template-preview" :class="`pv-frame pv-${tpl.kind}`">
                 <span v-if="tpl.kind === 'hinder'" class="pv-fill">HINDER</span>
+                <span v-else-if="tpl.kind === 'lvp'" class="pv-fill">LVP</span>
                 <span v-else-if="tpl.kind === 'bogsering'" class="pv-panel">Bogsering</span>
                 <span v-else-if="tpl.kind === 'snorojning'" class="pv-panel pv-panel-2">
                   <b>Snöröjning</b>
@@ -200,6 +201,7 @@ const framedEmptyTemplates: Array<{ kind: PaperInfoKind; label: string }> = [
 
 const infoTemplates: Array<{ kind: PaperInfoKind; label: string }> = [
   { kind: 'hinder', label: 'HINDER' },
+  { kind: 'lvp', label: 'LVP' },
   { kind: 'bogsering', label: 'Bogsering' },
   { kind: 'snorojning', label: 'Snöröjning Pågår' },
   { kind: 'prel_rojning', label: 'Prel nästa röjning' },
@@ -597,7 +599,8 @@ function onPrintTemplate(kind: PaperInfoKind) {
   font-size: 0.78rem;
 }
 
-.print-template-preview.pv-hinder {
+.print-template-preview.pv-hinder,
+.print-template-preview.pv-lvp {
   background-color: #d32f2f;
 }
 

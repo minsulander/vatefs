@@ -378,6 +378,7 @@
         @touchend="onNoteTouch"
       >
         <div v-if="paperInfoKind === 'hinder'" class="paper-info-full fit-font">HINDER</div>
+        <div v-else-if="paperInfoKind === 'lvp'" class="paper-info-full fit-font">LVP</div>
         <div v-else-if="paperInfoKind === 'bogsering'" class="paper-info-panel paper-info-bogsering-text fit-font">Bogsering</div>
         <div v-else-if="paperInfoKind === 'snorojning'" class="paper-info-panel paper-info-panel-2 fit-font">
           <span>Snöröjning</span>
@@ -2837,6 +2838,7 @@ const isPaperInfoHolder = computed(() => {
   return (
     k === 'empty' ||
     k === 'hinder' ||
+    k === 'lvp' ||
     k === 'bogsering' ||
     k === 'snorojning' ||
     k === 'prel_rojning'
@@ -7566,7 +7568,8 @@ function onGroundStateClick(action: string) {
   background: #f7f4ee;
 }
 
-.paper-info-hinder {
+.paper-info-hinder,
+.paper-info-lvp {
   background: #d32f2f;
 }
 

@@ -852,7 +852,7 @@ export function remapStripsForEssaGndOnly<T extends { sectionId: string; bayId: 
 
     return strips.map(s => {
         if (!isGndOnlyInboundSection(s.sectionId)) return s
-        // Deps on TWR RWY columns are soft-deleted (delete_dep_twr_lineup_*); do not
+        // Deps on TWR RWY columns are soft-deleted (delete_dep_twr_assumed_*); do not
         // leave them on invisible runway_* (that caused taxi_dep bounce-back).
         return { ...s, sectionId: 'inbound', bayId: inboundBay }
     })

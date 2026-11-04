@@ -298,6 +298,7 @@ import {
     filterEssaRunwayPlacementsForMyAor,
     essaAorLayoutKey,
     getMyEssaCoveredRunways,
+    resolveEssa0826Owner,
 } from "./essa-next-si.js"
 import {
     loadEssaSidPrefs,
@@ -1268,14 +1269,23 @@ if (cliArgs.mock) {
     // Spoof AFV RX for column freq visual review (after ESE load — see applyCliAfvRxSpoof)
     queueMicrotask(() => applyCliAfvRxSpoof())
 
-    // ESSA role boards: show TWR+GND+CD so mock arrivals/deps are visible for STD testing
+    // ESSA role boards: TWR top-down covers CD+GND+TWR (no separate GND online —
+    // that would dim CD / PENDING). GND mock keeps split peers for ZH/ZK HP prefs.
     if (isEssaRolesConfig(staticConfig)) {
-        setEssaRoles(["CD", "GND-E", "GND-N", "GND-W", "TWR-E", "TWR-W"], true)
-        console.log(`Mock ESSA roles: ${(staticConfig.essaRoles ?? []).join(", ")}`)
-        // Split GND (2 positions) so HP menu offers ZH/ZK prefs in mock
-        updateOnlineController("ESSA_E_GND", 121.7, staticConfig.myAirports, "AGE")
-        updateOnlineController("ESSA_W_GND", 121.925, staticConfig.myAirports, "AGW")
-        console.log("Mock ESSA online GND: ESSA_E_GND, ESSA_W_GND (split → ZH/ZK HP prefs)")
+        const mockCs = (cliArgs.callsign ?? mockMyselfUpdate.callsign).toUpperCase()
+        const mockAsGnd = /_GND\b/.test(mockCs)
+        if (mockAsGnd) {
+            setEssaRoles(["GND-E", "GND-N", "GND-W"], true)
+            updateOnlineController("ESSA_E_GND", 121.7, staticConfig.myAirports, "AGE")
+            updateOnlineController("ESSA_W_GND", 121.925, staticConfig.myAirports, "AGW")
+            updateOnlineController("ESSA_W_TWR", 118.5, staticConfig.myAirports, "TW")
+            console.log(`Mock ESSA roles: ${(staticConfig.essaRoles ?? []).join(", ")} (GND split)`)
+            console.log("Mock ESSA online: ESSA_E_GND, ESSA_W_GND, ESSA_W_TWR")
+        } else {
+            // TWR top-down (default mock): own the whole tower board
+            setEssaRoles(["CD", "GND-E", "GND-N", "GND-W", "TWR-E", "TWR-W"], true)
+            console.log(`Mock ESSA roles: ${(staticConfig.essaRoles ?? []).join(", ")} (TWR top-down)`)
+        }
     }
 
     // Start ATIS polling for mock mode
@@ -1692,6 +1702,7 @@ function buildStatusMessage(): StatusMessage {
         esggRoles: esggMode ? (staticConfig.esggRoles ?? []) : undefined,
         esggRolesManual: esggMode ? !!staticConfig.esggRolesManual : undefined,
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
+        essa0826Owner: essaMode ? resolveEssa0826Owner() : undefined,
         look: staticConfig.look === 'paper' ? 'paper' : 'saab',
         saabLayoutsMode: saabMode,
         saabLayoutId: saabMode ? (staticConfig.saabLayoutId ?? activeSaabLayoutId) : null,
@@ -1855,6 +1866,7 @@ function buildAtisInfo(): AirportAtisInfo[] {
                 arrAtis: essa.arrLetter,
                 depAtis: essa.depLetter,
                 qnh: essa.qnh,
+                lvp: essa.lvp,
                 arrRunways: rwy.arr,
                 depRunways: rwy.dep,
             })
@@ -1864,6 +1876,7 @@ function buildAtisInfo(): AirportAtisInfo[] {
                 airport,
                 atis: atis.letter,
                 qnh: atis.qnh,
+                lvp: atis.lvp,
                 arrRunways: rwy.arr,
                 depRunways: rwy.dep,
             })

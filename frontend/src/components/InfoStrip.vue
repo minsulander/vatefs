@@ -2,7 +2,12 @@
   <div
     ref="rootEl"
     class="info-strip"
-    :class="{ dragging: isDragging, 'tone-green': tone === 'green', 'tone-yellow': tone === 'yellow' }"
+    :class="{
+      dragging: isDragging,
+      'tone-green': tone === 'green',
+      'tone-yellow': tone === 'yellow',
+      'overflow-visible': overflowVisible,
+    }"
     :data-info-strip-id="stripId"
     draggable="true"
     @dragstart="onDragStart"
@@ -17,6 +22,7 @@
     </div>
     <div class="info-strip-actions">
       <StripCloseButton @click="emit('close')" />
+      <slot name="actions" />
     </div>
   </div>
 </template>
@@ -36,8 +42,10 @@ const props = withDefaults(
     stripId: string
     /** Visual tone — green briefing strips (08 turn / 19L SIDs), yellow R16 utökad */
     tone?: 'default' | 'green' | 'yellow'
+    /** Allow descenders (e.g. Speciell VFR “p”) outside the body clip */
+    overflowVisible?: boolean
   }>(),
-  { tone: 'default' },
+  { tone: 'default', overflowVisible: false },
 )
 
 const emit = defineEmits<{
@@ -63,7 +71,12 @@ function updateScale() {
 
 function onDragStart(event: DragEvent) {
   const t = event.target as HTMLElement | null
-  if (t?.closest('.strip-close-btn') || t?.closest('.info-strip-actions')) {
+  if (
+    t?.closest('.strip-close-btn') ||
+    t?.closest('.info-strip-actions') ||
+    t?.closest('[data-no-strip-drag]') ||
+    t?.closest('input, textarea, button')
+  ) {
     event.preventDefault()
     return
   }
@@ -235,6 +248,11 @@ onUnmounted(() => {
   display: flex;
   align-items: stretch;
   overflow: hidden;
+}
+
+.info-strip.overflow-visible,
+.info-strip.overflow-visible .info-strip-body {
+  overflow: visible;
 }
 
 /* MAP ideal: tight column, button top-right, flush beside content */

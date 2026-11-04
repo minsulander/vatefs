@@ -279,6 +279,7 @@
       :class="{
         'section-content--stick-bottom': stickBottomZone,
         'section-content--dtrans': isDtransDivider,
+        'section-content--rwy-hazard': rwyFlagHazardBg,
       }"
     >
       <!--
@@ -332,6 +333,39 @@
           <TurnDepInfoStrip v-if="showTurnBeforeTopIndex(index)" />
           <Sid19LInfoStrip v-if="showSid19lBeforeTopIndex(index)" />
           <R16InfoStrip v-if="showR16BeforeTopIndex(index)" />
+          <TextInfoStrip
+            v-for="v in svfrInSlot('beforeTop', index)"
+            :key="'svfr-t-'+v.airport"
+            :kind="`${SVFR_INFO_KIND}:${v.airport}`"
+            :text="v.text"
+            :visible="true"
+            tone="default"
+            large
+            @close="dismissSvfrAirport(v.airport)"
+          />
+          <TextInfoStrip
+            v-if="showBanaBeforeTopIndex(index)"
+            :kind="banaKind"
+            :text="banaText"
+            :visible="true"
+            tone="default"
+            @close="dismissBana"
+          />
+          <TextInfoStrip
+            v-for="v in lvpInSlot('beforeTop', index)"
+            :key="'lvp-t-'+v.airport"
+            :kind="`${LVP_INFO_KIND}:${v.airport}`"
+            :text="v.text"
+            :visible="true"
+            tone="default"
+            large
+            @close="dismissLvpAirport(v.airport)"
+          />
+          <ArbetsOmradeInfoStrip
+            v-for="v in arbetsInSlot('beforeTop', index)"
+            :key="'ao-t-'+v.airport"
+            :airport="v.airport"
+          />
           <div
             v-if="dropInsertIndex === index"
             class="drop-placement-line"
@@ -369,6 +403,39 @@
         <TurnDepInfoStrip v-if="showTurnAtEndOfTop" />
         <Sid19LInfoStrip v-if="showSid19lAtEndOfTop" />
         <R16InfoStrip v-if="showR16AtEndOfTop" />
+        <TextInfoStrip
+          v-for="v in svfrInSlot('endTop')"
+          :key="'svfr-et-'+v.airport"
+          :kind="`${SVFR_INFO_KIND}:${v.airport}`"
+          :text="v.text"
+          :visible="true"
+          tone="default"
+          large
+          @close="dismissSvfrAirport(v.airport)"
+        />
+        <TextInfoStrip
+          v-if="showBanaAtEndOfTop"
+          :kind="banaKind"
+          :text="banaText"
+          :visible="true"
+          tone="default"
+            @close="dismissBana"
+        />
+        <TextInfoStrip
+          v-for="v in lvpInSlot('endTop')"
+          :key="'lvp-et-'+v.airport"
+          :kind="`${LVP_INFO_KIND}:${v.airport}`"
+          :text="v.text"
+          :visible="true"
+          tone="default"
+          large
+          @close="dismissLvpAirport(v.airport)"
+        />
+        <ArbetsOmradeInfoStrip
+          v-for="v in arbetsInSlot('endTop')"
+          :key="'ao-et-'+v.airport"
+          :airport="v.airport"
+        />
         <!-- After trailing info strips so drops below DEP/ARR info work -->
         <div
           v-if="dropInsertIndex === topStrips.length"
@@ -421,6 +488,39 @@
           <TurnDepInfoStrip v-if="showTurnBeforeBottomIndex(index)" />
           <Sid19LInfoStrip v-if="showSid19lBeforeBottomIndex(index)" />
           <R16InfoStrip v-if="showR16BeforeBottomIndex(index)" />
+          <TextInfoStrip
+            v-for="v in svfrInSlot('beforeBottom', index)"
+            :key="'svfr-b-'+v.airport"
+            :kind="`${SVFR_INFO_KIND}:${v.airport}`"
+            :text="v.text"
+            :visible="true"
+            tone="default"
+            large
+            @close="dismissSvfrAirport(v.airport)"
+          />
+          <TextInfoStrip
+            v-if="showBanaBeforeBottomIndex(index)"
+            :kind="banaKind"
+            :text="banaText"
+            :visible="true"
+            tone="default"
+            @close="dismissBana"
+          />
+          <TextInfoStrip
+            v-for="v in lvpInSlot('beforeBottom', index)"
+            :key="'lvp-b-'+v.airport"
+            :kind="`${LVP_INFO_KIND}:${v.airport}`"
+            :text="v.text"
+            :visible="true"
+            tone="default"
+            large
+            @close="dismissLvpAirport(v.airport)"
+          />
+          <ArbetsOmradeInfoStrip
+            v-for="v in arbetsInSlot('beforeBottom', index)"
+            :key="'ao-b-'+v.airport"
+            :airport="v.airport"
+          />
           <FlightStrip
             :strip="strip"
             :section-id="effectiveSectionId"
@@ -446,6 +546,39 @@
         <TurnDepInfoStrip v-if="showTurnAtEndOfBottom" />
         <Sid19LInfoStrip v-if="showSid19lAtEndOfBottom" />
         <R16InfoStrip v-if="showR16AtEndOfBottom" />
+        <TextInfoStrip
+          v-for="v in svfrInSlot('endBottom')"
+          :key="'svfr-eb-'+v.airport"
+          :kind="`${SVFR_INFO_KIND}:${v.airport}`"
+          :text="v.text"
+          :visible="true"
+          tone="default"
+          large
+          @close="dismissSvfrAirport(v.airport)"
+        />
+        <TextInfoStrip
+          v-if="showBanaAtEndOfBottom"
+          :kind="banaKind"
+          :text="banaText"
+          :visible="true"
+          tone="default"
+            @close="dismissBana"
+        />
+        <TextInfoStrip
+          v-for="v in lvpInSlot('endBottom')"
+          :key="'lvp-eb-'+v.airport"
+          :kind="`${LVP_INFO_KIND}:${v.airport}`"
+          :text="v.text"
+          :visible="true"
+          tone="default"
+          large
+          @close="dismissLvpAirport(v.airport)"
+        />
+        <ArbetsOmradeInfoStrip
+          v-for="v in arbetsInSlot('endBottom')"
+          :key="'ao-eb-'+v.airport"
+          :airport="v.airport"
+        />
         <!-- Explicit hit target below trailing info strips -->
         <div
           class="bottom-info-drop-tail"
@@ -530,6 +663,8 @@ import DepInfoStrip from './DepInfoStrip.vue'
 import TurnDepInfoStrip from './TurnDepInfoStrip.vue'
 import Sid19LInfoStrip from './Sid19LInfoStrip.vue'
 import R16InfoStrip from './R16InfoStrip.vue'
+import TextInfoStrip from './TextInfoStrip.vue'
+import ArbetsOmradeInfoStrip from './ArbetsOmradeInfoStrip.vue'
 import RwyFlagStrip from './RwyFlagStrip.vue'
 import StripCreationDialog from './StripCreationDialog.vue'
 import DtransDividerHeader from './DtransDividerHeader.vue'
@@ -542,21 +677,35 @@ import {
   TURN_DEP_INFO_KIND,
   SID19L_INFO_KIND,
   R16_INFO_KIND,
+  SVFR_INFO_KIND,
+  BANA0826_INFO_KIND,
+  LVP_INFO_KIND,
+  ARBETS_OMRADE_INFO_KIND,
   setInfoStripPlacement,
   getInfoStripPlacement,
+  clearInfoStripPlacement,
   getActiveBreakoutVariants,
   breakoutForceKey,
   getActiveMapVariants,
   getActiveDepVariants,
+  getActiveSvfrVariants,
+  getActiveLvpVariants,
+  getActiveArbetsOmradeVariants,
+  dismissSvfrAirport,
+  dismissLvpAirport,
+  bayIdForOpsAirport,
+  sectionIdForOpsBay,
   infoStripInstanceKey,
   parseInfoStripPlacementKey,
   useTurnDepInfoStrip,
   useSid19LInfoStrip,
   useR16InfoStrip,
+  useBana0826InfoStrip,
   type InfoStripPlacement,
   type BreakoutVariant,
   type MapInfoVariant,
   type DepInfoVariant,
+  type OpsAirportVariant,
 } from '@/composables/useInfoStrips'
 import { essaMapDefaultSectionId } from '@/data/essa-map-info'
 import { essaDepDefaultSectionId } from '@/data/essa-dep-info'
@@ -1385,6 +1534,10 @@ const closedFlagActive = computed(
     showRwyFlagControls.value &&
     isRwyFlagActive(RWY_CLOSED_FLAG_KIND, props.section.id),
 )
+/** Red diagonal hatch behind strips when RWY vehicle and/or closed is up. */
+const rwyFlagHazardBg = computed(
+  () => occupiedFlagActive.value || closedFlagActive.value,
+)
 
 const {
   visible: turnVisible,
@@ -1402,11 +1555,24 @@ const {
   defaultBayId: r16DefaultBayId,
   defaultSectionId: r16DefaultSectionId,
 } = useR16InfoStrip()
+const {
+  variant: banaVariant,
+  visible: banaVisible,
+  placement: banaPlacement,
+  defaultBayId: banaDefaultBayId,
+  defaultSectionId: banaDefaultSectionId,
+  dismiss: dismissBana,
+  kind: banaKind,
+} = useBana0826InfoStrip()
+const banaText = computed(() => banaVariant.value?.text ?? 'Bana 08/26\nTillhör')
 
-/** Multi-config MAP / DEP / Breakout — recompute when catalog force / dismiss / RWY change. */
+/** Multi-config MAP / DEP / Breakout / Ops — recompute when catalog force / dismiss / RWY change. */
 const activeBreakouts = computed(() => getActiveBreakoutVariants())
 const activeMaps = computed(() => getActiveMapVariants())
 const activeDeps = computed(() => getActiveDepVariants())
+const activeSvfr = computed(() => getActiveSvfrVariants())
+const activeLvp = computed(() => getActiveLvpVariants())
+const activeArbets = computed(() => getActiveArbetsOmradeVariants())
 
 /**
  * Host for turn / Q·E briefing strips: default at the TOP of the DEP RWY bay itself.
@@ -1429,21 +1595,13 @@ function createRwyBayTopHost(
     if ((options?.requireRolesMode ?? true) && !store.essaRolesMode) return false
     if (!visible.value) return false
     const def = defaultSectionId.value
-    if (!def) return false
-    if (options?.defaultBayId) {
-      const wantBay = options.defaultBayId.value
-      if (wantBay && wantBay !== props.bayId) {
-        // Workspace paints synthetic column ids; first server bay → ws-col-0
-        const serverFirst = store.layout.bays[0]?.id
-        const okWs =
-          props.workspaceMode &&
-          props.bayId === 'ws-col-0' &&
-          !!serverFirst &&
-          wantBay === serverFirst
-        if (!okWs) return false
-      }
-    }
-    return props.section.id === def
+    if (!def || props.section.id !== def) return false
+    if (!options?.defaultBayId) return true
+    const wantBay = options.defaultBayId.value
+    if (!wantBay || wantBay === props.bayId) return true
+    // Workspace uses synthetic ws-col-* ids; section ids are unique on the board
+    if (props.workspaceMode) return true
+    return false
   })
   const showHere = computed(() => {
     if (!visible.value) return false
@@ -1610,6 +1768,75 @@ function depsInSlot(slot: InfoSlot, index?: number): DepInfoVariant[] {
       v.configId,
       essaDepDefaultSectionId(v.runway),
     )
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
+}
+
+function opsAirportDefaultOverride(airport: string): boolean {
+  const host = {
+    bayId: bayIdForOpsAirport(airport),
+    sectionId: sectionIdForOpsBay(bayIdForOpsAirport(airport)),
+  }
+  if (!host.bayId || !host.sectionId) return false
+  if (props.section.id !== host.sectionId) return false
+  if (props.bayId === host.bayId) return true
+  // Workspace synthetic columns: section id match is enough
+  if (props.workspaceMode) return true
+  return false
+}
+
+/**
+ * Per-airport Ops placement. Ignores legacy kind-only pins (`svfr` / `lvp`) that
+ * used to send every strip to the leftmost bay.
+ */
+function opsInfoSlot(
+  kind: typeof SVFR_INFO_KIND | typeof LVP_INFO_KIND | typeof ARBETS_OMRADE_INFO_KIND,
+  airport: string,
+): { slot: InfoSlot; index: number } | null {
+  const p = getInfoStripPlacement(infoStripInstanceKey(kind, airport))
+  if (p) {
+    if (!placementMatchesThisSection(p)) return null
+    if (p.bottom) {
+      if (p.index >= bottomStrips.value.length) return { slot: 'endBottom', index: p.index }
+      return { slot: 'beforeBottom', index: p.index }
+    }
+    if (p.index >= topStrips.value.length) return { slot: 'endTop', index: p.index }
+    if (topStrips.value.length === 0 && p.index === 0) return { slot: 'endTop', index: 0 }
+    return { slot: 'beforeTop', index: p.index }
+  }
+  if (!opsAirportDefaultOverride(airport)) return null
+  return { slot: 'endTop', index: 0 }
+}
+
+function svfrInSlot(slot: InfoSlot, index?: number): OpsAirportVariant[] {
+  void activeSvfr.value
+  void ws.activeLayout.value
+  return activeSvfr.value.filter((v) => {
+    const loc = opsInfoSlot(SVFR_INFO_KIND, v.airport)
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
+}
+
+function lvpInSlot(slot: InfoSlot, index?: number): OpsAirportVariant[] {
+  void activeLvp.value
+  void ws.activeLayout.value
+  return activeLvp.value.filter((v) => {
+    const loc = opsInfoSlot(LVP_INFO_KIND, v.airport)
+    if (!loc || loc.slot !== slot) return false
+    if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
+    return true
+  })
+}
+
+function arbetsInSlot(slot: InfoSlot, index?: number): OpsAirportVariant[] {
+  void activeArbets.value
+  void ws.activeLayout.value
+  return activeArbets.value.filter((v) => {
+    const loc = opsInfoSlot(ARBETS_OMRADE_INFO_KIND, v.airport)
     if (!loc || loc.slot !== slot) return false
     if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index
     return true
@@ -2848,7 +3075,14 @@ const hasPinnedZoneContent = computed(
     depsInSlot('endBottom').length > 0 ||
     showTurnAtBottom.value ||
     showSid19lAtBottom.value ||
-    showR16AtBottom.value,
+    showR16AtBottom.value ||
+    svfrInSlot('beforeBottom').length > 0 ||
+    svfrInSlot('endBottom').length > 0 ||
+    showBanaAtBottom.value ||
+    lvpInSlot('beforeBottom').length > 0 ||
+    lvpInSlot('endBottom').length > 0 ||
+    arbetsInSlot('beforeBottom').length > 0 ||
+    arbetsInSlot('endBottom').length > 0,
 )
 const sectionGaps = computed(() => store.getGapsForSection(effectiveBayId.value, effectiveSectionId.value))
 
@@ -3186,6 +3420,17 @@ const {
   defaultBayId: r16DefaultBayId,
   requireRolesMode: false,
 })
+const {
+  showHere: showBanaHere,
+  atBottom: showBanaAtBottom,
+  beforeTop: showBanaBeforeTopIndex,
+  endTop: showBanaAtEndOfTop,
+  beforeBottom: showBanaBeforeBottomIndex,
+  endBottom: showBanaAtEndOfBottom,
+} = createRwyBayTopHost(banaVisible, banaPlacement, banaDefaultSectionId, topStrips, bottomStrips, {
+  defaultBayId: banaDefaultBayId,
+  requireRolesMode: false,
+})
 
 /**
  * Workspace: pin default-hosted info strips to this section so they follow when
@@ -3193,7 +3438,7 @@ const {
  * and geometric "above runway" hosting would fail after the move).
  */
 function stickInfoPlacement(kind: string, forceKey: string | null, bottom: boolean, index: number) {
-  if (!props.workspaceMode) return
+  if (!props.workspaceMode && !store.multiAirport) return
   const key = forceKey ? infoStripInstanceKey(kind, forceKey) : kind
   if (getInfoStripPlacement(key)) return
   setInfoStripPlacement(key, {
@@ -3205,7 +3450,7 @@ function stickInfoPlacement(kind: string, forceKey: string | null, bottom: boole
 }
 
 watchEffect(() => {
-  if (!props.workspaceMode) return
+  if (!props.workspaceMode && !store.multiAirport) return
   void ws.activeLayout.value
 
   for (const v of activeBreakouts.value) {
@@ -3228,6 +3473,25 @@ watchEffect(() => {
   }
   if (showR16Here.value && !r16Placement.value) {
     stickInfoPlacement(R16_INFO_KIND, null, showR16AtBottom.value, 0)
+  }
+  for (const v of activeSvfr.value) {
+    if (!opsAirportDefaultOverride(v.airport)) continue
+    // Prefer instance pin; drop legacy kind-only pin that targeted bay1
+    clearInfoStripPlacement(SVFR_INFO_KIND)
+    stickInfoPlacement(SVFR_INFO_KIND, v.airport, false, 0)
+  }
+  if (showBanaHere.value && !banaPlacement.value) {
+    stickInfoPlacement(BANA0826_INFO_KIND, null, showBanaAtBottom.value, 0)
+  }
+  for (const v of activeLvp.value) {
+    if (!opsAirportDefaultOverride(v.airport)) continue
+    clearInfoStripPlacement(LVP_INFO_KIND)
+    stickInfoPlacement(LVP_INFO_KIND, v.airport, false, 0)
+  }
+  for (const v of activeArbets.value) {
+    if (!opsAirportDefaultOverride(v.airport)) continue
+    clearInfoStripPlacement(ARBETS_OMRADE_INFO_KIND)
+    stickInfoPlacement(ARBETS_OMRADE_INFO_KIND, v.airport, false, 0)
   }
 })
 
@@ -4654,6 +4918,18 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   min-height: 0;
   background: var(--efs-bay-bg, #3b3c41);
   transition: background 0.2s ease;
+}
+
+/* RWY vehicle / closed — hazard hatch fills empty section body */
+.section-content--rwy-hazard {
+  background: repeating-linear-gradient(
+    -45deg,
+    #2e3035 0,
+    #2e3035 10px,
+    #6e1a1a 10px,
+    #6e1a1a 20px
+  );
+  transition: none;
 }
 
 /* Horizontal insert marker while dragging between strips */

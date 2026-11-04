@@ -363,12 +363,14 @@ sectionRules:
     notMyRole: [TWR]
     priority: 210
 
-  # GND separate: after ASSUME, stay on TAXIWAY ARR (even ARR / still on RWY)
+  # GND separate: after ASSUME, stay on TAXIWAY ARR (even ARR / still on RWY).
+  # Do not require clearedToLand:false — CTL often lingers a few seconds after
+  # assume; that used to fall through to runway_* (shown as INBOUND TWR on GND)
+  # then bounce back when CTL cleared.
   taxi_arr_assumed_gnd_separate:
     sectionId: taxi_arr
     direction: arrival
     airborne: false
-    clearedToLand: false
     groundstates: ['', NSTS, ARR, TXIN]
     controller: myself
     myRole: [GND]
@@ -379,7 +381,6 @@ sectionRules:
     sectionId: taxi_arr
     direction: local
     airborne: false
-    clearedToLand: false
     groundstates: ['', NSTS, ARR, TXIN]
     controller: myself
     myRole: [GND]
@@ -571,7 +572,7 @@ sectionRules:
     priority: 99
 
   # TWR boards only — GND has no RWY columns; LINEUP/DEPA deps soft-delete there
-  # (delete_dep_twr_lineup_*). Without this gate, GND briefly assigns invisible runway_*
+  # (delete_dep_twr_assumed_*). Without this gate, GND briefly assigns invisible runway_*
   # then used to bounce back via taxi_dep_on_runway_*_gnd.
   runway_lineup_depa_dep:
     sectionId: dep_runway
@@ -756,27 +757,24 @@ deleteRules:
     notEssaFamilies: [GND]
     priority: 90
 
-  # Mirror for deps: GND (not covering TWR) hides TWR-owned LINEUP/DEPA so
-  # handed-off traffic does not vanish into invisible RWY then reappear in TAXI DEP.
-  # Still-TAXI TWR-owned strips stay visible in TAXIWAY DEP until LU.
-  delete_dep_twr_lineup_gnd:
+  # Mirror of delete_arr_gnd_assumed_taxi: GND (not covering TWR) hides deps
+  # as soon as TWR assumes — leave TAXIWAY DEP (TAXI / LINEUP / DEPA).
+  delete_dep_twr_assumed_gnd:
     direction: departure
     airborne: false
     controller: not_myself
     ownerRole: [TWR]
-    groundstates: [LINEUP, DEPA]
     myRole: [GND]
     notMyRole: [TWR]
     essaFamilies: [GND]
     notEssaFamilies: [TWR]
     priority: 95
 
-  delete_dep_twr_lineup_local_gnd:
+  delete_dep_twr_assumed_local_gnd:
     direction: local
     airborne: false
     controller: not_myself
     ownerRole: [TWR]
-    groundstates: [LINEUP, DEPA]
     myRole: [GND]
     notMyRole: [TWR]
     essaFamilies: [GND]

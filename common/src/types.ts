@@ -343,6 +343,7 @@ export type PaperInfoKind =
     | 'snorojning'
     | 'prel_rojning'
     | 'bogsering'
+    | 'lvp'
 
 export const PAPER_INFO_KINDS: readonly PaperInfoKind[] = [
     'empty',
@@ -353,6 +354,7 @@ export const PAPER_INFO_KINDS: readonly PaperInfoKind[] = [
     'snorojning',
     'prel_rojning',
     'bogsering',
+    'lvp',
 ] as const
 
 export function isPaperInfoKind(value: unknown): value is PaperInfoKind {
@@ -364,7 +366,8 @@ export function isPaperInfoKind(value: unknown): value is PaperInfoKind {
         value === 'hinder' ||
         value === 'snorojning' ||
         value === 'prel_rojning' ||
-        value === 'bogsering'
+        value === 'bogsering' ||
+        value === 'lvp'
     )
 }
 
@@ -560,6 +563,11 @@ export interface AirportAtisInfo {
     arrAtis?: string       // Arrival ATIS letter (ESSA-style split)
     depAtis?: string       // Departure ATIS letter (ESSA-style split)
     qnh?: number           // QNH in hPa
+    /**
+     * True when ATIS text contains LVP (only filled for airports whose LOP
+     * announces LVP via ATIS — see ATIS_LVP_AIRPORTS).
+     */
+    lvp?: boolean
     arrRunways: string[]   // Active arrival runways
     depRunways: string[]   // Active departure runways
 }

@@ -1509,6 +1509,8 @@ export function useWorkspace() {
   function buildDisplayBays(serverLayout: EfsLayout): Bay[] {
     const layout = activeLayout.value
     if (!layout) return serverLayout.bays
+    const store = useEfsStore()
+    const otherBoard = store.saabLayoutsMode && !store.essaRolesMode
 
     // One header per logical sectionId across the whole board (corrupt saves /
     // older catalog bugs could leave two CD or two INBOUND APP).
@@ -1521,9 +1523,11 @@ export function useWorkspace() {
           if (seenSectionIds.has(s.sectionId)) return false
           seenSectionIds.add(s.sectionId)
         }
-        // ESSA: never show bare "INBOUND" — drop orphan when server hid it (e.g. APP)
-        // or when the title would still be the YAML placeholder.
+        // ESSA only: never show bare "INBOUND" — drop orphan when server hid it
+        // (e.g. APP) or when the title would still be the YAML placeholder.
+        // OTHER keeps YAML title "INBOUND" and must still paint that section.
         if (s.sectionId !== 'inbound') return true
+        if (otherBoard) return true
         const wsTitle = (s.title || '').trim().toUpperCase()
         const isTwrForm =
           s.groupId === 'inbound_twr' || /^INBOUND\s+TWR\b/.test(wsTitle)
@@ -1607,7 +1611,8 @@ export function useWorkspace() {
             title = serverSec?.title?.trim() || 'PUSH BACK / START-UP'
           }
         }
-        if (s.sectionId === 'inbound') {
+        // ESSA: retitle bare/APP inbound forms. OTHER keeps YAML "INBOUND".
+        if (s.sectionId === 'inbound' && !otherBoard) {
           const wsU = (s.title || '').trim().toUpperCase()
           const isTwrForm =
             s.groupId === 'inbound_twr' || /^INBOUND\s+TWR\b/.test(wsU)
@@ -1623,13 +1628,10 @@ export function useWorkspace() {
           } else {
             title = s.title || serverSec?.title || 'INBOUND APP'
           }
-        }
-        // ESSA safety: never paint the empty placeholder label
-        if (
-          s.sectionId === 'inbound' &&
-          (title || '').trim().toUpperCase() === 'INBOUND'
-        ) {
-          title = 'INBOUND APP'
+          // Never paint the empty ESSA placeholder label
+          if ((title || '').trim().toUpperCase() === 'INBOUND') {
+            title = 'INBOUND APP'
+          }
         }
         return {
           id: s.sectionId,

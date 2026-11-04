@@ -281,6 +281,48 @@ function aorRowForOnlineTwrs(
     return [tw, ts, te]
 }
 
+export type Essa0826Owner = "TWR-E" | "TWR-W" | "TWR-S"
+
+/**
+ * Owner of ESSA 08/26 (TS AOR) for the "Bana 08/26 Tillhör" info strip.
+ * Split: first online in E→S→W. Solo login: that login. Top-down covering both
+ * physical TWRs without an E/W/S login: TWR-E (TS priority head).
+ */
+export function resolveEssa0826Owner(): Essa0826Owner | null {
+    if (!isEssaRolesConfig(staticConfig)) return null
+    const roles = staticConfig.essaRoles ?? []
+    const myTwrs = roles.filter((r) => ALL_TWR_POSITIONS.includes(r))
+    if (myTwrs.length === 0) return null
+
+    const onlineCallsigns = staticConfig.onlineControllers
+        ? [...staticConfig.onlineControllers.keys()]
+        : []
+    const online = new Set(parseOnlineEssaLoginIds(onlineCallsigns))
+    const myLogin = staticConfig.myCallsign
+        ? parseEssaLoginId(staticConfig.myCallsign)
+        : undefined
+    if (myLogin === "TWR-E" || myLogin === "TWR-W" || myLogin === "TWR-S") {
+        online.add(myLogin)
+    } else if (ALL_TWR_POSITIONS.every((r) => myTwrs.includes(r))) {
+        // Top-down covering E+W: treat both physical as present → TS = E
+        online.add("TWR-E")
+        online.add("TWR-W")
+    } else if (myTwrs.includes("TWR-E")) {
+        online.add("TWR-E")
+    } else if (myTwrs.includes("TWR-W")) {
+        online.add("TWR-W")
+    }
+
+    const row = aorRowForOnlineTwrs(online)
+    if (row) return row[1] as Essa0826Owner
+    // Solo
+    if (online.has("TWR-E") && !online.has("TWR-W") && !online.has("TWR-S")) return "TWR-E"
+    if (online.has("TWR-W") && !online.has("TWR-E") && !online.has("TWR-S")) return "TWR-W"
+    if (online.has("TWR-S") && !online.has("TWR-E") && !online.has("TWR-W")) return "TWR-S"
+    const solo = firstOnlineInPrio(AOR_PRIO_TS, online)
+    return (solo as Essa0826Owner | undefined) ?? null
+}
+
 /** AOR columns covered by this TWR login given who is online. */
 function aorColumnsForTwrLogin(login: string, onlineLogins: Iterable<string>): Set<EssaAorColumn> {
     const online = new Set<string>()

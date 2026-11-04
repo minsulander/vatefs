@@ -194,11 +194,11 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate("FIN842", {
         squawk: "1122",
         groundstate: "TXIN",
-        controller: "ESSA_GND",
+        controller: "ESSA_TWR",
         stand: "01",
     }),
 
-    // === PENDING CLR ===
+    // === PENDING CLR (untracked — ASSUME as TWR top-down / CD) ===
     fpUpdate("SAS462", "ESSA", "EGLL", "A320", {
         rfl: 36000,
         depRwy: "01L",
