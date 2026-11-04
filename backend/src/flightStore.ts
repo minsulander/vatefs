@@ -61,6 +61,7 @@ import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
 import { remapPushActionForStand } from "./essa-push-stands.js"
 import { isDepBayFlowStickyInvalid as depBayFlowStickyInvalid } from "./dep-bay-sticky.js"
 import {
+    extractTmaEntryPoint,
     extractTmaExitPoint,
     FAA_TO_ICAO,
     formatCflMenuLabel,
@@ -5813,6 +5814,11 @@ class FlightStore {
             stripType === 'departure' || stripType === 'local'
                 ? extractTmaExitPoint(undefined, flight.extractedRoute || flight.route)
                 : undefined
+        // Last filed fix before STAR legs (all airports — SAAB ARR bottom-right)
+        const tmaEntry =
+            stripType === 'arrival' || stripType === 'local'
+                ? extractTmaEntryPoint(flight.route || flight.extractedRoute, flight.star)
+                : undefined
 
         // Anonymous VFR/CROSS: flight.callsign holds stable id (vfrdep:uuid); never use callsign@ICAO
         const anon = isAnonymousSpecialStripId(flight.callsign)
@@ -5848,6 +5854,7 @@ class FlightStore {
             sectorEntryMin: flight.sectorEntryMin,
             sid: displaySid,
             tmaExit,
+            tmaEntry,
             star: flight.star,
             rfl,
             xfl,

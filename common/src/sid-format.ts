@@ -347,3 +347,83 @@ export function extractTmaExitPoint(
 ): string | undefined {
     return extractSignificantRouteFixes(route)[0]
 }
+
+/** Fix name from a STAR / procedure designator (ELTOK1G → ELTOK, ALJAC RNP Y → ALJAC). */
+export function extractFixFromProcedureName(
+    proc: string | undefined | null,
+): string | undefined {
+    if (!proc) return undefined
+    const upper = proc.trim().toUpperCase().replace(/[·.•]/g, " ").replace(/\s+/g, " ")
+    if (!upper) return undefined
+    const first = upper.split(" ")[0] ?? ""
+    if (first && first !== "RNP" && (/^[A-Z]{2,5}$/.test(first) || /^[A-Z]{2,}\d+[A-Z]+$/.test(first))) {
+        const named = first.match(/^([A-Z]{2,})(\d+[A-Z]+)$/)
+        if (named) return named[1]
+        if (/^[A-Z]{2,5}$/.test(first)) return first
+    }
+    const compact = upper.replace(/\s+/g, "")
+    const m = compact.match(/^([A-Z]{2,})(\d+[A-Z]+)$/)
+    if (m) return m[1]
+    return undefined
+}
+
+/**
+ * TMA entry = last filed FPL fix before STAR waypoints.
+ * Points on the STAR (after the STAR IAF / procedure) are excluded — e.g.
+ * extracted `… ELTOK OBCIV SA865` with STAR ELTOK1G → ELTOK, not OBCIV.
+ * Falls back to the STAR procedure name when the route has no usable fixes.
+ */
+export function extractTmaEntryPoint(
+    route: string | undefined | null,
+    star?: string | undefined | null,
+): string | undefined {
+    const starFix = extractFixFromProcedureName(star)
+    const starProc = (star ?? "").trim().toUpperCase().replace(/[·.•\s]/g, "")
+
+    if (!route) return starFix
+
+    const fixes: string[] = []
+    for (const raw of route.split(/\s+/)) {
+        const upper = raw.trim().toUpperCase()
+        if (!upper || upper === "DCT") continue
+        // ADEP/rwy, SID/rwy, STAR/rwy
+        if (upper.includes("/")) continue
+        if (/^\d{1,2}[LRC]?$/i.test(upper)) continue
+        if (/^[NKM]\d{3,4}[FASM]\d{3,4}$/i.test(upper)) continue
+        if (/^VFR/i.test(upper)) continue
+        if (/^[A-Z]{4}$/.test(upper)) continue
+
+        // Named STAR/SID designator (ELTOK1G) — entry is its fix; stop before STAR legs
+        if (/^[A-Z]{2,}\d+[A-Z]+$/.test(upper)) {
+            const fromProc = extractFixFromProcedureName(upper)
+            const compact = upper.replace(/[·.•\s]/g, "")
+            const isOurStar =
+                !!fromProc &&
+                ((!starProc && !starFix) ||
+                    compact === starProc ||
+                    (starFix != null && fromProc === starFix))
+            if (isOurStar) return fromProc ?? starFix
+            continue
+        }
+
+        let fix: string | undefined
+        const vector = parseVectorSidName(upper)
+        if (vector) {
+            fix = vector.exit
+        } else if (TRACK_SEP_RE.test(upper)) {
+            const last = upper.split(TRACK_SEP_RE).filter(Boolean).pop()
+            if (last && /^[A-Z]{2,}$/.test(last)) fix = last
+        } else if (/^[A-Z]{2,3}$/.test(upper) || /^[A-Z]{5}$/.test(upper)) {
+            fix = upper
+        }
+        if (!fix) continue
+
+        // STAR IAF reached — that fix is TMA entry; ignore following STAR points
+        if (starFix && fix === starFix) return starFix
+
+        fixes.push(fix)
+    }
+
+    if (fixes.length > 0) return fixes[fixes.length - 1]
+    return starFix
+}

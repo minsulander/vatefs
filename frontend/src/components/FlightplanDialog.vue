@@ -303,6 +303,34 @@
 
         <div v-if="ctotReason" class="fpl-note">{{ ctotReason }}</div>
 
+        <!-- CDM / schedule times (always visible when any present) -->
+        <div v-if="hasScheduleTimes" class="fpl-row fpl-row--times">
+          <div v-if="dbgEobt" class="fpl-field">
+            <span class="fpl-lbl">EOBT</span>
+            <span class="fpl-box">{{ dbgEobt }}</span>
+          </div>
+          <div v-if="dbgTobt" class="fpl-field">
+            <span class="fpl-lbl">TOBT</span>
+            <span class="fpl-box">{{ dbgTobt }}</span>
+          </div>
+          <div v-if="dbgTsat" class="fpl-field">
+            <span class="fpl-lbl">TSAT</span>
+            <span class="fpl-box">{{ dbgTsat }}</span>
+          </div>
+          <div v-if="dbgTtot" class="fpl-field">
+            <span class="fpl-lbl">TTOT</span>
+            <span class="fpl-box">{{ dbgTtot }}</span>
+          </div>
+          <div v-if="ctot" class="fpl-field">
+            <span class="fpl-lbl">CTOT</span>
+            <span class="fpl-box" :title="ctotReason || undefined">{{ ctot }}</span>
+          </div>
+          <div v-if="dbgFlsSlc" class="fpl-field">
+            <span class="fpl-lbl">{{ dbgFlsSlcLabel }}</span>
+            <span class="fpl-box">{{ dbgFlsSlc }}</span>
+          </div>
+        </div>
+
         <!-- Debug / live status — collapsed by default -->
         <button
           type="button"
@@ -790,8 +818,35 @@ const dbgTobt = computed(() => {
   return by ? `${t}(${by})` : t
 })
 const dbgTsat = computed(() => pick(f.value?.tsat, s.value.tsat))
+const dbgEobt = computed(() => pick(draft.eobt, f.value?.eobt, s.value.eobt))
+const dbgTtot = computed(() => pick(f.value?.ttot, s.value.ttot))
 const dbgAsrt = computed(() => pick(f.value?.asrt, s.value.asrt))
 const dbgCdmSts = computed(() => pick(f.value?.cdmSts, s.value.cdmSts))
+const dbgFlsSlc = computed(() => {
+  const sts = (dbgCdmSts.value || '').trim().toUpperCase()
+  if (!sts) return ''
+  if (sts === 'FLS' || sts.startsWith('FLS') || sts.includes('FLS') || sts === 'SUSP') return sts
+  if (sts === 'SLC' || sts === 'SCL' || sts === 'SRM') return sts
+  return ''
+})
+const dbgFlsSlcLabel = computed(() => {
+  const sts = dbgFlsSlc.value
+  if (!sts) return 'CDM'
+  if (sts === 'SRM') return 'SRM'
+  if (sts === 'SLC' || sts === 'SCL') return 'SLC'
+  return 'FLS'
+})
+const hasScheduleTimes = computed(
+  () =>
+    !!(
+      dbgEobt.value ||
+      dbgTobt.value ||
+      dbgTsat.value ||
+      dbgTtot.value ||
+      ctot.value ||
+      dbgFlsSlc.value
+    ),
+)
 const dbgDcl = computed(() => pick(f.value?.dclStatus, s.value.dclStatus))
 const dbgSection = computed(() => {
   const bay = s.value.bayId || '?'

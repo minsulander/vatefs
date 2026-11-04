@@ -2483,7 +2483,9 @@ function sendCdmMasterStatus(socket: WebSocket) {
     sendMessage(socket, buildCdmMasterStatusMessage())
 }
 
-function applyCdmMastersFromPoll(masters: { icao: string; position: string }[]) {
+/** Apply CDM masters from a successful /airport poll. `null` = fetch failed — keep last-known. */
+function applyCdmMastersFromPoll(masters: { icao: string; position: string }[] | null | undefined) {
+    if (masters == null) return
     const entry = masters.find((m) => m.icao.toUpperCase() === "ESSA")
     setCdmMasterEssa(entry?.position ?? null)
 }
@@ -10654,7 +10656,7 @@ function isDepartingIfrStrip(strip: FlightStrip): boolean {
 }
 
 function applyViffPoll(result: ViffPollResult) {
-    applyCdmMastersFromPoll(result.masters ?? [])
+    applyCdmMastersFromPoll(result.masters)
 
     const ctotByCs = new Map<string, { ctot: string; reason?: string }>()
     for (const entry of result.restricted) {

@@ -379,8 +379,8 @@ export function shouldShowInboundGnd(
 
 /**
  * TAXIWAY ARR: shown for GND (and combined GND+TWR). Hidden on TWR-only boards
- * when a separate GND is online — vacated arrivals soft-delete once GND assumes.
- * Solo TWR covering GND (no online GND peer) still sees the section.
+ * when a separate GND is online — TWR keeps TAXIWAY DEP only. Solo TWR covering
+ * GND (no online GND peer) still sees TAXIWAY ARR.
  */
 export function shouldShowTaxiArr(
     roles: EssaPositionRole[],
@@ -390,6 +390,28 @@ export function shouldShowTaxiArr(
     if (families.has("GND")) return true
     if (!families.has("TWR")) return false
     return !activeGndPeers || activeGndPeers.length === 0
+}
+
+/**
+ * Whether a static layout section is shown for the current ESSA role picker
+ * (visibleFor ∩ families). Used so airborne deps only auto-move to CTR DEP when
+ * that column is on the board; otherwise they stay on DEP RWY.
+ */
+export function isEssaSectionVisibleForPicker(
+    sectionId: string,
+    roles: EssaPositionRole[],
+    sectionVisibleFor: Map<string, EssaFamily[]> | undefined,
+    activeGndPeers?: EssaPositionRole[]
+): boolean {
+    if (!sectionVisibleFor || sectionVisibleFor.size === 0) return true
+    if (roles.length === 0) return true
+    if (sectionId === "inbound_gnd") return shouldShowInboundGnd(roles, activeGndPeers)
+    if (sectionId === "taxi_arr") return shouldShowTaxiArr(roles, activeGndPeers)
+    const families = familiesFromRoles(roles)
+    if (sectionId === "inbound" && families.has("APP")) return false
+    const visibleFor = sectionVisibleFor.get(sectionId)
+    if (!visibleFor || visibleFor.length === 0) return true
+    return visibleFor.some(f => families.has(f))
 }
 
 /** Max visible ESSA columns; CD ALL + TSAT share a column when this would be exceeded */
@@ -612,17 +634,20 @@ export function collectEssaRunwayPairs(
     for (const pair of ESSA_PHYSICAL_RWY_PAIRS) {
         const acc = byId.get(pair.id)
         if (!acc) continue
+        // FATO (07/25): only when someone has 07/25 assigned — never active-config alone
+        if (pair.assignedOnly && !(acc.fromAssignedDep || acc.fromAssignedArr)) continue
         // Active DEP → DEP column; active ARR-only → ARR column (left bay).
         // FPL-only pairs: dep assignment → DEP, else ARR. Never let FPL dep
         // override an active-ARR-only strip into the DEP column.
         let preferDepColumn: boolean
-        if (acc.inActiveDep) preferDepColumn = true
-        else if (acc.inActiveArr) preferDepColumn = false
+        if (acc.inActiveDep && !pair.assignedOnly) preferDepColumn = true
+        else if (acc.inActiveArr && !pair.assignedOnly) preferDepColumn = false
         else preferDepColumn = acc.fromAssignedDep
         const fromAssigned =
-            !acc.inActiveDep &&
-            !acc.inActiveArr &&
-            (acc.fromAssignedDep || acc.fromAssignedArr)
+            pair.assignedOnly ||
+            (!acc.inActiveDep &&
+                !acc.inActiveArr &&
+                (acc.fromAssignedDep || acc.fromAssignedArr))
         ordered.push({
             sectionId: essaRunwaySectionId(pair),
             title: formatEssaRunwaySectionTitle(pair),

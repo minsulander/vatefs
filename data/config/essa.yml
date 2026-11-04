@@ -56,7 +56,7 @@ layout:
           # First at bottom (newest inserts on top).
           addFromTop: true
           # GND boards (and solo TWR covering GND). Hidden on TWR-only when a
-          # separate GND is online — filterEssaLayout / shouldShowTaxiArr.
+          # separate GND is online — TWR keeps TAXIWAY DEP only (not merged).
           visibleFor: [GND, TWR]
 
     bay2:
@@ -64,6 +64,7 @@ layout:
         ctr_dep:
           # Same strip home for CTR DEP (TWR) and TMA DEP (APP / CD+GND+TWR+APP default).
           # filterEssaLayout retitles to TMA DEP when APP family is selected.
+          # Shown on TWR boards by default (including split TWR + separate GND).
           title: CTR DEP
           addFromTop: false
           visibleFor: [TWR, APP]
@@ -273,7 +274,7 @@ sectionRules:
     notEssaFamilies: [GND]
     priority: 70
 
-  # TAXIWAY ARR only after TAXI IN (TXIN) — not on mere vacate / ARR.
+  # TAXIWAY ARR fallback after TAXI IN (TXIN) — not on mere vacate / ARR.
   taxi_arr_local:
     sectionId: taxi_arr
     direction: local
@@ -307,43 +308,109 @@ sectionRules:
     depRunway: true
     priority: 108
 
-  # GND: pending inbound transfer stays on INBOUND until TXIN (disabled hop to TAXI ARR)
+  # === ARR → TAXIWAY ARR (no geographic RWY hold; GS / CTL / LINEUP place on RWY) ===
+  # Board matrix:
+  # - TWR-only + separate GND: stay on RUNWAY until TXIN or GND assumes (XFER alone does not leave RWY).
+  #   TXIN → hidden taxi_arr; GND assume → soft-delete. Board has CTR ARR+DEP + TAXIWAY DEP (not taxi_arr).
+  # - GND-only: pending XFER / assumed → taxi_arr (even on RWY)
+  # - Combined GND+TWR: TXIN → taxi_arr; ARR without TXIN stays RWY (until-taxi, even after vacate)
+  # Only RWY auto-move: dep airborne → CTR DEP when that section is on the board; else DEP RWY until APP assumes.
+  # TWR-only + separate GND: TXIN leaves RUNWAY (hidden taxi_arr) — not on XFER alone.
+  taxi_arr_txin_twr_separate:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    groundstates: [TXIN]
+    controller: myself
+    myRole: [TWR]
+    notMyRole: [GND]
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    priority: 210
+
+  taxi_arr_txin_twr_separate_local:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    groundstates: [TXIN]
+    controller: myself
+    myRole: [TWR]
+    notMyRole: [GND]
+    essaFamilies: [TWR]
+    notEssaFamilies: [GND]
+    priority: 210
+
+  # GND separate: INBOUND TWR → TAXIWAY ARR when incoming TWR→GND transfer
   taxi_arr_pending_inbound_transfer:
     sectionId: taxi_arr
-    myRole: []
-    priority: 115
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
 
   taxi_arr_pending_inbound_transfer_local:
     sectionId: taxi_arr
-    myRole: []
-    priority: 115
+    direction: local
+    airborne: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
 
-  # GND: assumed vacated arrival → TAXIWAY ARR only when TXIN is set
+  # GND separate: after ASSUME, stay on TAXIWAY ARR (even ARR / still on RWY)
+  taxi_arr_assumed_gnd_separate:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    clearedToLand: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: myself
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
+
+  taxi_arr_assumed_local_gnd_separate:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    clearedToLand: false
+    groundstates: ['', NSTS, ARR, TXIN]
+    controller: myself
+    myRole: [GND]
+    notMyRole: [TWR]
+    priority: 210
+
+  # GND (incl. combined GND+TWR): TAXI (TXI) → TAXIWAY ARR even if still on RWY
   # clearedToLand: false — keep CTL traffic on runway even if airborne flickers false on short final
   taxi_arr_assumed_gnd:
     sectionId: taxi_arr
     direction: arrival
     airborne: false
-    onRunway: false
     clearedToLand: false
     groundstates: [TXIN]
     controller: myself
     myRole: [GND]
-    priority: 105
+    priority: 210
 
-  # Assumed local → TAXIWAY ARR only on TXIN (not ARR alone)
+  # Assumed local → TAXIWAY ARR on TXIN (TAXI press / combined)
   taxi_arr_assumed_local_gnd:
     sectionId: taxi_arr
     direction: local
     airborne: false
-    onRunway: false
     clearedToLand: false
     groundstates: [TXIN]
     controller: myself
     myRole: [GND]
-    priority: 105
+    priority: 210
 
-  # GND assumed / vacated but not yet TXIN — stay on INBOUND TWR until TAXI IN
+  # Combined GND+TWR: assumed / vacated but not yet TXIN — stay off TAXIWAY ARR until TAXI
+  # (separate GND uses taxi_arr_assumed_*_separate above instead)
   inbound_assumed_vacated_arr_gnd:
     sectionId: inbound
     direction: arrival
@@ -353,6 +420,7 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     controller: myself
     myRole: [GND]
+    essaFamilies: [TWR]
     priority: 104
 
   inbound_assumed_vacated_local_gnd:
@@ -364,6 +432,7 @@ sectionRules:
     groundstates: [ARR]
     controller: myself
     myRole: [GND]
+    essaFamilies: [TWR]
     priority: 104
 
   # GND (not covering TWR): only tower-bound traffic under INBOUND TWR —
@@ -464,37 +533,59 @@ sectionRules:
     notMyRole: [TWR]
     priority: 100
 
-  # === GEOGRAPHIC RUNWAY DETECTION (highest priority) ===
+  # === RUNWAY SECTION RULES (no geographic hold) ===
+  # ARR stays on RWY by groundstate until TXIN / XFER (same idea as OTHER/RTC).
+  # Dep airborne → CTR DEP via common-rules when ctr_dep is on the board; otherwise
+  # dep_runway_airborne_hold* keep the strip on DEP RWY until APP assumes.
 
-  on_runway_geographic_dep:
-    sectionId: dep_runway
-    onRunway: true
-    depRunway: true
-    priority: 201
-
-  on_runway_geographic_arr:
+  # Priority > inbound_assumed_vacated_* (104): ARR stays on RWY until TXIN / XFER
+  # (vacate alone must not auto-move). Only RWY auto-move is dep airborne → CTR DEP.
+  runway_arr_until_taxi_arr:
     sectionId: arr_runway
-    onRunway: true
-    arrRunway: true
-    priority: 200
-
-  on_runway_geographic_third_dep:
-    sectionId: dep_runway
-    onRunway: true
-    depRunway: false
-    arrRunway: false
-    direction: departure
-    priority: 191
-
-  on_runway_geographic_third_arr:
-    sectionId: arr_runway
-    onRunway: true
-    depRunway: false
-    arrRunway: false
     direction: arrival
-    priority: 190
+    airborne: false
+    groundstates: ['', NSTS, ARR]
+    depRunway: false
+    priority: 110
 
-  # === RUNWAY SECTION RULES ===
+  runway_arr_until_taxi_dep:
+    sectionId: dep_runway
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR]
+    depRunway: true
+    priority: 111
+
+  runway_local_until_taxi_arr:
+    sectionId: arr_runway
+    direction: local
+    airborne: false
+    groundstates: [ARR]
+    depRunway: false
+    priority: 110
+
+  runway_local_until_taxi_dep:
+    sectionId: dep_runway
+    direction: local
+    airborne: false
+    groundstates: [ARR]
+    depRunway: true
+    priority: 111
+
+  # When CTR DEP is hidden / missing, airborne deps stay on DEP RWY (rules-engine skips ctr_dep).
+  dep_runway_airborne_hold:
+    sectionId: dep_runway
+    direction: departure
+    airborne: true
+    essaFamilies: [TWR]
+    priority: 99
+
+  dep_runway_airborne_hold_local:
+    sectionId: dep_runway
+    direction: local
+    airborne: true
+    essaFamilies: [TWR]
+    priority: 99
 
   runway_lineup_depa_dep:
     sectionId: dep_runway
@@ -526,57 +617,6 @@ sectionRules:
     airborne: true
     groundstates: ['', NSTS, ARR]
     priority: 95
-
-  # === TWR-ONLY + separate GND: hold on RWY while still geographically on runway ===
-  # Vacate does not auto-pull to TAXIWAY ARR (TXIN only). Soft-delete once GND assumes off-RWY.
-
-  runway_hold_twr_only_arr:
-    sectionId: arr_runway
-    direction: arrival
-    airborne: false
-    onRunway: true
-    groundstates: ['', NSTS, ARR, TXIN]
-    controller: myself
-    essaFamilies: [TWR]
-    notEssaFamilies: [GND]
-    notMyRole: [GND]
-    priority: 85
-
-  runway_hold_twr_only_arr_local:
-    sectionId: arr_runway
-    direction: local
-    airborne: false
-    onRunway: true
-    groundstates: [ARR, TXIN]
-    controller: myself
-    essaFamilies: [TWR]
-    notEssaFamilies: [GND]
-    notMyRole: [GND]
-    priority: 85
-
-  runway_hold_twr_only_dep:
-    sectionId: dep_runway
-    direction: arrival
-    airborne: false
-    onRunway: true
-    groundstates: ['', NSTS, ARR, TXIN]
-    controller: myself
-    essaFamilies: [TWR]
-    notEssaFamilies: [GND]
-    notMyRole: [GND]
-    priority: 85
-
-  runway_hold_twr_only_dep_local:
-    sectionId: dep_runway
-    direction: local
-    airborne: false
-    onRunway: true
-    groundstates: [ARR, TXIN]
-    controller: myself
-    essaFamilies: [TWR]
-    notEssaFamilies: [GND]
-    notMyRole: [GND]
-    priority: 85
 
 actionRules:
   # CD ALL: CLNC / ACK CLR for uncleared deps (CD family selected)
@@ -716,7 +756,7 @@ deleteRules:
 
   # TWR with separate GND online (not covering GND, GND family not selected):
   # soft-delete as soon as GND assumes — even if still on the runway
-  # (TAXIWAY ARR is hidden on TWR-only). Solo TWR covering GND / GND+TWR picker: no match.
+  # (strip stayed on RUNWAY until TXIN or this assume). Solo TWR / combined: no match.
   delete_arr_gnd_assumed_taxi:
     direction: arrival
     airborne: false

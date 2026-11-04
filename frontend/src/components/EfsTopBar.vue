@@ -2019,13 +2019,14 @@ const dclOtherTooltip = computed(() => {
 })
 
 const dclTooltip = computed(() => {
+  // Sticky-connected (no CD): still allow disconnect
+  if (efs.dclStatus === 'connected') return 'DCL connected - click to disconnect'
   if (!hasCdRole.value) return ''
   if (dclAirportTaken.value) {
     return `${dclOtherTooltip.value}. Click to connect anyway.`
   }
   switch (efs.dclStatus) {
     case 'available': return 'Voice clearance - click to connect DCL'
-    case 'connected': return 'DCL connected - click to disconnect'
     case 'error': return `DCL error: ${efs.dclError ?? 'unknown'} - click to retry`
     case 'unavailable': return 'DCL unavailable - voice clearance'
     default: return 'DCL: Voice'
@@ -2065,10 +2066,13 @@ function onAirportClick(info: AtisDisplayItem) {
 }
 
 function onDclClick() {
-  if (!hasCdRole.value) return
+  // Disconnect always allowed while sticky-connected (even without CD).
   if (efs.dclStatus === 'connected') {
     efs.dclLogout()
-  } else if (efs.dclStatus === 'available' || efs.dclStatus === 'error') {
+    return
+  }
+  if (!hasCdRole.value) return
+  if (efs.dclStatus === 'available' || efs.dclStatus === 'error') {
     efs.dclLogin()
   }
 }

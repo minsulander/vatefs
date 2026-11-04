@@ -14,6 +14,7 @@ import {
     type EssaPositionRole,
 } from "./essa-roles.js"
 import type { EfsStaticConfig } from "./config-types.js"
+import { controllerCallsignsEqual } from "./static-config.js"
 
 function layoutHasSection(config: EfsStaticConfig, sectionId: string): boolean {
     for (const bay of config.layout.bays) {
@@ -133,12 +134,21 @@ export function mapEssaRemotePlacement(
             return null
         }
         const gs = (flight?.groundstate || "").toUpperCase()
-        // TAXIWAY ARR only after TAXI IN — do not remap on ARR/vacate alone
-        const taxiIn =
+        const arrLike =
+            strip.stripType === "arrival" || strip.stripType === "local"
+        // TAXIWAY ARR: TXIN, or pending inbound transfer to this GND (separate TWR)
+        const taxiIn = flight && !flight.airborne && gs === "TXIN"
+        const mySi = config.myPositionId?.toUpperCase()
+        const hoSi = flight?.handoffTargetControllerId?.toUpperCase()
+        const pendingToMe =
             flight &&
             !flight.airborne &&
-            gs === "TXIN"
-        if (taxiIn && (strip.stripType === "arrival" || strip.stripType === "local")) {
+            arrLike &&
+            families.has("GND") &&
+            !families.has("TWR") &&
+            (controllerCallsignsEqual(flight.handoffTargetController, config.myCallsign) ||
+                (!!mySi && !!hoSi && mySi === hoSi))
+        if ((taxiIn || pendingToMe) && arrLike) {
             if (layoutHasSection(config, "taxi_arr")) {
                 sectionId = "taxi_arr"
                 bayId = bayIdForSection(config, "taxi_arr") || bayId

@@ -375,19 +375,7 @@ export function getUserDefaultLayoutId(roleKey: string): string | undefined {
   return loadWorkspaceStore().userDefaults[roleKey]
 }
 
-export function saveNamedLayout(name: string, layout: WorkspaceLayout): SavedWorkspaceLayout {
-  const store = loadWorkspaceStore()
-  const cleaned = sanitizeWorkspaceLayout(layout)
-  const entry: SavedWorkspaceLayout = {
-    id: newInstanceId('layout'),
-    name: name.trim() || 'Untitled',
-    savedAt: Date.now(),
-    layout: {
-      ...cleaned,
-      rolesLabel: cleaned.rolesLabel || formatEssaRolesLabel(cleaned.roles),
-    },
-  }
-  store.layouts.push(entry)
+function persistSharedLayouts(store: WorkspaceStoreFile): void {
   sharedMirror = {
     version: 1,
     userDefaults: { ...store.userDefaults },
@@ -403,6 +391,65 @@ export function saveNamedLayout(name: string, layout: WorkspaceLayout): SavedWor
     }
     bumpSharedRevision()
   }
+}
+
+/** Same name (case-insensitive) under the same roleKey folder. */
+export function findSavedLayoutByName(
+  name: string,
+  roleKey: string,
+): SavedWorkspaceLayout | undefined {
+  const trimmed = name.trim().toLowerCase()
+  if (!trimmed) return undefined
+  return loadWorkspaceStore().layouts.find(
+    (l) =>
+      l.name.trim().toLowerCase() === trimmed &&
+      (l.layout.roleKey || '') === (roleKey || ''),
+  )
+}
+
+export function saveNamedLayout(name: string, layout: WorkspaceLayout): SavedWorkspaceLayout {
+  const store = loadWorkspaceStore()
+  const cleaned = sanitizeWorkspaceLayout(layout)
+  const entry: SavedWorkspaceLayout = {
+    id: newInstanceId('layout'),
+    name: name.trim() || 'Untitled',
+    savedAt: Date.now(),
+    layout: {
+      ...cleaned,
+      rolesLabel: cleaned.rolesLabel || formatEssaRolesLabel(cleaned.roles),
+    },
+  }
+  store.layouts.push(entry)
+  persistSharedLayouts(store)
+  return entry
+}
+
+/**
+ * Overwrite an existing custom layout’s board snapshot (keeps id / default flags).
+ * Optional `name` renames at the same time.
+ */
+export function replaceSavedLayout(
+  layoutId: string,
+  layout: WorkspaceLayout,
+  name?: string,
+): SavedWorkspaceLayout | null {
+  const store = loadWorkspaceStore()
+  const entry = store.layouts.find((l) => l.id === layoutId)
+  if (!entry) return null
+  const cleaned = sanitizeWorkspaceLayout(layout)
+  const trimmed = name?.trim()
+  if (trimmed) entry.name = trimmed
+  entry.savedAt = Date.now()
+  entry.layout = {
+    ...cleaned,
+    roleKey: cleaned.roleKey || entry.layout.roleKey,
+    roles: cleaned.roles?.length ? cleaned.roles : entry.layout.roles,
+    rolesLabel:
+      cleaned.rolesLabel ||
+      entry.layout.rolesLabel ||
+      formatEssaRolesLabel(cleaned.roles?.length ? cleaned.roles : entry.layout.roles),
+  }
+  persistSharedLayouts(store)
   return entry
 }
 

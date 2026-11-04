@@ -39,6 +39,11 @@ export interface FlightStrip {
      * Independent of SID procedure name (e.g. ROKNI4R/08 ARS … → ARS).
      */
     tmaExit?: string
+    /**
+     * TMA entry fix — last filed FPL point before STAR legs (STAR IAF).
+     * Set for arrival / local strips; SAAB ARR layout shows this bottom-right.
+     */
+    tmaEntry?: string
     star?: string              // Standard Terminal Arrival Route
     rfl?: string               // Requested Flight Level e.g., "FL340", "A050"
     /** EuroScope exit coordination altitude / XFL e.g. "A050", "FL90" */

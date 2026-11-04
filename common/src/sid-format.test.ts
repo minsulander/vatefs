@@ -4,6 +4,8 @@
 
 import assert from "node:assert/strict"
 import {
+    extractTmaEntryPoint,
+    extractTmaExitPoint,
     formatSidForDisplay,
     formatVectorSidDisplay,
     isOffExitVectorSid,
@@ -56,6 +58,23 @@ check("isOffExitVectorSid: ARS6E·KOGAV yes, ARS6E·ARS no, plain ARS6E no", () 
     assert.equal(isOffExitVectorSid("KOGAV4L·ARS"), true)
     assert.equal(isOffExitVectorSid("ARS6E"), false)
     assert.equal(isOffExitVectorSid(""), false)
+})
+
+check("TMA exit is first fix, entry is last filed before STAR", () => {
+    const route = "N850 ARS DCT NOSLI DCT ELTOK"
+    assert.equal(extractTmaExitPoint(undefined, route), "ARS")
+    assert.equal(extractTmaEntryPoint(route), "ELTOK")
+})
+
+check("TMA entry ignores STAR legs after IAF (OBCIV)", () => {
+    const expanded = "ARS NOSLI ELTOK OBCIV SA865 ERXEC"
+    assert.equal(extractTmaEntryPoint(expanded, "ELTOK1G"), "ELTOK")
+    assert.equal(extractTmaEntryPoint("ARS DCT NOSLI ELTOK1G", "ELTOK1G"), "ELTOK")
+})
+
+check("TMA entry falls back to STAR name", () => {
+    assert.equal(extractTmaEntryPoint("", "ELTOK1G"), "ELTOK")
+    assert.equal(extractTmaEntryPoint(undefined, "ALJAC RNP Y"), "ALJAC")
 })
 
 console.log(`${passed} passed`)

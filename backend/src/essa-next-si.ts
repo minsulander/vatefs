@@ -328,7 +328,7 @@ export function getMyEssaAorColumns(): Set<EssaAorColumn> | null {
 
 function aorColumnForPairId(pairId: string): EssaAorColumn {
     if (pairId === "01L_19R") return "TW"
-    if (pairId === "08_26") return "TS"
+    if (pairId === "08_26" || pairId === "07_25") return "TS" // 08/26 and FATO 07/25
     return "TE" // 01R_19L
 }
 

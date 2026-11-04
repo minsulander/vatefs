@@ -103,11 +103,38 @@ sectionRules:
     myRole: [TWR, APP, CTR]
     priority: 102
 
-  # === 1RWY: single RUNWAY section ===
-  on_runway_geographic:
+  # Override common-rules: TAXIWAY only on TAXI (TXIN), not on ARR vacate alone.
+  taxi_arr:
+    sectionId: taxi
+    direction: arrival
+    airborne: false
+    clearedToLand: false
+    groundstates: [TXIN]
+    priority: 40
+
+  taxi_arr_local:
+    sectionId: taxi
+    direction: local
+    airborne: false
+    clearedToLand: false
+    groundstates: [TXIN]
+    priority: 40
+
+  # === 1RWY: single RUNWAY section (no geographic hold) ===
+  # ARR stays on RWY until TAXI pressed (TXIN → taxi_arr above).
+  runway_arr_until_taxi:
     sectionId: runway
-    onRunway: true
-    priority: 200
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR]
+    priority: 85
+
+  runway_local_until_taxi:
+    sectionId: runway
+    direction: local
+    airborne: false
+    groundstates: [ARR]
+    priority: 85
 
   runway_lineup_depa:
     sectionId: runway
@@ -123,34 +150,20 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 95
 
-  # === 2RWY: ARR / DEP runway sections ===
-  on_runway_geographic_dep:
-    sectionId: dep_runway
-    onRunway: true
-    depRunway: true
-    priority: 201
-
-  on_runway_geographic_arr:
+  # === 2RWY: ARR / DEP runway sections (no geographic hold) ===
+  runway_arr_until_taxi_arr:
     sectionId: arr_runway
-    onRunway: true
-    arrRunway: true
-    priority: 200
-
-  on_runway_geographic_third_dep:
-    sectionId: dep_runway
-    onRunway: true
-    depRunway: false
-    arrRunway: false
-    direction: departure
-    priority: 191
-
-  on_runway_geographic_third_arr:
-    sectionId: arr_runway
-    onRunway: true
-    depRunway: false
-    arrRunway: false
     direction: arrival
-    priority: 190
+    airborne: false
+    groundstates: ['', NSTS, ARR]
+    priority: 85
+
+  runway_local_until_taxi_arr:
+    sectionId: arr_runway
+    direction: local
+    airborne: false
+    groundstates: [ARR]
+    priority: 85
 
   runway_lineup_depa_dep:
     sectionId: dep_runway

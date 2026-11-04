@@ -146,7 +146,9 @@ import {
   listSavedLayouts,
   mergeImportedLayouts,
   parseImportPayload,
+  findSavedLayoutByName,
   renameSavedLayout,
+  replaceSavedLayout,
   resolveLoadedLayoutLabel,
   sanitizeWorkspaceLayout,
   saveNamedLayout,
@@ -488,16 +490,35 @@ function onSaveCurrent() {
   // that syncSelectionAndFolders / selectLayout put on activeLayout.
   const toSave = layoutBeforeOpen.value ?? ws.activeLayout.value
   if (!toSave) return
-  const name = window.prompt('Layout name', `Layout ${currentRolesLabel.value}`)
+  const suggested =
+    selectedSaved.value?.layout.roleKey === roleKey.value
+      ? selectedSaved.value.name
+      : `Layout ${currentRolesLabel.value}`
+  const name = window.prompt('Layout name', suggested)
   if (!name) return
   const trimmed = name.trim()
   if (!trimmed) return
-  const entry = saveNamedLayout(trimmed, {
+  const payload = {
     ...toSave,
     roleKey: roleKey.value,
     roles: [...store.essaRoles],
     rolesLabel: currentRolesLabel.value,
-  })
+  }
+  const existing = findSavedLayoutByName(trimmed, roleKey.value)
+  let entry
+  if (existing) {
+    if (
+      !window.confirm(
+        `A custom layout named “${existing.name}” already exists for this role.\n\nReplace it with the current board?`,
+      )
+    ) {
+      return
+    }
+    entry = replaceSavedLayout(existing.id, payload, trimmed)
+    if (!entry) return
+  } else {
+    entry = saveNamedLayout(trimmed, payload)
+  }
   selectedId.value = entry.id
   savedTick.value++
   folderOpen.value = { ...folderOpen.value, [roleKey.value]: true }

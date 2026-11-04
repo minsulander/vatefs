@@ -271,7 +271,7 @@ export function essaRwyQuickrefImageUrl(
 
 /**
  * Physical ESSA runway strips (both ends). Used for EFS runway section headers
- * e.g. "RUNWAY 01L/19R", "RUNWAY 08/26", "RUNWAY 01R/19L".
+ * e.g. "RUNWAY 01L/19R", "RUNWAY 08/26", "RUNWAY 01R/19L", "FATO" (07/25).
  */
 export interface EssaPhysicalRwyPair {
     /** Stable id for section keys (e.g. "01L_19R") */
@@ -280,13 +280,21 @@ export interface EssaPhysicalRwyPair {
     label: string
     /** Both runway ends belonging to this physical strip */
     ends: readonly [string, string]
+    /** Override section header text (default `RUNWAY ${label}`). e.g. FATO */
+    headerTitle?: string
+    /**
+     * Only emit a header when traffic has this strip assigned — never from
+     * active ES RWY config alone (07/25 FATO).
+     */
+    assignedOnly?: boolean
 }
 
-/** West parallel, east parallel, then crosswind — display order when several headers show */
+/** West parallel, east parallel, crosswind, then FATO (assigned-only) */
 export const ESSA_PHYSICAL_RWY_PAIRS: readonly EssaPhysicalRwyPair[] = [
     { id: '01L_19R', label: '01L/19R', ends: ['01L', '19R'] },
     { id: '01R_19L', label: '01R/19L', ends: ['01R', '19L'] },
     { id: '08_26', label: '08/26', ends: ['08', '26'] },
+    { id: '07_25', label: '07/25', ends: ['07', '25'], headerTitle: 'FATO', assignedOnly: true },
 ] as const
 
 const ESSA_RWY_TO_PAIR = new Map<string, EssaPhysicalRwyPair>()
@@ -307,9 +315,9 @@ export function essaRunwaySectionId(pair: EssaPhysicalRwyPair): string {
     return `runway_${pair.id}`
 }
 
-/** Header title: "RUNWAY 01L/19R" */
+/** Header title: "RUNWAY 01L/19R" or pair.headerTitle (e.g. FATO) */
 export function formatEssaRunwaySectionTitle(pair: EssaPhysicalRwyPair): string {
-    return `RUNWAY ${pair.label}`
+    return pair.headerTitle ?? `RUNWAY ${pair.label}`
 }
 
 export function isEssaDynamicRunwaySectionId(sectionId: string): boolean {

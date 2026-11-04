@@ -30,11 +30,14 @@ import {
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
 import { essaRunwaySectionId, isEssaDynamicRunwaySectionId } from "@vatefs/common"
 import {
+    activeOnlineGndRoles,
     familiesFromRoles,
     isEssaRolesConfig,
     isEssaLegacyRunwaySectionId,
+    isEssaSectionVisibleForPicker,
     resolveEssaPairForFlight,
     type EssaFamily,
+    type EssaPositionRole,
 } from "./essa-roles.js"
 import {
     isSaabLayouts,
@@ -688,6 +691,23 @@ export function determineSectionForFlight(
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateSectionRule(flight, rule, config)) {
+            // ESSA: only auto-move airborne deps to CTR DEP when that section is on the board
+            if (isEssaRolesConfig(config) && rule.sectionId === "ctr_dep") {
+                const onlineCs = config.onlineControllers
+                    ? [...config.onlineControllers.keys()]
+                    : []
+                const activeGnd = activeOnlineGndRoles(onlineCs)
+                if (
+                    !isEssaSectionVisibleForPicker(
+                        "ctr_dep",
+                        (config.essaRoles ?? []) as EssaPositionRole[],
+                        config.sectionVisibleFor,
+                        activeGnd,
+                    )
+                ) {
+                    continue
+                }
+            }
             if (isMulti && airport) {
                 const bayId = resolveBayForAirport(airport, config.columnAirports)
                 return {

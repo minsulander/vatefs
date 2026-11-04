@@ -35,11 +35,21 @@ bayTemplate:
 columnCount: 4
 
 sectionRules:
-  # === RUNWAY (highest priority) ===
-  on_runway_geographic:
+  # === RUNWAY (no geographic hold) ===
+  # ARR stays on RWY until TAXI pressed (TXIN → twy_taxi_arr).
+  runway_arr_until_taxi:
     sectionId: rwy
-    onRunway: true
-    priority: 200
+    direction: arrival
+    airborne: false
+    groundstates: ['', NSTS, ARR]
+    priority: 85
+
+  runway_local_until_taxi:
+    sectionId: rwy
+    direction: local
+    airborne: false
+    groundstates: [ARR]
+    priority: 85
 
   runway_lineup_depa:
     sectionId: rwy
@@ -183,19 +193,22 @@ sectionRules:
     groundstates: [TAXI]
     priority: 30
 
+  # TAXIWAY ARR only on TAXI (TXIN) — not on ARR vacate alone.
   twy_taxi_arr_local:
     sectionId: twy
     direction: local
     airborne: false
-    groundstates: [ARR, TXIN]
-    priority: 35
+    clearedToLand: false
+    groundstates: [TXIN]
+    priority: 40
 
   twy_taxi_arr:
     sectionId: twy
     direction: arrival
     airborne: false
-    groundstates: ['', NSTS, ARR, TAXI, TXIN]
-    priority: 30
+    clearedToLand: false
+    groundstates: [TXIN]
+    priority: 40
 
   # === DEP (pending + cleared + push/start) ===
   # False-airborne at gate/pre-push — keep in DEP (beats CTR 100).

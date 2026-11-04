@@ -23,12 +23,14 @@
         (store.multiAirport && rtcDraggingSectionId === section.id),
       'efs-section--workspace-blocker': isEmptyWorkspaceHeader,
       'efs-section--dtrans': isDtransDivider,
+      'efs-section--inbound-no-drop': blockInboundExternalDrop,
     }"
     :data-section-id="section.id"
     :data-efs-bay-id="effectiveBayId"
     :data-efs-section-id="effectiveSectionId"
     :data-efs-drop-section-id="effectiveSectionId"
     :data-efs-match-sections="sectionIdsForStripMatch().join(',')"
+    :data-efs-block-inbound-drop="blockInboundExternalDrop ? '1' : undefined"
     :data-ws-instance="workspaceInstanceId || undefined"
     :data-dtrans="isDtransDivider ? dtransVariant : undefined"
     :style="sectionStyle"
@@ -1803,6 +1805,10 @@ watch(touchDropPlacement, (p) => {
     }
     return
   }
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) {
+    clearDragHighlights()
+    return
+  }
   touchOwnedHighlight = true
   // Touch owns the single global marker — clear any stale HTML5 claim elsewhere
   claimHtml5DropHighlight()
@@ -1834,6 +1840,24 @@ const isCtrDepSection = computed(() => isCtrDepSectionId(props.section.id))
 const hasEssa = computed(() =>
   store.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
+
+/**
+ * ESSA only: refuse drops into inbound from other sections (reorder within inbound OK).
+ * Attribute + class drive cursor; place/drop handlers no-op external moves.
+ */
+const blockInboundExternalDrop = computed(
+  () => hasEssa.value && isInboundSectionId(props.section.id, props.section.title),
+)
+
+/** True when an inbound target should refuse this strip (not already a member). */
+function inboundExternalDropBlocked(stripId?: string): boolean {
+  if (!blockInboundExternalDrop.value) return false
+  if (!stripId) return true
+  const strip = store.strips.get(stripId)
+  if (!strip) return true
+  return !sectionIdsForStripMatch().includes(strip.sectionId)
+}
+
 /** Time-sort: classic dep bays, or RTC DEP/CLR (earliest EOBT on top). */
 const timeSortEnabled = computed(() => {
   if (!isTimeSortedSection.value) return false
@@ -2687,6 +2711,7 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
     acceptDtransStripDrop(stripId)
     return
   }
+  if (inboundExternalDropBlocked(stripId)) return
 
   const bay = effectiveBayId.value
   const modeSec = effectiveSectionId.value
@@ -3475,6 +3500,11 @@ function onHeaderDragOver(event: DragEvent) {
     return
   }
   event.preventDefault()
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) {
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    clearDragHighlights()
+    return
+  }
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
@@ -3530,6 +3560,7 @@ function onHeaderDrop(event: DragEvent) {
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) return
 
   if (isDtransDivider.value) {
     try {
@@ -3575,6 +3606,11 @@ function onTopDragOver(event: DragEvent) {
     return
   }
   event.preventDefault()
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) {
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    clearDragHighlights()
+    return
+  }
   if (event.dataTransfer) {
     // Set appropriate dropEffect based on drag source
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
@@ -3630,6 +3666,8 @@ function onTopDrop(event: DragEvent) {
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
+
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) return
 
   if (isDtransDivider.value) {
     try {
@@ -3878,6 +3916,11 @@ function onBottomDragOver(event: DragEvent) {
     return
   }
   event.preventDefault()
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) {
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    clearDragHighlights()
+    return
+  }
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
@@ -3915,6 +3958,8 @@ function onBottomDrop(event: DragEvent) {
   event.preventDefault()
   isBottomDragOver.value = false
 
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) return
+
   // D-trans: no pin — treat as normal transfer drop into the section
   if (isDtransDivider.value) {
     if (!event.dataTransfer) return
@@ -3943,6 +3988,7 @@ function onBottomDrop(event: DragEvent) {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data?.type === 'infoStrip') return
     const { stripId } = data
+    if (inboundExternalDropBlocked(stripId)) return
 
     // Move to bottom strips at the beginning
     store.moveStripToBottom(stripId, effectiveBayId.value, membershipSectionForDrop(stripId), 0)
@@ -3959,6 +4005,11 @@ function onBottomStripsDragOver(event: DragEvent) {
     return
   }
   event.preventDefault()
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) {
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    clearDragHighlights()
+    return
+  }
   if (event.dataTransfer) {
     const isCreateDrag = event.dataTransfer.types.includes('application/efs-create')
     event.dataTransfer.dropEffect = isCreateDrag ? 'copy' : 'move'
@@ -3975,6 +4026,7 @@ function onBottomStripsDrop(event: DragEvent) {
   isBottomDragOver.value = false
 
   if (!event.dataTransfer) return
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) return
 
   // Handle create-strip drops from bottom bar
   const createType = event.dataTransfer.getData('application/efs-create')
@@ -3991,6 +4043,7 @@ function onBottomStripsDrop(event: DragEvent) {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data?.type === 'infoStrip') return
     const { stripId } = data
+    if (inboundExternalDropBlocked(stripId)) return
 
     // Find position within bottom strips (past last flight / over info → end)
     const position = computeBottomStripsDrop(event)
@@ -4007,6 +4060,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   event.stopPropagation()
   isBottomDragOver.value = false
   if (!event.dataTransfer) return
+  if (inboundExternalDropBlocked(draggingStripId() ?? undefined)) return
 
   const createType = event.dataTransfer.getData('application/efs-create')
   if (createType) {
@@ -4017,6 +4071,7 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   try {
     const data = JSON.parse(event.dataTransfer.getData('application/json'))
     if (data?.type === 'infoStrip') return
+    if (inboundExternalDropBlocked(data.stripId)) return
     store.moveStripToBottom(
       data.stripId,
       effectiveBayId.value,
@@ -4038,6 +4093,14 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
   border-bottom: 1px solid #2b2d31;
   border-right: 1px solid #2b2d31;
   border-left: 1px solid #2b2d31;
+}
+
+/* ESSA inbound: no-drop cursor while refusing external strip drops */
+.efs-section--inbound-no-drop.drop-active,
+.efs-section--inbound-no-drop .top-strips-container,
+.efs-section--inbound-no-drop .bottom-drop-zone,
+.efs-section--inbound-no-drop .bottom-strips-container {
+  cursor: not-allowed;
 }
 
 /* Empty divider chrome (blank title); still a normal strip host when drops land */

@@ -7,11 +7,6 @@
     :assumed-before-open="depCoordAssumedBeforeOpen"
   />
   <AtdDialog v-model="atdDialogOpen" :strip="strip" @confirm="onAtdDialogConfirm" />
-  <TsacDialog
-    v-model="tsacDialogOpen"
-    :strip="strip"
-    :initial="tsacDialogInitial"
-  />
   <CoordProposalDialog v-model="coordProposalDialogOpen" :strip="strip" />
   <StripZoomOverlay
     v-if="!isLargeView"
@@ -219,17 +214,6 @@
       </div>
     </div>
   </v-menu>
-  </v-menu>
-
-  <!-- TSAC menu (within TSAT window) -->
-  <v-menu v-model="tsacMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ" :close-on-content-click="true">
-    <div class="efs-popup-menu" @click.stop>
-      <div class="efs-popup-header">TSAC</div>
-      <div class="efs-popup-list">
-        <button type="button" class="efs-popup-item" @click="onEditTsacMenuClick">Edit TSAC</button>
-        <button v-if="canClearTsac" type="button" class="efs-popup-item" @click="onRemoveTsacMenuClick">Remove TSAC</button>
-      </div>
-    </div>
   </v-menu>
 
   <!-- CTOT menu (reason + CTOC + REA + CDM PM) -->
@@ -994,7 +978,16 @@
           <!-- ARR: ATIS/MET + QNH only; DEP chips below -->
           <template v-if="!isArrLayout">
             <button type="button" class="exp-chip" :class="{ 'exp-rea': isRea }" @click.stop="onExpRea">REA</button>
-            <button type="button" class="exp-chip inert" disabled>SIG</button>
+            <button
+              type="button"
+              class="exp-chip"
+              :class="{
+                'exp-sig-remind': sigState === 'remind',
+                'exp-sig-done': sigState === 'done',
+              }"
+              :title="sigChipTitle"
+              @click.stop="onExpSig"
+            >SIG</button>
           </template>
           <button
             v-if="store.multiAirport && currentAtisLetter"
@@ -1136,17 +1129,13 @@
             title="Normal size"
             @click.stop="onSizeNormal"
           >
-            <!-- Match ▲/▼ highlight (REA green / QNH·TSAC stale amber) on restore clickzone -->
+            <!-- Match ▲ highlight (REA green / QNH stale red) on restore clickzone -->
             <span
               class="compact-gutter-half compact-gutter-top"
               :class="topArrowClass"
               :title="topArrowTitle !== 'Top menu' && topArrowTitle !== 'Close top menu' ? topArrowTitle : undefined"
             />
-            <span
-              class="compact-gutter-half compact-gutter-bot"
-              :class="{ 'arrow-stale': showTsacStaleArrow }"
-              :title="showTsacStaleArrow ? 'TSAT changed - expand strip to confirm TSAC' : undefined"
-            />
+            <span class="compact-gutter-half compact-gutter-bot" />
           </button>
           <button
             v-else-if="!topExpanded"
@@ -1173,7 +1162,15 @@
           <div
             v-if="showPrimaryTime"
             class="strip-time strip-time-top fit-font"
-            :class="{ ghost: !primaryTimeValue, 'time-changed': tobtChanged }"
+            :class="[
+              {
+                ghost: !primaryTimeValue,
+                'time-changed': tobtChanged,
+                'time-dim': primaryTimeKind === 'tobt' && isEssaDep,
+                'time-tsac-stale': primaryTsacStale,
+              },
+              primaryTimeKind === 'tsat' ? tsatColorClass : undefined,
+            ]"
             :title="primaryTimeLabelTitle"
             @click.stop="onPrimaryTimeClick"
           >
@@ -1218,23 +1215,14 @@
               @click.stop="onSizeCompact"
             >{{ strip.wakeTurbulence }}</span>
 
-            <!-- ▼ when collapsed; TSAC (like P/A) between FRUL and ▼ when bottom expander open -->
+            <!-- ▼ when collapsed (TSAC ack is click on highlighted TS) -->
             <button
               v-if="!bottomExpanded"
               type="button"
               class="ctrl-arrow strip-left-dn"
-              :class="{ 'arrow-stale': showTsacStaleArrow }"
-              :title="showTsacStaleArrow ? 'TSAT changed - open bottom menu and click TSAC box' : 'Bottom menu'"
+              title="Bottom menu"
               @click.stop="onExpandBottomExpander"
             ><span class="arrow-glyph">▼</span></button>
-            <button
-              v-else-if="showTsacBox"
-              type="button"
-              class="tsac-box strip-left-dn"
-              :class="tsacBoxClass"
-              :title="tsacTooltip"
-              @click.stop="onTsacClick($event)"
-            />
           </template>
           <div
             class="strip-time strip-time-bot fit-font"
@@ -1243,9 +1231,17 @@
                 ghost: !secondaryTimeValue && !faceAssr,
                 'has-face-assr': !!faceAssr,
                 'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
+                'time-ctot-pending': ctotPendingAck,
                 'time-fls': secondaryTimeKind === 'fls',
                 'time-cdm-sts':
                   secondaryTimeKind === 'srm' || secondaryTimeKind === 'slc',
+                'time-constraint-bold':
+                  !store.isPaperLook &&
+                  (secondaryTimeKind === 'ctot' ||
+                    secondaryTimeKind === 'scl' ||
+                    secondaryTimeKind === 'fls' ||
+                    secondaryTimeKind === 'srm' ||
+                    secondaryTimeKind === 'slc'),
                 'squawk-empty':
                   secondaryTimeKind === 'assr' &&
                   !displayAssr &&
@@ -1255,7 +1251,6 @@
                   !!displayAssr &&
                   (ssrCoordActive || strip.canResetSquawk),
               },
-              secondaryTimeKind === 'tsat' ? tsatColorClass : undefined,
             ]"
             :title="secondaryTimeTitle"
             @click.stop="onSecondaryTimeClick"
@@ -1452,6 +1447,7 @@
               v-if="!isCompactBay"
               class="cell cell-cto"
               :class="{ 'has-ctot': !!triangleTimeText || !!depArrowCtot }"
+              :title="depArrowCtot && !strip.atd ? ctocTooltip : undefined"
               @click.stop="onDepArrowCtotClick"
             >
               <svg
@@ -1565,14 +1561,13 @@
         </div>
       </div>
 
-      <!-- Bottom: [▼ TSAC? RMK FPL][ASSR | ADES | remarks under CFL→][TMA] -->
+      <!-- Bottom: [▼ RMK FPL][ASSR | ADES | remarks under CFL→][TMA] -->
       <div v-if="bottomExpanded && !isCompactBay" class="strip-expander strip-expander-bottom" @click.stop>
         <div class="exp-bottom-left">
           <button
             type="button"
             class="ctrl-arrow expander-arrow mirrored"
-            :class="{ 'arrow-stale': showTsacStaleArrow }"
-            :title="showTsacStaleArrow ? 'TSAT changed - click TSAC box to update' : 'Close bottom menu'"
+            title="Close bottom menu"
             @click.stop="onCollapseBottomExpander"
           ><span class="arrow-glyph">▼</span></button>
           <button type="button" class="exp-chip" title="Remarks" @click.stop="onRemarksClick">RMK</button>
@@ -1635,10 +1630,10 @@
         </div>
         <span
           class="exp-tma-exit"
-          :class="{ ghost: !tmaExitPoint }"
-          :title="tmaExitPoint ? `TMA exit ${tmaExitPoint}` : 'TMA exit'"
+          :class="{ ghost: !tmaBottomPoint }"
+          :title="tmaBottomTitle"
         >
-          <span class="exp-tma-exit-text">{{ tmaExitPoint || '----' }}</span>
+          <span class="exp-tma-exit-text">{{ tmaBottomPoint || '----' }}</span>
         </span>
         <svg
           v-if="showStripScribbles"
@@ -1676,6 +1671,7 @@
 import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } from 'vue'
 import {
   DEFAULT_TRANSITION_ALTITUDE_FT,
+  extractTmaEntryPoint,
   extractTmaExitPoint,
   formatEfsLevel,
   formatStripAltitude,
@@ -1683,7 +1679,6 @@ import {
   getEssaRwyCombination,
   hasVectRemark,
   isHeavyAsLeaderAircraftType,
-  isThickAtypBorderAircraftType,
   isIfrSidEligible,
   isLocalInboundPresentation,
   isTrackSidName,
@@ -1736,7 +1731,6 @@ import { useZoomStripScalePercent } from '@/composables/useStripZoomScale'
 import ClearanceDialog from './ClearanceDialog.vue'
 import DepCoordDialog from './DepCoordDialog.vue'
 import AtdDialog from './AtdDialog.vue'
-import TsacDialog from './TsacDialog.vue'
 import CoordProposalDialog from './CoordProposalDialog.vue'
 import FlightplanDialog from './FlightplanDialog.vue'
 import SidRouteMenu from './SidRouteMenu.vue'
@@ -2087,9 +2081,6 @@ const pobMenuOpen = ref(false)
 const pobEditText = ref('')
 const pobInputEl = ref<HTMLInputElement | null>(null)
 const ctotMenuOpen = ref(false)
-const tsacMenuOpen = ref(false)
-const tsacDialogOpen = ref(false)
-const tsacDialogInitial = ref('')
 const reaMenuOpen = ref(false)
 
 function closeStripContextMenu() {
@@ -2342,6 +2333,18 @@ function finishPaperBayDrop() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
+    // ESSA inbound: refuse external drops (snap back); same-section reorder OK
+    if (
+      sectionEl?.getAttribute('data-efs-block-inbound-drop') === '1' &&
+      !matchIds.includes(dragOriginSectionId)
+    ) {
+      applyCockAfterUnifiedDrop(stripId, true)
+      isDragging.value = false
+      markStripDragEnded()
+      paperBayDragging = false
+      setKlackPullBayActive(false)
+      return
+    }
     const stripForDrop = store.strips.get(result.data.stripId)
     const pushDropHeader =
       dropHeaderId === 'push_back' ||
@@ -3622,28 +3625,11 @@ const wtcYellowHighlight = computed(
   () => store.isPaperLook && heavyAsLeaderType.value,
 )
 
-/**
- * Thick ATYP frame for slow aircraft — DEP only, not in RTC
- * (RTC suppresses ATYP frames except B757/Tu204 yellow + heavy thick border).
- */
-const atypSlowFrame = computed(
-  () =>
-    !store.multiAirport &&
-    !!props.strip.isSlow &&
-    !isArrLayout.value &&
-    !isLocalOnlyStrip.value,
-)
-
-/**
- * Always thick ATYP border for super/heavy types (A388/A124/B748/…).
- * Global wherever the digital ATYP cell exists (SAAB + RTC); not yellow fill.
- */
-const atypHeavyThickFrame = computed(() =>
-  isThickAtypBorderAircraftType(props.strip.aircraftType),
-)
-
-/** Thick ATYP border: slow-DEP frame and/or heavy take-off types. */
-const atypThickBorder = computed(() => atypSlowFrame.value || atypHeavyThickFrame.value)
+/** Thick ATYP border for WTC H and J only (no slow / type-list chrome). */
+const atypThickBorder = computed(() => {
+  const w = (props.strip.wakeTurbulence || '').trim().toUpperCase()
+  return w === 'H' || w === 'J'
+})
 
 /** RTC only: yellow ATYP for B757 / Tu204 (same heavy-as-leader set). */
 const atypYellowHighlight = computed(
@@ -3833,6 +3819,29 @@ function onExpRea() {
   else if (canSendRea.value) onSendReaClick()
 }
 
+/** SIG reminder chip: grey → red (remind) → green (reminded) → grey. Session-sticky per strip. */
+type SigState = 'off' | 'remind' | 'done'
+const sigStateByStripId = new Map<string, SigState>()
+const sigState = ref<SigState>('off')
+watch(
+  () => props.strip.id,
+  (id) => {
+    sigState.value = sigStateByStripId.get(id) || 'off'
+  },
+  { immediate: true },
+)
+const sigChipTitle = computed(() => {
+  if (sigState.value === 'remind') return 'SIG remind - click when reminded'
+  if (sigState.value === 'done') return 'SIG reminded - click to clear'
+  return 'SIG - click to remind'
+})
+function onExpSig() {
+  const next: SigState =
+    sigState.value === 'off' ? 'remind' : sigState.value === 'remind' ? 'done' : 'off'
+  sigState.value = next
+  sigStateByStripId.set(props.strip.id, next)
+}
+
 /** Airport used for ATIS QNH on this strip */
 const qnhAirport = computed(() =>
   isArrLayout.value ? props.strip.ades : props.strip.adep
@@ -3855,7 +3864,7 @@ const currentAtisLetter = computed(() => {
   return letter || undefined
 })
 
-/** Amber only when acknowledged value differs from current (changed since last click). */
+/** Red when acknowledged value differs from current (changed since last click). */
 const qnhStale = computed(() => {
   const given = props.strip.qnhGiven
   const cur = currentQnh.value
@@ -3869,8 +3878,8 @@ const qnhGivenMatches = computed(() => {
 })
 
 /**
- * ATIS amber when the stamped letter/QNH pair no longer matches current
- * (changed since last ATIS click). Not amber for QNH-only stamps.
+ * ATIS red when the stamped letter/QNH pair no longer matches current
+ * (changed since last ATIS click). Not stale for QNH-only stamps.
  */
 const atisStale = computed(() => {
   const given = (props.strip.atisGiven || '').trim().toUpperCase()
@@ -3943,9 +3952,9 @@ function onPaperAtisQnhClick() {
   store.setQnhGiven(props.strip.id, curQnh, curAtis)
 }
 
-/** Top ▲: QNH/ATIS stale (orange) overrides REA (green) */
+/** Top ▲: QNH/ATIS stale (red) overrides REA (green) */
 const topArrowClass = computed(() => {
-  if (qnhStale.value || atisStale.value) return { 'arrow-stale': true }
+  if (qnhStale.value || atisStale.value) return { 'arrow-qnh-stale': true }
   if (isRea.value) return { 'arrow-rea': true }
   return {}
 })
@@ -4183,10 +4192,32 @@ watch(hpMenuOpen, (open) => {
   if (!open && hpEditing.value) finishHpCellEdit()
 })
 
-/** TMA exit — first FPL point after ADEP/rwy or SID/rwy */
-const tmaExitPoint = computed(
-  () => props.strip.tmaExit || extractTmaExitPoint(undefined, props.strip.route),
-)
+/** TMA exit — first FPL point after ADEP/rwy or SID/rwy (DEP/local COO). */
+const tmaExitPoint = computed(() => {
+  const route = props.strip.extractedRoute || props.strip.route
+  return props.strip.tmaExit || extractTmaExitPoint(undefined, route)
+})
+
+/**
+ * Bottom-right expander: TMA entry for SAAB ARR (ESSA / OTHER / RTC — not paper),
+ * TMA exit for DEP/local. Prefer strip.tmaEntry; else filed route + STAR (skip STAR legs).
+ */
+const useTmaEntryBottom = computed(() => !store.isPaperLook && isArrLayout.value)
+
+const tmaBottomPoint = computed(() => {
+  if (useTmaEntryBottom.value) {
+    if (props.strip.tmaEntry) return props.strip.tmaEntry
+    const route = props.strip.route || props.strip.extractedRoute
+    return extractTmaEntryPoint(route, props.strip.star)
+  }
+  return tmaExitPoint.value
+})
+
+const tmaBottomTitle = computed(() => {
+  const pt = tmaBottomPoint.value
+  if (useTmaEntryBottom.value) return pt ? `TMA entry ${pt}` : 'TMA entry'
+  return pt ? `TMA exit ${pt}` : 'TMA exit'
+})
 
 /**
  * DEP/local EST / C cell (not ARR — inbound ARR uses pink C on PEL).
@@ -4508,17 +4539,14 @@ const showCtot = computed(() =>
 
 /**
  * Taxi DEP / runway / CTR DEP onward: never show EOBT/TOBT (CTOT alone if regulated).
- * ESSA DEP exception: TTOT stays visible from PUSH&START through taxi/runway
- * (including CFTO) until the strip moves to CTR DEP.
+ * ESSA DEP exception: TTOT stays visible from PUSH&START through taxi/runway/CTR
+ * (including after takeoff) until the strip is soft-deleted.
  * Arrivals keep ETA on taxi_arr / inbound.
  */
 const showPrimaryTime = computed(() => {
   if (!sectionIdMatches(props.strip.sectionId, TAXI_ONWARD_SECTIONS)) return true
-  // ESSA: TTOT from PUSH&START through runway — hide once in CTR DEP
-  if (isEssaDep.value && isPushStartOrLater.value) {
-    if (isCtrDepSection(props.strip.sectionId)) return false
-    return true
-  }
+  // ESSA: TTOT from PUSH&START until soft-remove (incl. CTR DEP)
+  if (isEssaDep.value && isPushStartOrLater.value) return true
   // Outbound dep/local: no EOBT from taxi onward (CTOT shown separately)
   if (isDeparture.value) {
     return false
@@ -4529,8 +4557,8 @@ const showPrimaryTime = computed(() => {
 
 /**
  * Parse vIFF/CDM network status for strip UI.
- * Shown: REA (badge above CTOT/TOBT); FLS / SRM / SLC replace the TSAT slot
- * (below ATYP) — FLS alternates with subtype reason. COMPLY/AIRB/DES/SAM ignored.
+ * Shown: REA (badge); FLS / SRM / SLC take the bottom (CTOT) slot —
+ * FLS alternates with subtype reason. COMPLY/AIRB/DES/SAM ignored.
  */
 function parseCdmSts(sts: string | undefined): {
   kind: 'rea' | 'fls' | 'srm' | 'slc'
@@ -4586,21 +4614,13 @@ const isFls = computed(() => cdmStatus.value?.kind === 'fls')
 const isSrm = computed(() => cdmStatus.value?.kind === 'srm')
 const isSlcSts = computed(() => cdmStatus.value?.kind === 'slc')
 const isRea = computed(() => cdmStatus.value?.kind === 'rea')
-/** FLS replaces TSAT while TOBT (TB) is still primary */
-const flsReplacesTsat = computed(
-  () => showCdm.value && !isPushStartOrLater.value && isFls.value,
-)
-/**
- * SRM / SLC replace the below-ATYP slot only after TB → TT
- * (PUSH&START onward, until CFTO).
- */
-const srmSlcInSecondary = computed(
+/** FLS / SRM / SLC take the bottom (CTOT) slot — never highlight / never CTOC. */
+const flsSlcInSecondary = computed(
   () =>
     isEssaDep.value &&
     isDepartingIfr.value &&
-    isPushStartOrLater.value &&
     !props.strip.clearedForTakeoff &&
-    (isSrm.value || isSlcSts.value),
+    (isFls.value || isSrm.value || isSlcSts.value),
 )
 
 /**
@@ -4645,19 +4665,23 @@ function formatHhmmColon(hhmm: string | undefined): string {
   return `${n.slice(0, 2)}:${n.slice(2, 4)}`
 }
 
-type PrimaryTimeKind = 'tobt' | 'ttot' | 'eobt' | 'eta' | 'none'
+type PrimaryTimeKind = 'tsat' | 'tobt' | 'ttot' | 'eobt' | 'eta' | 'none'
 type SecondaryTimeKind = 'tsat' | 'ctot' | 'scl' | 'assr' | 'fls' | 'srm' | 'slc' | 'none'
 
 /**
  * Top time window:
- * - ESSA DEP: TOBT (TB) until PUSH&START, then TTOT (TT)
+ * - ESSA DEP: TSAT (TS) if present; else dimmed TOBT (TB); else EOBT (EB).
+ *   After PUSH&START+: TTOT (TT) until soft-remove.
  * - ARR: ETA
  * - Other DEP: EOBT (EB), or TOBT (TB) if present
  */
 const primaryTimeKind = computed((): PrimaryTimeKind => {
   if (isArrLayout.value) return 'eta'
   if (isEssaDep.value) {
-    return isPushStartOrLater.value ? 'ttot' : 'tobt'
+    if (isPushStartOrLater.value) return 'ttot'
+    if (props.strip.tsat) return 'tsat'
+    if (props.strip.tobt) return 'tobt'
+    return 'eobt'
   }
   if (isDeparture.value) {
     return props.strip.tobt ? 'tobt' : 'eobt'
@@ -4667,6 +4691,8 @@ const primaryTimeKind = computed((): PrimaryTimeKind => {
 
 const primaryTimeValue = computed(() => {
   switch (primaryTimeKind.value) {
+    case 'tsat':
+      return formatHhmmColon(props.strip.tsat)
     case 'tobt':
       return formatHhmmColon(props.strip.tobt || props.strip.eobt)
     case 'ttot':
@@ -4680,9 +4706,10 @@ const primaryTimeValue = computed(() => {
   }
 })
 
-/** Short label: TB / TT / EB / ETA (FLS/SRM/SLC use the TSAT slot below ATYP) */
+/** Short label: TS / TB / TT / EB (FLS/SRM/SLC/CTOT live in the bottom slot) */
 const primaryTimeLabel = computed(() => {
   switch (primaryTimeKind.value) {
+    case 'tsat': return 'TS'
     case 'tobt': return 'TB'
     case 'ttot': return 'TT'
     case 'eobt': return 'EB'
@@ -4691,30 +4718,33 @@ const primaryTimeLabel = computed(() => {
   }
 })
 
-/** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled) */
+/** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled). ESSA: bottom slot owns CTOT. */
 const depArrowCtot = computed(() => {
   if (isArrLayout.value || props.strip.atd || !showCtot.value || props.strip.clearedForTakeoff) return ''
+  if (isEssaDep.value && isDepartingIfr.value) return ''
   if (showCtotCancelled.value) return 'SCL'
   return formatHhmmColon(props.strip.ctot)
 })
 
 /**
  * Bottom time window (below ATYP):
- * - ESSA IFR DEP + TB: FLS (alt. reason) replaces TSAT; else TSAT
- * - ESSA IFR DEP + TT (PUSH&START+): SRM / SLC only (never ASSR)
+ * - ESSA IFR DEP: CTOT, or FLS / SRM / SLC / SCL (never ASSR; never TSAT)
  * - Compact DEP: CTOT/SCL in that slot when present
  * - ARR / other airports: ASSR (squawk)
  * CTOT regulation reason (mostPenalisingRegulation) is menu-only — not shown here.
+ * FLS/SLC never use CTOC highlight.
  */
 const secondaryTimeKind = computed((): SecondaryTimeKind => {
   if (isArrLayout.value) return 'assr'
-  if (isEssaDep.value && !isPushStartOrLater.value) {
-    if (flsReplacesTsat.value) return 'fls'
-    return 'tsat'
-  }
-  if (srmSlcInSecondary.value) {
-    if (isSrm.value) return 'srm'
-    if (isSlcSts.value) return 'slc'
+  if (isEssaDep.value && isDepartingIfr.value) {
+    if (flsSlcInSecondary.value) {
+      if (isFls.value) return 'fls'
+      if (isSrm.value) return 'srm'
+      if (isSlcSts.value) return 'slc'
+    }
+    if (showCtotCancelled.value) return 'scl'
+    if (showCtot.value && props.strip.ctot) return 'ctot'
+    return 'none'
   }
   // Compact: CTOT/SCL in ASSR slot (triangle only for CFTO/ATD green)
   if (isCompactBay.value && depArrowCtot.value) {
@@ -4821,12 +4851,13 @@ const secondaryTimeValue = computed(() => {
 const secondaryTimeLabel = computed(() => {
   switch (secondaryTimeKind.value) {
     case 'tsat': return secondaryTimeValue.value ? 'TS' : ''
-    case 'ctot': return 'CT' // compact: CT 20:55 (same short style as TS/TB)
-    case 'scl': return 'CT'
+    case 'ctot':
+    case 'scl':
+      return '' // time / SCL alone — no "CT" prefix
     case 'fls':
     case 'srm':
     case 'slc':
-      return '' // status fills the value alone (replaces TSAT)
+      return '' // status fills the value alone (bottom constraint slot)
     case 'assr': return '' // squawk only, no "ASSR" prefix
     default: return ''
   }
@@ -4935,7 +4966,7 @@ function onSecondaryTimeClick(event: MouseEvent) {
       onAssrClick()
       break
     case 'tsat':
-      // TSAT text is display-only — TSAC set/options are on the TSAC box only
+      // TSAT lives in the primary slot — TSAC ack is click on highlighted TS
       break
     case 'ctot':
     case 'scl':
@@ -4952,15 +4983,16 @@ const canEditPrimaryTime = computed(
   () =>
     canEditAssignedData.value &&
     (primaryTimeKind.value === 'tobt' ||
+      primaryTimeKind.value === 'tsat' ||
       (primaryTimeKind.value === 'eobt' && !store.isPaperLook)),
 )
 
-/** ESSA CDM TOBT entry / Ready TOBT click menu (incl. FLS / suspended) */
+/** ESSA CDM TOBT entry / Ready TOBT click menu (from TS or dim TB; incl. FLS) */
 const canOpenReadyTobt = computed(
   () =>
     canEditAssignedData.value &&
     showCdm.value &&
-    primaryTimeKind.value === 'tobt',
+    (primaryTimeKind.value === 'tobt' || primaryTimeKind.value === 'tsat'),
 )
 
 /** Send CDM flow PM (same eligibility as Ready TOBT) */
@@ -4989,7 +5021,7 @@ const showCdmPmPending = computed(
   () =>
     showCdm.value &&
     showPrimaryTime.value &&
-    primaryTimeKind.value === 'tobt' &&
+    (primaryTimeKind.value === 'tobt' || primaryTimeKind.value === 'tsat') &&
     !props.strip.cdmInformed &&
     props.strip.tobtSetBy !== 'A' &&
     props.strip.tobtSetBy !== 'P',
@@ -5041,9 +5073,14 @@ function openEobtMenuFromContext() {
 }
 
 const showTobtSetBy = computed(() => {
-  // P/A is "TOBT by" — only while TB is primary; hide after TB→TT (PUSH&START+)
-  if (!showCdm.value || isFls.value || primaryTimeKind.value !== 'tobt') return false
-  if (props.strip.tobtSetBy === 'P') return true
+  // P removed: italic TS covers pilot-confirm. Keep A while TS/TB primary.
+  if (
+    !showCdm.value ||
+    isFls.value ||
+    (primaryTimeKind.value !== 'tobt' && primaryTimeKind.value !== 'tsat')
+  ) {
+    return false
+  }
   if (props.strip.tobtSetBy === 'A') return store.showTobtSetByA
   return false
 })
@@ -5053,9 +5090,29 @@ const tobtSetByTitle = computed(() => {
   return props.strip.tobtSetBy === 'P' ? 'TOBT set by Pilot' : 'TOBT set by ATC'
 })
 
+/** Top TS amber when TSAC set and |TSAT−TSAC| > 5 min — click TS to re-set TSAC. */
+const primaryTsacStale = computed(
+  () => primaryTimeKind.value === 'tsat' && tsacStale.value,
+)
+
 const primaryTimeLabelTitle = computed(() => {
-  if (isFls.value) {
-    return flsTooltip(cdmStatus.value?.raw || 'FLS', cdmStatus.value?.flsType)
+  if (primaryTimeKind.value === 'tsat') {
+    const tsat = displayTsat.value
+    const tobt = formatHhmmColon(props.strip.tobt || props.strip.eobt)
+    const parts: string[] = [tsat ? `TSAT ${tsat}` : 'TSAT']
+    if (tobt) parts.push(`TOBT ${tobt}`)
+    if (props.strip.tobtSetBy === 'P') parts.push('TOBT pilot-confirmed')
+    else if (props.strip.tobtSetBy === 'A') parts.push('TOBT set by ATC')
+    else parts.push('TOBT not pilot-confirmed')
+    if (tsacStale.value) parts.push('TSAC stale — click to update')
+    return parts.join(' · ')
+  }
+  if (primaryTimeKind.value === 'tobt') {
+    return tobtSetByTitle.value || 'TOBT (no TSAT)'
+  }
+  if (primaryTimeKind.value === 'ttot') {
+    const t = formatHhmmColon(props.strip.ttot)
+    return t ? `TTOT ${t}` : 'TTOT'
   }
   return tobtSetByTitle.value
 })
@@ -5239,11 +5296,7 @@ const canEditTsac = computed(() =>
   canEditAssignedData.value && showTsacCtoc.value && showCdm.value && !!displayTsat.value
 )
 
-const canClearTsac = computed(() =>
-  canEditAssignedData.value && showTsacCtoc.value && !!props.strip.tsac
-)
-
-/** TSAC set and within ±5 min of live TSAT — green box; menu on click */
+/** TSAC within ±5 min of live TSAT */
 const isTsacGreen = computed(() => {
   const tsac = normalizeHhmmDisplay(props.strip.tsac)
   if (!tsac) return false
@@ -5251,7 +5304,7 @@ const isTsacGreen = computed(() => {
   return delta != null && delta <= 5
 })
 
-/** Same as orange-filled TSAC box: set, and outside ±5 min of live TSAT */
+/** TSAC set and outside ±5 min of live TSAT — amber TS; click TS to re-set */
 const tsacStale = computed(() => {
   const tsac = normalizeHhmmDisplay(props.strip.tsac)
   if (!tsac) return false
@@ -5266,6 +5319,18 @@ const canEditCtoc = computed(() =>
   !!props.strip.ctot
 )
 
+/**
+ * Amber CTOT until CTOC confirms the live value (missing or mismatched CTOC).
+ * FLS/SLC/SCL never use this — they stay plain bold.
+ */
+const ctotPendingAck = computed(() => {
+  if (secondaryTimeKind.value !== 'ctot') return false
+  const ctot = normalizeHhmmDisplay(props.strip.ctot)
+  if (!ctot) return false
+  const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
+  return !ctoc || ctoc !== ctot
+})
+
 const canClearCtoc = computed(() =>
   canEditAssignedData.value &&
   showTsacCtoc.value &&
@@ -5274,127 +5339,23 @@ const canClearCtoc = computed(() =>
   !!props.strip.ctoc
 )
 
-/**
- * TSAC confirmation box: only with bottom expander open + CD ALL / TSAT.
- * Never on compact half-height strips (expanders hidden; left column is gutter+times).
- * Show when TSAT is known (editable) or TSAC is already set (even if TSAT briefly missing).
- */
-const showTsacBox = computed(
-  () =>
-    !isCompactBay.value &&
-    bottomExpanded.value &&
-    showTsacCtoc.value &&
-    showCdm.value &&
-    secondaryTimeKind.value === 'tsat' &&
-    (!!displayTsat.value || !!normalizeHhmmDisplay(props.strip.tsac)),
-)
-
-/** Orange ▼ only while collapsed, and only when the TSAC box would be orange-filled */
-const showTsacStaleArrow = computed(
-  () =>
-    !bottomExpanded.value &&
-    showTsacCtoc.value &&
-    showCdm.value &&
-    secondaryTimeKind.value === 'tsat' &&
-    tsacStale.value,
-)
-
-/** empty border | green fill (±5) | orange fill (mismatch) */
-const tsacBoxClass = computed(() => {
-  const tsac = normalizeHhmmDisplay(props.strip.tsac)
-  if (!tsac) return { 'tsac-empty': true }
-  const delta = hhmmAbsDeltaMinutes(displayTsat.value, tsac)
-  if (delta != null && delta <= 5) return { 'tsac-match': true }
-  return { 'tsac-mismatch': true }
-})
-
-/** Signed CTOT − CTOC minutes (circular UTC), or null if no CTOC. */
-const ctocDeltaMinutes = computed((): number | null => {
-  const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
-  if (!ctoc) return null
-  const ctot = normalizeHhmmDisplay(props.strip.ctot)
-  if (!ctot) return null
-  const ctotM = hhmmToMinutes(ctot)
-  const ctocM = hhmmToMinutes(ctoc)
-  if (ctotM == null || ctocM == null) return null
-  let signed = ctotM - ctocM
-  if (signed > 12 * 60) signed -= 24 * 60
-  if (signed < -12 * 60) signed += 24 * 60
-  return signed
-})
-
-/** e.g. "+4", "-3", "0" when CTOC set; null → empty checkbox */
-const ctocDeltaText = computed((): string | null => {
-  const d = ctocDeltaMinutes.value
-  if (d == null) {
-    // CTOC set but no live CTOT (e.g. SCL) — still show that CTOC exists
-    const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
-    return ctoc ? 'X' : null
-  }
-  return d > 0 ? `+${d}` : `${d}`
-})
-
-const tsacTooltip = computed(() => {
-  const tsac = normalizeHhmmDisplay(props.strip.tsac)
-  const tsat = displayTsat.value
-  if (tsac && tsat && tsac === tsat) return `TSAC ${tsac} - click for options`
-  if (tsacStale.value) return `TSAC ${tsac} - TSAT now ${tsat}; click to update`
-  if (canEditTsac.value) return 'Click to set TSAC (communicated TSAT)'
-  return 'TSAC'
-})
-
+/** Native title: optional Set CTOC · CTOT HHMM · Reason: … */
 const ctocTooltip = computed(() => {
+  const lines: string[] = []
   const ctoc = normalizeHhmmDisplay(props.strip.ctoc)
-  if (ctoc) {
-    const d = ctocDeltaMinutes.value
-    if (d != null) {
-      const sign = d > 0 ? '+' : ''
-      return `CTOC ${ctoc} (${sign}${d})`
-    }
-    return `CTOC ${ctoc}`
+  if (!ctoc && canEditCtoc.value) lines.push('Set CTOC')
+  const ctot = normalizeHhmmDisplay(props.strip.ctot)
+  if (showCtotCancelled.value && !ctot) {
+    lines.push('CTOT cancelled (SCL)')
+  } else if (ctot) {
+    lines.push(`CTOT ${ctot}`)
+  } else {
+    lines.push('CTOT')
   }
-  if (canEditCtoc.value) return 'Set CTOC (communicated CTOT)'
-  return props.strip.ctotReason || 'CTOT'
+  const reason = (props.strip.ctotReason || '').trim()
+  lines.push(reason ? `Reason: ${reason}` : 'Reason: —')
+  return lines.join('\n')
 })
-
-function onTsacClick(event?: MouseEvent) {
-  if (!canEditTsac.value) return
-  const tsat = displayTsat.value
-  if (!tsat) return
-  const tsac = normalizeHhmmDisplay(props.strip.tsac)
-  // Already in sync with live TSAT → Edit / Remove menu
-  if (tsac && tsac === tsat) {
-    if (event) menuPosition.value = [event.clientX, event.clientY]
-    menuOpen.value = false
-    ctotMenuOpen.value = false
-    reaMenuOpen.value = false
-    transferMenuOpen.value = false
-    groundStateMenuOpen.value = false
-    tsacMenuOpen.value = true
-    return
-  }
-  // Empty or stale: set / refresh TSAC from current TSAT
-  store.setTsac(props.strip.id, tsat)
-}
-
-function onTsacClear() {
-  if (!canClearTsac.value) return
-  store.setTsac(props.strip.id, '')
-}
-
-function onEditTsacMenuClick() {
-  tsacMenuOpen.value = false
-  if (!canEditTsac.value) return
-  tsacDialogInitial.value =
-    normalizeHhmmDisplay(props.strip.tsac) || displayTsat.value || ''
-  tsacDialogOpen.value = true
-}
-
-function onRemoveTsacMenuClick() {
-  tsacMenuOpen.value = false
-  if (!canClearTsac.value) return
-  store.setTsac(props.strip.id, '')
-}
 
 function onSetCtocMenuClick() {
   ctotMenuOpen.value = false
@@ -5480,6 +5441,16 @@ const tsatColorClass = computed(() => {
 
 function onPrimaryTimeClick(event?: MouseEvent) {
   if (!canEditPrimaryTime.value) return
+  if (primaryTimeKind.value === 'tsat') {
+    // Highlighted / empty TSAC: left-click re-sets TSAC from live TSAT
+    const tsat = displayTsat.value
+    if (canEditTsac.value && tsat && (primaryTsacStale.value || !normalizeHhmmDisplay(props.strip.tsac))) {
+      store.setTsac(props.strip.id, tsat)
+      return
+    }
+    openTobtMenu(event)
+    return
+  }
   if (primaryTimeKind.value === 'tobt') {
     openTobtMenu(event)
     return
@@ -5497,12 +5468,17 @@ function onReadyTobtClick() {
 
 function onCtotClick(event: MouseEvent) {
   if (!canEditAssignedData.value || !showCtot.value || showCtotCancelled.value) return
+  const ctot = normalizeHhmmDisplay(props.strip.ctot)
+  // Missing or mismatched CTOC (amber): left-click sets/updates CTOC from live CTOT
+  if (canEditCtoc.value && ctot && ctotPendingAck.value) {
+    store.setCtoc(props.strip.id, ctot)
+    return
+  }
   menuPosition.value = [event.clientX, event.clientY]
   menuOpen.value = false
   transferMenuOpen.value = false
   groundStateMenuOpen.value = false
   reaMenuOpen.value = false
-  tsacMenuOpen.value = false
   ctotMenuOpen.value = true
 }
 
@@ -6145,11 +6121,22 @@ function onActionPointerUp(e: PointerEvent, action: string) {
   onActionClick(action)
 }
 
-/** Voice ACK CLR also stamps current QNH(+ATIS) green (same as onExpAtis ack path). */
+/** Clearance success stamps current QNH(+ATIS) green — no separate QNH click at CLR. */
 function stampQnhAtisOnAckClr() {
-  if (currentQnh.value == null || !currentAtisLetter.value) return
-  store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
+  if (currentQnh.value == null) return
+  if (currentAtisLetter.value) {
+    store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
+  } else {
+    store.setQnhGiven(props.strip.id, currentQnh.value)
+  }
 }
+
+watch(
+  () => props.strip.clearance,
+  (now, was) => {
+    if (now && !was) stampQnhAtisOnAckClr()
+  },
+)
 
 // Action button handlers
 function onActionClick(action: string) {
@@ -6239,7 +6226,6 @@ function onStripClick() {
 function onContextMenu(event: MouseEvent) {
   menuPosition.value = [event.clientX, event.clientY]
   ctotMenuOpen.value = false
-  tsacMenuOpen.value = false
   reaMenuOpen.value = false
   sidRouteMenuOpen.value = false
   rwyMenuOpen.value = false
@@ -6281,7 +6267,6 @@ function menuCoordsFromEvent(event: MouseEvent): [number, number] {
 function closeAssignmentMenus() {
   menuOpen.value = false
   ctotMenuOpen.value = false
-  tsacMenuOpen.value = false
   reaMenuOpen.value = false
   tobtMenuOpen.value = false
   groundStateMenuOpen.value = false
@@ -8307,17 +8292,19 @@ function onGroundStateClick(action: string) {
   flex-shrink: 0;
 }
 /* Hover/active only for plain chips — do not wash out green/orange/DCL/CLR highlights */
-.exp-chip:hover:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
+.exp-chip:hover:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
   background: #e0e0e0;
 }
-.exp-chip:active:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
+.exp-chip:active:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
   background: #d4d4d4;
 }
 .exp-chip:disabled { opacity: 0.55; cursor: default; }
 .exp-chip.active { background: var(--strip-amber); color: #fff; }
 .exp-chip.exp-rea { background: #12b33a; color: #fff; border-color: #0a8a2a; }
 .exp-chip.exp-qnh-ok { background: #12b33a; color: #fff; border-color: #0a8a2a; }
-.exp-chip.exp-qnh-stale { background: var(--strip-amber); color: #fff; border-color: #b06a00; }
+.exp-chip.exp-qnh-stale { background: #e53935; color: #fff; border-color: #b71c1c; }
+.exp-chip.exp-sig-remind { background: #e53935; color: #fff; border-color: #b71c1c; }
+.exp-chip.exp-sig-done { background: #12b33a; color: #fff; border-color: #0a8a2a; }
 .exp-chip.inert { opacity: 0.55; cursor: default; }
 .exp-chip.dcl-request { background: #fdd835; color: #000; }
 /* Clearance green / amber / error — white text on highlight (chip + ▲ arrows already white) */
@@ -8575,38 +8562,6 @@ function onGroundStateClick(action: string) {
 }
 .strip-left-up { grid-area: up; place-self: center; }
 .strip-left-dn { grid-area: dn; place-self: center; }
-/* TSAC: mirrors tobt-setby (P/A) in the dn cell — between FRUL and bottom expander ▼ */
-.tsac-box.strip-left-dn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: calc(12px * var(--strip-scale, 1));
-  height: calc(12px * var(--strip-scale, 1));
-  min-width: calc(12px * var(--strip-scale, 1));
-  min-height: calc(12px * var(--strip-scale, 1));
-  margin: 0;
-  padding: 0;
-  border-radius: 1px;
-  box-sizing: border-box;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  /* Same place-self as .tobt-setby / .strip-left-dn arrows */
-  justify-self: center;
-  align-self: center;
-}
-.tsac-box.tsac-empty {
-  background: transparent;
-  border: 2px solid var(--strip-ok-green);
-}
-.tsac-box.tsac-match {
-  background: var(--strip-ok-green);
-  border: 1px solid var(--strip-ok-green-border);
-}
-.tsac-box.tsac-mismatch {
-  background: #e67e22;
-  border: 1px solid #c45f0a;
-}
 /* Middle row only: framed FRUL / ATYP / WTC (dim frames, same as data boxes) */
 .strip-left .ctrl-ident,
 .strip-left .atyp-box,
@@ -8731,7 +8686,7 @@ function onGroundStateClick(action: string) {
 .strip-expander .expander-arrow.arrow-rea:hover {
   background: #1fc44a !important;
 }
-/* Stale TSAC / QNH — amber key, white glyph (overrides REA on top ▲) */
+/* Stale TSAC — amber key, white glyph */
 .ctrl-arrow.arrow-stale,
 .strip-left .ctrl-arrow.arrow-stale,
 .strip-expander .expander-arrow.arrow-stale {
@@ -8748,6 +8703,24 @@ function onGroundStateClick(action: string) {
 .strip-left .ctrl-arrow.arrow-stale:hover,
 .strip-expander .expander-arrow.arrow-stale:hover {
   background: #f0a020 !important;
+}
+/* Stale QNH/ATIS — red (overrides REA on top ▲) */
+.ctrl-arrow.arrow-qnh-stale,
+.strip-left .ctrl-arrow.arrow-qnh-stale,
+.strip-expander .expander-arrow.arrow-qnh-stale {
+  background: #e53935 !important;
+  border-color: #b71c1c;
+  color: #fff;
+}
+.ctrl-arrow.arrow-qnh-stale .arrow-glyph,
+.strip-left .ctrl-arrow.arrow-qnh-stale .arrow-glyph,
+.strip-expander .expander-arrow.arrow-qnh-stale .arrow-glyph {
+  color: #fff;
+}
+.ctrl-arrow.arrow-qnh-stale:hover,
+.strip-left .ctrl-arrow.arrow-qnh-stale:hover,
+.strip-expander .expander-arrow.arrow-qnh-stale:hover {
+  background: #ef5350 !important;
 }
 .strip-time-top { grid-area: timeT; }
 .strip-time-bot { grid-area: timeB; }
@@ -8802,14 +8775,19 @@ function onGroundStateClick(action: string) {
   color: #000;
   line-height: 1;
 }
-/* CTOT and cancelled CTOT (SLC/SCL) — bold + amber */
+/* CTOT / SCL — bold black; amber only while CTOC missing/mismatched */
 .strip-time.time-ctot,
 .strip-time.time-ctot .strip-time-lbl,
 .strip-time.time-ctot .strip-time-val {
   font-weight: 700;
+  color: #000;
+}
+.strip-time.time-ctot-pending,
+.strip-time.time-ctot-pending .strip-time-lbl,
+.strip-time.time-ctot-pending .strip-time-val {
   color: #d97706;
 }
-/* FLS in TSAT slot — red */
+/* FLS in bottom constraint slot — red + bold */
 .strip-time.time-fls,
 .strip-time.time-fls .strip-time-lbl,
 .strip-time.time-fls .strip-time-val {
@@ -8817,12 +8795,31 @@ function onGroundStateClick(action: string) {
   color: #c00000;
 }
 .time-fls, .label-fls { color: #c00000; }
-/* SRM / SLC in TSAT slot — black, bolder than TB (500) */
+/* SRM / SLC in bottom slot — black, bold */
 .strip-time.time-cdm-sts,
 .strip-time.time-cdm-sts .strip-time-lbl,
 .strip-time.time-cdm-sts .strip-time-val {
   font-weight: 700;
   color: #000;
+}
+/* Ensure CTOT/FLS/SLC bold on all non-paper SAAB layouts */
+.strip-time.time-constraint-bold,
+.strip-time.time-constraint-bold .strip-time-lbl,
+.strip-time.time-constraint-bold .strip-time-val {
+  font-weight: 700;
+}
+/* Dim TB when shown because no TSAT */
+.strip-time.time-dim,
+.strip-time.time-dim .strip-time-lbl,
+.strip-time.time-dim .strip-time-val {
+  opacity: 0.55;
+}
+/* TS amber when |TSAT−TSAC| > 5 min (cleared by updating TSAC) */
+.strip-time.time-tsac-stale,
+.strip-time.time-tsac-stale .strip-time-lbl,
+.strip-time.time-tsac-stale .strip-time-val {
+  color: #d97706;
+  font-weight: 700;
 }
 .tsat-mini { color: #00a000; }
 /* TSAT window: green in ±5; yellow last minute; red after expiry */
@@ -8991,7 +8988,7 @@ button.tobt-setby-pm:hover {
   width: 100%;
   box-sizing: border-box;
 }
-.flight-strip.strip-compact .compact-gutter:hover .compact-gutter-half:not(.arrow-rea):not(.arrow-stale) {
+.flight-strip.strip-compact .compact-gutter:hover .compact-gutter-half:not(.arrow-rea):not(.arrow-stale):not(.arrow-qnh-stale) {
   background: rgba(0, 0, 0, 0.04);
 }
 /* Same fills as expander ▲/▼ keys */
@@ -9000,6 +8997,9 @@ button.tobt-setby-pm:hover {
 }
 .flight-strip.strip-compact .compact-gutter-half.arrow-stale {
   background: var(--strip-amber);
+}
+.flight-strip.strip-compact .compact-gutter-half.arrow-qnh-stale {
+  background: #e53935;
 }
 /*
  * Compact main: same column tracks as normal DEP so C/S (span 2) and RWY

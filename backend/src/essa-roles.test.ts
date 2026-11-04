@@ -11,6 +11,7 @@ import {
     computeAutoEssaRoles,
     filterEssaLayout,
     isEssaAppCallsign,
+    isEssaSectionVisibleForPicker,
     parseEssaLoginId,
     resolveGndRolesFromOwnerCoverage,
     type EssaFamily,
@@ -218,7 +219,7 @@ check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
     )
 })
 
-check("TWR-only with separate GND hides TAXIWAY ARR", () => {
+check("TWR-only with separate GND hides TAXIWAY ARR, keeps CTR ARR+DEP and TAXIWAY DEP", () => {
     const layout: EfsLayout = {
         bays: [
             {
@@ -228,16 +229,25 @@ check("TWR-only with separate GND hides TAXIWAY ARR", () => {
                     { id: "taxi_arr", title: "TAXIWAY ARR" },
                 ],
             },
+            {
+                id: "bay2",
+                sections: [
+                    { id: "ctr_dep", title: "CTR DEP" },
+                    { id: "taxi_dep", title: "TAXIWAY DEP" },
+                ],
+            },
         ],
     }
     const visibleFor = new Map<string, EssaFamily[]>([
         ["ctr_arr", ["TWR", "APP"]],
         ["taxi_arr", ["GND", "TWR"]],
+        ["ctr_dep", ["TWR", "APP"]],
+        ["taxi_dep", ["GND", "TWR"]],
     ])
     const out = filterEssaLayout(layout, ["TWR-W"], visibleFor, ["TWR-W"], ["GND-W"])
     assert.deepEqual(
-        out.bays[0]!.sections.map((s) => s.id),
-        ["ctr_arr"]
+        out.bays.map((b) => b.sections.map((s) => s.id)),
+        [["ctr_arr"], ["ctr_dep", "taxi_dep"]]
     )
 })
 
@@ -346,6 +356,41 @@ check("TWR without APP keeps CTR ARR title and INBOUND APP", () => {
     const out = filterEssaLayout(layout, ["TWR-E"], visibleFor, ["TWR-E"], [])
     assert.equal(out.bays[0]!.sections[0]!.title, "INBOUND APP")
     assert.equal(out.bays[0]!.sections[1]!.title, "CTR ARR")
+})
+
+check("ctr_dep visible for TWR/APP picker only", () => {
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["ctr_dep", ["TWR", "APP"]],
+        ["dep_runway", ["TWR"]],
+    ])
+    assert.equal(isEssaSectionVisibleForPicker("ctr_dep", ["TWR-E"], visibleFor, []), true)
+    assert.equal(isEssaSectionVisibleForPicker("ctr_dep", ["TWR-E"], visibleFor, ["GND-E"]), true)
+    assert.equal(isEssaSectionVisibleForPicker("ctr_dep", ["APP"], visibleFor, ["GND-E"]), true)
+    assert.equal(isEssaSectionVisibleForPicker("ctr_dep", ["GND-E"], visibleFor), false)
+    assert.equal(isEssaSectionVisibleForPicker("dep_runway", ["GND-E"], visibleFor), false)
+})
+
+check("FATO 07/25 only when assigned, never from active config alone", () => {
+    const none = collectEssaRunwayPairs({ ESSA: { arr: ["01L"], dep: ["01R"] } }, ["ESSA"])
+    assert.equal(none.some((p) => p.pair.id === "07_25"), false)
+
+    const activeOnly = collectEssaRunwayPairs(
+        { ESSA: { arr: ["07"], dep: ["25"] } },
+        ["ESSA"],
+    )
+    assert.equal(activeOnly.some((p) => p.pair.id === "07_25"), false)
+
+    const assigned = collectEssaRunwayPairs(
+        { ESSA: { arr: ["01L"], dep: ["01R"] } },
+        ["ESSA"],
+        { arr: ["07"], dep: [] },
+    )
+    const fato = assigned.find((p) => p.pair.id === "07_25")
+    assert.ok(fato)
+    assert.equal(fato!.title, "FATO")
+    assert.equal(fato!.sectionId, "runway_07_25")
+    assert.equal(fato!.fromAssigned, true)
+    assert.equal(fato!.preferDepColumn, false)
 })
 
 console.log(`\n${passed} passed`)

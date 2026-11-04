@@ -14,21 +14,32 @@
         <div class="tobt-menu-callsign">{{ strip.callsign }}</div>
       </button>
       <div class="tobt-menu-manual" @click.stop>
-        <input
-          ref="manualInput"
-          v-model="manualText"
-          class="tobt-menu-manual-input"
-          :class="{ invalid: manualText.length > 0 && !manualValid }"
-          type="text"
-          inputmode="numeric"
-          maxlength="5"
-          placeholder="HHMM / HH:MM"
-          spellcheck="false"
-          autocomplete="off"
-          @input="onManualInput"
-          @keydown.enter.prevent="onReady"
-          @keydown.escape.prevent="closeMenu"
-        />
+        <div class="tobt-menu-field">
+          <span class="tobt-menu-field-lbl">{{ kind === 'eobt' ? 'EOBT' : 'TOBT' }}</span>
+          <input
+            ref="manualInput"
+            v-model="manualText"
+            class="tobt-menu-manual-input"
+            :class="{ invalid: manualText.length > 0 && !manualValid }"
+            type="text"
+            inputmode="numeric"
+            maxlength="5"
+            placeholder="HHMM / HH:MM"
+            spellcheck="false"
+            autocomplete="off"
+            @input="onManualInput"
+            @keydown.enter.prevent="onReady"
+            @keydown.escape.prevent="closeMenu"
+          />
+        </div>
+        <div v-if="kind === 'tobt'" class="tobt-menu-field">
+          <span class="tobt-menu-field-lbl">TSAT</span>
+          <div
+            class="tobt-menu-manual-input tobt-menu-tsat-box"
+            :class="{ ghost: !tsatDisplay }"
+            title="TSAT"
+          >{{ tsatDisplay || '----' }}</div>
+        </div>
       </div>
       <div class="tobt-menu-actions">
         <button
@@ -91,6 +102,13 @@ let ignoreCloseUntil = 0
 const kindLabel = computed(() => (props.kind === 'eobt' ? 'EOBT' : 'TOBT'))
 const setLabel = computed(() => (props.kind === 'eobt' ? 'Set EOBT' : 'Set TOBT'))
 const readyLabel = computed(() => (props.kind === 'eobt' ? 'Ready EOBT' : 'Ready TOBT'))
+/** Live TSAT under TOBT header (CDM only). */
+const tsatDisplay = computed(() => {
+  if (props.kind !== 'tobt') return ''
+  const raw = (props.strip.tsat || '').replace(/\D/g, '').slice(0, 4)
+  if (raw.length !== 4) return ''
+  return formatHhmmColon(raw)
+})
 const cdmPmLabel = computed(() =>
   props.strip.cdmInformed ? 'Resend CDM PM ✓' : 'Send CDM PM',
 )
@@ -267,13 +285,38 @@ function onSendCdmPm() {
 }
 
 .tobt-menu-manual {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4px * var(--s));
   padding: calc(6px * var(--s)) calc(8px * var(--s));
   background: #c8c8c8;
 }
 
+.tobt-menu-field {
+  display: flex;
+  align-items: stretch;
+  gap: calc(4px * var(--s));
+  min-width: 0;
+}
+
+.tobt-menu-field-lbl {
+  flex: 0 0 calc(36px * var(--s));
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  font-size: calc(10px * var(--s));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #222;
+  text-transform: uppercase;
+  user-select: none;
+}
+
 .tobt-menu-manual-input {
   display: block;
+  flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
   margin: 0;
   padding: calc(5px * var(--s)) calc(6px * var(--s));
@@ -306,6 +349,22 @@ function onSendCdmPm() {
   text-transform: none;
   letter-spacing: 0;
   font-size: calc(10px * var(--s));
+}
+
+/* Same footprint as TOBT entry — read-only TSAT */
+.tobt-menu-tsat-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  user-select: none;
+  background: #ececec;
+  color: #000;
+  cursor: default;
+}
+.tobt-menu-tsat-box.ghost {
+  color: #888;
+  font-weight: 600;
 }
 
 .tobt-menu-actions {

@@ -112,7 +112,9 @@ import {
   listSavedLayouts,
   mergeImportedLayouts,
   parseImportPayload,
+  findSavedLayoutByName,
   renameSavedLayout,
+  replaceSavedLayout,
   resolveLoadedLayoutLabel,
   saveNamedLayout,
   setUserDefaultLayout,
@@ -321,17 +323,34 @@ function onSaveCurrent() {
   // Prefer board snapshot from dialog open — not a catalog preview sitting on activeLayout
   const layout = layoutBeforeOpen.value ?? ws.activeLayout.value
   if (!layout) return
-  const name = window.prompt('Layout name')
+  const key = saabRoleKey(currentProfileId.value)
+  const suggested =
+    selectedSaved.value?.layout.roleKey === key ? selectedSaved.value.name : ''
+  const name = window.prompt('Layout name', suggested)
   if (!name?.trim()) return
   const trimmed = name.trim()
-  const key = saabRoleKey(currentProfileId.value)
   const profile = profiles.value.find((l) => l.id === currentProfileId.value)
-  const entry = saveNamedLayout(trimmed, {
+  const payload = {
     ...layout,
     roleKey: key,
     roles: [],
     rolesLabel: profile ? `${profile.name} · ${profile.bayCount} BAYS` : key,
-  })
+  }
+  const existing = findSavedLayoutByName(trimmed, key)
+  let entry
+  if (existing) {
+    if (
+      !window.confirm(
+        `A custom layout named “${existing.name}” already exists for this profile.\n\nReplace it with the current board?`,
+      )
+    ) {
+      return
+    }
+    entry = replaceSavedLayout(existing.id, payload, trimmed)
+    if (!entry) return
+  } else {
+    entry = saveNamedLayout(trimmed, payload)
+  }
   savedTick.value++
   selectedId.value = entry.id
   ws.previewLayout(entry.layout, {

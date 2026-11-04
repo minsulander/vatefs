@@ -51,8 +51,12 @@ export interface ViffPollResult {
     restricted: ViffRestrictedEntry[]
     statuses: ViffStatusEntry[]
     cdm: ViffCdmEntry[]
-    /** CDM master airports from GET /airport */
-    masters: ViffMasterAirport[]
+    /**
+     * CDM master airports from GET /airport.
+     * `null` = fetch failed (caller must keep last-known master — do not clear).
+     * `[]` = successful empty response (no masters online).
+     */
+    masters: ViffMasterAirport[] | null
 }
 
 type PollCallback = (result: ViffPollResult) => void
@@ -388,17 +392,20 @@ export class ViffService {
         }
     }
 
-    /** GET /airport — CDM master list `[{ icao, position }, …]`. */
-    private async fetchMasterAirports(): Promise<ViffMasterAirport[]> {
+    /**
+     * GET /airport — CDM master list `[{ icao, position }, …]`.
+     * Returns `null` on network/HTTP/parse failure so the UI can keep last-known master.
+     */
+    private async fetchMasterAirports(): Promise<ViffMasterAirport[] | null> {
         const url = `${this.baseUrl}/airport`
         try {
             const res = await fetch(url, { signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) })
             if (!res.ok) {
                 console.warn(`[VIFF] airport (masters) HTTP ${res.status}`)
-                return []
+                return null
             }
             const data = await res.json()
-            if (!Array.isArray(data)) return []
+            if (!Array.isArray(data)) return null
             const out: ViffMasterAirport[] = []
             for (const item of data) {
                 if (!item || typeof item !== "object") continue
@@ -413,7 +420,7 @@ export class ViffService {
                 `[VIFF] airport (masters) error:`,
                 err instanceof Error ? err.message : err,
             )
-            return []
+            return null
         }
     }
 

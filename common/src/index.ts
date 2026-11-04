@@ -150,6 +150,8 @@ export {
     withVectRemark,
     formatAhdVectorSidDisplay,
     extractTmaExitPoint,
+    extractTmaEntryPoint,
+    extractFixFromProcedureName,
     extractSignificantRouteFixes,
 } from "./sid-format.js"
 

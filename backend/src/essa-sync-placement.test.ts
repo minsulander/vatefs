@@ -159,6 +159,32 @@ check("TXIN peer inbound → taxi_arr", () => {
     assert.equal(mapped!.sectionId, "taxi_arr")
 })
 
+check("GND separate: pending inbound transfer → taxi_arr", () => {
+    const gnd = baseConfig(["GND-E"])
+    gnd.myCallsign = "ESSA_E_GND"
+    const flight = {
+        callsign: "SAS884",
+        airborne: false,
+        groundstate: "ARR",
+        handoffTargetController: "ESSA_E_GND",
+    } as Flight
+    const mapped = mapEssaRemotePlacement(
+        gnd,
+        "bay1",
+        "inbound",
+        strip({
+            id: "SAS884",
+            callsign: "SAS884",
+            stripType: "arrival",
+            sectionId: "inbound",
+            bayId: "bay1",
+        }),
+        flight,
+    )
+    assert.ok(mapped)
+    assert.equal(mapped!.sectionId, "taxi_arr")
+})
+
 check("do not pull taxi_arr strip back to inbound", () => {
     const twr = baseConfig(["TWR-W"])
     const mapped = mapEssaRemotePlacement(
