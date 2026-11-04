@@ -1383,6 +1383,34 @@ function broadcastStrip(
     pushStripCftoAtdIfChanged(strip)
 }
 
+/**
+ * Apply strip to store (preserves same-slot klack/cock) then broadcast the applied result.
+ * Never broadcast a raw regenerateStrip() — it omits klack and clients animate flush.
+ */
+function updateAndBroadcastStrip(
+    strip: FlightStrip,
+    options?: {
+        exclude?: WebSocket
+        autoMoved?: boolean
+        cleanReprint?: boolean
+        playPrintAnim?: boolean
+        allowPositionChange?: boolean
+    },
+): FlightStrip {
+    const allowPositionChange = options?.allowPositionChange
+    const applied = store.updateStripFromFlight(
+        strip,
+        allowPositionChange ? { allowPositionChange: true } : undefined,
+    )
+    broadcastStrip(applied, {
+        exclude: options?.exclude,
+        autoMoved: options?.autoMoved,
+        cleanReprint: options?.cleanReprint,
+        playPrintAnim: options?.playPrintAnim,
+    })
+    return applied
+}
+
 // Broadcast a strip delete
 function broadcastStripDelete(stripId: string, exclude?: WebSocket) {
     const message: StripDeleteMessage = { type: "stripDelete", stripId }
@@ -2389,8 +2417,7 @@ function applyMultiAirportViewChange(opts?: { reprocess?: boolean }) {
 
     const remapped = flightStore.remapMultiAirportPlacements()
     for (const strip of remapped) {
-        store.updateStripFromFlight(strip)
-        broadcastStrip(strip)
+        updateAndBroadcastStrip(strip)
     }
 
     broadcastStatus()
@@ -2939,8 +2966,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
 
         const updatedStrip = flightStore.regenerateStrip(callsign)
         if (updatedStrip) {
-            store.updateStripFromFlight(updatedStrip)
-            broadcastStrip(updatedStrip)
+            updateAndBroadcastStrip(updatedStrip)
         }
     }, 300)
     preferredSidAfterDepRwyTimers.set(stripId, timer)
@@ -3682,8 +3708,7 @@ function runAutoDepPrep(callsign: string, logTag = "DEP PREP"): boolean {
 
     const updated = flightStore.regenerateStrip(strip.id)
     if (updated) {
-        store.updateStripFromFlight(updated)
-        broadcastStrip(updated)
+        updateAndBroadcastStrip(updated)
     }
     return true
 }
@@ -3844,8 +3869,7 @@ function sendDclClearance(
 
     const strip = flightStore.regenerateStrip(flight.callsign)
     if (strip) {
-        store.updateStripFromFlight(strip)
-        broadcastStrip(strip)
+        updateAndBroadcastStrip(strip)
         pushPaperStripIfNeeded(strip.id)
     }
 
@@ -3951,8 +3975,7 @@ function handleDclRequest(from: string, packet: string) {
     // Regenerate and broadcast strip
     const strip = flightStore.regenerateStrip(callsign)
     if (strip) {
-        store.updateStripFromFlight(strip)
-        broadcastStrip(strip)
+        updateAndBroadcastStrip(strip)
     }
 
     // Record when the request was received (for REQUEST timeout)
@@ -4071,8 +4094,7 @@ function handleCpdlcResponse(from: string, packet: string) {
         // Regenerate and broadcast strip
         const strip = flightStore.regenerateStrip(flight.callsign)
         if (strip) {
-            store.updateStripFromFlight(strip)
-            broadcastStrip(strip)
+            updateAndBroadcastStrip(strip)
             pushPaperStripIfNeeded(strip.id)
         }
     } else if (responseWord === "UNABLE") {
@@ -4087,8 +4109,7 @@ function handleCpdlcResponse(from: string, packet: string) {
         // Regenerate and broadcast strip
         const strip = flightStore.regenerateStrip(flight.callsign)
         if (strip) {
-            store.updateStripFromFlight(strip)
-            broadcastStrip(strip)
+            updateAndBroadcastStrip(strip)
         }
     }
 }
@@ -4558,8 +4579,7 @@ function applyRemoteScribble(
                 if (flagsChanged) {
                     const updated = flightStore.regenerateStrip(strip.callsign)
                     if (updated) {
-                        store.updateStripFromFlight(updated)
-                        broadcastStrip(updated)
+                        updateAndBroadcastStrip(updated)
                         strip = store.getStrip(updated.id) || updated
                         stripId = strip.id
                     }
@@ -5986,8 +6006,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         })
                         const cdmUpdated = flightStore.regenerateStrip(strip.callsign)
                         if (cdmUpdated) {
-                            store.updateStripFromFlight(cdmUpdated)
-                            broadcastStrip(cdmUpdated)
+                            updateAndBroadcastStrip(cdmUpdated)
                         }
                     }
                 // XFER: initiate handoff to the appropriate next controller
@@ -7146,8 +7165,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                         const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                         if (updatedStrip) {
-                            store.updateStripFromFlight(updatedStrip)
-                            broadcastStrip(updatedStrip)
+                            updateAndBroadcastStrip(updatedStrip)
                         }
                     }
                 } else if (
@@ -7162,8 +7180,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     // Optimistic strip SID/RWY/CFL/AHD display before EuroScope roundtrip
                     const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                     if (updatedStrip) {
-                        store.updateStripFromFlight(updatedStrip)
-                        broadcastStrip(updatedStrip)
+                        updateAndBroadcastStrip(updatedStrip)
                     }
                 }
             } else {
@@ -7249,8 +7266,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 flight.ownershipOptimisticUntil = undefined
                 const updatedStrip = flightStore.regenerateStrip(strip.callsign)
                 if (updatedStrip) {
-                    store.updateStripFromFlight(updatedStrip)
-                    broadcastStrip(updatedStrip)
+                    updateAndBroadcastStrip(updatedStrip)
                 }
             }
             break
@@ -7433,8 +7449,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             // Regenerate and broadcast strip
             const rejStrip = flightStore.regenerateStrip(strip.callsign)
             if (rejStrip) {
-                store.updateStripFromFlight(rejStrip)
-                broadcastStrip(rejStrip)
+                updateAndBroadcastStrip(rejStrip)
             }
             break
         }
@@ -8045,8 +8060,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                     const updatedStrip = flightStore.regenerateStrip(remarkStrip.callsign)
                     if (updatedStrip) {
-                        store.updateStripFromFlight(updatedStrip)
-                        broadcastStrip(updatedStrip)
+                        updateAndBroadcastStrip(updatedStrip)
                     }
                     console.log(`[REMARKS] ${remarkStrip.callsign}: "${flight.remarks ?? ""}" hp=${flight.hp ?? "-"} scratch="${scratchValue}"`)
                 }
@@ -8070,8 +8084,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             sendUdp(JSON.stringify({ type: "setScratch", callsign: hpStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
             const updatedStrip = flightStore.regenerateStrip(hpStrip.callsign)
             if (updatedStrip) {
-                store.updateStripFromFlight(updatedStrip)
-                broadcastStrip(updatedStrip)
+                updateAndBroadcastStrip(updatedStrip)
             }
             console.log(`[HP] ${hpStrip.callsign}: "${text}" scratch="${scratchValue}"`)
             break
@@ -8089,8 +8102,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             sendUdp(JSON.stringify({ type: "setHs", callsign: hsStrip.callsign, value: text } satisfies OutboundPluginCommand))
             const updatedStrip = flightStore.regenerateStrip(hsStrip.callsign)
             if (updatedStrip) {
-                store.updateStripFromFlight(updatedStrip)
-                broadcastStrip(updatedStrip)
+                updateAndBroadcastStrip(updatedStrip)
             }
             console.log(`[HS] ${hsStrip.callsign}: "${text}" (VCH)`)
             break
@@ -8113,8 +8125,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             } satisfies OutboundPluginCommand))
             const updatedStrip = flightStore.regenerateStrip(cooStrip.callsign)
             if (updatedStrip) {
-                store.updateStripFromFlight(updatedStrip)
-                broadcastStrip(updatedStrip)
+                updateAndBroadcastStrip(updatedStrip)
             }
             console.log(`[DepC] ${cooStrip.callsign}: ${message.coo ? "on" : "off"} (ann 6)`)
             break
@@ -8202,8 +8213,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 )
                 const updatedStrip = flightStore.regenerateStrip(accStrip.callsign)
                 if (updatedStrip) {
-                    store.updateStripFromFlight(updatedStrip)
-                    broadcastStrip(updatedStrip)
+                    updateAndBroadcastStrip(updatedStrip)
                 }
                 console.log(
                     `[XFL-COORD] ${accStrip.callsign}: ESMS auto DepC on Accept of ${pendingAlt}ft`,
@@ -8307,8 +8317,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 }
                 const updated = flightStore.regenerateStrip(callsign)
                 if (updated) {
-                    store.updateStripFromFlight(updated)
-                    broadcastStrip(updated)
+                    updateAndBroadcastStrip(updated)
                 }
             }
             console.log(`[FPL] amendFlightPlan ${callsign}`)
@@ -8582,8 +8591,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flight.cdmSts = message.set ? "REA" : undefined
                     const updated = flightStore.regenerateStrip(reaStrip.callsign)
                     if (updated) {
-                        store.updateStripFromFlight(updated)
-                        broadcastStrip(updated)
+                        updateAndBroadcastStrip(updated)
                     }
                 }
                 viffService.pollSoon()
@@ -8613,8 +8621,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             const updated = flightStore.regenerateStrip(eobtStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             console.log(`[EOBT] ${eobtStrip.callsign} → ${eobt}`)
             const ok = await viffService.updateEobt(eobtStrip.callsign, eobt)
@@ -8651,8 +8658,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             applyEfsTobt(flight, tobt)
             const updated = flightStore.regenerateStrip(tobtStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             console.log(`[CDM] TOBT via ES ${tobtStrip.callsign} → ${tobt}`)
             // Network catch-up (CDM master may also sync; this keeps vIFF aligned)
@@ -8711,8 +8717,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             const updated = flightStore.regenerateStrip(readyStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             viffService.pollSoon()
             break
@@ -8761,8 +8766,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             const updated = flightStore.regenerateStrip(rsStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             viffService.pollSoon()
             break
@@ -8790,8 +8794,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             flight.tsac = tsac || undefined
             const updated = flightStore.regenerateStrip(tsacStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             console.log(`[CDM] TSAC ${tsacStrip.callsign} → ${tsac || "(clear)"}`)
             break
@@ -8819,8 +8822,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             flight.ctoc = ctoc || undefined
             const updated = flightStore.regenerateStrip(ctocStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             console.log(`[CDM] CTOC ${ctocStrip.callsign} → ${ctoc || "(clear)"}`)
             break
@@ -8851,8 +8853,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             flight.atd = atd || undefined
             const updated = flightStore.regenerateStrip(atdStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
             console.log(`[ATD] ${atdStrip.callsign} → ${atd || "(clear)"}`)
             break
@@ -8878,8 +8879,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             }
             const updated = flightStore.regenerateStrip(qnhStrip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
                 void pushStripFlagsToRemote(updated.id)
             }
             console.log(
@@ -9017,8 +9017,7 @@ function applyDevSpoofAndBroadcast(callsign: string, fields: DevSpoofFields) {
     }
     const strip = flightStore.applyDevSpoof(callsign, fields)
     if (strip) {
-        const applied = store.updateStripFromFlight(strip)
-        broadcastStrip(applied ?? strip)
+        updateAndBroadcastStrip(strip)
     }
     const snap = flightStore.getDevSpoofSnapshot(callsign)
     return snap ?? { error: `Flight not found: ${callsign}` as const }
@@ -10638,8 +10637,7 @@ udpIn.on("message", (msg, rinfo) => {
                             // Re-broadcast strip with updated preview
                             const updatedStrip = flightStore.regenerateStrip(result.strip.id)
                             if (updatedStrip) {
-                                store.updateStripFromFlight(updatedStrip)
-                                broadcastStrip(updatedStrip)
+                                updateAndBroadcastStrip(updatedStrip)
                             }
                         }
                     }
@@ -10787,8 +10785,7 @@ function checkDclTimeouts() {
                 // Regenerate and broadcast strip
                 const strip = flightStore.regenerateStrip(flight.callsign)
                 if (strip) {
-                    store.updateStripFromFlight(strip)
-                    broadcastStrip(strip)
+                    updateAndBroadcastStrip(strip)
                 }
             }
         }
@@ -10815,8 +10812,7 @@ function checkDclTimeouts() {
                 // Regenerate and broadcast strip
                 const strip = flightStore.regenerateStrip(flight.callsign)
                 if (strip) {
-                    store.updateStripFromFlight(strip)
-                    broadcastStrip(strip)
+                    updateAndBroadcastStrip(strip)
                 }
             }
         }
@@ -11039,8 +11035,7 @@ function applyViffPoll(result: ViffPollResult) {
         if (changed) {
             const updated = flightStore.regenerateStrip(strip.callsign)
             if (updated) {
-                store.updateStripFromFlight(updated)
-                broadcastStrip(updated)
+                updateAndBroadcastStrip(updated)
             }
         }
     }
