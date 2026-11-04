@@ -1233,14 +1233,12 @@
                 'time-ctot': secondaryTimeKind === 'ctot' || secondaryTimeKind === 'scl',
                 'time-ctot-pending': ctotPendingAck,
                 'time-fls': secondaryTimeKind === 'fls',
-                'time-cdm-sts':
-                  secondaryTimeKind === 'srm' || secondaryTimeKind === 'slc',
+                'time-cdm-sts': secondaryTimeKind === 'slc',
                 'time-constraint-bold':
                   !store.isPaperLook &&
                   (secondaryTimeKind === 'ctot' ||
                     secondaryTimeKind === 'scl' ||
                     secondaryTimeKind === 'fls' ||
-                    secondaryTimeKind === 'srm' ||
                     secondaryTimeKind === 'slc'),
                 'squawk-empty':
                   secondaryTimeKind === 'assr' &&
@@ -4557,8 +4555,9 @@ const showPrimaryTime = computed(() => {
 
 /**
  * Parse vIFF/CDM network status for strip UI.
- * Shown: REA (badge); FLS / SRM / SLC take the bottom (CTOT) slot —
- * FLS alternates with subtype reason. COMPLY/AIRB/DES/SAM ignored.
+ * Shown: REA (badge); FLS / SLC take the bottom (CTOT) slot —
+ * FLS alternates with subtype reason. SRM never fills the slot (CTOT stays; highlight is CTOT≠CTOC only).
+ * COMPLY/AIRB/DES/SAM ignored.
  */
 function parseCdmSts(sts: string | undefined): {
   kind: 'rea' | 'fls' | 'srm' | 'slc'
@@ -4614,13 +4613,14 @@ const isFls = computed(() => cdmStatus.value?.kind === 'fls')
 const isSrm = computed(() => cdmStatus.value?.kind === 'srm')
 const isSlcSts = computed(() => cdmStatus.value?.kind === 'slc')
 const isRea = computed(() => cdmStatus.value?.kind === 'rea')
-/** FLS / SRM / SLC take the bottom (CTOT) slot — never highlight / never CTOC. */
+/** FLS / SLC take the bottom (CTOT) slot on SAAB IFR DEP — never CTOC. SRM is not shown (CTOT stays). */
 const flsSlcInSecondary = computed(
   () =>
-    isEssaDep.value &&
     isDepartingIfr.value &&
+    !store.isPaperLook &&
     !props.strip.clearedForTakeoff &&
-    (isFls.value || isSrm.value || isSlcSts.value),
+    !isCtrDepSection(props.strip.sectionId) &&
+    (isFls.value || isSlcSts.value),
 )
 
 /**
@@ -4629,10 +4629,10 @@ const flsSlcInSecondary = computed(
  */
 const paperShowRea = computed(() => !isArrLayout.value && isRea.value)
 
-/** Badge above CTOT (or primary time if no CTOT). FLS uses primary label instead. */
+/** Badge above CTOT (or primary time if no CTOT). FLS/SRM never badge here. */
 const networkStatusBadge = computed(() => {
   const sts = cdmStatus.value
-  if (!sts || sts.kind === 'fls') return null
+  if (!sts || sts.kind === 'fls' || sts.kind === 'srm') return null
   return sts.badge
 })
 
@@ -4706,7 +4706,7 @@ const primaryTimeValue = computed(() => {
   }
 })
 
-/** Short label: TS / TB / TT / EB (FLS/SRM/SLC/CTOT live in the bottom slot) */
+/** Short label: TS / TB / TT / EB (FLS/SLC/CTOT live in the bottom slot) */
 const primaryTimeLabel = computed(() => {
   switch (primaryTimeKind.value) {
     case 'tsat': return 'TS'
@@ -4718,28 +4718,31 @@ const primaryTimeLabel = computed(() => {
   }
 })
 
-/** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled). ESSA: bottom slot owns CTOT. */
+/** CTOT / SCL inside dep arrow (hidden when ATD set or CTO filled). SAAB IFR DEP: bottom slot owns CTOT. */
 const depArrowCtot = computed(() => {
   if (isArrLayout.value || props.strip.atd || !showCtot.value || props.strip.clearedForTakeoff) return ''
-  if (isEssaDep.value && isDepartingIfr.value) return ''
+  // Digital SAAB: CTOT/FLS/SLC live in the bottom time box — not the dep arrow
+  if (isDepartingIfr.value && !store.isPaperLook) return ''
   if (showCtotCancelled.value) return 'SCL'
   return formatHhmmColon(props.strip.ctot)
 })
 
 /**
  * Bottom time window (below ATYP):
- * - ESSA IFR DEP: CTOT, or FLS / SRM / SLC / SCL (never ASSR; never TSAT)
- * - Compact DEP: CTOT/SCL in that slot when present
- * - ARR / other airports: ASSR (squawk)
+ * - SAAB IFR DEP: CTOT, or FLS / SLC / SCL (never ASSR; never SRM text — CTOT highlight is CTOT≠CTOC only)
+ * - SAAB VFR DEP (and other non-IFR deps): SSR (squawk) in this box
+ * - Compact DEP: CTOT/SCL in that slot when present (paper / legacy arrow path)
+ * - ARR: ASSR (squawk)
  * CTOT regulation reason (mostPenalisingRegulation) is menu-only — not shown here.
  * FLS/SLC never use CTOC highlight.
  */
 const secondaryTimeKind = computed((): SecondaryTimeKind => {
   if (isArrLayout.value) return 'assr'
-  if (isEssaDep.value && isDepartingIfr.value) {
+  // VFR / Z / non-IFR deps: always SSR in the bottom box (not CTOT slot)
+  if (isDeparture.value && !isDepartingIfr.value) return 'assr'
+  if (isDepartingIfr.value && !store.isPaperLook) {
     if (flsSlcInSecondary.value) {
       if (isFls.value) return 'fls'
-      if (isSrm.value) return 'srm'
       if (isSlcSts.value) return 'slc'
     }
     if (showCtotCancelled.value) return 'scl'
@@ -4749,10 +4752,6 @@ const secondaryTimeKind = computed((): SecondaryTimeKind => {
   // Compact: CTOT/SCL in ASSR slot (triangle only for CFTO/ATD green)
   if (isCompactBay.value && depArrowCtot.value) {
     return depArrowCtot.value === 'SCL' ? 'scl' : 'ctot'
-  }
-  // ESSA IFR DEP: no squawk in the below-ATYP box (ASSR stays in expander / face)
-  if (isDepartingIfr.value && CDM_AIRPORTS.has(props.strip.adep)) {
-    return 'none'
   }
   return 'assr'
 })
@@ -4871,9 +4870,6 @@ const secondaryTimeTitle = computed(() => {
   if (secondaryTimeKind.value === 'fls') {
     return flsTooltip(cdmStatus.value?.raw || 'FLS', cdmStatus.value?.flsType)
   }
-  if (secondaryTimeKind.value === 'srm') {
-    return 'SRM - Slot Revision Message (CTOT revised)'
-  }
   if (secondaryTimeKind.value === 'slc') {
     return 'SLC - Slot Cancellation Message. (CTOT not applicable anymore)'
   }
@@ -4885,8 +4881,8 @@ const secondaryTimeTitle = computed(() => {
 const ssrCoordActive = computed(() => store.isSsrCoordinationActive(props.strip))
 const displayAssr = computed(() => store.displayAssrForStrip(props.strip))
 /**
- * RTC face squawk when the bottom slot is TSAT/CTOT (ESSA CDM) and this airport
- * is not in verbal-ACC manual SSR. Otherwise the assigned ES code has nowhere to show.
+ * RTC face squawk when the bottom slot is CTOT/FLS/SLC (SAAB IFR DEP) and this
+ * airport is not in verbal-ACC manual SSR. Otherwise the assigned ES code has nowhere to show.
  */
 const faceAssr = computed(() => {
   if (!store.multiAirport) return ''
