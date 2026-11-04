@@ -495,23 +495,6 @@ sectionRules:
     notMyRole: [TWR]
     priority: 210
 
-  # GND (not covering TWR): keep on-runway deps in TAXIWAY DEP — dep_runway is TWR-only
-  taxi_dep_on_runway_dep_gnd:
-    sectionId: taxi_dep
-    direction: departure
-    onRunway: true
-    myRole: [GND]
-    notMyRole: [TWR]
-    priority: 202
-
-  taxi_dep_on_runway_local_gnd:
-    sectionId: taxi_dep
-    direction: local
-    onRunway: true
-    myRole: [GND]
-    notMyRole: [TWR]
-    priority: 202
-
   # GND (not covering TWR): keep other-owned vacated arrivals in INBOUND until GND assumes
   inbound_vacated_arr_gnd:
     sectionId: inbound
@@ -587,11 +570,15 @@ sectionRules:
     essaFamilies: [TWR]
     priority: 99
 
+  # TWR boards only — GND has no RWY columns; LINEUP/DEPA deps soft-delete there
+  # (delete_dep_twr_lineup_*). Without this gate, GND briefly assigns invisible runway_*
+  # then used to bounce back via taxi_dep_on_runway_*_gnd.
   runway_lineup_depa_dep:
     sectionId: dep_runway
     airborne: false
     groundstates: [LINEUP, DEPA]
     depRunway: true
+    essaFamilies: [TWR]
     priority: 91
 
   runway_lineup_depa_arr:
@@ -599,6 +586,7 @@ sectionRules:
     airborne: false
     groundstates: [LINEUP, DEPA]
     depRunway: false
+    essaFamilies: [TWR]
     priority: 90
 
   runway_cleared_to_land_dep:
@@ -767,6 +755,33 @@ deleteRules:
     essaFamilies: [TWR]
     notEssaFamilies: [GND]
     priority: 90
+
+  # Mirror for deps: GND (not covering TWR) hides TWR-owned LINEUP/DEPA so
+  # handed-off traffic does not vanish into invisible RWY then reappear in TAXI DEP.
+  # Still-TAXI TWR-owned strips stay visible in TAXIWAY DEP until LU.
+  delete_dep_twr_lineup_gnd:
+    direction: departure
+    airborne: false
+    controller: not_myself
+    ownerRole: [TWR]
+    groundstates: [LINEUP, DEPA]
+    myRole: [GND]
+    notMyRole: [TWR]
+    essaFamilies: [GND]
+    notEssaFamilies: [TWR]
+    priority: 95
+
+  delete_dep_twr_lineup_local_gnd:
+    direction: local
+    airborne: false
+    controller: not_myself
+    ownerRole: [TWR]
+    groundstates: [LINEUP, DEPA]
+    myRole: [GND]
+    notMyRole: [TWR]
+    essaFamilies: [GND]
+    notEssaFamilies: [TWR]
+    priority: 95
 
 moveRules:
   # TSAT → PUSH: write GS even for TWR top-down (common-rules was GND-only —

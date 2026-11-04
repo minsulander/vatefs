@@ -4346,10 +4346,8 @@ onUnmounted(() => {
 })
 
 function onNoteClick() {
-  if (props.isLargeView) {
-    emit('close-large-view')
-    return
-  }
+  // Zoom open: body tap is a scribble plupp (overlay) — only the close key closes
+  if (props.isLargeView) return
   openLargeView()
 }
 
@@ -6239,6 +6237,8 @@ function onCallsignClick(event: MouseEvent) {
     return
   }
   if (props.isLargeView) {
+    // Notes stay open until backdrop / zoom ✕ (not body/callsign tap)
+    if (isNote.value) return
     emit('close-large-view')
     return
   }
@@ -6361,6 +6361,7 @@ function onCallsignTouch(event: TouchEvent) {
   event.stopPropagation()
   event.preventDefault()
   if (props.isLargeView) {
+    if (isNote.value) return
     emit('close-large-view')
     return
   }

@@ -368,7 +368,7 @@ function standItemClass(stand: StandMenuStand) {
   const blockedAsOccupied = occKind === 'blocked' && occ?.blockFrom !== 'assigned'
   const blockedAsPlanned = occKind === 'blocked' && occ?.blockFrom === 'assigned'
   const planned = occKind === 'assigned' || blockedAsPlanned
-  // Fill = availability (amber/red/purple WIP/grey/default). Green left edge = preferred.
+  // Fill = availability (amber / soft red / dark-red WIP / grey). Green left edge = preferred.
   return {
     selected: !!currentStand.value && currentStand.value.toUpperCase() === stand.name.toUpperCase(),
     'exit-match': stand.fit === 'preferred' && !notAllowed,
@@ -766,11 +766,11 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
-/* GRpluginMaps WIP BLOCKS — distinct from occupied (red) / planned (amber) */
+/* GRpluginMaps / TopSky WIP BLOCKS — dark red + light text (vs soft red aircraft block) */
 .sid-route-item.stand-closed {
-  background: #d4c4e8;
-  color: #3a2048;
-  box-shadow: inset 0 0 0 1px #9070b0;
+  background: #4a0a0a;
+  color: #ffd0d0;
+  box-shadow: inset 0 0 0 1px #2a0505;
 }
 
 /* Preferred = green left edge only (fill stays availability colour) */
@@ -792,7 +792,7 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-item.exit-match.stand-closed {
-  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #9070b0;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #2a0505;
 }
 
 .sid-route-item.stand-not-allowed {
@@ -1228,9 +1228,9 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.stand-closed {
-  background: #d4c4e8;
-  color: #3a2048;
-  box-shadow: inset 0 0 0 1px #9070b0;
+  background: #4a0a0a;
+  color: #ffd0d0;
+  box-shadow: inset 0 0 0 1px #2a0505;
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-planned.stand-planned-air {
@@ -1247,7 +1247,7 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-closed {
-  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #9070b0;
+  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #2a0505;
 }
 
 .sid-route-overlay .sid-route-item.stand-not-allowed {

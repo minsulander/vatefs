@@ -4,7 +4,11 @@
  */
 
 import assert from "node:assert/strict"
-import { mapEssaRemotePlacement, stripMetaWithoutPlacement } from "./essa-sync-placement.js"
+import {
+    localInsertIndexFromPeerRanks,
+    mapEssaRemotePlacement,
+    stripMetaWithoutPlacement,
+} from "./essa-sync-placement.js"
 import type { EfsStaticConfig } from "./config-types.js"
 import type { FlightStrip } from "@vatefs/common"
 import type { Flight } from "./types.js"
@@ -66,6 +70,32 @@ function strip(partial: Partial<FlightStrip> & Pick<FlightStrip, "id" | "callsig
 
 console.log("essa-sync-placement tests")
 
+check("taxi-out relative insert: peer ranks map across different set sizes", () => {
+    // GND taxi_dep positions 0..4; TWR inbound_gnd only has SAS22 + RYR40KC
+    const ranks = new Map<string, number>([
+        ["SAS22", 3],
+        ["RYR40KC", 4],
+    ])
+    // Place SAS22 first into empty inbound_gnd
+    assert.equal(localInsertIndexFromPeerRanks(3, [], ranks), 0)
+    // Then RYR40KC should go after SAS22
+    assert.equal(
+        localInsertIndexFromPeerRanks(4, [{ id: "SAS22", position: 0, callsign: "SAS22" }], ranks),
+        1,
+    )
+    // Swap on GND: SAS22 pos 4, RYR pos 3 — RYR should move above SAS22
+    ranks.set("SAS22", 4)
+    ranks.set("RYR40KC", 3)
+    assert.equal(
+        localInsertIndexFromPeerRanks(
+            3,
+            [{ id: "SAS22", position: 0, callsign: "SAS22" }],
+            ranks,
+        ),
+        0,
+    )
+})
+
 check("scribble meta drops placement fields", () => {
     const out = stripMetaWithoutPlacement({
         bayId: "bay3",
@@ -109,6 +139,46 @@ check("GND taxi_dep → TWR inbound_gnd when unassumed", () => {
     )
     assert.ok(mapped)
     assert.equal(mapped!.sectionId, "inbound_gnd")
+})
+
+check("pending handoff to TWR keeps peer taxi_dep (not inbound_gnd)", () => {
+    const twr = baseConfig(["TWR-W"])
+    twr.myCallsign = "ESSA_W__TWR"
+    const flight = {
+        callsign: "VKG1649",
+        airborne: false,
+        groundstate: "TAXI",
+        handoffTargetController: "ESSA_W__TWR",
+    } as Flight
+    const mapped = mapEssaRemotePlacement(
+        twr,
+        "bay3",
+        "taxi_dep",
+        strip({
+            id: "VKG1649",
+            callsign: "VKG1649",
+            sectionId: "taxi_dep",
+            transferPending: "in",
+        }),
+        flight,
+        { assumedByMe: false },
+    )
+    assert.ok(mapped)
+    assert.equal(mapped!.sectionId, "taxi_dep")
+})
+
+check("assumedByMe keeps peer taxi_dep on TWR board", () => {
+    const twr = baseConfig(["TWR-W"])
+    const mapped = mapEssaRemotePlacement(
+        twr,
+        "bay3",
+        "taxi_dep",
+        strip({ id: "VKG1649", callsign: "VKG1649", sectionId: "taxi_dep" }),
+        undefined,
+        { assumedByMe: true },
+    )
+    assert.ok(mapped)
+    assert.equal(mapped!.sectionId, "taxi_dep")
 })
 
 check("ARR vacated peer inbound stays inbound (not taxi_arr until TXIN)", () => {

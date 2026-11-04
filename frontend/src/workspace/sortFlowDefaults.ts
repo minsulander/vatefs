@@ -94,5 +94,15 @@ export function preferredSortFlowForWorkspaceSection(opts: {
     return 'newestTop'
   }
 
+  // TAXIWAY DEP — first on top (newest taxi-out appends at bottom)
+  if (
+    sid === 'taxi_dep' ||
+    titleU === 'TAXIWAY DEP' ||
+    (groupId === 'taxiway' && member === 'dep') ||
+    (groupId === 'saab_taxi' && member === 'dep')
+  ) {
+    return 'newestBottom'
+  }
+
   return undefined
 }

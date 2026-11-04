@@ -74,6 +74,43 @@ function isTaxiDepSection(sectionId: string): boolean {
     return sectionId === "taxi_dep" || sectionId.endsWith("_taxi_dep")
 }
 
+function isInboundGndSection(sectionId: string): boolean {
+    return sectionId === "inbound_gnd" || sectionId.startsWith("inbound_gnd")
+}
+
+/** Shared taxi-out queue across GND TAXIWAY DEP ↔ TWR INBOUND GND. */
+export function isEssaSharedTaxiOutSection(sectionId: string): boolean {
+    return isTaxiDepSection(sectionId) || isInboundGndSection(sectionId)
+}
+
+/**
+ * Map a peer's absolute position into a local insert index among `others`
+ * that already sit in the local taxi-out column. Absolute indices diverge
+ * when the two boards hold different strip sets (GND taxi_dep has more than
+ * TWR inbound_gnd); relative peer ranks keep SAS22/RYR… order aligned.
+ */
+export function localInsertIndexFromPeerRanks(
+    peerRank: number,
+    others: ReadonlyArray<{ id: string; position: number; callsign?: string }>,
+    peerRanks: ReadonlyMap<string, number>,
+): number {
+    const ranked = others.map((o) => ({
+        id: o.id,
+        callsign: (o.callsign || o.id).toUpperCase(),
+        rank: peerRanks.has(o.id) ? peerRanks.get(o.id)! : o.position,
+    }))
+    ranked.sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank
+        return a.callsign.localeCompare(b.callsign)
+    })
+    for (let i = 0; i < ranked.length; i++) {
+        const o = ranked[i]!
+        if (peerRank < o.rank) return i
+        if (peerRank === o.rank) return i // stable: new/updated sits at equal slot
+    }
+    return ranked.length
+}
+
 function isTaxiArrSection(sectionId: string): boolean {
     return sectionId === "taxi_arr" || sectionId.endsWith("_taxi_arr")
 }
@@ -111,18 +148,29 @@ export function mapEssaRemotePlacement(
     let bayId = remoteBayId
 
     // TWR INBOUND GND (other-owned taxi-out) → GND TAXIWAY DEP
-    if (sectionId === "inbound_gnd" || sectionId.startsWith("inbound_gnd")) {
+    if (isInboundGndSection(sectionId)) {
         if (!layoutHasSection(config, "inbound_gnd")) {
             sectionId = "taxi_dep"
             bayId = bayIdForSection(config, "taxi_dep") || bayId
         }
     }
 
-    // GND TAXIWAY DEP → TWR INBOUND GND when TWR alone and not assumed
+    // GND TAXIWAY DEP → TWR INBOUND GND when TWR alone and not assumed.
+    // Keep taxi_dep when pending inbound handoff to me (rules: taxi_dep_pending_*)
+    // or already assumed — otherwise sync fights the section rules.
     if (isTaxiDepSection(sectionId) && layoutHasSection(config, "inbound_gnd")) {
         if (families.has("TWR") && !families.has("GND") && !assumedByMe) {
-            sectionId = "inbound_gnd"
-            bayId = bayIdForSection(config, "inbound_gnd") || bayId
+            const mySi = config.myPositionId?.toUpperCase()
+            const hoSi = flight?.handoffTargetControllerId?.toUpperCase()
+            const pendingHandoffToMe =
+                strip.transferPending === "in" ||
+                (!!flight &&
+                    (controllerCallsignsEqual(flight.handoffTargetController, config.myCallsign) ||
+                        (!!mySi && !!hoSi && mySi === hoSi)))
+            if (!pendingHandoffToMe) {
+                sectionId = "inbound_gnd"
+                bayId = bayIdForSection(config, "inbound_gnd") || bayId
+            }
         }
     }
 

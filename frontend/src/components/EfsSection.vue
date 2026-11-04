@@ -124,7 +124,7 @@
             v-if="workspaceMode && !isEmptyWorkspaceHeader"
             type="button"
             class="section-hdr-btn section-hdr-flow"
-            :title="workspaceSortFlow === 'newestTop' ? 'Sort flow: new on top, first at bottom' : 'Sort flow: new at bottom, first on top'"
+            :title="workspaceSortFlow === 'newestTop' ? 'Display: first at bottom (synced order reversed)' : 'Display: first on top (synced order)'"
             @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
@@ -2516,11 +2516,16 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
     ordered = list.sort((a, b) => a.position - b.position)
   }
 
-  // Appearance-order sections: sort-flow controls insert via setSectionAddFromTop
-  // (newestTop → addFromTop true). Do not reverse the position-sorted list here —
-  // that double-reverses against backend addFromTop and puts new strips at the bottom.
-  // Time-sort / ETA paths set flowAlreadyApplied and already honour workspaceSortFlow.
-  void flowAlreadyApplied
+  // Appearance / sticky position order: synced sequence is position ascending.
+  // Sort-flow only flips display (newestTop = first at bottom). Do not rewrite
+  // positions or addFromTop — peers share one order.
+  if (
+    !flowAlreadyApplied &&
+    props.workspaceMode &&
+    workspaceSortFlow.value === 'newestTop'
+  ) {
+    ordered = [...ordered].reverse()
+  }
   return ordered
 }
 
@@ -2740,7 +2745,9 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
     topContainer.value,
     matchIds.length > 1 ? matchIds : undefined,
   )
-  store.moveStripToSection(stripId, bay, membershipSec, insertAmongVisible)
+  const othersCount = allTopStrips.value.filter((s) => s.id !== stripId).length
+  const logicalPos = logicalInsertFromVisual(insertAmongVisible, othersCount)
+  store.moveStripToSection(stripId, bay, membershipSec, logicalPos)
 }
 
 /** D-trans: when peer accepts the handoff, clear strip from this bay. */
@@ -2805,27 +2812,32 @@ const bottomStrips = computed(() => {
 })
 
 /**
- * Sort-flow toggle: which end is “first” (display) + where new strips insert.
- * Do not reverse strip positions — that republishes stripview sequence.
- * Exception: CD / TSAT / EOBT while sorting by TOBT/TSAT/EOBT — inserts stay
- * time-ordered (UI), not bound to the flow end; only display flips.
+ * Sort-flow toggle: display only (top↔bottom of the synced position order).
+ * Does not rewrite strip positions or section addFromTop — those stay shared.
+ * CD / TSAT / EOBT time-sort already flips via activeTimeSortDir.
  */
 function onWorkspaceToggleFlow() {
   if (!props.workspaceInstanceId) return
   ws.toggleSortFlow(props.workspaceInstanceId)
+}
 
-  const cdTimeSortActive =
-    timeSortEnabled.value &&
-    !preferManualOrder.value &&
-    (store.isModeToggleSectionId(props.section.id) ||
-      sectionIdsForStripMatch().some((id) => store.isModeToggleSectionId(id)))
-  if (cdTimeSortActive) return
+/** True when appearance order is shown reversed (newestTop). */
+function appearanceDisplayReversed(): boolean {
+  if (!props.workspaceMode) return false
+  if (workspaceSortFlow.value !== 'newestTop') return false
+  if (timeSortEnabled.value && !preferManualOrder.value) return false
+  if (etaSortEnabled.value) return false
+  return true
+}
 
-  const flow = workspaceSection.value?.sortFlow ?? 'newestBottom'
-  const addFromTop = flow === 'newestTop'
-  for (const sid of sectionIdsForStripMatch()) {
-    store.setSectionAddFromTop(effectiveBayId.value, sid, addFromTop)
-  }
+/**
+ * Map a visual insert index (among N others on screen) to the logical
+ * position index used by moveStrip / synced order.
+ */
+function logicalInsertFromVisual(visualInsert: number, othersCount: number): number {
+  const at = Math.max(0, Math.min(visualInsert, othersCount))
+  if (!appearanceDisplayReversed()) return at
+  return othersCount - at
 }
 
 const hasPinnedZoneContent = computed(
@@ -3442,9 +3454,27 @@ function applyCreate(
   gapIndex?: number,
   gapSize?: number
 ) {
-  store.createStrip(type, callsign, aircraftType, airport, effectiveBayId.value, effectiveSectionId.value, position, isBottom)
+  let logicalPos = position
+  if (logicalPos !== undefined && !isBottom) {
+    const othersCount = allTopStrips.value.length
+    logicalPos = logicalInsertFromVisual(logicalPos, othersCount)
+  }
+  store.createStrip(
+    type,
+    callsign,
+    aircraftType,
+    airport,
+    effectiveBayId.value,
+    effectiveSectionId.value,
+    logicalPos,
+    isBottom,
+  )
   if (gapIndex !== undefined && gapSize && gapSize >= store.GAP_BUFFER) {
-    store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, gapIndex, gapSize)
+    const logicalGap =
+      gapIndex !== undefined && !isBottom
+        ? logicalInsertFromVisual(gapIndex, allTopStrips.value.length)
+        : gapIndex
+    store.setGapAtIndex(effectiveBayId.value, effectiveSectionId.value, logicalGap, gapSize)
   }
 }
 

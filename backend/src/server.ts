@@ -126,7 +126,52 @@ import {
 } from "./vatefs-sync.js"
 import { stripNmSuffix, isAppOrDepCallsign } from "./iris-efs-order.js"
 import { isIrisStripviewPlacement } from "./iris-efs-order.js"
-import { mapEssaRemotePlacement } from "./essa-sync-placement.js"
+import {
+    isEssaSharedTaxiOutSection,
+    localInsertIndexFromPeerRanks,
+    mapEssaRemotePlacement,
+} from "./essa-sync-placement.js"
+
+/** Peer taxi-out sequence ranks (GND taxi_dep ↔ TWR inbound_gnd). */
+const peerTaxiOutOrderRanks = new Map<string, number>()
+
+/** Re-sort a local taxi-out column by peer ranks (absolute positions diverge). */
+function reindexTaxiOutByPeerRanks(bayId: string, sectionId: string): FlightStrip[] {
+    const strips = store.getStripsForSection(bayId, sectionId, false)
+    if (strips.length < 2) return []
+    const sorted = [...strips].sort((a, b) => {
+        const ra = peerTaxiOutOrderRanks.has(a.id)
+            ? peerTaxiOutOrderRanks.get(a.id)!
+            : a.position
+        const rb = peerTaxiOutOrderRanks.has(b.id)
+            ? peerTaxiOutOrderRanks.get(b.id)!
+            : b.position
+        if (ra !== rb) return ra - rb
+        return (a.callsign || a.id).localeCompare(b.callsign || b.id)
+    })
+    let changed = false
+    for (let i = 0; i < sorted.length; i++) {
+        if (sorted[i]!.position !== i) {
+            changed = true
+            break
+        }
+    }
+    if (!changed) return []
+    const broadcast: FlightStrip[] = []
+    sorted.forEach((s, index) => {
+        if (s.position === index) return
+        s.position = index
+        flightStore.setStripAssignment(s.id, {
+            bayId,
+            sectionId,
+            position: index,
+            bottom: false,
+        })
+        flightStore.markManualPlacement(s.id)
+        broadcast.push(s)
+    })
+    return broadcast
+}
 import type { ScribbleRealm } from "./vatefs-sync.js"
 import { suggestCidFromEsPrf } from "./prf-cid.js"
 import {
@@ -4292,6 +4337,36 @@ function applyRemoteScribble(
                 : meta?.bayId && meta?.sectionId
                   ? { bayId: meta.bayId, sectionId: meta.sectionId }
                   : null
+        // Shared sequence (position/bottom) syncs across peers. Sort-flow is
+        // display-only on the client (top↔bottom), so opposite flow does not
+        // rewrite the synced order.
+        // Taxi-out: GND taxi_dep and TWR inbound_gnd hold different strip sets —
+        // map peer position to a relative insert so order stays aligned.
+        const remoteTaxiOut =
+            typeof meta?.sectionId === "string" && isEssaSharedTaxiOutSection(meta.sectionId)
+        const localTaxiOut =
+            !!mappedPlace && isEssaSharedTaxiOutSection(mappedPlace.sectionId)
+        const useTaxiOutRelativeOrder =
+            isEssaRolesConfig(staticConfig) &&
+            remoteTaxiOut &&
+            localTaxiOut &&
+            typeof meta?.position === "number"
+        if (useTaxiOutRelativeOrder && strip) {
+            peerTaxiOutOrderRanks.set(strip.id, meta!.position as number)
+        } else if (strip && mappedPlace && !localTaxiOut) {
+            peerTaxiOutOrderRanks.delete(strip.id)
+        }
+        let syncPosition = meta?.position
+        if (useTaxiOutRelativeOrder && strip && mappedPlace && typeof meta?.position === "number") {
+            const others = store
+                .getStripsForSection(mappedPlace.bayId, mappedPlace.sectionId, false)
+                .filter((s) => s.id !== strip.id)
+            syncPosition = localInsertIndexFromPeerRanks(
+                meta.position,
+                others,
+                peerTaxiOutOrderRanks,
+            )
+        }
         if (
             strip &&
             !irisPlacement &&
@@ -4299,13 +4374,13 @@ function applyRemoteScribble(
             (strip.bayId !== mappedPlace.bayId ||
                 strip.sectionId !== mappedPlace.sectionId ||
                 !!strip.bottom !== !!meta?.bottom ||
-                (typeof meta?.position === "number" && strip.position !== meta.position))
+                (typeof syncPosition === "number" && strip.position !== syncPosition))
         ) {
             const moved = store.moveStrip(
                 strip.id,
                 mappedPlace.bayId,
                 mappedPlace.sectionId,
-                meta?.position,
+                syncPosition,
                 !!meta?.bottom,
                 { fromSync: true },
             )
@@ -4333,6 +4408,12 @@ function applyRemoteScribble(
                 broadcastStrip(moved.strip)
                 strip = moved.strip
                 stripId = moved.strip.id
+            }
+        }
+        if (useTaxiOutRelativeOrder && mappedPlace) {
+            for (const s of reindexTaxiOutByPeerRanks(mappedPlace.bayId, mappedPlace.sectionId)) {
+                broadcastStrip(s)
+                if (strip && s.id === strip.id) strip = s
             }
         }
 
@@ -4658,6 +4739,60 @@ function applyEfsTobt(flight: Flight, tobt: string) {
         flight.tobtSetBy = "A"
         flight.tobtSetByAt = Date.now()
     }
+}
+
+/**
+ * CDM Ready Startup ON — ASRT only (plugin Ready Start-up / ASRT column).
+ * Does **not** send REA (that stays Ready TOBT / explicit REA / toggle-with-REA).
+ * Idempotent if ASRT already set. IFR/Y deps only.
+ * @see https://github.com/rpuig2001/CDM
+ */
+function enableCdmReadyStartupAsrt(
+    flight: Flight,
+    opts: {
+        callsign: string
+        stripType?: string
+        flightRules?: string
+        /** When true, only ESSA (DEL READY). */
+        essaOnly?: boolean
+        adep?: string
+        reason?: string
+    },
+): boolean {
+    if (opts.stripType !== "departure") return false
+    if (opts.essaOnly) {
+        const adep = (opts.adep || flight.origin || "").toUpperCase()
+        if (adep !== "ESSA") return false
+    }
+    const rules = opts.flightRules || flight.flightRules
+    if (rules !== "I" && rules !== "Y") return false
+    if (!staticConfig.isController) return false
+
+    const callsign = opts.callsign
+    if (flight.asrt) {
+        console.log(
+            `[CDM] Ready Startup already ASRT=${flight.asrt} ${callsign}` +
+                (opts.reason ? ` (${opts.reason})` : ""),
+        )
+        return true
+    }
+    const now = new Date()
+    const asrt =
+        String(now.getUTCHours()).padStart(2, "0") +
+        String(now.getUTCMinutes()).padStart(2, "0")
+    sendUdp(
+        JSON.stringify({
+            type: "setAsrt",
+            callsign,
+            asrt,
+        } satisfies OutboundPluginCommand),
+    )
+    flight.asrt = asrt
+    console.log(
+        `[CDM] Ready Startup ON ${callsign} ASRT=${asrt}` +
+            (opts.reason ? ` (${opts.reason})` : ""),
+    )
+    return true
 }
 
 /**
@@ -5814,6 +5949,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 const flight = flightStore.getFlight(strip.callsign)
 
                 // READY is a compound action: set DE-ICE groundstate + transfer
+                // (+ ESSA CDM Ready Startup / ASRT+REA — same as plugin Ready Start-up)
                 if (message.action === "READY") {
                     if (flight) {
                         assumeUntrackedPaperDepLocal(flight, strip.stripType, "READY")
@@ -5824,6 +5960,22 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
                         flight.handoffOptimisticUntil = Date.now() + 3000
+                    }
+                    if (flight) {
+                        // ASRT / Ready Startup only — never REA (RDY = DE-ICE)
+                        enableCdmReadyStartupAsrt(flight, {
+                            callsign: strip.callsign,
+                            stripType: strip.stripType,
+                            adep: strip.adep,
+                            flightRules: strip.flightRules,
+                            essaOnly: true,
+                            reason: "DEL READY",
+                        })
+                        const cdmUpdated = flightStore.regenerateStrip(strip.callsign)
+                        if (cdmUpdated) {
+                            store.updateStripFromFlight(cdmUpdated)
+                            broadcastStrip(cdmUpdated)
+                        }
                     }
                 // XFER: initiate handoff to the appropriate next controller
                 } else if (message.action === "XFER") {
@@ -8563,23 +8715,37 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             const flight = flightStore.getFlight(rsStrip.callsign)
             if (!flight) break
             const enable = !flight.asrt
-            const now = new Date()
-            const asrt = enable
-                ? String(now.getUTCHours()).padStart(2, "0") + String(now.getUTCMinutes()).padStart(2, "0")
-                : ""
-            sendUdp(JSON.stringify({
-                type: "setAsrt",
-                callsign: rsStrip.callsign,
-                asrt,
-            } satisfies OutboundPluginCommand))
-            flight.asrt = enable ? asrt : undefined
-            const reaOk = await viffService.setRea(rsStrip.callsign, enable)
-            if (reaOk) {
-                flight.cdmSts = enable ? "REA" : (flight.cdmSts === "REA" ? undefined : flight.cdmSts)
+            if (enable) {
+                enableCdmReadyStartupAsrt(flight, {
+                    callsign: rsStrip.callsign,
+                    stripType: rsStrip.stripType,
+                    adep: rsStrip.adep,
+                    flightRules: rsStrip.flightRules,
+                    reason: "toggle",
+                })
+                const reaOk = await viffService.setRea(rsStrip.callsign, true)
+                if (reaOk) {
+                    flight.cdmSts = "REA"
+                } else {
+                    console.error(`[VIFF] Ready Startup REA set failed for ${rsStrip.callsign}`)
+                }
             } else {
-                console.error(`[VIFF] Ready Startup REA ${enable ? "set" : "clear"} failed for ${rsStrip.callsign}`)
+                sendUdp(
+                    JSON.stringify({
+                        type: "setAsrt",
+                        callsign: rsStrip.callsign,
+                        asrt: "",
+                    } satisfies OutboundPluginCommand),
+                )
+                flight.asrt = undefined
+                const reaOk = await viffService.setRea(rsStrip.callsign, false)
+                if (reaOk) {
+                    flight.cdmSts = flight.cdmSts === "REA" ? undefined : flight.cdmSts
+                } else {
+                    console.error(`[VIFF] Ready Startup REA clear failed for ${rsStrip.callsign}`)
+                }
+                console.log(`[CDM] Ready Startup OFF ${rsStrip.callsign}`)
             }
-            console.log(`[CDM] Ready Startup ${enable ? "ON" : "OFF"} ${rsStrip.callsign}${enable ? ` ASRT=${asrt}` : ""}`)
             const updated = flightStore.regenerateStrip(rsStrip.callsign)
             if (updated) {
                 store.updateStripFromFlight(updated)

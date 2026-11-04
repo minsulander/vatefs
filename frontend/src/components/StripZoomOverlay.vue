@@ -511,17 +511,60 @@ function resetDrawPointerState() {
   pendingPointerId = null
 }
 
-function clickThroughToStrip(clientX: number, clientY: number) {
+/**
+ * Strip / zoom controls that count as a “press” (not a scribble plupp):
+ * zoom keys, action key, expander keys, editable databoxes, paper clickzones.
+ * Note body (.note-content) is intentionally excluded — that is ink.
+ */
+const ZOOM_INTERACTIVE_CLICK_SELECTOR = [
+  'button',
+  'a',
+  'input',
+  'select',
+  'textarea',
+  '[role="button"]',
+  '.action-button',
+  '.zoom-key',
+  '.ctrl-arrow',
+  '.expander-arrow',
+  '.exp-chip',
+  '.exp-assr',
+  '.exp-rmk',
+  '.callsign-box',
+  '.cell',
+  '.vehicle-cell',
+  '.strip-time',
+  '.editable',
+  '.pg-clr-check',
+  '.pg-cto-check',
+  '.pg-atis-qnh',
+  '.pg-xfer-diag-hit',
+  '.pg-goa-zone',
+  '.pg-cs',
+  '.pg-sid',
+  '.pg-time-eobt',
+  '.strip-cock-hit',
+].join(', ')
+
+function elementUnderDraw(clientX: number, clientY: number): HTMLElement | null {
   const svg = drawEl.value
-  if (!svg) return
+  if (!svg) return null
   svg.style.pointerEvents = 'none'
   const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null
-  window.setTimeout(() => svg.style.removeProperty('pointer-events'), 450)
-  if (!el) return
-  const target =
-    (el.closest(
-      'button, a, input, select, textarea, [role="button"], .action-button, .callsign-box, .cell, .vehicle-cell, .exp-chip, .ctrl-arrow, .exp-assr, .exp-rmk, .strip-time, .pg-clr-check, .pg-cto-check, .pg-atis-qnh',
-    ) as HTMLElement | null) ?? el
+  // Restore immediately for hit-test; clickThrough also schedules a delayed restore
+  svg.style.removeProperty('pointer-events')
+  return el
+}
+
+function closestClickTarget(
+  el: HTMLElement | null,
+  selector: string,
+): HTMLElement | null {
+  if (!el) return null
+  return el.closest(selector) as HTMLElement | null
+}
+
+function dispatchSyntheticClick(target: HTMLElement, clientX: number, clientY: number) {
   target.focus?.({ preventScroll: true })
   target.dispatchEvent(
     new MouseEvent('click', {
@@ -538,6 +581,37 @@ function clickThroughToStrip(clientX: number, clientY: number) {
   nextTick(() => {
     requestAnimationFrame(() => measureStage())
   })
+}
+
+function clickThroughToStrip(clientX: number, clientY: number) {
+  const svg = drawEl.value
+  if (!svg) return
+  svg.style.pointerEvents = 'none'
+  const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+  window.setTimeout(() => svg.style.removeProperty('pointer-events'), 450)
+  if (!el) return
+  const target = closestClickTarget(el, ZOOM_INTERACTIVE_CLICK_SELECTOR)
+  if (!target) return
+  // Never treat note body as a press (would close / no-op instead of plupp)
+  if (target.closest('.note-content, .note-display')) return
+  dispatchSyntheticClick(target, clientX, clientY)
+}
+
+/** Tiny plus so a single tap renders as a visible scribble “plupp”. */
+function scribbleDotPoints(x: number, y: number, r = 2.2): string {
+  const xf = x.toFixed(1)
+  const yf = y.toFixed(1)
+  const xp = (x + r).toFixed(1)
+  const xm = (x - r).toFixed(1)
+  const yp = (y + r).toFixed(1)
+  const ym = (y - r).toFixed(1)
+  return `${xf},${yf} ${xp},${yf} ${xf},${yf} ${xf},${yp} ${xf},${yf} ${xm},${yf} ${xf},${yf} ${xf},${ym}`
+}
+
+function commitScribbleDotAt(clientX: number, clientY: number) {
+  const pt = toScribble(clientX, clientY, true)
+  if (!pt) return
+  commitStrokeMaybeClr(scribbleDotPoints(pt.x, pt.y))
 }
 
 function togglePenColor() {
@@ -659,6 +733,8 @@ function close() {
 
 function onEscape() {
   if (onEscapePenOff()) return
+  // Notes: only close via backdrop click or the zoom ✕ key — not Escape
+  if (isNote.value) return
   close()
 }
 
@@ -817,8 +893,19 @@ function onDrawPointerUp(event: PointerEvent) {
   }
 
   if (drawing.value) {
-    if (activeStroke.value && activeStroke.value.includes(' ')) {
-      commitStrokeMaybeClr(activeStroke.value)
+    if (activeStroke.value) {
+      if (activeStroke.value.includes(' ')) {
+        commitStrokeMaybeClr(activeStroke.value)
+      } else {
+        // Began a stroke but never moved — keep as a plupp
+        const [xy] = activeStroke.value.split(' ')
+        const [xs, ys] = (xy || '').split(',')
+        const x = Number(xs)
+        const y = Number(ys)
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          commitStrokeMaybeClr(scribbleDotPoints(x, y))
+        }
+      }
     }
     resetDrawPointerState()
     return
@@ -827,8 +914,21 @@ function onDrawPointerUp(event: PointerEvent) {
   if (pointerPending) {
     const x = event.clientX
     const y = event.clientY
+    const under = elementUnderDraw(x, y)
+    const interactive = closestClickTarget(under, ZOOM_INTERACTIVE_CLICK_SELECTOR)
+    const onInteractive =
+      !!interactive && !interactive.closest('.note-content, .note-display')
     resetDrawPointerState()
-    clickThroughToStrip(x, y)
+    if (onInteractive) {
+      // Action key / expander / databox / clickzone / zoom key
+      clickThroughToStrip(x, y)
+      return
+    }
+    if (penActive.value || isNote.value) {
+      // Empty body / note: scribble plupp (dot over i, etc.)
+      commitScribbleDotAt(x, y)
+      return
+    }
     return
   }
 
