@@ -114,7 +114,7 @@ export function isSlowSid(sid: string | undefined | null): boolean {
 }
 
 /**
- * IFR / IFR→VFR only — preferred SID + auto-SLOW rules apply.
+ * IFR / IFR→VFR only — preferred SID / SLOW SID coupling apply.
  * V (VFR) and Z (VFR→IFR) never auto-assign SLOW SIDs or the SLOW flag.
  */
 export function isIfrSidEligible(flightRules: string | undefined | null): boolean {

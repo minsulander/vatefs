@@ -80,8 +80,8 @@ export function isSlowAircraft(
 }
 
 /**
- * ESSA auto-SLOW is only applied 06:00–22:00 local time (Europe/Stockholm).
- * Window is [06:00, 22:00).
+ * ESSA daytime window for slow-type APP/DEP sector routing and RWY letter selection.
+ * [06:00, 22:00) local time (Europe/Stockholm).
  */
 export function isEssaAutoSlowHours(now: Date = new Date()): boolean {
     const hourStr = new Intl.DateTimeFormat("en-GB", {

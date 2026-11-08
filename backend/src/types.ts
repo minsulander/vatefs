@@ -212,11 +212,6 @@ export interface Flight {
     exitCoordRefused?: boolean
     exitCoordPoint?: string
     exitCoordAltitude?: number
-    /** True after controller manually clears an auto-SLOW remark — do not re-add */
-    autoSlowDismissed?: boolean
-    /** True when SLOW remarks were added by tryAutoSlowRemark (safe to auto-clear on ATYP change) */
-    autoSlowApplied?: boolean
-
     // Backend-managed state flags
     /**
      * Cached ESSA STD conflict: stand occupied/planned by other ground traffic,

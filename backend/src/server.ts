@@ -3017,7 +3017,6 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
                 f.remarks = withSlowRemark(f.remarks, true) || undefined
                 console.log(`[REMARKS] ${callsign}: set SLOW (track SID ${sid})`)
             }
-            flightStore.markSlowRemarkManual(f)
             flightStore.holdScratchFields(f, 3000)
             const scratchValue = flightScratchValue(f)
             sendUdp(JSON.stringify({ type: "setScratch", callsign, value: scratchValue } satisfies OutboundPluginCommand))
@@ -6966,7 +6965,6 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flightForAssign.remarks = withSlowRemark(flightForAssign.remarks, true) || undefined
                             console.log(`[REMARKS] ${strip.callsign}: set SLOW (slow SID ${message.value})`)
                         }
-                        flightStore.markSlowRemarkManual(flightForAssign)
                         flightStore.holdScratchFields(flightForAssign, 3000)
                         const pushSlowScratch = () => {
                             const f = flightStore.getFlight(strip.callsign)
@@ -8098,10 +8096,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const prevSlow = hasSlowRemark(flight.remarks)
                     const nextRemarks = text || undefined
                     const nextSlow = hasSlowRemark(nextRemarks)
-                    flightStore.markAutoSlowDismissed(flight, flight.remarks, nextRemarks)
                     flight.remarks = nextRemarks
                     if (hpFromText) flight.hp = hpFromText
-                    flightStore.markSlowRemarkManual(flight)
                     // Hold across AmendFlightPlan / ES scratch clears so SLOW does not flash off
                     flightStore.holdScratchFields(flight, 3000)
                     const scratchValue = flightScratchValue(flight)

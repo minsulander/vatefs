@@ -117,7 +117,7 @@ function sameSet(a: string[], b: string[]): boolean {
 }
 
 /**
- * Day window for ESSA RWY letter selection / auto-SLOW: [06:00, 22:00) LT.
+ * Day window for ESSA RWY letter selection / slow-type APP routing: [06:00, 22:00) LT.
  * Night configs (9B, 15B) auto-select outside this window.
  */
 export function isEssaRwyDayHours(now: Date = new Date()): boolean {

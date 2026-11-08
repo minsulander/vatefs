@@ -57,7 +57,7 @@ import {
 } from "./essa-stand-assign.js"
 import { isOnAnyRunway } from "./runway-detection.js"
 import { isWithinCtr } from "./ctr-data.js"
-import { isSlowAircraft, isEssaAutoSlowHours } from "./slow-aircraft.js"
+import { isSlowAircraft } from "./slow-aircraft.js"
 import { remapPushActionForStand } from "./essa-push-stands.js"
 import { isDepBayFlowStickyInvalid as depBayFlowStickyInvalid } from "./dep-bay-sticky.js"
 import {
@@ -68,7 +68,6 @@ import {
     formatFaaEquipDisplay,
     essaPhysicalPairForRunway,
     hasForcedSidInRoute,
-    hasSlowRemark,
     isIfrSidEligible,
     isRunwayOrderSectionId,
     isTrackSidName,
@@ -336,7 +335,7 @@ export interface ProcessMessageResult {
      */
     allowPositionChange?: boolean
 
-    /** Scratchpad value to push to EuroScope (e.g. auto-SLOW remark) */
+    /** Scratchpad value to push to EuroScope */
     setScratchValue?: string
 
     /** Clear VCH hold-short (annotation 4) in EuroScope */
@@ -2008,15 +2007,6 @@ class FlightStore {
             position = abovePushPin.position
             bottom = abovePushPin.bottom
 
-            // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
-            if (!setScratchValue && this.tryClearAutoSlowRemark(flight)) {
-                setScratchValue = buildFlightScratch(flight)
-                this.holdScratchFields(flight)
-            } else if (!setScratchValue && this.tryAutoSlowRemark(flight)) {
-                setScratchValue = buildFlightScratch(flight)
-                this.holdScratchFields(flight)
-            }
-
             const strip = this.createStrip(
                 flight,
                 placeBayId,
@@ -2505,15 +2495,6 @@ class FlightStore {
         position = abovePushPin.position
         bottom = abovePushPin.bottom
 
-        // ATYP/WTC changes: clear SLOW if no longer slow, else auto-add when eligible
-        if (this.tryClearAutoSlowRemark(flight)) {
-            setScratchValue = buildFlightScratch(flight)
-            this.holdScratchFields(flight)
-        } else if (this.tryAutoSlowRemark(flight)) {
-            setScratchValue = buildFlightScratch(flight)
-            this.holdScratchFields(flight)
-        }
-
         const strip = this.createStrip(flight, placeBayId, placeSectionId, position, bottom)
         const shiftedCallsigns = this.getLastShiftedCallsigns()
 
@@ -2531,76 +2512,6 @@ class FlightStore {
                 utflygningPin.bumped ||
                 abovePushPin.bumped ||
                 undefined,
-        }
-    }
-
-    /**
-     * Auto-add SLOW remark for ESSA IFR departure strips.
-     * Arrivals/locals ignored; not re-added after manual clear; only 06:00–22:00 LT.
-     */
-    private tryAutoSlowRemark(flight: Flight): boolean {
-        // ESSA IFR DEP only — not ARR, not ESSA–ESSA local
-        if (flight.origin !== 'ESSA') return false
-        if (!flight.destination || flight.destination === 'ESSA') return false
-        if (!isIfrSidEligible(flight.flightRules)) return false
-        if (flight.remarks) return false
-        if (flight.autoSlowDismissed) return false
-        if (!isEssaAutoSlowHours()) return false
-
-        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (!isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return false
-
-        flight.remarks = 'SLOW'
-        flight.autoSlowApplied = true
-        console.log(`[REMARKS] ${flight.callsign}: - -> SLOW (auto)`)
-        return true
-    }
-
-    /**
-     * Remove auto-SLOW when ATYP/WTC is no longer a slow type.
-     * Never clears controller-set SLOW (chip / track SID / typed remarks).
-     */
-    private tryClearAutoSlowRemark(flight: Flight): boolean {
-        if (!flight.autoSlowApplied) return false
-        if (flight.remarks !== 'SLOW') {
-            flight.autoSlowApplied = false
-            return false
-        }
-
-        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return false
-
-        flight.remarks = undefined
-        flight.autoSlowApplied = false
-        console.log(`[REMARKS] ${flight.callsign}: SLOW -> - (auto, not slow)`)
-        return true
-    }
-
-    /**
-     * Remember that the controller cleared SLOW so we do not auto-add it again.
-     * Skips dismissal when the aircraft is no longer slow (auto-removal from ATYP change).
-     * Only call from intentional controller edits (updateRemarks) — not from ES scratch CAD.
-     */
-    markAutoSlowDismissed(flight: Flight, previousRemarks: string | undefined, nextRemarks: string | undefined) {
-        // Controller-owned remarks — never treat as auto-SLOW
-        if (hasSlowRemark(nextRemarks)) {
-            flight.autoSlowApplied = false
-        }
-        if (!hasSlowRemark(previousRemarks) || hasSlowRemark(nextRemarks)) return
-
-        flight.autoSlowApplied = false
-        const wakeTurbulence = this.parseWakeCategory(flight.aircraftType, flight.wakeTurbulence)
-        if (!isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) return
-
-        flight.autoSlowDismissed = true
-        console.log(`[REMARKS] ${flight.callsign}: auto-SLOW dismissed`)
-    }
-
-    /** Controller / track-SID set SLOW — must not be wiped by tryClearAutoSlowRemark */
-    markSlowRemarkManual(flight: Flight): void {
-        flight.autoSlowApplied = false
-        if (hasSlowRemark(flight.remarks)) {
-            flight.autoSlowDismissed = false
         }
     }
 
@@ -3911,8 +3822,6 @@ class FlightStore {
                 if (nextRemarks !== null && nextRemarks !== flight.remarks) {
                     console.log(`[REMARKS] ${callsign}: ${flight.remarks ?? '-'} -> ${nextRemarks ?? '-'}`)
                     flight.remarks = nextRemarks
-                    // Scratch-sourced SLOW is controller/TopSky owned — never auto-clear
-                    if (hasSlowRemark(nextRemarks)) this.markSlowRemarkManual(flight)
                 }
                 if (nextHp !== null && nextHp !== flight.hp) {
                     // Strip-only HP after airborne/CFTO: ignore empty scratch wiping the cell
@@ -5740,7 +5649,7 @@ class FlightStore {
         // Can edit clearance if we're a controller and the flight is tracked by me or untracked
         const canEditClearance = actionConfig.isController === true && (isTrackedByMe || isUntracked)
 
-        // Slow aircraft detection — V / Z never get auto-SLOW SID rules or SLOW flag
+        // Slow aircraft detection — V / Z never get SLOW SID preferred-table treatment
         const isSlow =
             (isIfrSidEligible(flightRules) &&
                 isSlowAircraft(wakeTurbulence ?? '', flight.aircraftType ?? '', flight.engineType)) ||
