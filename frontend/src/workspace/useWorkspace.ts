@@ -1338,6 +1338,19 @@ export function useWorkspace() {
     return true
   }
 
+  /** True when X will merge with the last split sibling (no confirm). */
+  function willAutoMergeOnClose(instanceId: string): boolean {
+    const layout = activeLayout.value
+    if (!layout) return false
+    const s = layout.sections.find((x) => x.instanceId === instanceId)
+    if (!s || !canMergeSection(s)) return false
+    return (
+      layout.sections.filter(
+        (x) => x.groupId === s.groupId && canMergeSection(x),
+      ).length === 2
+    )
+  }
+
   function closeSection(instanceId: string) {
     const layout = activeLayout.value
     if (!layout) return
@@ -2022,6 +2035,7 @@ export function useWorkspace() {
     toggleSortFlow,
     splitSection,
     tryMergeDrop,
+    willAutoMergeOnClose,
     closeSection,
     addEmptyHeader,
     addDtransDivider,

@@ -120,6 +120,23 @@ export function cycleRtcStripSize(bayId: string, sectionId: string): RtcStripSiz
   return next
 }
 
+/**
+ * True when RTC close X merges siblings (CLR/PUSH&START → DEP, CTR↔TMA) —
+ * no confirm. False when the divider is fully removed/hidden.
+ */
+export function rtcCloseWillMerge(bayId: string, sectionId: string): boolean {
+  if (isRtcEmptyDividerId(sectionId)) return false
+  if (isRtcClrId(sectionId) || isRtcPushStartId(sectionId)) return true
+  if (isRtcArrAppMergedId(sectionId) || isRtcCtrTmaMergedId(sectionId)) return false
+  const log = logicalSectionIdFromRtc(sectionId)
+  if (log === 'tma' || log === 'app') {
+    const cur = normalizeExtras(bayId)
+    const other = log === 'tma' ? 'app' : 'tma'
+    if (!cur.ctrTmaMerged && !cur.hiddenLogical.includes(other)) return true
+  }
+  return false
+}
+
 /** Close a divider: empty remove, DEP halves merge, basics hide (catalog restore). */
 export function closeRtcSection(bayId: string, sectionId: string) {
   if (isRtcEmptyDividerId(sectionId)) {

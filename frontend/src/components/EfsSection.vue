@@ -644,6 +644,7 @@ import {
   rtcCanSplitSection,
   splitRtcSection,
   closeRtcSection,
+  rtcCloseWillMerge,
   cycleRtcStripSize,
   getRtcStripSize,
   tryRtcMergeArrApp,
@@ -1028,11 +1029,25 @@ const rtcCanSplit = computed(
 )
 
 function onWorkspaceClose() {
+  const title = (props.section.title || 'bay').trim() || 'bay'
   if (store.multiAirport && !props.workspaceMode) {
+    if (
+      !rtcCloseWillMerge(props.bayId, props.section.id) &&
+      !window.confirm(`Close ${title}?`)
+    ) {
+      return
+    }
     closeRtcSection(props.bayId, props.section.id)
     return
   }
   if (!props.workspaceMode || !props.workspaceInstanceId) return
+  // Auto-merge last split sibling → no confirm; hard remove → confirm
+  if (
+    !ws.willAutoMergeOnClose(props.workspaceInstanceId) &&
+    !window.confirm(`Close ${title}?`)
+  ) {
+    return
+  }
   ws.closeSection(props.workspaceInstanceId)
 }
 
