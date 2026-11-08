@@ -2,7 +2,7 @@
  * Wake / ATYP highlight helpers for strip UI.
  *
  * B757 and Tu-204/214 are filed as WTC M but are treated as Heavy when leading
- * for wake spacing — UI keeps showing "M" and uses a yellow cell instead.
+ * for wake spacing — UI keeps showing "M" and uses a black square cell instead.
  *
  * Super/heavy wingspan types always get a thick ATYP cell border (and ESSA
  * prefers DEP 01L/19R — see airport-rules).

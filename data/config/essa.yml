@@ -516,8 +516,9 @@ sectionRules:
 
   # === RUNWAY SECTION RULES (no geographic hold) ===
   # ARR stays on RWY by groundstate until TXIN / XFER (same idea as OTHER/RTC).
-  # Dep airborne → CTR DEP via common-rules when ctr_dep is on the board; otherwise
-  # dep_runway_airborne_hold* keep the strip on DEP RWY until APP assumes.
+  # Dep airborne → CTR DEP via common-rules only when CTR DEP is open on the
+  # workspace; otherwise dep_runway_airborne_hold* keep the strip on DEP RWY
+  # until APP/DEP assumes (delete_dep_high_transferred).
 
   # Priority > inbound_assumed_vacated_* (104): ARR stays on RWY until TXIN / XFER
   # (vacate alone must not auto-move). Only RWY auto-move is dep airborne → CTR DEP.
@@ -553,7 +554,8 @@ sectionRules:
     depRunway: true
     priority: 111
 
-  # When CTR DEP is hidden / missing, airborne deps stay on DEP RWY (rules-engine skips ctr_dep).
+  # When CTR DEP is not open on the workspace, airborne deps stay on DEP RWY
+  # (rules-engine skips ctr_dep) until APP/DEP assumes.
   dep_runway_airborne_hold:
     sectionId: dep_runway
     direction: departure

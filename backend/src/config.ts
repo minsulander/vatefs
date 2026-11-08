@@ -53,6 +53,7 @@ export {
     setEssaRoles,
     refreshEssaRolesIfAuto,
     restoreEssaRolesFromSettings,
+    setWorkspaceOpenSectionIds,
     isEsggRolesConfig,
     setEsggRoles,
     refreshEsggRolesIfAuto,

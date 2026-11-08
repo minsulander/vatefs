@@ -2250,6 +2250,21 @@ export function watchEssaRolesForWorkspace(
 
   const store = useEfsStore()
 
+  // ESSA/OTHER: sync open workspace section ids so backend gates CTR DEP automoves
+  watch(
+    () => {
+      if (!inWorkspace()) return ''
+      const ids = [...ws.openWorkspaceSectionIds()].sort()
+      return ids.join('|')
+    },
+    (fp) => {
+      if (!inWorkspace()) return
+      const sectionIds = fp ? fp.split('|') : []
+      store.setWorkspaceOpenSections(sectionIds)
+    },
+    { immediate: true },
+  )
+
   // Drop local workspace when the YAML config file changes (OTHER↔ESSA↔RTC, …)
   watch(
     () => store.activeConfig,

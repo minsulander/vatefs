@@ -130,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { FlightStrip as FlightStripData } from '@/types/efs'
 import { useEfsScaleValue } from '@/composables/useEfsUiScale'
 import { useStripScribbleMode } from '@/composables/useStripScribbleMode'
@@ -362,8 +362,10 @@ function placeShell() {
   if (anchor) {
     const cx = anchor.left + anchor.width / 2
     const cy = anchor.top + anchor.height / 2
-    left = cx - pw / 2
-    // Center on strip body (keys above sit outside that vertical center)
+    left = cx - totalW / 2
+    // Center on strip body (keys above sit outside that vertical center).
+    // Far-down strips: maxTop + clampShellIntoView pull the shell up so it is
+    // not clipped under the bottom bar / viewport.
     top = cy - stageH / 2 - keysH
   } else {
     left = (vw - totalW) / 2
@@ -372,8 +374,9 @@ function placeShell() {
 
   // Edge-to-edge when zoomed to full width; otherwise keep a tiny clamp only if overflowing
   const maxLeft = Math.max(0, vw - totalW)
+  const maxTop = Math.max(0, vh - estH)
   shellLeft.value = Math.round(Math.max(0, Math.min(left, maxLeft)))
-  shellTop.value = Math.round(Math.max(0, Math.min(top, Math.max(0, vh - estH))))
+  shellTop.value = Math.round(Math.max(0, Math.min(top, maxTop)))
   placedPanelWidth = pw
   // DOM top updates on the next frame — pull in any border the estimate still misses.
   scheduleClampIntoView()
@@ -996,7 +999,15 @@ watch(
     resetDrawPointerState()
     await afterOpenMeasure()
   },
+  // HomeView mounts with modelValue already true — without immediate the shell
+  // stays at (0,0) top-left and never places over the strip.
+  { immediate: true },
 )
+
+onMounted(() => {
+  // Teleport target may not exist until mount; re-measure once DOM is ready
+  if (props.modelValue) void afterOpenMeasure()
+})
 
 watch([topExpanded, bottomExpanded], async () => {
   if (!props.modelValue) return

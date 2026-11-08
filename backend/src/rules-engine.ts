@@ -30,11 +30,9 @@ import {
 import { logicalSectionId, prefixedSectionId, resolveBayForAirport } from "./multi-airport.js"
 import { essaRunwaySectionId, isEssaDynamicRunwaySectionId } from "@vatefs/common"
 import {
-    activeOnlineGndRoles,
     familiesFromRoles,
     isEssaRolesConfig,
     isEssaLegacyRunwaySectionId,
-    isEssaSectionVisibleForPicker,
     resolveEssaPairForFlight,
     type EssaFamily,
     type EssaPositionRole,
@@ -691,22 +689,14 @@ export function determineSectionForFlight(
     // Find first matching rule
     for (const rule of sortedRules) {
         if (evaluateSectionRule(flight, rule, config)) {
-            // ESSA: only auto-move airborne deps to CTR DEP when that section is on the board
+            // ESSA: only auto-move airborne deps to CTR DEP when that header is
+            // actually open on the workspace board. Otherwise keep them on DEP RWY
+            // (dep_runway_airborne_hold*) until APP/DEP assumes
+            // (delete_dep_high_transferred). No picker-visibility fallback — TWR
+            // can pick CTR DEP in the catalog without it being on the board.
             if (isEssaRolesConfig(config) && rule.sectionId === "ctr_dep") {
-                const onlineCs = config.onlineControllers
-                    ? [...config.onlineControllers.keys()]
-                    : []
-                const activeGnd = activeOnlineGndRoles(onlineCs)
-                if (
-                    !isEssaSectionVisibleForPicker(
-                        "ctr_dep",
-                        (config.essaRoles ?? []) as EssaPositionRole[],
-                        config.sectionVisibleFor,
-                        activeGnd,
-                    )
-                ) {
-                    continue
-                }
+                const open = config.workspaceOpenSectionIds
+                if (!open || !open.has("ctr_dep")) continue
             }
             if (isMulti && airport) {
                 const bayId = resolveBayForAirport(airport, config.columnAirports)

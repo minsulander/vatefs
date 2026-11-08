@@ -3930,6 +3930,43 @@ void VatEFSPlugin::ReceiveUdpMessages()
                                 newRoute = routeBeforeLast;
                                 amend = true;
                             } else {
+                                newRoute = route;
+                            }
+                            // STAR designators (e.g. ELTOK8P) force an ARR RWY in ES —
+                            // remove the assigned STAR from the route when clearing RWY.
+                            const char *starNameC = fpData.GetStarName();
+                            std::string starName = starNameC ? starNameC : "";
+                            if (!starName.empty()) {
+                                std::string body = amend ? newRoute : route;
+                                std::string cleaned;
+                                cleaned.reserve(body.size());
+                                std::size_t pos = 0;
+                                bool removed = false;
+                                while (pos < body.size()) {
+                                    while (pos < body.size() && body[pos] == ' ') pos++;
+                                    if (pos >= body.size()) break;
+                                    std::size_t end = body.find(' ', pos);
+                                    if (end == std::string::npos) end = body.size();
+                                    std::string term = body.substr(pos, end - pos);
+                                    std::string termBase = term;
+                                    auto sp = termBase.find('/');
+                                    if (sp != std::string::npos) termBase = termBase.substr(0, sp);
+                                    if (_stricmp(termBase.c_str(), starName.c_str()) == 0) {
+                                        removed = true;
+                                    } else {
+                                        if (!cleaned.empty()) cleaned += ' ';
+                                        cleaned += term;
+                                    }
+                                    pos = end;
+                                }
+                                if (removed) {
+                                    newRoute = cleaned;
+                                    amend = true;
+                                    DebugMessage("assignArrivalRunway: clear also dropped STAR " + starName);
+                                } else if (!amend) {
+                                    DebugMessage("assignArrivalRunway: clear skipped (no rwy suffix / STAR not in route)");
+                                }
+                            } else if (!amend) {
                                 DebugMessage("assignArrivalRunway: clear skipped (no rwy suffix)");
                             }
                         } else if (arrivalAirport.empty()) {

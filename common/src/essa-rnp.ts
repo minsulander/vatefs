@@ -173,7 +173,9 @@ export function isEssaEorRnpRunway(runway: string | undefined | null): boolean {
  * Always returns both RWYs of the pair (never a single ARR-only breakout).
  *
  * Prefer the matched approach runway’s pair (e.g. RNP on 01L → 01L+01R);
- * else ARR/DEP from config when they form a parallel pair (configs 1 & 2).
+ * else config ARR when it is a parallel-pair runway (configs 1 & 2).
+ * Do **not** fall back to DEP alone — e.g. ARR 26 / DEP 19R must not open
+ * 19L+19R breakouts (single-runway APP, not parallel).
  */
 export function essaRnpBreakoutRunways(opts: {
     hintRunway?: string | null
@@ -187,8 +189,10 @@ export function essaRnpBreakoutRunways(opts: {
     const dep = opts.configDep?.toUpperCase()
     const fromArr = essaParallelBreakoutPair(arr)
     if (fromArr) return fromArr
+
+    // Only when ARR+DEP are the same parallel pair (dual ops), never DEP alone
     const fromDep = essaParallelBreakoutPair(dep)
-    if (fromDep) return fromDep
+    if (fromDep && arr && fromDep.includes(arr as EssaBreakoutRunway)) return fromDep
 
     // No single-runway fallback — auto breakouts only for parallel APP pairs
     return []

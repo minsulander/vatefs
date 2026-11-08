@@ -11,6 +11,31 @@
     :initial-text="rwyTimerMenuInitial"
     @start="onRwyTimerMenuStart"
   />
+  <v-dialog
+    v-model="closeConfirmOpen"
+    max-width="300"
+    content-class="close-divider-dialog-wrapper"
+  >
+    <div class="close-divider-dialog">
+      <div class="close-divider-dialog-text">Close {{ closeConfirmTitle }}?</div>
+      <div class="close-divider-dialog-actions">
+        <button
+          type="button"
+          class="close-divider-dialog-btn close-divider-dialog-cancel"
+          @click="closeConfirmOpen = false"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="close-divider-dialog-btn close-divider-dialog-confirm"
+          @click="confirmWorkspaceClose"
+        >
+          CLOSE
+        </button>
+      </div>
+    </div>
+  </v-dialog>
   <div
     ref="sectionRoot"
     class="efs-section"
@@ -125,7 +150,7 @@
             v-if="workspaceMode && !isEmptyWorkspaceHeader"
             type="button"
             class="section-hdr-btn section-hdr-flow"
-            :title="workspaceSortFlow === 'newestTop' ? 'Display: first at bottom (synced order reversed)' : 'Display: first on top (synced order)'"
+            :title="workspaceSortFlow === 'newestTop' ? 'Display: new on top, first at bottom' : 'Display: first on top, new at bottom (synced order reversed)'"
             @pointerdown.stop
             @mousedown.stop
             @touchstart.stop
@@ -877,6 +902,9 @@ const props = withDefaults(defineProps<{
 const createDialogOpen = ref(false)
 const createDialogType = ref<SpecialStripType>('vfrDep')
 const createDialogAirport = ref<string | undefined>(undefined)
+const closeConfirmOpen = ref(false)
+const closeConfirmTitle = ref('bay')
+const closeConfirmMode = ref<'workspace' | 'rtc'>('workspace')
 
 // Pending create info (stored while dialog is open, applied on dialog OK)
 const pendingCreatePosition = ref<number | undefined>(undefined)
@@ -1037,23 +1065,34 @@ const rtcCanSplit = computed(
 function onWorkspaceClose() {
   const title = (props.section.title || 'bay').trim() || 'bay'
   if (store.multiAirport && !props.workspaceMode) {
-    if (
-      !rtcCloseWillMerge(props.bayId, props.section.id) &&
-      !window.confirm(`Close ${title}?`)
-    ) {
+    if (rtcCloseWillMerge(props.bayId, props.section.id)) {
+      closeRtcSection(props.bayId, props.section.id)
       return
     }
-    closeRtcSection(props.bayId, props.section.id)
+    closeConfirmTitle.value = title
+    closeConfirmMode.value = 'rtc'
+    closeConfirmOpen.value = true
     return
   }
   if (!props.workspaceMode || !props.workspaceInstanceId) return
-  // Auto-merge last split sibling → no confirm; hard remove → confirm
-  if (
-    !ws.willAutoMergeOnClose(props.workspaceInstanceId) &&
-    !window.confirm(`Close ${title}?`)
-  ) {
+  // Auto-merge last split sibling → no confirm; hard remove → in-app confirm
+  // (native window.confirm exits browser fullscreen)
+  if (ws.willAutoMergeOnClose(props.workspaceInstanceId)) {
+    ws.closeSection(props.workspaceInstanceId)
     return
   }
+  closeConfirmTitle.value = title
+  closeConfirmMode.value = 'workspace'
+  closeConfirmOpen.value = true
+}
+
+function confirmWorkspaceClose() {
+  closeConfirmOpen.value = false
+  if (closeConfirmMode.value === 'rtc') {
+    closeRtcSection(props.bayId, props.section.id)
+    return
+  }
+  if (!props.workspaceInstanceId) return
   ws.closeSection(props.workspaceInstanceId)
 }
 
@@ -1916,8 +1955,9 @@ function tryHandleInfoStripDrop(event: DragEvent, bottom: boolean): boolean {
 
 /** ESSA SAAB header tint: runway / inbound-from-other / other */
 const essaHeaderClass = computed(() => {
-  if (isSystemInbound.value) return undefined
   if (!store.essaRolesMode) return undefined
+  // SYSTEM INBOUND matches other INBOUND divider colour
+  if (isSystemInbound.value) return 'section-header--essa-inbound'
   const id = props.section.id.toLowerCase()
   const title = (props.section.title || '').toUpperCase()
   if (
@@ -2769,13 +2809,14 @@ function orderTopStrips(list: FlightStripData[]): FlightStripData[] {
     ordered = list.sort((a, b) => a.position - b.position)
   }
 
-  // Appearance / sticky position order: synced sequence is position ascending.
-  // Sort-flow only flips display (newestTop = first at bottom). Do not rewrite
-  // positions or addFromTop — peers share one order.
+  // Appearance / sticky position order: synced sequence is position ascending
+  // with addFromTop (newest at position 0 = top). newestTop uses that as-is
+  // (new on top, first at bottom). newestBottom reverses display only — peers
+  // share one position order / addFromTop.
   if (
     !flowAlreadyApplied &&
     props.workspaceMode &&
-    workspaceSortFlow.value === 'newestTop'
+    workspaceSortFlow.value === 'newestBottom'
   ) {
     ordered = [...ordered].reverse()
   }
@@ -3122,19 +3163,19 @@ const bottomStrips = computed(() => {
 })
 
 /**
- * Sort-flow toggle: display only (top↔bottom of the synced position order).
+ * Sort-flow toggle: newestBottom reverses display of the shared position order.
  * Does not rewrite strip positions or section addFromTop — those stay shared.
- * CD / TSAT / EOBT time-sort already flips via activeTimeSortDir.
+ * CD / TSAT / EOBT time-sort already flips via activeTimeSortDir (unless MAN).
  */
 function onWorkspaceToggleFlow() {
   if (!props.workspaceInstanceId) return
   ws.toggleSortFlow(props.workspaceInstanceId)
 }
 
-/** True when appearance order is shown reversed (newestTop). */
+/** True when appearance order is shown reversed (newestBottom). */
 function appearanceDisplayReversed(): boolean {
   if (!props.workspaceMode) return false
-  if (workspaceSortFlow.value !== 'newestTop') return false
+  if (workspaceSortFlow.value !== 'newestBottom') return false
   if (timeSortEnabled.value && !preferManualOrder.value) return false
   if (etaSortEnabled.value) return false
   return true
@@ -4955,13 +4996,13 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 }
 
 /* ESSA Direct Transfer divider — same height/chrome as other headers; green fill */
-/* SYSTEM INBOUND catch-all (workspace) — blue; D-trans stays green */
-.section-header--system-inbound {
-  background: #1a4a7a;
-  border-bottom-color: #143a60;
+/* SYSTEM INBOUND: same tint as other INBOUND dividers (see --essa-inbound) */
+.section-header--system-inbound:not(.section-header--essa-inbound) {
+  background: #97aba9;
+  border-bottom-color: #7a908d;
 }
-.section-header--system-inbound .section-title {
-  color: #e8f0f8;
+.section-header--system-inbound:not(.section-header--essa-inbound) .section-title {
+  color: #ebebeb;
 }
 
 .section-header--dtrans {
@@ -5197,5 +5238,58 @@ body.section-resizing {
 
 body.section-resizing * {
   cursor: ns-resize !important;
+}
+
+/* Close-divider confirm — unscoped because v-dialog teleports */
+.close-divider-dialog-wrapper {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+.close-divider-dialog {
+  background: #2a2a2e;
+  border: 2px solid #555;
+  padding: 0;
+}
+
+.close-divider-dialog-text {
+  padding: 16px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.close-divider-dialog-actions {
+  display: flex;
+  border-top: 1px solid #555;
+}
+
+.close-divider-dialog-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+
+.close-divider-dialog-cancel {
+  background: #555;
+  color: #ccc;
+  border-right: 1px solid #666;
+}
+
+.close-divider-dialog-cancel:hover {
+  background: #666;
+}
+
+.close-divider-dialog-confirm {
+  background: #455a64;
+  color: #fff;
+}
+
+.close-divider-dialog-confirm:hover {
+  background: #546e7a;
 }
 </style>

@@ -605,6 +605,15 @@ export interface EfsStaticConfig {
     /** True when essaRoles were set manually (skip auto-detect until cleared) */
     essaRolesManual?: boolean
 
+    /**
+     * Section ids currently open on the ESSA/OTHER workspace board (client-synced).
+     * Used so airborne deps only auto-move to CTR DEP when that header is present.
+     */
+    workspaceOpenSectionIds?: Set<string>
+
+    /** Fingerprint of last synced workspace open sections (skip reprocess when unchanged) */
+    workspaceOpenSectionsFingerprint?: string
+
     /** ESGG covering roles (CD / GND / TWR) — what you act as */
     esggRoles?: Array<'CD' | 'GND' | 'TWR' | 'APP'>
 

@@ -262,6 +262,21 @@ export function isArrivalToOutboundTurnaroundFpl(
     return wasArrival && nowOutbound
 }
 
+/** Outbound dep/local at our airport still carrying arrival/park groundstate leftovers. */
+export function hasOutboundDepWithArrivalGroundstate(
+    flight: Pick<Flight, "origin" | "destination" | "groundstate">,
+    myAirports: readonly string[],
+): boolean {
+    const ours = (icao: string | undefined) =>
+        !!icao && myAirports.some((a) => a.toUpperCase() === icao.toUpperCase())
+    if (!ours(flight.origin)) return false
+    const gs = (flight.groundstate || "").toUpperCase()
+    if (gs !== "PARK" && gs !== "ARR" && gs !== "TXIN") return false
+    // Pure arrival FPL still at our dest — leave PARK/ARR alone
+    if (ours(flight.destination) && !ours(flight.origin)) return false
+    return true
+}
+
 /**
  * Result of processing a plugin message
  */
@@ -3437,12 +3452,14 @@ class FlightStore {
         // Active ARR strip + new outbound FPL (turnaround before PARK): trash ARR, clean DEP print.
         // Park-trash path is handled inside finalizeFlightStrips / applyDeleteRules.
         const fplChanged = flightPlanFingerprint(flight) !== prevFingerprint
+        const turnaroundOutbound =
+            fplChanged &&
+            isArrivalToOutboundTurnaroundFpl(prevFpl, flight, this.config.myAirports)
         if (
             hadActiveStrip &&
             !flight.deleted &&
             !flight.manuallyDeleted &&
-            fplChanged &&
-            isArrivalToOutboundTurnaroundFpl(prevFpl, flight, this.config.myAirports)
+            turnaroundOutbound
         ) {
             console.log(
                 `Flight ${callsign} turnaround FPL while ARR on bay — trash ARR, clean DEP reprint`,
@@ -3456,6 +3473,19 @@ class FlightStore {
             if (exitCoordSound && !result.transferSound) result.transferSound = exitCoordSound
             this.queueRouteExpandIfPresent(callsign, flight, result, routeChanged)
             return result
+        }
+        // No ARR strip on bay (already parked / trash / never printed): still clear
+        // leftover PARK/ARR/TXIN so pending_dep / fallback_departure can place a DEP.
+        if (
+            !hadActiveStrip &&
+            !flight.manuallyDeleted &&
+            (turnaroundOutbound ||
+                hasOutboundDepWithArrivalGroundstate(flight, this.config.myAirports))
+        ) {
+            beginNewDepartureCycleAfterPark(flight)
+            console.log(
+                `Flight ${callsign} turnaround FPL — cleared arrival GS leftovers for new DEP cycle`,
+            )
         }
 
         const result = this.withTransferSound(

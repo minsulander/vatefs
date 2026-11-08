@@ -26,8 +26,9 @@
           type="button"
           class="sid-route-item"
           :class="{ selected: isSelected(rwy) }"
+          :title="rwyLabel(rwy) !== rwy ? rwy : undefined"
           @click="onSelect(rwy)"
-        >{{ rwy }}</button>
+        >{{ rwyLabel(rwy) }}</button>
       </div>
       <button type="button" class="sid-route-clear" @click="onClear">CLEAR</button>
     </div>
@@ -95,51 +96,27 @@ function isSelected(rwy: string): boolean {
   return (props.strip.runway || '').toUpperCase() === rwy.toUpperCase()
 }
 
-/** ESSA physical order: west pair, east pair, south pair, then heli 07/25 */
+/** ESSA physical order: west pair, east pair, south pair, then FATO 07/25 (HKP) */
 const ESSA_RWY_ORDER = ['01L', '19R', '01R', '19L', '08', '26', '07', '25']
-const ESSA_HELI_RWYS = new Set(['07', '25'])
+/** FATO ends — always listed at bottom of ESSA RWY picker, shown as HKP */
+const ESSA_HKP_RWYS = ['07', '25'] as const
+const ESSA_HKP_SET = new Set<string>(ESSA_HKP_RWYS)
 
-/** Common ICAO helicopter type designators (VATSIM / ESSA traffic). */
-const HELI_ATYP = new Set([
-  'A109', 'A119', 'A139', 'A169', 'A189',
-  'AS35', 'AS50', 'AS55', 'AS65', 'AS3B',
-  'AW139', 'AW169', 'AW189',
-  'B06', 'B47', 'B206', 'B212', 'B407', 'B412', 'B429', 'B430',
-  'BK17', 'BO105',
-  'EC20', 'EC25', 'EC30', 'EC35', 'EC45', 'EC55', 'EC75',
-  'H60', 'H64', 'H47', 'H135', 'H145', 'H160', 'H175', 'H215', 'H225',
-  'KA32', 'MD50', 'MD52', 'MD60', 'MI8', 'MI17', 'MI24', 'NH90',
-  'R22', 'R44', 'R66', 'S61', 'S76', 'S92',
-  'HELI', 'H/C',
-])
-
-function isUnknownAtyp(atyp: string | undefined): boolean {
-  const u = (atyp || '').trim().toUpperCase()
-  return !u || u === 'UNKN' || u === '????' || u === 'ZZZZ' || u === 'XXXX'
-}
-
-function isHelicopterAtyp(atyp: string | undefined): boolean {
-  const u = (atyp || '').trim().toUpperCase()
-  if (!u) return false
-  return HELI_ATYP.has(u)
-}
-
-function showEssaHeliRwys(): boolean {
-  const atyp = props.strip.aircraftType
-  if (isHelicopterAtyp(atyp) || isUnknownAtyp(atyp)) return true
-  // Keep 07/25 visible if already assigned (so CLEAR / re-select stays possible)
-  const current = (props.strip.runway || '').toUpperCase()
-  return ESSA_HELI_RWYS.has(current)
+/** Dialog label: FATO 07/25 both display as HKP (tooltip keeps real end). */
+function rwyLabel(rwy: string): string {
+  return ESSA_HKP_SET.has(rwy.toUpperCase()) ? 'HKP' : rwy
 }
 
 function sortRunways(apt: string, list: string[]): string[] {
   if (apt.toUpperCase() === 'ESSA') {
-    const allowHeli = showEssaHeliRwys()
-    const filtered = allowHeli
-      ? list
-      : list.filter((r) => !ESSA_HELI_RWYS.has(r.toUpperCase()))
+    // Ensure FATO ends are present (not always in runways.csv)
+    const seen = new Set(list.map((r) => r.toUpperCase()))
+    const withHkp = [...list]
+    for (const h of ESSA_HKP_RWYS) {
+      if (!seen.has(h)) withHkp.push(h)
+    }
     const rank = new Map(ESSA_RWY_ORDER.map((r, i) => [r, i]))
-    return [...filtered].sort((a, b) => {
+    return [...withHkp].sort((a, b) => {
       const ra = rank.get(a.toUpperCase())
       const rb = rank.get(b.toUpperCase())
       if (ra !== undefined && rb !== undefined) return ra - rb

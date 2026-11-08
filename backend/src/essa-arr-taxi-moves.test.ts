@@ -3,7 +3,8 @@
  * - TWR separate: stay on RUNWAY until TXIN or GND assumes (XFER alone does not leave)
  * - GND separate: incoming transfer → taxi_arr
  * - Combined GND+TWR: TXIN (TAXI) → taxi_arr; ARR stays on RWY via GS until-taxi
- * - Dep airborne → CTR DEP when section visible; else DEP RWY hold
+ * - Dep airborne → CTR DEP when CTR DEP is open on the workspace; else DEP RWY
+ *   hold until APP/DEP assumes (delete_dep_high_transferred)
  *
  * Run: npx tsx src/essa-arr-taxi-moves.test.ts
  */
@@ -19,13 +20,13 @@ import {
     setMyCallsign,
     setMyRole,
     setMyAirports,
+    setWorkspaceOpenSectionIds,
     staticConfig,
 } from "./static-config.js"
 import { determineSectionForFlight } from "./rules-engine.js"
 import type { Flight } from "./types.js"
 import type { ControllerRole } from "./config-types.js"
 import { isEssaDynamicRunwaySectionId } from "@vatefs/common"
-import { isEssaSectionVisibleForPicker } from "./essa-roles.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const dataDir = path.resolve(__dirname, "../../data")
@@ -266,33 +267,42 @@ check("Combined GND+TWR: on-polygon ARR uses GS until-taxi (no geo hold)", () =>
     )
 })
 
-check("TWR: airborne dep → CTR DEP (shown by default, including split)", () => {
+check("TWR: airborne dep → CTR DEP when CTR DEP is open on workspace", () => {
     setRoles("ESSA_E_TWR", "TWR", ["TWR-E"], ["TWR"])
     staticConfig.onlineControllers = new Map([
         ["ESSA_E_GND", { role: "GND", frequency: 121.7, callsign: "ESSA_E_GND" }],
     ])
-    assert.equal(
-        isEssaSectionVisibleForPicker(
-            "ctr_dep",
-            ["TWR-E"],
-            staticConfig.sectionVisibleFor,
-            ["GND-E"],
-        ),
-        true,
-    )
+    setWorkspaceOpenSectionIds(["ctr_dep", "dep_runway", "taxi_dep"])
     const section = determineSectionForFlight(departure(), staticConfig)
+    setWorkspaceOpenSectionIds([])
+    staticConfig.workspaceOpenSectionIds = undefined
+    staticConfig.workspaceOpenSectionsFingerprint = undefined
     assert.equal(section?.sectionId, "ctr_dep")
     assert.equal(section?.ruleId, "ctr_dep_airborne")
 })
 
-check("Airborne dep stays DEP RWY when CTR DEP column removed from layout", () => {
+check("Airborne dep stays DEP RWY when CTR DEP is not open on workspace", () => {
     setRoles("ESSA_E_TWR", "TWR", ["TWR-E"], ["TWR"])
     staticConfig.onlineControllers = new Map()
-    const prev = staticConfig.sectionVisibleFor
-    staticConfig.sectionVisibleFor = new Map(prev)
-    staticConfig.sectionVisibleFor.set("ctr_dep", ["APP"])
+    setWorkspaceOpenSectionIds(["dep_runway", "taxi_dep", "pending_dep"])
     const section = determineSectionForFlight(departure(), staticConfig)
-    staticConfig.sectionVisibleFor = prev
+    setWorkspaceOpenSectionIds([])
+    staticConfig.workspaceOpenSectionIds = undefined
+    staticConfig.workspaceOpenSectionsFingerprint = undefined
+    assert.ok(section)
+    assert.ok(
+        section!.sectionId === "dep_runway" ||
+            isEssaDynamicRunwaySectionId(section!.sectionId),
+    )
+    assert.equal(section!.ruleId, "dep_runway_airborne_hold")
+})
+
+check("Airborne dep stays DEP RWY when workspace open sections not synced yet", () => {
+    setRoles("ESSA_E_TWR", "TWR", ["TWR-E"], ["TWR"])
+    staticConfig.onlineControllers = new Map()
+    staticConfig.workspaceOpenSectionIds = undefined
+    staticConfig.workspaceOpenSectionsFingerprint = undefined
+    const section = determineSectionForFlight(departure(), staticConfig)
     assert.ok(section)
     assert.ok(
         section!.sectionId === "dep_runway" ||

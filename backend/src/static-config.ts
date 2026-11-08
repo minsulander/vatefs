@@ -187,6 +187,9 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.esggRoles = undefined
     staticConfig.esggLayoutRoles = undefined
     staticConfig.esggRolesManual = undefined
+    // Workspace open-section sync is client-owned; drop stale board until reconnect
+    staticConfig.workspaceOpenSectionIds = undefined
+    staticConfig.workspaceOpenSectionsFingerprint = undefined
 
     // Restore runtime state
     if (currentCallsign) staticConfig.myCallsign = currentCallsign
@@ -727,6 +730,25 @@ export function restoreEssaRolesFromSettings(
         staticConfig.essaRolesManual = false
         refreshEssaRolesIfAuto()
     }
+}
+
+/**
+ * Sync which section ids are open on the flexible workspace board.
+ * Returns true when the open set changed (caller should reprocess strips).
+ */
+export function setWorkspaceOpenSectionIds(sectionIds: string[]): boolean {
+    const next = new Set(
+        sectionIds
+            .map((id) => (typeof id === 'string' ? id.trim() : ''))
+            .filter(Boolean),
+    )
+    const fp = [...next].sort().join('|')
+    if (fp === (staticConfig.workspaceOpenSectionsFingerprint ?? '')) {
+        return false
+    }
+    staticConfig.workspaceOpenSectionIds = next
+    staticConfig.workspaceOpenSectionsFingerprint = fp
+    return true
 }
 
 function esggRolesKey(roles: EsggPositionRole[] | undefined): string {

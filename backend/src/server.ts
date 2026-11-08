@@ -203,7 +203,7 @@ import {
     resolveEsaaPluginsDir,
     resolveIcaoAirlinesFile,
 } from "./euroscope-paths.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole, controllerCallsignsEqual } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, setWorkspaceOpenSectionIds, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole, controllerCallsignsEqual } from "./config.js"
 import type { ControllerRole, EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
 import {
     normalizeEssaRoles,
@@ -8077,6 +8077,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 broadcastLayout()
                 broadcastEssaSepIndicators()
                 broadcastRefresh("ESSA roles changed")
+            }
+            break
+        }
+
+        case "setWorkspaceOpenSections": {
+            // ESSA/OTHER: gate CTR DEP airborne automove on open workspace headers
+            if (!isEssaRolesConfig(staticConfig) && staticConfig.layoutMode !== "saabLayouts") {
+                break
+            }
+            const ids = Array.isArray(message.sectionIds) ? message.sectionIds : []
+            if (setWorkspaceOpenSectionIds(ids)) {
+                console.log(
+                    `[WORKSPACE] Open sections (${ids.length}): ${ids.includes("ctr_dep") ? "ctr_dep open" : "ctr_dep closed"}`,
+                )
+                store.reprocessAllFlights()
             }
             break
         }

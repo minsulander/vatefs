@@ -614,7 +614,7 @@
                 "
               >{{ strip.aircraftType?.trim() || '' }}<template v-if="!isPaperEmptyFlightHolder && strip.wakeTurbulence && strip.aircraftType?.trim()"> <span
                   class="pg-wtc"
-                  :class="{ 'pg-wtc-circled': wtcPaperCircled, 'pg-wtc-yellow': wtcYellowHighlight }"
+                  :class="{ 'pg-wtc-circled': wtcPaperCircled, 'pg-wtc-black': wtcBlackSquareHighlight }"
                   :title="paperTip('WTC', `Wake turbulence ${strip.wakeTurbulence}`)"
                 ><svg
                     v-if="wtcPaperCircled"
@@ -1199,8 +1199,8 @@
               class="wtc-box fit-font"
               :class="{
                 boxed: wtcRtcBorder,
-                plain: !wtcRtcBorder && !wtcYellowHighlight,
-                'wtc-yellow': wtcYellowHighlight,
+                plain: !wtcRtcBorder && !wtcBlackSquareHighlight,
+                'wtc-black': wtcBlackSquareHighlight,
               }"
               :title="
                 strip.wakeTurbulence
@@ -1472,6 +1472,8 @@
               'clr-pending-hl': unclearedFieldHighlight && !!displayCfl,
               editable: canEditAssignedData,
               'arr-cfl-ghost': isArrLayout && !displayCfl,
+              'cfl-no-xfl-center':
+                !isArrLayout && !displayXfl && !props.strip.assignedHeading,
             }"
             title="Cleared flight level"
             @click.stop="onCflClick"
@@ -3633,28 +3635,26 @@ const heavyAsLeaderType = computed(() =>
 
 /**
  * RTC only: thick WTC cell border when wake is not Medium.
- * (M stays plain; B757/Tu204 use yellow instead — see wtcYellowHighlight.)
+ * (M stays plain; B757/Tu204 use black square — see wtcBlackSquareHighlight.)
  */
 const wtcRtcBorder = computed(() => {
   if (!store.multiAirport) return false
   const w = props.strip.wakeTurbulence
-  return !!w && w !== 'M'
+  return !!w && w !== 'M' && !heavyAsLeaderType.value
 })
 
 /** Paper look: red kulspetspenna circle around non-M WTC (unchanged ESGG cue). */
 const wtcPaperCircled = computed(() => {
   if (!paperLook.value) return false
   const w = props.strip.wakeTurbulence
-  return !!w && w !== 'M'
+  return !!w && w !== 'M' && !heavyAsLeaderType.value
 })
 
 /**
- * SAAB / paper look (all views): yellow WTC cell for B757 & Tu204 family.
- * Letter stays "M"; fill matches non-standard RWY (#fddf5f).
+ * ESSA / paper / SAAB: black square behind WTC letter for B757 & Tu204 family.
+ * Letter stays "M" (weight definition); square = treat as H when leading.
  */
-const wtcYellowHighlight = computed(
-  () => paperLook.value && heavyAsLeaderType.value,
-)
+const wtcBlackSquareHighlight = computed(() => heavyAsLeaderType.value)
 
 /** Thick ATYP border for WTC H and J only (no slow / type-list chrome). */
 const atypThickBorder = computed(() => {
@@ -7072,11 +7072,12 @@ function onGroundStateClick(action: string) {
   letter-spacing: 0;
   vertical-align: baseline;
 }
-/* B757 / Tu204: WTC letter stays M; yellow fill = heavy-as-leader (same as non-std RWY) */
-.pg-wtc.pg-wtc-yellow {
-  padding: 0 0.12em;
-  background: #fddf5f;
-  box-shadow: inset 0 0 0 1px #c9a82a;
+/* B757 / Tu204: WTC letter stays M; black square = heavy-as-leader */
+.pg-wtc.pg-wtc-black {
+  padding: 0 0.14em;
+  background: #000;
+  color: #fff;
+  box-shadow: inset 0 0 0 1px #000;
 }
 
 .pg-wtc-scribble {
@@ -8622,9 +8623,13 @@ function onGroundStateClick(action: string) {
 }
 .flight-strip.dimmed-data .strip-main .cell-rwy.rwy-nonstandard,
 .flight-strip.dimmed-data .strip-main .cell-std.stand-blocked,
-.flight-strip.dimmed-data .strip-left .atyp-box.atyp-yellow,
-.flight-strip.dimmed-data .strip-left .wtc-box.wtc-yellow {
+.flight-strip.dimmed-data .strip-left .atyp-box.atyp-yellow {
   color: #000 !important;
+}
+.flight-strip.dimmed-data .strip-left .wtc-box.wtc-black,
+.flight-strip.dimmed-data .pg-wtc.pg-wtc-black {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
 }
 /* Inbound pink C: keep full pink even when strip data is dimmed / ownedByOther */
 .flight-strip.dimmed-data .strip-main .cell.proposal,
@@ -8706,10 +8711,14 @@ function onGroundStateClick(action: string) {
 /* Keep non-standard RWY readable on yellow fill */
 .flight-strip.transfer-out-accepted .strip-main .cell-rwy.rwy-nonstandard,
 .flight-strip.transfer-out-accepted .strip-main .cell-std.stand-blocked,
-.flight-strip.transfer-out-accepted .strip-left .atyp-box.atyp-yellow,
-.flight-strip.transfer-out-accepted .strip-left .wtc-box.wtc-yellow {
+.flight-strip.transfer-out-accepted .strip-left .atyp-box.atyp-yellow {
   color: #000 !important;
   -webkit-text-fill-color: #000 !important;
+}
+.flight-strip.transfer-out-accepted .strip-left .wtc-box.wtc-black,
+.flight-strip.transfer-out-accepted .pg-wtc.pg-wtc-black {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
 }
 /* RTC pink C / ROF cues stay their own colors */
 .flight-strip.transfer-out-accepted .strip-main .cell.proposal,
@@ -8828,10 +8837,11 @@ function onGroundStateClick(action: string) {
   border: 2px solid #111;
   margin: 0;
 }
-/* B757 / Tu204 WTC yellow (paper look also uses .pg-wtc-yellow; digital if ever enabled) */
-.strip-left .wtc-box.wtc-yellow {
-  background: #fddf5f;
-  border: 1px solid #c9a82a;
+/* B757 / Tu204 WTC black square (heavy-as-leader; letter stays M) */
+.strip-left .wtc-box.wtc-black {
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
   margin: 1px;
 }
 /* Slow ATYP (DEP) + heavy types (A388/A124/…): thick frame like non-M WTC */
@@ -9590,6 +9600,16 @@ button.tobt-setby-pm:hover {
   font-size: var(--fs-mid-ghost);
   font-weight: 700;
   border: none !important;
+}
+/* No XFL (and no AHD): centre CFL on the bottom row spanning CFL+AHD */
+.strip-grid-dep .strip-main .cell-cfl.cfl-no-xfl-center {
+  grid-area: cfl / cfl / cfl / ahd;
+  justify-content: center;
+  text-align: center;
+}
+.strip-grid-dep .strip-main:has(.cell-cfl.cfl-no-xfl-center) .cell-ahd {
+  visibility: hidden;
+  pointer-events: none;
 }
 .cell-cfl.editable {
   cursor: pointer;

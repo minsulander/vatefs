@@ -75,6 +75,9 @@ assert.deepEqual(
 )
 // No single ARR-only auto breakout without a parallel pair
 assert.deepEqual(essaRnpBreakoutRunways({ configArr: '26', configDep: '08' }), [])
+// ARR 26 + DEP 19R must not open 19L breakouts (not parallel APP)
+assert.deepEqual(essaRnpBreakoutRunways({ configArr: '26', configDep: '19R' }), [])
+assert.deepEqual(essaRnpBreakoutRunways({ hintRunway: '26', configArr: '26', configDep: '19R' }), [])
 
 assert.equal(essaRnpIndicatorLabel('ALJAC RNP Y', undefined), 'RNP Y')
 assert.equal(essaRnpIndicatorLabel(undefined, 'RNPX 19R'), 'RNP X')

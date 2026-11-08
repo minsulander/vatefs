@@ -3280,6 +3280,11 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'setEssaRoles', roles, manual })
     }
 
+    /** Sync open workspace section ids so backend can gate CTR DEP automoves (ESSA/OTHER). */
+    function setWorkspaceOpenSections(sectionIds: string[]) {
+        sendMessage({ type: 'setWorkspaceOpenSections', sectionIds })
+    }
+
     /**
      * Set ESSA RWY combination manually, or pass manual=false for auto
      * (ES runways + night/day letter selection).
@@ -4133,6 +4138,7 @@ export const useEfsStore = defineStore("efs", () => {
         airportCoverage,
         airportRxFrequencies,
         setEssaRoles,
+        setWorkspaceOpenSections,
         esggRolesMode,
         esggRoles,
         esggRolesManual,

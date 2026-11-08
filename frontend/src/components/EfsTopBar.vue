@@ -284,9 +284,9 @@
             >Disconnect DCL</button>
           </div>
         </v-menu>
-        <!-- Pending + handled DCL log (#75) — especially useful on paper/ESGG -->
+        <!-- Pending + handled DCL log (#75) — ESGG paper only (not SAAB/OTHER/ESSA) -->
         <v-menu
-          v-if="dclLogEntries.length > 0"
+          v-if="efs.isPaperLook && dclLogEntries.length > 0"
           location="bottom"
           offset="4"
           :close-on-content-click="false"
