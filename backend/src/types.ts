@@ -136,6 +136,8 @@ export interface Flight {
     dclMessage?: string           // Original pilot request text
     /** Pilot telex had free-text after ATIS — force manual DCL (no ACK CLR / auto-send). */
     dclRequestHasRemarks?: boolean
+    /** ATIS letter from pilot PREDEP request (#75). */
+    dclRequestAtis?: string
     dclClearance?: string         // Filled-out clearance template for preview
     dclSeqNumber?: number         // Our CPDLC sequence number (to match WILCO/UNABLE)
     dclPdcNumber?: number         // PDC number for this clearance

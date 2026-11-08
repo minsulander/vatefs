@@ -5809,10 +5809,14 @@ class FlightStore {
             ? this.config.activeRunways?.[flight.origin]?.dep
             : undefined
         const displaySid = extractDisplaySid(flight, activeDepForOrigin)
-        // First FPL point after ADEP/rwy or SID/rwy (not the SID procedure name)
+        // Filed TMA exit — prefer FPL route over expanded SID legs (HAPZI must not
+        // replace filed ARS / etc. when a SLOW SID is assigned — #81).
         const tmaExit =
             stripType === 'departure' || stripType === 'local'
-                ? extractTmaExitPoint(undefined, flight.extractedRoute || flight.route)
+                ? extractTmaExitPoint(
+                      displaySid || flight.sid,
+                      flight.route || flight.extractedRoute,
+                  )
                 : undefined
         // Last filed fix before STAR legs (all airports — SAAB ARR bottom-right)
         const tmaEntry =
@@ -5911,6 +5915,7 @@ class FlightStore {
             dclStatus: flight.dclStatus,
             dclMessage: flight.dclMessage,
             dclRequestHasRemarks: flight.dclRequestHasRemarks || undefined,
+            dclRequestAtis: flight.dclRequestAtis || undefined,
             dclClearance: flight.dclClearance,
             paperClrReadSuppressed: paperFresh
                 ? undefined

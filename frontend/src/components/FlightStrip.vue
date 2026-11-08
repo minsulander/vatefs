@@ -95,7 +95,7 @@
           @click.stop="sizeMenuOpen = true"
         >Size…</button>
         <button
-          v-if="store.isPaperLook && canDragStrip && !isLargeView"
+          v-if="paperLook && canDragStrip && !isLargeView"
           type="button"
           class="efs-popup-item"
           @click.stop="klackMenuOpen = true"
@@ -112,7 +112,7 @@
 
     <v-menu v-model="klackMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ + 1" :close-on-content-click="true">
       <div class="efs-popup-menu" @click.stop>
-        <div class="efs-popup-header">{{ store.isPaperLook ? 'Klack' : 'Cock' }}</div>
+        <div class="efs-popup-header">{{ paperLook ? 'Klack' : 'Cock' }}</div>
         <div class="efs-popup-list">
           <button type="button" class="efs-popup-item" @click="onKlackMenu('right')">RIGHT</button>
           <button type="button" class="efs-popup-item" @click="onKlackMenu('left')">LEFT</button>
@@ -121,7 +121,7 @@
             type="button"
             class="efs-popup-item"
             @click="onKlackMenu(null)"
-          >{{ store.isPaperLook ? 'Reset Klack' : 'Reset Cock' }}</button>
+          >{{ paperLook ? 'Reset Klack' : 'Reset Cock' }}</button>
         </div>
       </div>
     </v-menu>
@@ -273,8 +273,8 @@
     ref="stripHostEl"
     class="strip-host"
     :class="{
-      'strip-host--paper': store.isPaperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
-      'strip-host--cocked': !store.isPaperLook && (!!strip.klack || klackPulling),
+      'strip-host--paper': paperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'strip-host--cocked': !paperLook && (!!strip.klack || klackPulling),
       'strip-host--saab-cock': showSaabCockEdges,
       'strip-host--klack-instant': klackInstant,
     }"
@@ -327,11 +327,11 @@
       'strip-note-layout': isNote && !isPaperEmptyFlightHolder,
       'strip-vehicle-layout': isVehicle,
       'look-essa': isVehicle && store.essaRolesMode,
-      'look-paper': store.isPaperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
-      'paper-info-holder': store.isPaperLook && isPaperInfoHolder,
-      'paper-empty-frame': store.isPaperLook && paperInfoKind === 'empty_frame',
-      'paper-empty-arr': store.isPaperLook && paperInfoKind === 'empty_arr',
-      'paper-empty-dep': store.isPaperLook && paperInfoKind === 'empty_dep',
+      'look-paper': paperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'paper-info-holder': paperLook && isPaperInfoHolder,
+      'paper-empty-frame': paperLook && paperInfoKind === 'empty_frame',
+      'paper-empty-arr': paperLook && paperInfoKind === 'empty_arr',
+      'paper-empty-dep': paperLook && paperInfoKind === 'empty_dep',
       'auto-move-hidden': isAutoMoving,
       'print-anim-hidden': isPrinting,
       'layout-arr': isArrLayout,
@@ -344,7 +344,7 @@
       'is-large-view': isLargeView,
       'strip-compact': isCompactBay,
       'dimmed-data': dimmedData,
-      'transfer-out-accepted': !!strip.transferOutAccepted && !store.isPaperLook,
+      'transfer-out-accepted': !!strip.transferOutAccepted && !paperLook,
       'no-drag': !canDragStrip && !isLargeView,
       /* OTHER + RTC share SAAB strip chrome; ESSA keeps its own scheme */
       'rtc-layout': useSaabSharedLayout,
@@ -417,7 +417,7 @@
         </svg>
       </div>
       <!-- Paper: delete via drag to trash — no X -->
-      <div v-if="!isLargeView && !store.isPaperLook" class="note-actions">
+      <div v-if="!isLargeView && !paperLook" class="note-actions">
         <StripCloseButton @click="onNoteClose" />
       </div>
     </template>
@@ -453,7 +453,7 @@
         </svg>
         <span v-else class="note-display note-empty">Click to scribble...</span>
       </div>
-      <div v-if="!isLargeView && !store.isPaperLook" class="note-actions">
+      <div v-if="!isLargeView && !paperLook" class="note-actions">
         <StripCloseButton @click="onNoteClose" />
       </div>
     </template>
@@ -550,7 +550,7 @@
     </template>
 
     <!-- Paper FPS strip (ESGG) — VatFSP field grid in SAAB outer size -->
-    <template v-else-if="store.isPaperLook || isPaperEmptyFlightHolder">
+    <template v-else-if="paperLook || isPaperEmptyFlightHolder">
       <div class="paper-with-actions">
       <div
         class="paper-flight"
@@ -1236,7 +1236,7 @@
                 'time-fls': secondaryTimeKind === 'fls',
                 'time-cdm-sts': secondaryTimeKind === 'slc',
                 'time-constraint-bold':
-                  !store.isPaperLook &&
+                  !paperLook &&
                   (secondaryTimeKind === 'ctot' ||
                     secondaryTimeKind === 'scl' ||
                     secondaryTimeKind === 'fls' ||
@@ -1763,6 +1763,17 @@ const emit = defineEmits<{
 }>()
 
 const store = useEfsStore()
+/**
+ * Paper chrome: global paper look, or ESGG airport strip inside RTC (#45) —
+ * strip type follows airport, not only the active config look.
+ */
+const paperLook = computed(() => {
+  if (store.isPaperLook) return true
+  if (!store.multiAirport) return false
+  const adep = (props.strip.adep || '').toUpperCase()
+  const ades = (props.strip.ades || '').toUpperCase()
+  return adep === 'ESGG' || ades === 'ESGG'
+})
 const zoomStripScalePercent = useZoomStripScalePercent()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
@@ -1789,7 +1800,7 @@ applySpawnExpanderDefaults(props.strip.id, {
 
 /** SAAB flight strips that support half-height compact mode. */
 const canCompactStrip = computed(() => {
-  if (store.isPaperLook) return false
+  if (paperLook.value) return false
   const t = props.strip.stripType
   return t === 'departure' || t === 'arrival' || t === 'local' || t === 'vfr'
 })
@@ -1812,7 +1823,7 @@ const showStripScribbles = computed(
 
 /** SAAB look always draws black; paper uses per-stroke blue/red. */
 function scribbleStrokeHex(color: ScribbleInk | undefined): string {
-  if (!store.isPaperLook) return SCRIBBLE_INK_HEX.black
+  if (!paperLook.value) return SCRIBBLE_INK_HEX.black
   return SCRIBBLE_INK_HEX[color ?? 'blue']
 }
 
@@ -2100,7 +2111,7 @@ function onKlackMenu(klack: 'left' | 'right' | null) {
 /** SAAB: type-coloured side frame is the cock hit target. */
 const showSaabCockEdges = computed(
   () =>
-    !store.isPaperLook &&
+    !paperLook.value &&
     !props.isLargeView &&
     props.strip.stripType !== 'note' &&
     props.strip.stripType !== 'vehicle',
@@ -2131,7 +2142,7 @@ const usesCombinedStripPointer = computed(
   () =>
     !props.isLargeView &&
     canDragStrip.value &&
-    (store.isPaperLook || showSaabCockEdges.value),
+    (paperLook.value || showSaabCockEdges.value),
 )
 const KLACK_BASE_PX = 28
 const PAPER_ARM_PX = 8
@@ -2173,7 +2184,7 @@ function readKlackAmtPx(): number {
   const el = stripElement.value || stripHostEl.value
   if (!el) return KLACK_BASE_PX
   const styles = getComputedStyle(el)
-  if (!store.isPaperLook) {
+  if (!paperLook.value) {
     const gutterRaw = styles.getPropertyValue('--efs-bay-gutter').trim()
     const gutter = parseFloat(gutterRaw) || 8
     const marginRaw = styles.getPropertyValue('--cock-strip-margin-x').trim()
@@ -2192,7 +2203,7 @@ const SAAB_KLACK_SNAP_MULT = 5
 
 function klackSnapThresholdPx(): number {
   const amt = klackAmtPx.value
-  if (!store.isPaperLook && showSaabCockEdges.value) return amt * SAAB_KLACK_SNAP_MULT
+  if (!paperLook.value && showSaabCockEdges.value) return amt * SAAB_KLACK_SNAP_MULT
   return amt * PAPER_KLACK_SNAP_THRESHOLD
 }
 
@@ -2220,7 +2231,7 @@ function captureDragOrigin() {
 function klackOffsetFromPointer(): number {
   const dx = dragLastClientX - paperStartX
   // SAAB needs headroom past 5× cock distance so the snap threshold is reachable
-  const max = !store.isPaperLook && showSaabCockEdges.value
+  const max = !paperLook.value && showSaabCockEdges.value
     ? klackAmtPx.value * (SAAB_KLACK_SNAP_MULT + 0.5)
     : klackAmtPx.value * 2.2
   return Math.max(-max, Math.min(max, klackBaseX + dx))
@@ -2266,7 +2277,7 @@ function applyCockAfterUnifiedDrop(stripId: string, forcedSameSpot?: boolean) {
 const klackPullStyle = computed(() => undefined)
 
 const klackHostStyle = computed(() => {
-  if (!store.isPaperLook && !showSaabCockEdges.value && !props.strip.klack) return undefined
+  if (!paperLook.value && !showSaabCockEdges.value && !props.strip.klack) return undefined
   return {
     '--klack-amt': `${klackAmtPx.value || KLACK_BASE_PX}px`,
   }
@@ -2923,7 +2934,7 @@ const paperShowGoaArrow = computed(
 /** Paper ESGG: CLR / CTL / CTO / ATIS clickspots — locked when another controller owns. */
 const canUsePaperClickspots = computed(
   () =>
-    store.isPaperLook &&
+    paperLook.value &&
     store.isController &&
     !isPaperEmptyFlightHolder.value &&
     store.allowMoveOwnedStrip(props.strip),
@@ -2962,7 +2973,7 @@ function onPaperGoaScribbleClear() {
 
 /** PÅ BANAN / UTFLYGNING / soft G/A — same conditions as zoom rising-/ tag */
 const paperCanXferAppDiag = computed(() => {
-  if (!store.isPaperLook || isPaperEmptyFlightHolder.value) return false
+  if (!paperLook.value || isPaperEmptyFlightHolder.value) return false
   if (!store.isController || !store.allowMoveOwnedStrip(props.strip)) return false
   if (isTransferIn.value) return false
   const sec = props.sectionId || props.strip.sectionId
@@ -2977,7 +2988,7 @@ const paperCanXferAppDiag = computed(() => {
 
 /** Bottom cell left-half clickspot: refuse inbound, XFER APP, cancel outbound, or clear ink */
 const paperShowXferDiagClickspot = computed(() => {
-  if (!store.isPaperLook || isPaperEmptyFlightHolder.value || !store.isController) return false
+  if (!paperLook.value || isPaperEmptyFlightHolder.value || !store.isController) return false
   const id = props.strip.id
   // Keep clickzone while tagged ink is present so mismatched shapes can still be cleared
   if (hasClrScribble(id, 'xfer-app') || hasClrScribble(id, 'xfer-refuse')) return true
@@ -2995,7 +3006,7 @@ const paperXferDiagTitle = computed(() => {
 
 /** Click left half of bottom col-1 cell — rising diagonal / (refuse, XFER APP, or re-assume) */
 function onPaperXferDiagClick() {
-  if (!store.isPaperLook || isPaperEmptyFlightHolder.value || !store.isController) return
+  if (!paperLook.value || isPaperEmptyFlightHolder.value || !store.isController) return
   const id = props.strip.id
 
   // Ink present: always clear; re-assume only if outbound was pending
@@ -3046,7 +3057,7 @@ const paperTas = computed(() => {
 
 /** Paper tooltips: short field names in ESGG / paper mode */
 function paperTip(shortLabel: string, longLabel: string): string {
-  return store.isPaperLook ? shortLabel : longLabel
+  return paperLook.value ? shortLabel : longLabel
 }
 
 /** Paper col 4 — CLR read (also on when readback or ES CLR; unsetting in CLEARED clears ES CLR) */
@@ -3076,22 +3087,38 @@ const paperShowDclRead = computed(() => {
 /** True while we auto-opened CLR for a paper DCL REQUEST (dismiss on auto/semi send). */
 const dclDialogAutoOpened = ref(false)
 
+/** True when auto/semi will handle this REQUEST without controller Send. */
+function dclWillAutoHandleRequest(): boolean {
+  if (props.strip.dclRequestHasRemarks) return false
+  if (store.dclMode === 'auto') return true
+  if (store.dclMode !== 'semi') return false
+  const sid = (props.strip.sid || '').replace(/[\s·.•]/g, '').toUpperCase()
+  const sidOk = !!sid && /^[A-Z0-9]+$/.test(sid)
+  const cflOk = !!(props.strip.clearedAltitude || '').trim()
+  const sq = (props.strip.squawk || '').trim()
+  const sqOk = !!sq && sq !== '0000'
+  return sidOk && cflOk && sqOk
+}
+
 /**
- * Paper has no CLNC action key — on DCL REQUEST, open Clearance so manual/semi
- * can Send. Auto/semi that auto-sends → SENT closes the flash dialog.
+ * Paper has no CLNC action key — open Clearance only when controller must act.
+ * Auto-handled REQUEST: no dialog (#75); still appears in top-bar DCL log.
  */
 watch(
   () => props.strip.dclStatus,
   (status, prev) => {
-    if (!store.isPaperLook || isArrLayout.value || isPaperEmptyFlightHolder.value) return
+    if (!paperLook.value || isArrLayout.value || isPaperEmptyFlightHolder.value) return
     if (!canEditAssignedData.value || props.strip.ownedByOther) return
 
     if (status === 'REQUEST' && prev !== 'REQUEST') {
+      if (dclWillAutoHandleRequest()) {
+        dclDialogAutoOpened.value = false
+        return
+      }
       clncDialogOpen.value = true
       dclDialogAutoOpened.value = true
       return
     }
-    // Auto/semi auto-send succeeded — don't leave a SENT dialog flash open
     if (
       status === 'SENT' &&
       dclDialogAutoOpened.value &&
@@ -3578,7 +3605,7 @@ const rwyNonStandard = computed(() => {
  * DEP/local → above ADEP; ARR → above ADES.
  */
 const paperNonStdRwyLabel = computed(() => {
-  if (!store.isPaperLook || isPaperEmptyFlightHolder.value) return ''
+  if (!paperLook.value || isPaperEmptyFlightHolder.value) return ''
   if (!rwyNonStandard.value) return ''
   const rwy = (props.strip.runway || '').trim()
   return rwy || ''
@@ -3612,7 +3639,7 @@ const wtcRtcBorder = computed(() => {
 
 /** Paper look: red kulspetspenna circle around non-M WTC (unchanged ESGG cue). */
 const wtcPaperCircled = computed(() => {
-  if (!store.isPaperLook) return false
+  if (!paperLook.value) return false
   const w = props.strip.wakeTurbulence
   return !!w && w !== 'M'
 })
@@ -3622,7 +3649,7 @@ const wtcPaperCircled = computed(() => {
  * Letter stays "M"; fill matches non-standard RWY (#fddf5f).
  */
 const wtcYellowHighlight = computed(
-  () => store.isPaperLook && heavyAsLeaderType.value,
+  () => paperLook.value && heavyAsLeaderType.value,
 )
 
 /** Thick ATYP border for WTC H and J only (no slow / type-list chrome). */
@@ -3640,7 +3667,7 @@ const atypYellowHighlight = computed(
  * ESSA (`essaRolesMode`) keeps its own strip scheme; paper never uses this.
  */
 const useSaabSharedLayout = computed(
-  () => !store.isPaperLook && !store.essaRolesMode,
+  () => !paperLook.value && !store.essaRolesMode,
 )
 
 /**
@@ -3692,7 +3719,7 @@ const xflCoordAmber = computed(
  */
 const showEstCoordC = computed(
   () =>
-    !store.isPaperLook &&
+    !paperLook.value &&
     !isArrLayout.value &&
     !!props.strip.exitCoordPending,
 )
@@ -3702,7 +3729,7 @@ const showEstCoordC = computed(
  * Accept/Refuse only — no send / XflMenu / DepCoord. Not RTC-config-gated.
  */
 const showArrCoordPendingC = computed(
-  () => !store.isPaperLook && isArrLayout.value && !!props.strip.exitCoordPending,
+  () => !paperLook.value && isArrLayout.value && !!props.strip.exitCoordPending,
 )
 
 /** DEP: always show XFL (non-compact). ARR: only the pending pink-C PEL slot on RTC. */
@@ -4059,7 +4086,7 @@ const remarksInput = ref<HTMLInputElement | null>(null)
 
 function clearScribblesInCell(sel: string): boolean {
   const root = stripElement.value
-  if (!root || store.isPaperLook) return false
+  if (!root || paperLook.value) return false
   const el = root.querySelector(sel) as HTMLElement | null
   if (!el) return false
   const rect = elementToScribbleRect(el, root)
@@ -4080,7 +4107,7 @@ watch(
       cfto: !!props.strip.clearedForTakeoff,
     }) as const,
   (cur, prev) => {
-    if (store.isPaperLook) return
+    if (paperLook.value) return
     const becameAirborne = cur.airborne && !prev?.airborne
     const becameCfto = cur.cfto && !prev?.cfto
     if (becameAirborne || becameCfto) {
@@ -4202,7 +4229,7 @@ const tmaExitPoint = computed(() => {
  * Bottom-right expander: TMA entry for SAAB ARR (ESSA / OTHER / RTC — not paper),
  * TMA exit for DEP/local. Prefer strip.tmaEntry; else filed route + STAR (skip STAR legs).
  */
-const useTmaEntryBottom = computed(() => !store.isPaperLook && isArrLayout.value)
+const useTmaEntryBottom = computed(() => !paperLook.value && isArrLayout.value)
 
 const tmaBottomPoint = computed(() => {
   if (useTmaEntryBottom.value) {
@@ -4225,7 +4252,7 @@ const tmaBottomTitle = computed(() => {
  * shows the C box. Never paper look. ESSA/ESGG are not in the coordination set.
  */
 const showCooCell = computed(() => {
-  if (store.isPaperLook) return false
+  if (paperLook.value) return false
   if (isCompactBay.value || isArrLayout.value) return false
   if (props.strip.airborne) return false
   if (!isIfrSidEligible(props.strip.flightRules)) return false
@@ -4617,7 +4644,7 @@ const isRea = computed(() => cdmStatus.value?.kind === 'rea')
 const flsSlcInSecondary = computed(
   () =>
     isDepartingIfr.value &&
-    !store.isPaperLook &&
+    !paperLook.value &&
     !props.strip.clearedForTakeoff &&
     !isCtrDepSection(props.strip.sectionId) &&
     (isFls.value || isSlcSts.value),
@@ -4722,7 +4749,7 @@ const primaryTimeLabel = computed(() => {
 const depArrowCtot = computed(() => {
   if (isArrLayout.value || props.strip.atd || !showCtot.value || props.strip.clearedForTakeoff) return ''
   // Digital SAAB: CTOT/FLS/SLC live in the bottom time box — not the dep arrow
-  if (isDepartingIfr.value && !store.isPaperLook) return ''
+  if (isDepartingIfr.value && !paperLook.value) return ''
   if (showCtotCancelled.value) return 'SCL'
   return formatHhmmColon(props.strip.ctot)
 })
@@ -4740,7 +4767,7 @@ const secondaryTimeKind = computed((): SecondaryTimeKind => {
   if (isArrLayout.value) return 'assr'
   // VFR / Z / non-IFR deps: always SSR in the bottom box (not CTOT slot)
   if (isDeparture.value && !isDepartingIfr.value) return 'assr'
-  if (isDepartingIfr.value && !store.isPaperLook) {
+  if (isDepartingIfr.value && !paperLook.value) {
     if (flsSlcInSecondary.value) {
       if (isFls.value) return 'fls'
       if (isSlcSts.value) return 'slc'
@@ -4913,7 +4940,7 @@ const assrTitle = computed(() => {
 })
 
 /** Paper FPS: short ASSR tooltip only */
-const paperAssrTitle = computed(() => (store.isPaperLook ? 'ASSR' : assrTitle.value))
+const paperAssrTitle = computed(() => (paperLook.value ? 'ASSR' : assrTitle.value))
 
 function startAssrManualEdit() {
   assrEditText.value = displayAssr.value || ''
@@ -4980,7 +5007,7 @@ const canEditPrimaryTime = computed(
     canEditAssignedData.value &&
     (primaryTimeKind.value === 'tobt' ||
       primaryTimeKind.value === 'tsat' ||
-      (primaryTimeKind.value === 'eobt' && !store.isPaperLook)),
+      (primaryTimeKind.value === 'eobt' && !paperLook.value)),
 )
 
 /** ESSA CDM TOBT entry / Ready TOBT click menu (from TS or dim TB; incl. FLS) */
@@ -5027,7 +5054,7 @@ const showCdmPmPending = computed(
 const canOpenEobtMenu = computed(
   () =>
     canEditAssignedData.value &&
-    !store.isPaperLook &&
+    !paperLook.value &&
     !isLocalOnlyStrip.value &&
     primaryTimeKind.value === 'eobt' &&
     showPrimaryTime.value,
@@ -5636,15 +5663,23 @@ function actionButtonClass(action: string): Record<string, boolean> {
     classes['action-goa'] = true
   }
 
-  // DCL status coloring for CLNC button (green while SENT or DONE/WILCO confirmed)
+  // DCL: filled key when controller must act; text-only while awaiting pilot (#75)
   if (action === 'CLNC') {
     const status = props.strip.dclStatus
-    const remarksNeedAction =
-      status === 'REQUEST' && !!props.strip.dclRequestHasRemarks
-    classes['action-dcl-request'] = status === 'REQUEST' && !remarksNeedAction
-    // Remarks in PREDEP telex → stronger highlight than normal yellow REQUEST
-    classes['action-dcl-remarks'] = remarksNeedAction
-    classes['action-dcl-error'] = status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED'
+    const err =
+      status === 'INVALID' || status === 'UNABLE' || status === 'REJECTED'
+    const needsAction =
+      err ||
+      (status === 'REQUEST' &&
+        (!!props.strip.dclRequestHasRemarks ||
+          store.dclMode === 'manual' ||
+          (store.dclMode === 'semi' && !dclWillAutoHandleRequest())))
+    classes['action-dcl-error'] = err
+    // Filled amber — needs controller action
+    classes['action-dcl-remarks'] = needsAction && !err
+    // Text-only yellow — auto REQUEST in progress (no filled button)
+    classes['action-dcl-request'] = status === 'REQUEST' && !needsAction
+    // Text-only green — SENT (awaiting WILCO) or DONE
     classes['action-dcl-sent'] = status === 'SENT' || status === 'DONE' || status === 'WILCO'
   }
 

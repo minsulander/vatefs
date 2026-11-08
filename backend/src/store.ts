@@ -136,6 +136,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "dclStatus",
     "dclMessage",
     "dclRequestHasRemarks",
+    "dclRequestAtis",
     "dclClearance",
     "noteText",
     "paperInfoKind",

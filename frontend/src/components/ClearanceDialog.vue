@@ -95,6 +95,16 @@
           <span class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
         </div>
         <div v-if="strip.dclMessage" class="efs-popup-meta clnc-dcl-message">{{ strip.dclMessage }}</div>
+        <div
+          v-if="strip.dclRequestAtis"
+          class="efs-popup-meta clnc-dcl-atis"
+          :class="dclAtisMismatch ? 'clnc-dcl-atis--mismatch' : 'clnc-dcl-atis--ok'"
+        >
+          Pilot ATIS {{ strip.dclRequestAtis }}
+          <template v-if="liveAtisLetter"> · live {{ liveAtisLetter }}</template>
+          <template v-if="dclAtisMismatch"> — mismatch</template>
+          <template v-else-if="liveAtisLetter"> — match</template>
+        </div>
         <div v-if="strip.dclClearance" class="efs-popup-meta clnc-dcl-preview">{{ strip.dclClearance }}</div>
         <div v-if="strip.dclStatus === 'REQUEST'" class="efs-popup-search">
           <span class="clnc-field-label">RMK</span>
@@ -114,12 +124,22 @@
           <input v-model="remarks" class="efs-popup-search-input" placeholder="Remarks…" />
         </div>
       </template>
-      <template v-else-if="strip.dclStatus">
+      <template v-else-if="strip.dclStatus || strip.dclMessage">
         <div class="efs-popup-section">
           DCL
-          <span class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
+          <span v-if="strip.dclStatus" class="clnc-dcl-status" :class="dclStatusClass">{{ strip.dclStatus }}</span>
         </div>
         <div v-if="strip.dclMessage" class="efs-popup-meta clnc-dcl-message">{{ strip.dclMessage }}</div>
+        <div
+          v-if="strip.dclRequestAtis"
+          class="efs-popup-meta clnc-dcl-atis"
+          :class="dclAtisMismatch ? 'clnc-dcl-atis--mismatch' : 'clnc-dcl-atis--ok'"
+        >
+          Pilot ATIS {{ strip.dclRequestAtis }}
+          <template v-if="liveAtisLetter"> · live {{ liveAtisLetter }}</template>
+          <template v-if="dclAtisMismatch"> — mismatch</template>
+          <template v-else-if="liveAtisLetter"> — match</template>
+        </div>
         <div v-if="strip.dclClearance" class="efs-popup-meta clnc-dcl-preview">{{ strip.dclClearance }}</div>
       </template>
 
@@ -250,6 +270,24 @@ const dclStatusClass = computed(() => {
     case 'REJECTED': return 'dcl-status-error'
     default: return ''
   }
+})
+
+/** Live ATIS letter for strip ADEP (compare to pilot PREDEP letter). */
+const liveAtisLetter = computed(() => {
+  const adep = (props.strip.adep || '').toUpperCase()
+  const info =
+    store.atisInfo.find((a) => a.airport.toUpperCase() === adep) ??
+    store.atisInfo[0]
+  // DEP letter preferred for clearance; fall back to single ATIS
+  const letter = (info?.depAtis || info?.atis || '').trim().toUpperCase()
+  return letter || ''
+})
+
+const dclAtisMismatch = computed(() => {
+  const pilot = (props.strip.dclRequestAtis || '').trim().toUpperCase()
+  const live = liveAtisLetter.value
+  if (!pilot || !live) return false
+  return pilot !== live
 })
 
 async function checkHoppieOnline() {
@@ -917,6 +955,20 @@ function onAssrClick() {
 .clnc-dcl-message {
   word-break: break-all;
   opacity: 0.85;
+}
+
+.clnc-dcl-atis {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.clnc-dcl-atis--ok {
+  color: #1a5a1a;
+}
+
+.clnc-dcl-atis--mismatch {
+  color: #8a1010;
+  background: #f8e0e0;
 }
 
 .clnc-dcl-preview {
