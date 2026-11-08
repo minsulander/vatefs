@@ -1014,7 +1014,18 @@ function reevaluateAndBroadcast(callsign: string) {
 
     if (!result.strip) return
 
-    // Handle section change: recompute positions in old section
+    // Same-slot: pin appearance order (TAXIWAY ARR TXIN/TAXI etc.).
+    // Section moves and APP-transfer sticky-top bumps: allow new pos.
+    const allowPos = !!(result.sectionChanged || result.allowPositionChange)
+    // Apply into the new section first, then recompute the old section.
+    // Recomputing first still includes this strip under previousSection and
+    // setStripAssignment would undo the flightStore section change (ACK CLR
+    // CD→TSAT jump: optimistic move, then regenerate/echo moves again).
+    const applied = store.updateStripFromFlight(
+        result.strip,
+        allowPos ? { allowPositionChange: true } : undefined
+    )
+
     if (result.sectionChanged && result.previousSection) {
         store.recomputePositions(
             result.previousSection.bayId,
@@ -1022,14 +1033,6 @@ function reevaluateAndBroadcast(callsign: string) {
             false
         )
     }
-
-    // Same-slot: pin appearance order (TAXIWAY ARR TXIN/TAXI etc.).
-    // Section moves and APP-transfer sticky-top bumps: allow new pos.
-    const allowPos = !!(result.sectionChanged || result.allowPositionChange)
-    const applied = store.updateStripFromFlight(
-        result.strip,
-        allowPos ? { allowPositionChange: true } : undefined
-    )
 
     // Broadcast shifted strips and gaps BEFORE the auto-moved strip so positions are settled
     // by the time the frontend mounts the moved strip and measures its target position

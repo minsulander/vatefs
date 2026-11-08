@@ -5634,8 +5634,10 @@ function onReadyTobtClick() {
 function onCtotClick(event: MouseEvent) {
   if (!canEditAssignedData.value || !showCtot.value || showCtotCancelled.value) return
   const ctot = normalizeHhmmDisplay(props.strip.ctot)
-  // Missing or mismatched CTOC (amber): left-click sets/updates CTOC from live CTOT
-  if (canEditCtoc.value && ctot && ctotPendingAck.value) {
+  // Amber CTOT: left-click sets/updates CTOC from live CTOT (turns black).
+  // Do not gate on showTsacCtoc / canEditCtoc — those only apply in CD ALL / TSAT;
+  // outside those bays the click used to open the menu instead of acknowledging.
+  if (ctot && ctotPendingAck.value) {
     store.setCtoc(props.strip.id, ctot)
     return
   }
