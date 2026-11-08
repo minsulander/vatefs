@@ -6,7 +6,7 @@
  * - Radar-vector (not SLOW): "ARS6E·KOGAV" → "ARS 6E veKOGAV"; "ARS6E·ARS" → "ARS 6E"
  * - SLOW track:
  *   - one separator:  "120·BABAP" → "120veBABAP"
- *   - two separators: "010·240·NOSLI" → "010·240veNOSLI" (keep first ·, replace second with ve)
+ *   - two separators: "010·240·NOSLI" → "240veNOSLI" (first heading goes to AHD)
  */
 
 const TRACK_SEP_RE = /[·•*]/
@@ -98,6 +98,49 @@ export function isTrackSidName(sid: string | undefined | null): boolean {
     if (!raw || raw.startsWith("VFR")) return false
     if (isVectorSidName(raw)) return false
     return TRACK_SID_RE.test(raw)
+}
+
+/**
+ * Parse track/SLOW SID into headings + exit.
+ * - `120·BABAP` → firstHeading=120, exit=BABAP
+ * - `010·240·NOSLI` → firstHeading=010, secondHeading=240, exit=NOSLI
+ */
+export function parseTrackSidParts(
+    sid: string | undefined | null,
+): { firstHeading: string; secondHeading?: string; exit: string } | null {
+    if (!sid) return null
+    const raw = sid.trim().toUpperCase().replace(/\s+/g, "")
+    if (!raw || /^VFR/i.test(raw)) return null
+    if (isVectorSidName(raw)) return null
+    if (!TRACK_SEP_RE.test(raw)) return null
+
+    const parts = raw.split(TRACK_SEP_RE).filter(Boolean)
+    if (parts.length === 3) {
+        const [a, b, exit] = parts
+        if (/^\d{3}$/.test(a!) && /^\d{3}$/.test(b!) && /^[A-Z]{2,}$/.test(exit!)) {
+            return { firstHeading: a!, secondHeading: b!, exit: exit! }
+        }
+        return null
+    }
+    if (parts.length === 2) {
+        const [heading, exit] = parts
+        if (/^\d{3}$/.test(heading!) && /^[A-Z]{2,}$/.test(exit!)) {
+            return { firstHeading: heading!, exit: exit! }
+        }
+    }
+    return null
+}
+
+/** Two-heading track SID: NNN·NNN·EXIT (first heading → AHD). */
+export function isTwoHeadingTrackSid(sid: string | undefined | null): boolean {
+    const p = parseTrackSidParts(sid)
+    return !!p?.secondHeading
+}
+
+/** One-heading track SID: NNN·EXIT. */
+export function isOneHeadingTrackSid(sid: string | undefined | null): boolean {
+    const p = parseTrackSidParts(sid)
+    return !!p && !p.secondHeading
 }
 
 /** Named HAPZI SLOW SIDs (HAPZI1G, HAPZI 1G, …). */
@@ -193,28 +236,11 @@ export function formatAhdVectorSidDisplay(tmaExit: string | undefined | null): s
 
 /** Strip display form for ESE track/SLOW SIDs. */
 export function formatTrackSidDisplay(sid: string | undefined | null): string | null {
-    if (!sid) return null
-    const raw = sid.trim().toUpperCase().replace(/\s+/g, "")
-    if (!raw || /^VFR/i.test(raw)) return null
-    if (isVectorSidName(raw)) return null
-    if (!TRACK_SEP_RE.test(raw)) return null
-
-    const parts = raw.split(TRACK_SEP_RE).filter(Boolean)
-    if (parts.length === 3) {
-        const [a, b, exit] = parts
-        if (/^\d{3}$/.test(a!) && /^\d{3}$/.test(b!) && /^[A-Z]{2,}$/.test(exit!)) {
-            // Keep first separator, replace second with ve
-            return `${a!}·${b!}ve${exit!}`
-        }
-        return null
-    }
-    if (parts.length === 2) {
-        const [heading, exit] = parts
-        if (/^\d{3}$/.test(heading!) && /^[A-Z]{2,}$/.test(exit!)) {
-            return `${heading!}ve${exit!}`
-        }
-    }
-    return null
+    const parts = parseTrackSidParts(sid)
+    if (!parts) return null
+    // Two-heading: first heading lives in AHD — strip shows second·exit as XXXveEXIT
+    if (parts.secondHeading) return `${parts.secondHeading}ve${parts.exit}`
+    return `${parts.firstHeading}ve${parts.exit}`
 }
 
 /**
@@ -245,15 +271,12 @@ export function formatVectorSidDisplay(
     return `${baseLabel} ve${parsed.exit}`
 }
 
-/** @deprecated AHDG is no longer derived from SID */
+/** First heading + strip display for track SIDs (two-heading → AHD = first). */
 export function parseTrackSid(sid: string | undefined | null): { ahdg: string; display: string } | null {
+    const parts = parseTrackSidParts(sid)
     const display = formatTrackSidDisplay(sid)
-    if (!display) return null
-    const raw = sid!.trim().toUpperCase().replace(/\s+/g, "")
-    const parts = raw.split(TRACK_SEP_RE).filter(Boolean)
-    const ahdg = parts[0] && /^\d{3}$/.test(parts[0]) ? parts[0] : ""
-    if (!ahdg) return null
-    return { ahdg, display }
+    if (!parts || !display) return null
+    return { ahdg: parts.firstHeading, display }
 }
 
 /**
@@ -340,21 +363,17 @@ export function extractSignificantRouteFixes(
 
 /**
  * TMA exit = first significant FPL route point, excluding ADEP/rwy and SID/rwy.
- * SID procedure name is ignored (ROKNI4R/08 ARS … → ARS).
- * When `sid` is set, also skip that procedure's name (e.g. HAPZI SID must not
- * replace filed ARS as the exit — #81).
+ * SID designators in the route (PETEV2G, PETEV2G/01L) are ignored by
+ * extractSignificantRouteFixes — they are never the exit.
+ * Do **not** skip a filed fix that shares the SID name (PETEV2G + PETEV N872… → PETEV).
+ * HAPZI is never an exit (#81); it is filtered in extractSignificantRouteFixes.
  */
 export function extractTmaExitPoint(
-    sid: string | undefined | null,
+    _sid: string | undefined | null,
     route: string | undefined | null,
 ): string | undefined {
     const fixes = extractSignificantRouteFixes(route)
-    if (!fixes.length) return undefined
-    const sidName =
-        extractFixFromProcedureName(sid) ||
-        (isHapziSid(sid) ? "HAPZI" : undefined)
     for (const fix of fixes) {
-        if (sidName && fix === sidName) continue
         if (/^HAPZI$/i.test(fix)) continue
         return fix
     }

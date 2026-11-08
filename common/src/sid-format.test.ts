@@ -7,9 +7,14 @@ import {
     extractTmaEntryPoint,
     extractTmaExitPoint,
     formatSidForDisplay,
+    formatTrackSidDisplay,
     formatVectorSidDisplay,
     isOffExitVectorSid,
+    isOneHeadingTrackSid,
+    isTwoHeadingTrackSid,
     isVectorSidName,
+    parseTrackSid,
+    parseTrackSidParts,
 } from "./sid-format.js"
 
 let passed = 0
@@ -73,6 +78,21 @@ check("HAPZI SID does not replace filed TMA exit ARS (#81)", () => {
     assert.equal(extractTmaExitPoint("HAPZI1G", "HAPZI TRF DCT"), "TRF")
 })
 
+check("PETEV route exit is PETEV (not ELPAX); SID designator is not the exit", () => {
+    const route = "PETEV N872 ELPAX DCT IBREK/N0465F400 DCT DOSUR DCT NIKIL DCT EEL"
+    assert.equal(extractTmaExitPoint(undefined, route), "PETEV")
+    // SID before the exit fix must not skip PETEV
+    assert.equal(extractTmaExitPoint("PETEV2G", route), "PETEV")
+    assert.equal(
+        extractTmaExitPoint("PETEV2G", "PETEV2G/01L PETEV N872 ELPAX DCT IBREK"),
+        "PETEV",
+    )
+    assert.equal(
+        extractTmaExitPoint(undefined, "PETEV2G/01L PETEV N872 ELPAX"),
+        "PETEV",
+    )
+})
+
 check("TMA entry ignores STAR legs after IAF (OBCIV)", () => {
     const expanded = "ARS NOSLI ELTOK OBCIV SA865 ERXEC"
     assert.equal(extractTmaEntryPoint(expanded, "ELTOK1G"), "ELTOK")
@@ -82,6 +102,33 @@ check("TMA entry ignores STAR legs after IAF (OBCIV)", () => {
 check("TMA entry falls back to STAR name", () => {
     assert.equal(extractTmaEntryPoint("", "ELTOK1G"), "ELTOK")
     assert.equal(extractTmaEntryPoint(undefined, "ALJAC RNP Y"), "ALJAC")
+})
+
+check("one-heading track: 120·BABAP → 120veBABAP", () => {
+    assert.equal(formatTrackSidDisplay("120·BABAP"), "120veBABAP")
+    assert.equal(formatSidForDisplay("120*BABAP"), "120veBABAP")
+    assert.equal(isOneHeadingTrackSid("120·BABAP"), true)
+    assert.equal(isTwoHeadingTrackSid("120·BABAP"), false)
+    assert.deepEqual(parseTrackSidParts("120·BABAP"), {
+        firstHeading: "120",
+        exit: "BABAP",
+    })
+})
+
+check("two-heading track: strip drops first heading (AHD)", () => {
+    assert.equal(formatTrackSidDisplay("010·240·NOSLI"), "240veNOSLI")
+    assert.equal(formatSidForDisplay("010*330*RESNA"), "330veRESNA")
+    assert.equal(isTwoHeadingTrackSid("010·240·NOSLI"), true)
+    assert.equal(isOneHeadingTrackSid("010·240·NOSLI"), false)
+    assert.deepEqual(parseTrackSidParts("010·240·NOSLI"), {
+        firstHeading: "010",
+        secondHeading: "240",
+        exit: "NOSLI",
+    })
+    assert.deepEqual(parseTrackSid("010·240·NOSLI"), {
+        ahdg: "010",
+        display: "240veNOSLI",
+    })
 })
 
 console.log(`${passed} passed`)
