@@ -3770,8 +3770,8 @@ const xflCellTitle = computed(() => {
   }
   return 'EuroScope XFL - click to request exit coordination'
 })
-/** GS where confirmed DCL stays filled green (drives ▲). TAXI+ → frame only. */
-const DCL_FILL_GROUNDSTATES = new Set(['', 'NSTS', 'ONFREQ', 'DE-ICE', 'STUP', 'PUSH'])
+/** GS where confirmed DCL stays filled green (drives ▲). RDY/STUP/PUSH/TAXI+ → frame only. */
+const DCL_FILL_GROUNDSTATES = new Set(['', 'NSTS', 'ONFREQ'])
 
 const dclConfirmed = computed(() => {
   const s = props.strip.dclStatus
@@ -3783,26 +3783,73 @@ const dclFillGroundstate = computed(() => {
   return DCL_FILL_GROUNDSTATES.has(gs)
 })
 
+/** Effective CD / GND from role picker or classic myRole. */
+const dclHasCdRole = computed(() => {
+  if (store.essaRolesMode) return store.essaRoles.includes('CD')
+  if (store.esggRolesMode) return store.esggRoles.includes('CD')
+  return store.myRole === 'DEL'
+})
+
+const dclHasGndRole = computed(() => {
+  if (store.essaRolesMode) return store.essaRoles.some((r) => r.startsWith('GND'))
+  if (store.esggRolesMode) return store.esggRoles.includes('GND')
+  return store.myRole === 'GND'
+})
+
+/**
+ * CD and GND are separately staffed (neither side covers the other).
+ * Covering both (e.g. TWR→CD+GND) is not a split.
+ */
+const cdGndSplit = computed(() => {
+  const otherDel = store.controllers.some((c) =>
+    (c.callsign || '').toUpperCase().endsWith('_DEL'),
+  )
+  const otherGnd = store.controllers.some((c) =>
+    (c.callsign || '').toUpperCase().endsWith('_GND'),
+  )
+  const cdStaffed = dclHasCdRole.value || store.myRole === 'DEL' || otherDel
+  const gndStaffed = dclHasGndRole.value || store.myRole === 'GND' || otherGnd
+  if (!cdStaffed || !gndStaffed) return false
+  // Covering both roles locally = not split
+  if (dclHasCdRole.value && dclHasGndRole.value) return false
+  return true
+})
+
+/**
+ * Confirmed DCL fill / ▲:
+ * - CD+GND split, CD side → always green
+ * - CD+GND split, GND side → never green
+ * - otherwise → early GS only (empty/NSTS/ONFREQ)
+ */
+const dclDrivesFillGreen = computed(() => {
+  if (!dclConfirmed.value) return false
+  if (cdGndSplit.value) {
+    if (dclHasCdRole.value && !dclHasGndRole.value) return true
+    if (dclHasGndRole.value && !dclHasCdRole.value) return false
+    return false
+  }
+  return dclFillGroundstate.value
+})
+
 /**
  * Top-expander CLR/DCL chip.
- * Fill green (▲) = DCL confirmed + early GS; frame green (no ▲) = voice CLR or
- * DCL confirmed after TAXI+. SENT stays neutral (awaiting WILCO).
+ * Fill green (▲) = DCL confirmed + early GS (or always on CD when split);
+ * frame green (no ▲) = voice CLR, late GS, or GND when CD/GND split.
+ * SENT stays neutral (awaiting WILCO).
  */
 const clrChipClass = computed(() => {
   const s = props.strip.dclStatus
   if (s === 'REQUEST') return 'dcl-request'
   if (s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED') return 'dcl-err'
   if (dclConfirmed.value) {
-    return dclFillGroundstate.value ? 'exp-clr-ok' : 'exp-clr-frame'
+    return dclDrivesFillGreen.value ? 'exp-clr-ok' : 'exp-clr-frame'
   }
   if (props.strip.clearance) return 'exp-clr-frame'
   return ''
 })
 
 /** Filled DCL green drives the top ▲; frame CLR/DCL does not. */
-const clrDrivesTopArrowGreen = computed(
-  () => dclConfirmed.value && dclFillGroundstate.value,
-)
+const clrDrivesTopArrowGreen = computed(() => dclDrivesFillGreen.value)
 
 /** ESSA: show DCL when Hoppie flow is active or pilot is online on Hoppie. */
 const hoppieOnlineForClr = ref(false)
