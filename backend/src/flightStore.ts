@@ -50,9 +50,10 @@ import { getAirportCoords } from "./airport-data.js"
 import { isWithinRangeOfAnyAirport, isWithinStripVisibilityRange, findNearestAirport } from "./geo-utils.js"
 import { findStandForPosition, hasStandData } from "./stand-data.js"
 import {
-    hasEssaStandAssignData,
-    isEssaStandBlocked,
+    hasStandMenuAirport,
+    isStandBlocked,
     resolveAircraftDims,
+    standMenuAirports,
     type OccupierInfo,
 } from "./essa-stand-assign.js"
 import { isOnAnyRunway } from "./runway-detection.js"
@@ -2580,8 +2581,9 @@ class FlightStore {
         return this.withStandBlockedPeerRefresh(result, cs || undefined)
     }
 
-    /** Build GRP occupancy traffic snapshot for ESSA stand checks. */
-    buildEssaOccupierTraffic(): OccupierInfo[] {
+    /** Build GRP occupancy traffic snapshot for stand checks at one airport. */
+    buildOccupierTraffic(airport: string): OccupierInfo[] {
+        const apt = airport.toUpperCase()
         const traffic: OccupierInfo[] = []
         for (const f of this.flights.values()) {
             if (!f.callsign) continue
@@ -2595,7 +2597,7 @@ class FlightStore {
                 heading: f.heading,
                 groundstate: f.groundstate,
                 airborne: !!f.airborne,
-                departure: origin === "ESSA",
+                departure: origin === apt,
                 tsat: f.tsat,
                 tobt: f.tobt,
                 eobt: f.eobt,
@@ -2605,20 +2607,26 @@ class FlightStore {
                     f.callsign,
                     f.fplRemarks,
                 ),
-                assigned: !!(f.stand && destination === "ESSA" && origin !== "ESSA"),
+                assigned: !!(f.stand && destination === apt && origin !== apt),
             })
         }
         return traffic
     }
 
+    /** @deprecated Use buildOccupierTraffic("ESSA") */
+    buildEssaOccupierTraffic(): OccupierInfo[] {
+        return this.buildOccupierTraffic("ESSA")
+    }
+
     private evalStandBlocked(flight: Flight): boolean {
-        if (!hasEssaStandAssignData()) return false
-        if ((flight.destination || "").toUpperCase() !== "ESSA") return false
+        const dest = (flight.destination || "").toUpperCase()
+        if (!hasStandMenuAirport(dest)) return false
         if (!flight.stand) return false
-        return isEssaStandBlocked(
+        return isStandBlocked(
+            dest,
             flight.stand,
             flight.callsign,
-            this.buildEssaOccupierTraffic(),
+            this.buildOccupierTraffic(dest),
         )
     }
 
@@ -2627,16 +2635,22 @@ class FlightStore {
      * flag changed (so strips can be regenerated).
      */
     syncPeerStandBlockedFlags(exceptCallsign?: string): string[] {
-        if (!hasEssaStandAssignData()) return []
-        if (!this.config.myAirports.some((a) => a.toUpperCase() === "ESSA")) return []
+        const menuAirports = standMenuAirports().filter((a) =>
+            this.config.myAirports.some((m) => m.toUpperCase() === a),
+        )
+        if (!menuAirports.length) return []
         const except = (exceptCallsign || "").toUpperCase()
-        const traffic = this.buildEssaOccupierTraffic()
+        const trafficByApt = new Map(
+            menuAirports.map((a) => [a, this.buildOccupierTraffic(a)] as const),
+        )
         const changed: string[] = []
         for (const f of this.flights.values()) {
             if (!f.callsign || f.callsign.toUpperCase() === except) continue
-            if ((f.destination || "").toUpperCase() !== "ESSA") continue
+            const dest = (f.destination || "").toUpperCase()
+            if (!menuAirports.includes(dest)) continue
+            const traffic = trafficByApt.get(dest) ?? []
             const next = f.stand
-                ? isEssaStandBlocked(f.stand, f.callsign, traffic)
+                ? isStandBlocked(dest, f.stand, f.callsign, traffic)
                 : false
             if (!!f.standBlocked !== next) {
                 f.standBlocked = next || undefined

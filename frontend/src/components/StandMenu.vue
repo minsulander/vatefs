@@ -14,6 +14,7 @@
       class="sid-route-menu stand-menu"
       :class="{
         'stand-menu-multi': !isCompact && columns.length > 1,
+        'stand-menu-single': !isCompact && columns.length === 1,
         'stand-menu-compact': isCompact,
       }"
       :style="menuBoxStyle"
@@ -225,10 +226,11 @@ let ignoreCloseUntil = 0
 let refineToken = 0
 
 /**
- * Display columns L→R after combining (geo order preserved).
+ * ESSA display columns L→R after combining (geo order preserved).
  * Backend still emits S/N faces; we stack them in one column (S then N, etc.).
+ * Non-ESSA airports keep backend apron order (YAML / comments / GROUPs).
  */
-const COLUMN_ORDER = [
+const ESSA_COLUMN_ORDER = [
   'R',
   'S',
   'ED',
@@ -241,10 +243,10 @@ const COLUMN_ORDER = [
 ] as const
 
 /**
- * Map backend apron title → combined column + Full mid-subtitle + Compact folder.
+ * Map ESSA backend apron title → combined column + Full mid-subtitle + Compact folder.
  * Order of sections follows backend apron order (E before D, *S before *N, …).
  */
-function columnKeyForApron(
+function essaColumnKeyForApron(
   title: string,
 ): { key: string; colTitle: string; subtitle: string; folderLabel: string } {
   const t = title.trim().toUpperCase()
@@ -269,11 +271,37 @@ function columnKeyForApron(
   return { key: t, colTitle: t, subtitle: t, folderLabel: t }
 }
 
+const isEssaStandMenu = computed(
+  () => (props.strip.ades || '').toUpperCase() === 'ESSA',
+)
+
 const columns = computed((): StandColumn[] => {
+  // Non-ESSA: one column per backend apron, preserve server order (e.g. ESMS N before S)
+  if (!isEssaStandMenu.value) {
+    return aprons.value
+      .filter((apron) => apron.stands.length > 0)
+      .map((apron, idx) => {
+        const title = apron.title.trim() || 'ALL'
+        return {
+          // Index suffix: duplicate titles allowed (e.g. two ESGG Term columns)
+          key: `${title.toUpperCase()}-${idx}`,
+          title,
+          sections: [
+            {
+              title: apron.title,
+              subtitle: undefined,
+              folderLabel: title,
+              stands: apron.stands,
+            },
+          ],
+        }
+      })
+  }
+
   const map = new Map<string, StandColumn>()
   for (const apron of aprons.value) {
     if (!apron.stands.length) continue
-    const { key, colTitle, subtitle, folderLabel } = columnKeyForApron(apron.title)
+    const { key, colTitle, subtitle, folderLabel } = essaColumnKeyForApron(apron.title)
     let col = map.get(key)
     if (!col) {
       col = { key, title: colTitle, sections: [] }
@@ -299,7 +327,7 @@ const columns = computed((): StandColumn[] => {
     }
   }
   const ordered: StandColumn[] = []
-  for (const key of COLUMN_ORDER) {
+  for (const key of ESSA_COLUMN_ORDER) {
     const col = map.get(key)
     if (col) ordered.push(col)
     map.delete(key)
@@ -363,20 +391,22 @@ const columnsBoxStyle = computed(() => {
 function standItemClass(stand: StandMenuStand) {
   const occ = stand.occupied
   const occKind = occ?.kind
+  const mapClosed = occKind === 'closed'
   const notAllowed = stand.fit === 'notAllowed'
   // Blocked: red if related stand occupied, amber if only planned
   const blockedAsOccupied = occKind === 'blocked' && occ?.blockFrom !== 'assigned'
   const blockedAsPlanned = occKind === 'blocked' && occ?.blockFrom === 'assigned'
   const planned = occKind === 'assigned' || blockedAsPlanned
-  // Fill = availability (amber / soft red / dark-red WIP / grey). Green left edge = preferred.
+  // GRPmap closed wins over not-allowed (dimmed red vs grey).
+  // Fill = availability (amber / soft red / dimmed-red map / grey). Green left edge = preferred.
   return {
     selected: !!currentStand.value && currentStand.value.toUpperCase() === stand.name.toUpperCase(),
-    'exit-match': stand.fit === 'preferred' && !notAllowed,
-    'stand-occupied': !notAllowed && (occKind === 'occupied' || blockedAsOccupied),
-    'stand-planned': !notAllowed && planned,
-    'stand-planned-air': !notAllowed && planned && !!occ?.airborne,
-    'stand-closed': !notAllowed && occKind === 'closed',
-    'stand-not-allowed': notAllowed,
+    'exit-match': stand.fit === 'preferred' && !notAllowed && !mapClosed,
+    'stand-occupied': !notAllowed && !mapClosed && (occKind === 'occupied' || blockedAsOccupied),
+    'stand-planned': !notAllowed && !mapClosed && planned,
+    'stand-planned-air': !notAllowed && !mapClosed && planned && !!occ?.airborne,
+    'stand-closed': mapClosed,
+    'stand-not-allowed': notAllowed && !mapClosed,
   }
 }
 
@@ -437,11 +467,11 @@ function depTimeText(stand: StandMenuStand): string {
   return ''
 }
 
-/** Bottom-right key line: related stand when blocked, map name when closed, else dep time. */
+/** Bottom-right key line: related stand when blocked, else dep time (map name is in CS only). */
 function standKeySubText(stand: StandMenuStand): string {
   const occ = stand.occupied
   if (!occ) return ''
-  if (occ.kind === 'closed') return occ.label || ''
+  if (occ.kind === 'closed') return ''
   if (occ.kind === 'blocked') return occ.relatedStand ?? ''
   return depTimeText(stand)
 }
@@ -766,11 +796,12 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 0 0 1px #b07070;
 }
 
-/* GRpluginMaps / TopSky WIP BLOCKS — dark red + light text (vs soft red aircraft block) */
+/* GRpluginMaps / TopSky WIP BLOCKS — same dimmed fill as not-allowed, red text */
 .sid-route-item.stand-closed {
-  background: #4a0a0a;
-  color: #ffd0d0;
-  box-shadow: inset 0 0 0 1px #2a0505;
+  background: #c8c8c8;
+  color: #a03030;
+  opacity: 0.55;
+  box-shadow: none;
 }
 
 /* Preferred = green left edge only (fill stays availability colour) */
@@ -792,7 +823,8 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-item.exit-match.stand-closed {
-  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #2a0505;
+  box-shadow: inset 8px 0 0 #33ae35;
+  opacity: 0.55;
 }
 
 .sid-route-item.stand-not-allowed {
@@ -949,6 +981,13 @@ onBeforeUnmount(() => {
   min-height: 0;
   border-right: 2px solid #555;
   overflow: hidden;
+}
+
+/* One full-mode column: fill menu width (foot buttons keep menu min width; no grey gutter) */
+.sid-route-overlay .stand-menu-single .stand-menu-columns > .stand-menu-col:only-child {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
 }
 
 .sid-route-overlay .stand-menu-columns > .stand-menu-col:last-child,
@@ -1228,9 +1267,10 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.stand-closed {
-  background: #4a0a0a;
-  color: #ffd0d0;
-  box-shadow: inset 0 0 0 1px #2a0505;
+  background: #c8c8c8;
+  color: #a03030;
+  opacity: 0.55;
+  box-shadow: none;
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-planned.stand-planned-air {
@@ -1247,7 +1287,8 @@ onBeforeUnmount(() => {
 }
 
 .sid-route-overlay .sid-route-item.exit-match.stand-closed {
-  box-shadow: inset 8px 0 0 #33ae35, inset 0 0 0 1px #2a0505;
+  box-shadow: inset 8px 0 0 #33ae35;
+  opacity: 0.55;
 }
 
 .sid-route-overlay .sid-route-item.stand-not-allowed {

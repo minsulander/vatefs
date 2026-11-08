@@ -1,10 +1,14 @@
 /**
- * ESSA stand menu: parse GRpluginStands.txt (ESSA only) and classify stands
+ * Stand menu: parse GRpluginStands.txt for all GRP airports and classify stands
  * for one arrival (physical fit, preferred airline/Schengen highlight, occupancy).
+ *
+ * Menu columns: VatEFS data/stand-menu-groups.yml → //TERMINAL|APRON comments →
+ * airport terminal GROUP: sections → single ALL column.
  */
 
 import fs from "fs"
 import path from "path"
+import yaml from "js-yaml"
 import { getAirportCoords } from "./airport-data.js"
 import { calculateDistanceNm } from "./geo-utils.js"
 import {
@@ -167,16 +171,83 @@ interface IcaoAircraftEntry {
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
-/** Stand name → variants (COPY creates multiple) */
-let essaVariants: Map<string, StandVariant[]> = new Map()
-/** Apron order + stand names in file order */
-let apronOrder: { title: string; standNames: string[] }[] = []
-let standLists: StandListEntry[] = []
+interface MenuApronDef {
+    title: string
+    standNames: string[]
+}
+
+interface AirportStandStore {
+    /** Stand name → variants (COPY creates multiple) */
+    variants: Map<string, StandVariant[]>
+    /** Columns from //TERMINAL / //APRON comments in this airport block */
+    commentAprons: MenuApronDef[]
+    standLists: StandListEntry[]
+    /** Terminal-section GROUP: names in file order (e.g. GGTERM, T5A) */
+    terminalGroupOrder: string[]
+    terminalGroups: Map<string, string[]>
+    /** Resolved display columns (hybrid) */
+    menuAprons: MenuApronDef[]
+}
+
+function emptyAirportStore(): AirportStandStore {
+    return {
+        variants: new Map(),
+        commentAprons: [],
+        standLists: [],
+        terminalGroupOrder: [],
+        terminalGroups: new Map(),
+        menuAprons: [],
+    }
+}
+
+/** Per-airport GRP stand data */
+let byAirport: Map<string, AirportStandStore> = new Map()
+/** All GROUP: definitions (airline + terminal) for GROUP_ expansion */
 let groups: Map<string, string[]> = new Map()
+/** VatEFS YAML menu overrides (airport → columns) */
+let yamlMenuGroups: Map<
+    string,
+    { title: string; stands?: string[]; group?: string; all?: boolean }[]
+> = new Map()
 let aircraftByIcao: Map<string, IcaoAircraftEntry> = new Map()
 /** Callsign prefix (3 letters) → use override from OperatorInfo */
 let operatorUse: Map<string, string> = new Map()
 let loaded = false
+
+/**
+ * Active airport pointers — helpers (fit / occupancy / auto) read these.
+ * `bindAirport` swaps them before building a menu.
+ */
+let essaVariants: Map<string, StandVariant[]> = new Map()
+let apronOrder: MenuApronDef[] = []
+let standLists: StandListEntry[] = []
+let activeAirport = ""
+
+function ensureAirport(icao: string): AirportStandStore {
+    const key = icao.toUpperCase()
+    let store = byAirport.get(key)
+    if (!store) {
+        store = emptyAirportStore()
+        byAirport.set(key, store)
+    }
+    return store
+}
+
+function bindAirport(icao: string): AirportStandStore | undefined {
+    const store = byAirport.get(icao.toUpperCase())
+    if (!store) {
+        essaVariants = new Map()
+        apronOrder = []
+        standLists = []
+        activeAirport = ""
+        return undefined
+    }
+    essaVariants = store.variants
+    apronOrder = store.menuAprons.length > 0 ? store.menuAprons : store.commentAprons
+    standLists = store.standLists
+    activeAirport = icao.toUpperCase()
+    return store
+}
 
 /** ICAO aerodrome ref code letter → max wingspan (CODE:C ≡ WINGSPAN:35.999) */
 const CODE_MAX_WINGSPAN: Record<string, number> = {
@@ -736,35 +807,245 @@ function applyStandLine(v: StandVariant, line: string): void {
     }
 }
 
-function finalizeVariant(v: StandVariant | undefined): void {
+function finalizeVariant(store: AirportStandStore, v: StandVariant | undefined): void {
     if (!v) return
     if (v.coords.length === 0 && !v.circle) return
-    const list = essaVariants.get(v.name) ?? []
-    // Avoid duplicating identical empty-coord copies without geometry on first save
+    const list = store.variants.get(v.name) ?? []
     list.push(v)
-    essaVariants.set(v.name, list)
+    store.variants.set(v.name, list)
+}
+
+/** `//----------------------------------------------------------------------------ESSA` or bare `----ESSB` */
+function airportDividerIcao(line: string): string | undefined {
+    const compact = line.replace(/\s/g, "")
+    const m = compact.match(/^\/\/?-{4,}([A-Z]{4})$/i)
+    return m ? m[1]!.toUpperCase() : undefined
+}
+
+function prettyTerminalGroupTitle(groupName: string): string {
+    const g = groupName.trim()
+    const known: Record<string, string> = {
+        GGCARGO: "Cargo",
+        GGTERM: "Term",
+        GGMSTERMNEW: "MS Term",
+        GGAPNSE: "Apron SE",
+        GGAPNSW: "Apron SW",
+        MSTERMN: "Term N",
+        MSTERMS: "Term S",
+        MSREMOTE: "Remote",
+        MSCARGO: "Cargo",
+    }
+    if (known[g]) return known[g]!
+    if (g.startsWith("GG")) return g.slice(2)
+    if (g.startsWith("MS")) return g.slice(2)
+    return g
+}
+
+/** Numeric-aware stand name sort (ascending). */
+function compareStandNamesAsc(a: string, b: string): number {
+    return a.localeCompare(b, undefined, { numeric: true })
+}
+
+/** Numeric-aware stand name sort (high → low). */
+function compareStandNamesDesc(a: string, b: string): number {
+    return b.localeCompare(a, undefined, { numeric: true })
+}
+
+function sortMenuColumnStands(
+    cols: MenuApronDef[],
+    compare: (a: string, b: string) => number,
+): MenuApronDef[] {
+    return cols.map((c) => ({
+        ...c,
+        standNames: [...c.standNames].sort(compare),
+    }))
 }
 
 /**
- * Parse ESSA section of GRpluginStands.txt content (stops at ESSB/ESGG dividers).
- * Exported for fixture tests.
+ * Ensure every GRP stand appears in some menu column.
+ * Leftovers (not listed in YAML / comments / GROUPs) go into Other.
+ */
+function ensureAllGrpStandsInMenu(
+    cols: MenuApronDef[],
+    store: AirportStandStore,
+    compare: (a: string, b: string) => number = compareStandNamesAsc,
+): MenuApronDef[] {
+    if (!cols.length) return cols
+    const covered = new Set<string>()
+    for (const col of cols) {
+        for (const n of col.standNames) covered.add(n)
+    }
+    const leftover = [...store.variants.keys()]
+        .filter((n) => !covered.has(n))
+        .sort(compare)
+    if (!leftover.length) return sortMenuColumnStands(cols, compare)
+
+    // Prefer Other / ALL / Cargo/Other sink — never bare "Cargo" (leave that group intact)
+    const sinkIdx = cols.findIndex((c) => {
+        const t = c.title.trim().toUpperCase().replace(/\s+/g, "")
+        return t === "OTHER" || t === "ALL" || t.startsWith("CARGO/OTHER")
+    })
+    if (sinkIdx >= 0) {
+        const sink = cols[sinkIdx]!
+        const seen = new Set(sink.standNames)
+        const extras: string[] = []
+        for (const n of leftover) {
+            if (seen.has(n)) continue
+            seen.add(n)
+            extras.push(n)
+        }
+        // Keep original group stands first (sorted); append leftovers after — do not
+        // re-interleave so Cargo/etc. membership stays visually unchanged.
+        const next = cols.slice()
+        next[sinkIdx] = {
+            ...sink,
+            standNames: [...[...sink.standNames].sort(compare), ...extras],
+        }
+        return next.map((c, i) =>
+            i === sinkIdx ? c : { ...c, standNames: [...c.standNames].sort(compare) },
+        )
+    }
+    return sortMenuColumnStands(
+        [...cols, { title: "Other", standNames: leftover }],
+        compare,
+    )
+}
+
+/**
+ * Resolve display columns for one airport (hybrid):
+ * YAML → comment aprons → terminal GROUPs → ALL.
+ * Never omit a stand that exists in GRpluginStands for that airport.
+ */
+function resolveMenuApronsForAirport(icao: string, store: AirportStandStore): MenuApronDef[] {
+    const standCompare =
+        icao.toUpperCase() === "ESGG" ? compareStandNamesDesc : compareStandNamesAsc
+
+    const resolveNames = (raw: string[]): string[] => {
+        const out: string[] = []
+        const seen = new Set<string>()
+        for (const r of raw) {
+            const key = resolveStandKeyIn(store, r)
+            if (!store.variants.has(key) && !store.variants.has(r)) continue
+            const name = store.variants.has(key) ? key : r
+            if (seen.has(name)) continue
+            seen.add(name)
+            out.push(name)
+        }
+        return out
+    }
+
+    const yamlCols = yamlMenuGroups.get(icao.toUpperCase())
+    if (yamlCols?.length) {
+        const cols: MenuApronDef[] = []
+        for (const col of yamlCols) {
+            let raw: string[] = []
+            // No group/stands (or all: true) → every stand at this airport
+            if (col.all || (!col.group && !(col.stands?.length))) {
+                raw = [...store.variants.keys()].sort(standCompare)
+            } else {
+                if (col.group) {
+                    raw = [
+                        ...(store.terminalGroups.get(col.group) ?? []),
+                        ...(groups.get(col.group) ?? []),
+                    ]
+                }
+                if (col.stands?.length) raw = [...raw, ...col.stands]
+            }
+            const standNames = resolveNames(raw)
+            if (standNames.length) cols.push({ title: col.title, standNames })
+        }
+        if (cols.length) return ensureAllGrpStandsInMenu(cols, store, standCompare)
+    }
+
+    // //TERMINAL|APRON comments; keep pre-comment stands as a leading "Stands" column
+    // (e.g. ESSB 3–19 before //APRON EAST) rather than dropping the OTHER bucket.
+    const namedComments = store.commentAprons
+        .filter((a) => a.title !== "OTHER")
+        .map((a) => ({ title: a.title, standNames: resolveNames(a.standNames) }))
+        .filter((a) => a.standNames.length > 0)
+    if (namedComments.length) {
+        const other = store.commentAprons.find((a) => a.title === "OTHER")
+        const pre = other ? resolveNames(other.standNames) : []
+        const cols = pre.length
+            ? [{ title: "Stands", standNames: pre }, ...namedComments]
+            : namedComments
+        return ensureAllGrpStandsInMenu(cols, store, standCompare)
+    }
+
+    if (store.terminalGroupOrder.length) {
+        const cols: MenuApronDef[] = []
+        for (const gName of store.terminalGroupOrder) {
+            const standNames = resolveNames(store.terminalGroups.get(gName) ?? [])
+            if (standNames.length) {
+                cols.push({ title: prettyTerminalGroupTitle(gName), standNames })
+            }
+        }
+        if (cols.length) return ensureAllGrpStandsInMenu(cols, store, standCompare)
+    }
+
+    const all = [...store.variants.keys()].sort(standCompare)
+    return all.length ? [{ title: "ALL", standNames: all }] : []
+}
+
+/** Resolve stand ref against one airport store (padding / case). */
+function resolveStandKeyIn(store: AirportStandStore, stand: string): string {
+    const sn = stand.trim()
+    if (!sn) return sn
+    if (store.variants.has(sn)) return sn
+    const up = sn.toUpperCase()
+    for (const k of store.variants.keys()) {
+        if (k.toUpperCase() === up) return k
+    }
+    if (/^\d+$/.test(sn)) {
+        const pad2 = sn.padStart(2, "0")
+        if (store.variants.has(pad2)) return pad2
+        if (sn.length < 3) {
+            const pad3 = sn.padStart(3, "0")
+            if (store.variants.has(pad3)) return pad3
+        }
+    }
+    return sn
+}
+
+/**
+ * Parse GRpluginStands.txt for all airports (exported for fixture tests).
  */
 export function parseEssaStandsContent(content: string): void {
+    byAirport = new Map()
+    groups = new Map()
     essaVariants = new Map()
     apronOrder = []
     standLists = []
-    groups = new Map()
+    activeAirport = ""
 
     const lines = content.split(/\r?\n/)
+    let currentIcao: string | undefined
+    let store: AirportStandStore | undefined
     let currentApron = "OTHER"
     let apronStands: Map<string, string[]> = new Map()
     let current: StandVariant | undefined
-    let inEssa = false
+    /** GROUPs before first STAND: in an airport block are menu terminal groups */
+    let inTerminalGroupSection = false
+
+    const beginAirport = (icao: string) => {
+        if (store) finalizeVariant(store, current)
+        current = undefined
+        currentIcao = icao
+        store = ensureAirport(icao)
+        currentApron = "OTHER"
+        apronStands = new Map()
+        for (const a of store.commentAprons) {
+            apronStands.set(a.title, a.standNames)
+        }
+        inTerminalGroupSection = true
+    }
 
     const ensureApron = (title: string) => {
+        if (!store) return [] as string[]
         if (!apronStands.has(title)) {
-            apronStands.set(title, [])
-            apronOrder.push({ title, standNames: apronStands.get(title)! })
+            const standNames: string[] = []
+            apronStands.set(title, standNames)
+            store.commentAprons.push({ title, standNames })
         }
         return apronStands.get(title)!
     }
@@ -778,20 +1059,18 @@ export function parseEssaStandsContent(content: string): void {
         const line = rawLine.trim()
         if (!line) continue
 
-        // Airport dividers
-        // Stop at ESSB / ESGG section dividers in the shared stands file
-        if (/ESSB|ESGG/i.test(line) && /^-{4,}/.test(line.replace(/\s/g, ""))) {
-            finalizeVariant(current)
+        const divIcao = airportDividerIcao(line)
+        if (divIcao) {
+            if (store) finalizeVariant(store, current)
             current = undefined
-            inEssa = false
-            break
+            beginAirport(divIcao)
+            continue
         }
 
         const apronTitle = isApronComment(line)
         if (apronTitle) {
-            // Section comments before first ESSA STAND still apply once we see ESSA
             currentApron = apronTitle
-            ensureApron(currentApron)
+            if (store) ensureApron(currentApron)
             continue
         }
 
@@ -800,47 +1079,60 @@ export function parseEssaStandsContent(content: string): void {
         if (line.startsWith("GROUP:")) {
             const parts = line.substring(6).split(":")
             const name = parts[0]!
-            groups.set(name, parts.slice(1).filter(Boolean))
+            const members = parts.slice(1).filter(Boolean)
+            groups.set(name, members)
+            if (store && inTerminalGroupSection) {
+                if (!store.terminalGroups.has(name)) {
+                    store.terminalGroupOrder.push(name)
+                }
+                store.terminalGroups.set(name, members)
+            }
             continue
         }
 
         if (line.startsWith("STANDLIST:")) {
+            inTerminalGroupSection = false
             const parts = line.substring(10).split(":")
-            if (parts.length >= 4 && parts[0]!.toUpperCase() === "ESSA") {
-                inEssa = true
+            if (parts.length >= 4) {
+                const airport = parts[0]!.toUpperCase()
+                if (!store || currentIcao !== airport) {
+                    if (store) finalizeVariant(store, current)
+                    current = undefined
+                    beginAirport(airport)
+                    inTerminalGroupSection = false
+                }
                 const callsignList = expandList(parts[1]!.split(","))
                 const points = parseInt(parts[2]!, 10) || 0
                 const stands = expandList(parts[3]!.split(","))
-                standLists.push({ callsignPrefixes: callsignList, points, stands })
+                store!.standLists.push({ callsignPrefixes: callsignList, points, stands })
             }
             continue
         }
 
         if (line.toUpperCase() === "COPY") {
-            if (current) {
+            if (current && store) {
                 const next = cloneVariant(current)
-                finalizeVariant(current)
+                finalizeVariant(store, current)
                 current = next
             }
             continue
         }
 
         if (line.startsWith("STAND:")) {
-            finalizeVariant(current)
+            inTerminalGroupSection = false
+            if (store) finalizeVariant(store, current)
             current = undefined
             const parts = line.substring(6).split(":")
             const airport = (parts[0] ?? "").toUpperCase()
-            if (airport !== "ESSA") {
-                // Leave ESSA block when another airport's STAND appears
-                if (inEssa && airport && airport !== "ESSA") break
-                continue
+            if (!airport) continue
+            if (!store || currentIcao !== airport) {
+                beginAirport(airport)
+                inTerminalGroupSection = false
             }
-            inEssa = true
             const name = (parts[1] ?? "").trim()
             if (!name) continue
             current = emptyVariant(name, currentApron)
             noteStandInApron(name, currentApron)
-            // Circle form: STAND:ESSA:name:lat:lon:radius
             if (parts.length >= 5) {
                 const lat = parseDmsPart(parts[2]!)
                 const lon = parseDmsPart(parts[3]!)
@@ -852,46 +1144,110 @@ export function parseEssaStandsContent(content: string): void {
             continue
         }
 
-        if (current && inEssa) {
+        if (current && store) {
             applyStandLine(current, line)
         }
     }
-    finalizeVariant(current)
+    if (store) finalizeVariant(store, current)
 
-    // Drop empty aprons
-    apronOrder = apronOrder.filter((a) => a.standNames.length > 0)
-    loaded = essaVariants.size > 0
+    // Drop empty comment aprons; resolve hybrid menu columns
+    for (const [icao, s] of byAirport) {
+        s.commentAprons = s.commentAprons.filter((a) => a.standNames.length > 0)
+        s.menuAprons = resolveMenuApronsForAirport(icao, s)
+    }
+
+    bindAirport("ESSA")
+    loaded = byAirport.size > 0 && [...byAirport.values()].some((s) => s.variants.size > 0)
 }
 
-export function loadEssaStandAssign(euroscopeDir: string, packageFilter = "ESAA"): number {
+/** Load optional VatEFS stand-menu-groups.yml (relative to dataDir). */
+export function loadStandMenuGroupsYaml(dataDir: string): void {
+    yamlMenuGroups = new Map()
+    const file = path.join(dataDir, "stand-menu-groups.yml")
+    if (!fs.existsSync(file)) return
+    try {
+        const doc = yaml.load(fs.readFileSync(file, "utf8")) as Record<
+            string,
+            | { title?: string; stands?: string[]; group?: string; all?: boolean }[]
+            | undefined
+        >
+        if (!doc || typeof doc !== "object") return
+        for (const [icao, cols] of Object.entries(doc)) {
+            if (!Array.isArray(cols)) continue
+            const parsed = cols
+                .map((c) => {
+                    const title = String(c?.title || "").trim() || "Stands"
+                    const stands = Array.isArray(c?.stands)
+                        ? c.stands.map((s) => String(s).trim()).filter(Boolean)
+                        : undefined
+                    const group = c?.group ? String(c.group).trim() : undefined
+                    const all =
+                        c?.all === true ||
+                        (!group && !(stands?.length) && title.toUpperCase() === "ALL")
+                    return { title, stands, group, all: all || undefined }
+                })
+                .filter(
+                    (c) =>
+                        (c.stands?.length ?? 0) > 0 || !!c.group || !!c.all,
+                )
+            if (parsed.length) yamlMenuGroups.set(icao.toUpperCase(), parsed)
+        }
+        // Re-resolve menu columns if stands already loaded
+        for (const [icao, s] of byAirport) {
+            s.menuAprons = resolveMenuApronsForAirport(icao, s)
+        }
+        if (activeAirport) bindAirport(activeAirport)
+        console.log(`[stands] menu groups YAML: ${yamlMenuGroups.size} airports from ${file}`)
+    } catch (err) {
+        console.warn(`[stands] Failed to load stand-menu-groups.yml: ${err}`)
+    }
+}
+
+export function loadEssaStandAssign(
+    euroscopeDir: string,
+    packageFilter = "ESAA",
+    dataDir?: string,
+): number {
     loaded = false
+    byAirport = new Map()
     essaVariants = new Map()
     apronOrder = []
     standLists = []
     groups = new Map()
+    activeAirport = ""
 
     loadGrpAutoAssignDist(euroscopeDir, packageFilter)
     loadGrpMapsBlocks(euroscopeDir, packageFilter)
 
+    if (dataDir) loadStandMenuGroupsYaml(dataDir)
+
     const standFile = findPluginFile(euroscopeDir, "GRpluginStands.txt", packageFilter)
     if (!standFile) {
-        console.warn("[ESSA stands] GRpluginStands.txt not found")
+        console.warn("[stands] GRpluginStands.txt not found")
         return 0
     }
+    // YAML may load before parse; re-apply after parse inside parseEssaStandsContent
+    const savedYaml = yamlMenuGroups
     parseEssaStandsContent(fs.readFileSync(standFile, "utf8"))
+    if (savedYaml.size) {
+        yamlMenuGroups = savedYaml
+        for (const [icao, s] of byAirport) {
+            s.menuAprons = resolveMenuApronsForAirport(icao, s)
+        }
+        bindAirport("ESSA")
+    }
 
     const aircraftFile = findPluginFile(euroscopeDir, "ICAO_Aircraft.json", packageFilter)
     aircraftByIcao = new Map()
     if (aircraftFile) {
         try {
-            // EuroScope package file may start with a UTF-8 BOM
             const raw = fs.readFileSync(aircraftFile, "utf8").replace(/^\uFEFF/, "")
             const arr = JSON.parse(raw) as IcaoAircraftEntry[]
             for (const e of arr) {
                 if (e?.ICAO) aircraftByIcao.set(e.ICAO.toUpperCase(), e)
             }
         } catch (err) {
-            console.warn(`[ESSA stands] Failed to load ICAO_Aircraft.json: ${err}`)
+            console.warn(`[stands] Failed to load ICAO_Aircraft.json: ${err}`)
         }
     }
 
@@ -908,11 +1264,17 @@ export function loadEssaStandAssign(euroscopeDir: string, packageFilter = "ESAA"
         }
     }
 
+    let totalStands = 0
+    let totalLists = 0
+    for (const s of byAirport.values()) {
+        totalStands += s.variants.size
+        totalLists += s.standLists.length
+    }
     console.log(
-        `[ESSA stands] ${essaVariants.size} stands, ${standLists.length} STANDLIST rows, ` +
+        `[stands] ${byAirport.size} airports, ${totalStands} stands, ${totalLists} STANDLIST rows, ` +
             `${aircraftByIcao.size} aircraft types from ${standFile}`,
     )
-    return essaVariants.size
+    return totalStands
 }
 
 function findPluginFile(euroscopeDir: string, filename: string, packageFilter?: string): string | undefined {
@@ -941,7 +1303,22 @@ function findPluginFile(euroscopeDir: string, filename: string, packageFilter?: 
 }
 
 export function hasEssaStandAssignData(): boolean {
-    return loaded && essaVariants.size > 0
+    return loaded && (byAirport.get("ESSA")?.variants.size ?? 0) > 0
+}
+
+/** Airports with resolved menu columns (hybrid groups + geometry). */
+export function standMenuAirports(): string[] {
+    if (!loaded) return []
+    return [...byAirport.entries()]
+        .filter(([, s]) => s.menuAprons.length > 0 && s.variants.size > 0)
+        .map(([icao]) => icao)
+        .sort()
+}
+
+export function hasStandMenuAirport(airport: string | undefined | null): boolean {
+    if (!airport || !loaded) return false
+    const s = byAirport.get(airport.toUpperCase())
+    return !!s && s.menuAprons.length > 0 && s.variants.size > 0
 }
 
 // ─── Aircraft resolution ─────────────────────────────────────────────────────
@@ -1356,11 +1733,14 @@ function depTimesFrom(info: OccupierInfo): Pick<StandOccupancy, "tsat" | "tobt" 
 }
 
 /**
- * Build apron-grouped stand menu for one ESSA arrival.
- * Status never reorders stands.
+ * Build apron-grouped stand menu for one arrival at a GRP airport.
+ * Status never reorders stands. ESSA still gets geo pier layout.
  */
-export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | undefined {
-    if (!loaded || input.destination?.toUpperCase() !== "ESSA") return undefined
+export function buildStandMenu(input: ClassifyInput): StandMenuResult | undefined {
+    const dest = (input.destination || "").toUpperCase()
+    if (!loaded || !dest) return undefined
+    const store = bindAirport(dest)
+    if (!store || store.menuAprons.length === 0 || store.variants.size === 0) return undefined
 
     const ac = resolveAircraftDims(
         input.aircraftType,
@@ -1377,7 +1757,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
     /** Multi-assign apron areas: unique callsigns on/assigned (count only). */
     const multiAssignCs = new Map<string, Set<string>>()
     /** Active GRpluginMaps WIP BLOCKS → map name */
-    const closedByMap = activeClosedStandMap("ESSA")
+    const closedByMap = activeClosedStandMap(dest)
 
     const bumpMulti = (stand: string, callsign: string) => {
         const key = stand.toUpperCase()
@@ -1413,7 +1793,7 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
         // No position → keep prior behaviour (cannot apply the nm gate).
         const hasPos = t.latitude !== undefined && t.longitude !== undefined
         const plannedOk =
-            !hasPos || isWithinEssaStandAssignDist(t.latitude, t.longitude, "ESSA")
+            !hasPos || isWithinEssaStandAssignDist(t.latitude, t.longitude, dest)
 
         if (assignedKey) {
             if (isMultiAssignStand(assignedKey)) {
@@ -1654,11 +2034,17 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
         if (stands.length) aprons.push({ title: apron.title, stands })
     }
 
+    const laidOut = dest === "ESSA" ? applyEssaStandMenuGeoLayout(aprons) : aprons
     return {
         stripId: input.stripId,
         currentStand: input.currentStand,
-        aprons: applyEssaStandMenuGeoLayout(aprons),
+        aprons: laidOut,
     }
+}
+
+/** @deprecated Use buildStandMenu — kept for callers/tests */
+export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | undefined {
+    return buildStandMenu(input)
 }
 
 /**
@@ -1666,17 +2052,20 @@ export function buildEssaStandMenu(input: ClassifyInput): StandMenuResult | unde
  * BLOCKS/LIMITS/closed — amber-highlight the STD cell on the other arrival strip.
  * Airborne planned arrivals do not trigger amber (Inbound shade only in the menu).
  */
-export function isEssaStandBlocked(
+export function isStandBlocked(
+    airport: string,
     stand: string | undefined,
     selfCallsign: string,
     traffic: OccupierInfo[],
 ): boolean {
     if (!loaded || !stand?.trim()) return false
-    const menu = buildEssaStandMenu({
+    const dest = airport.toUpperCase()
+    if (!hasStandMenuAirport(dest)) return false
+    const menu = buildStandMenu({
         stripId: "_stand_warn",
         callsign: selfCallsign,
-        origin: "ESGG",
-        destination: "ESSA",
+        origin: dest === "ESSA" ? "ESGG" : "ESSA",
+        destination: dest,
         aircraftType: "A320",
         traffic,
     })
@@ -1689,12 +2078,20 @@ export function isEssaStandBlocked(
             if (!occ) return false
             if (occ.kind === "blocked" || occ.kind === "closed") return true
             if (occ.kind === "occupied") return true
-            // Planned / assigned: only when the other aircraft is on the ground
             if (occ.kind === "assigned" && !occ.airborne) return true
             return false
         }
     }
     return false
+}
+
+/** @deprecated ESSA-only wrapper */
+export function isEssaStandBlocked(
+    stand: string | undefined,
+    selfCallsign: string,
+    traffic: OccupierInfo[],
+): boolean {
+    return isStandBlocked("ESSA", stand, selfCallsign, traffic)
 }
 
 /**
@@ -1724,12 +2121,13 @@ function pickWeightedStand(
  * Prefers STANDLIST points (weighted random) + stand PRIORITY; retries with soft filters lifted.
  * Excludes the strip's current stand so pressing Auto again yields a different gate when possible.
  */
-export function pickEssaAutoStand(
+export function pickAutoStand(
     input: ClassifyInput,
     rng: () => number = Math.random,
 ): string | undefined {
-    if (!loaded || input.destination?.toUpperCase() !== "ESSA") return undefined
-    const menu = buildEssaStandMenu(input)
+    const dest = (input.destination || "").toUpperCase()
+    if (!loaded || !dest || !hasStandMenuAirport(dest)) return undefined
+    const menu = buildStandMenu(input)
     if (!menu) return undefined
 
     const ac = resolveAircraftDims(
@@ -1824,14 +2222,25 @@ export function pickEssaAutoStand(
     )
 }
 
+/** @deprecated Use pickAutoStand */
+export function pickEssaAutoStand(
+    input: ClassifyInput,
+    rng: () => number = Math.random,
+): string | undefined {
+    return pickAutoStand(input, rng)
+}
+
 /** Test helpers */
 export function _testReset() {
+    byAirport = new Map()
     essaVariants = new Map()
     apronOrder = []
     standLists = []
     groups = new Map()
+    yamlMenuGroups = new Map()
     aircraftByIcao = new Map()
     operatorUse = new Map()
+    activeAirport = ""
     loaded = false
 }
 
@@ -1841,5 +2250,23 @@ export function _testSetAircraft(entries: IcaoAircraftEntry[]) {
 }
 
 export function _testMarkLoaded() {
-    loaded = essaVariants.size > 0
+    loaded = [...byAirport.values()].some((s) => s.variants.size > 0)
+    if (!activeAirport && byAirport.has("ESSA")) bindAirport("ESSA")
+}
+
+/** Test helper: inject YAML menu groups then re-resolve. */
+export function _testSetYamlMenuGroups(
+    doc: Record<
+        string,
+        { title: string; stands?: string[]; group?: string; all?: boolean }[]
+    >,
+): void {
+    yamlMenuGroups = new Map()
+    for (const [icao, cols] of Object.entries(doc)) {
+        yamlMenuGroups.set(icao.toUpperCase(), cols)
+    }
+    for (const [icao, s] of byAirport) {
+        s.menuAprons = resolveMenuApronsForAirport(icao, s)
+    }
+    if (activeAirport) bindAirport(activeAirport)
 }

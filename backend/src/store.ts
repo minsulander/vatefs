@@ -5,7 +5,11 @@ import { staticConfig } from "./config.js"
 import type { EfsStaticConfig } from "./config-types.js"
 import { flightStore } from "./flightStore.js"
 import type { ProcessMessageResult } from "./flightStore.js"
-import { mockPluginMessages, mockBackendStateUpdates } from "./mockPluginMessages.js"
+import {
+    mockPluginMessages,
+    mockBackendStateUpdates,
+    MOCK_MYSELF_CALLSIGN,
+} from "./mockPluginMessages.js"
 import type { PluginMessage } from "./types.js"
 import { isPluginMessage } from "./types.js"
 import { buildTrashMeta, pruneTrashMap, type TrashMeta } from "./trash-meta.js"
@@ -284,8 +288,19 @@ class EfsStore {
         flightStore.clear()
 
         if (useMocks) {
-            // Process mock plugin messages through the flight store
-            for (const message of mockPluginMessages) {
+            // Process mock plugin messages through the flight store.
+            // Remap MOCK_MYSELF_CALLSIGN → actual myCallsign so --callsign still leaves strips editable.
+            const myCs = (staticConfig.myCallsign || MOCK_MYSELF_CALLSIGN).toUpperCase()
+            for (const raw of mockPluginMessages) {
+                let message = raw
+                if (
+                    (raw.type === "controllerAssignedDataUpdate" ||
+                        raw.type === "radarTargetPositionUpdate") &&
+                    raw.controller &&
+                    raw.controller.toUpperCase() === MOCK_MYSELF_CALLSIGN
+                ) {
+                    message = { ...raw, controller: myCs }
+                }
                 const result = flightStore.processMessage(message)
                 if (result.strip) {
                     this.strips.set(result.strip.id, result.strip)

@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import {
     parseEssaStandsContent,
     buildEssaStandMenu,
+    buildStandMenu,
     pickEssaAutoStand,
     isEssaStandBlocked,
     normalizeApronTitle,
@@ -14,9 +15,12 @@ import {
     isSchengenOrigin,
     applyEssaStandMenuGeoLayout,
     GEO_APRON_ORDER,
+    hasStandMenuAirport,
+    standMenuAirports,
     _testReset,
     _testSetAircraft,
     _testMarkLoaded,
+    _testSetYamlMenuGroups,
 } from "./essa-stand-assign.js"
 import { _setMapBlocksForTests, _resetGrpMapsForTests } from "./grp-maps.js"
 
@@ -1156,6 +1160,92 @@ check("AUTO skips MANUAL AREA stands", () => {
     })
     assert.notEqual(picked, "APNH")
     assert.ok(picked)
+})
+
+check("fixture ESSB gets fallback ALL menu; ESGG still empty", () => {
+    assert.equal(hasStandMenuAirport("ESSB"), true)
+    assert.equal(hasStandMenuAirport("ESGG"), false)
+    const menu = buildStandMenu({
+        stripId: "SAS1",
+        callsign: "SAS1",
+        origin: "ESSA",
+        destination: "ESSB",
+        aircraftType: "A320",
+        traffic: [],
+    })
+    assert.ok(menu)
+    assert.equal(menu!.aprons.length, 1)
+    assert.equal(menu!.aprons[0]!.title, "ALL")
+    assert.ok(menu!.aprons[0]!.stands.some((s) => s.name === "1"))
+    assert.ok(standMenuAirports().includes("ESSA"))
+    assert.ok(standMenuAirports().includes("ESSB"))
+})
+
+check("YAML menu groups override columns for an airport", () => {
+    _testSetYamlMenuGroups({
+        ESSB: [
+            { title: "East", stands: ["1"] },
+        ],
+    })
+    const menu = buildStandMenu({
+        stripId: "SAS2",
+        callsign: "SAS2",
+        origin: "ESSA",
+        destination: "ESSB",
+        aircraftType: "A320",
+        traffic: [],
+    })
+    assert.ok(menu)
+    assert.equal(menu!.aprons.length, 1)
+    assert.equal(menu!.aprons[0]!.title, "East")
+    assert.deepEqual(
+        menu!.aprons[0]!.stands.map((s) => s.name),
+        ["1"],
+    )
+})
+
+check("YAML ALL column without stands lists every stand", () => {
+    _testSetYamlMenuGroups({
+        ESSB: [{ title: "ALL", all: true }],
+    })
+    const menu = buildStandMenu({
+        stripId: "SAS3",
+        callsign: "SAS3",
+        origin: "ESSA",
+        destination: "ESSB",
+        aircraftType: "A320",
+        traffic: [],
+    })
+    assert.ok(menu)
+    assert.equal(menu!.aprons.length, 1)
+    assert.equal(menu!.aprons[0]!.title, "ALL")
+    assert.ok(menu!.aprons[0]!.stands.some((s) => s.name === "1"))
+})
+
+check("YAML subset on ESSA appends Other with remaining GRP stands", () => {
+    _testSetYamlMenuGroups({
+        ESSA: [{ title: "OnlyF", stands: ["F34"] }],
+    })
+    const menu = buildStandMenu({
+        stripId: "SAS5",
+        callsign: "SAS5",
+        origin: "ENGM",
+        destination: "ESSA",
+        aircraftType: "A320",
+        traffic: [],
+    })
+    assert.ok(menu)
+    assert.ok(menu!.aprons.length >= 2)
+    assert.equal(menu!.aprons[0]!.title.toUpperCase(), "ONLYF")
+    const other = menu!.aprons.find((a) => a.title.toUpperCase() === "OTHER")
+    assert.ok(other, "expected Other column for stands outside YAML")
+    assert.ok(other!.stands.length > 0)
+    const names = new Set(menu!.aprons.flatMap((a) => a.stands.map((s) => s.name)))
+    // Every fixture stand shown somewhere; F34 still in OnlyF
+    assert.ok(names.has("F34"))
+    assert.ok(names.has("01"))
+    assert.ok(names.has("APNH"))
+    assert.equal(names.size, 5) // 01,03,05,F34,APNH
 })
 
 console.log(`\n${passed} passed`)

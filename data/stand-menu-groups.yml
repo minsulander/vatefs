@@ -1,0 +1,43 @@
+# Stand menu column groups (VatEFS).
+# Hybrid resolve: this file → //TERMINAL|APRON comments → GRP terminal GROUP: → ALL.
+# Each column: title + group: (GRP GROUP name) and/or stands: [list].
+# A column with neither group nor stands resolves to every stand (use title ALL).
+# Stands present in GRpluginStands but missing from these columns are appended as Other
+# (or merged into a Cargo/Other column when that title is used).
+
+# ESGG: stand numbers within columns sorted high→low in code.
+# S = Apron SE + SW; Term = GGTERM + former MS Term (21–23B).
+ESGG:
+  - title: S
+    group: GGAPNSE
+    stands: ["68", "70", "72", "74", "76", "78"]
+  - title: Term
+    group: GGTERM
+    stands: ["21", "22A", "22", "22B", "23A", "23", "23B"]
+  - title: W
+    stands: ["42", "43", "44", "46", "48", "50", "52", "54", "56", "58", "60", "62"]
+  - title: Cargo/Other
+    group: GGCARGO
+
+ESMS:
+  - title: N
+    group: MSTERMN
+  - title: S
+    group: MSTERMS
+  - title: Remote
+    group: MSREMOTE
+  - title: Cargo
+    group: MSCARGO
+
+# Stands 3–19 first; remaining aprons (East/4/6/7/Linta) in one second column
+ESSB:
+  - title: Stands
+    stands: ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+  - title: Aprons
+    stands: ["APNE", "APN4", "APN6", "APN7", "LINT"]
+
+# Single ALL column (no apron split)
+ESMQ:
+  - title: ALL
+
+# ESSA uses //TERMINAL|APRON comments + geo pier layout (no override needed).

@@ -955,11 +955,20 @@
 
         <!-- GRP stand — felt-tip annotation, far right middle (stand only here on paper) -->
         <div
-          v-if="strip.stand"
+          v-if="strip.stand || canOpenStandMenu"
           class="pg-grp-stand"
-          :class="{ 'pg-grp-stand--dep': !isArrLayout }"
-          :title="paperTip('Stand', 'GRP stand')"
-        >{{ strip.stand }}</div>
+          :class="{
+            'pg-grp-stand--dep': !isArrLayout,
+            editable: canOpenStandMenu,
+            ghost: !strip.stand,
+          }"
+          :title="
+            canOpenStandMenu
+              ? paperTip('Stand', 'Open stand menu')
+              : paperTip('Stand', 'GRP stand')
+          "
+          @click.stop="onStandClick"
+        >{{ strip.stand || 'STD' }}</div>
       </div>
       </div>
     </template>
@@ -6416,14 +6425,13 @@ function onSidClick(event: MouseEvent) {
   sidRouteMenuOpen.value = true
 }
 
-/** ESSA arrival STD — open Ground Radar stand menu (roles mode only). */
+/** Arrival STD — open Ground Radar stand menu when destination has GRP groups. */
 const canOpenStandMenu = computed(
   () =>
-    store.essaRolesMode &&
     isArrLayout.value &&
     canEditAssignedData.value &&
     !isPaperEmptyFlightHolder.value &&
-    (props.strip.ades || '').toUpperCase() === 'ESSA',
+    store.hasStandMenuAirport(props.strip.ades),
 )
 
 const standCellTitle = computed(() => {
@@ -6859,6 +6867,17 @@ function onGroundStateClick(action: string) {
     calc(0.4px * var(--strip-scale)) 0 0 #000,
     0 calc(0.4px * var(--strip-scale)) 0 #000;
   white-space: nowrap;
+}
+
+.pg-grp-stand.editable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pg-grp-stand.ghost {
+  opacity: 0.35;
+  -webkit-text-stroke: 0;
+  text-shadow: none;
 }
 
 /* DEP: top half of last column so it clears the route string (same size as ARR) */

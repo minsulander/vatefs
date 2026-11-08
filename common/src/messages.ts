@@ -18,6 +18,8 @@ import type { EssaSepIndicators, EssaSepOverrides } from "./essa-sep-indicators.
 export interface LayoutMessage {
     type: 'layout'
     layout: EfsLayout
+    /** ICAOs with GRP stand menu columns available (arrivals). */
+    standMenuAirports?: string[]
 }
 
 export interface StripMessage {

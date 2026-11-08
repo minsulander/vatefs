@@ -4,16 +4,24 @@
  * These messages simulate EuroScope plugin data for testing the flight store
  * without a live connection. Enable with the --mock command-line flag.
  *
- * Currently ESSA-oriented (role layout). Revert to ESGG samples when
- * exercising Gothenburg again.
+ * Includes ESSA role samples plus one inbound per GRP stand-menu airport
+ * (radar near each field; myAirports seeded from mockMyselfUpdate.rwyconfig).
  */
 
 import type { PluginMessage, FlightPlanDataUpdateMessage, ControllerAssignedDataUpdateMessage, RadarTargetPositionUpdateMessage, MyselfUpdateMessage } from "./types.js"
+
+/** Mock myself callsign — strips with this controller are editable under --mock. */
+export const MOCK_MYSELF_CALLSIGN = "ESSA_TWR"
 
 // ESSA (Arlanda) airport coordinates
 const ESSA_LAT = 59.64849
 const ESSA_LON = 17.928829
 const ESSA_ELEV = 137 // feet
+
+// ESGG (Landvetter)
+const ESGG_LAT = 57.6628
+const ESGG_LON = 12.2798
+const ESGG_ELEV = 506
 
 // C-box visual-check airports
 const ESMS_LAT = 55.535564
@@ -28,6 +36,107 @@ const ESNU_ELEV = 24
 const ESNQ_LAT = 67.821999
 const ESNQ_LON = 20.3368
 const ESNQ_ELEV = 1508
+
+/** GRP airports with stand menus — one inbound each for UI review. */
+const GRP_STAND_MENU_AIRPORTS: {
+    icao: string
+    lat: number
+    lon: number
+    elev: number
+    /** Optional assigned stand so STD / occupancy shows in the menu */
+    stand?: string
+}[] = [
+    { icao: "ESSA", lat: 59.64849, lon: 17.928829, elev: 137, stand: "F34" },
+    { icao: "ESGG", lat: 57.6628, lon: 12.2798, elev: 506, stand: "16" },
+    { icao: "ESSB", lat: 59.3544, lon: 17.9417, elev: 47, stand: "10" },
+    { icao: "ESMS", lat: 55.535564, lon: 13.376327, elev: 236, stand: "5" },
+    { icao: "ESOW", lat: 59.5894, lon: 16.6336, elev: 21, stand: "3" },
+    { icao: "ESPA", lat: 65.5438, lon: 22.122, elev: 65 },
+    { icao: "ESKN", lat: 58.788601, lon: 16.912201, elev: 140 },
+    { icao: "ESGT", lat: 58.3181, lon: 12.345, elev: 137 },
+    { icao: "ESNZ", lat: 63.194135, lon: 14.500322, elev: 1233 },
+    { icao: "ESNU", lat: 63.791801, lon: 20.282801, elev: 24 },
+    { icao: "ESNX", lat: 65.5903, lon: 19.2819, elev: 1245 },
+    { icao: "ESNN", lat: 62.5281, lon: 17.4439, elev: 16 },
+    { icao: "ESNQ", lat: 67.822, lon: 20.3368, elev: 1508 },
+    { icao: "ESNS", lat: 64.6248, lon: 21.0769, elev: 157 },
+    { icao: "ESSL", lat: 58.4062, lon: 15.6805, elev: 172 },
+    { icao: "ESSV", lat: 57.6628, lon: 18.3462, elev: 164 },
+    { icao: "ESTA", lat: 56.2961, lon: 12.8471, elev: 68 },
+    { icao: "ESMQ", lat: 56.685501, lon: 16.2876, elev: 17 },
+    { icao: "ESKS", lat: 61.158393, lon: 12.842503, elev: 1608 },
+    { icao: "ESIB", lat: 58.426399, lon: 12.7144, elev: 181 },
+    { icao: "ESDF", lat: 56.266701, lon: 15.265, elev: 191 },
+    { icao: "ESCM", lat: 59.897301, lon: 17.5886, elev: 68 },
+    { icao: "ESCF", lat: 58.402302, lon: 15.5257, elev: 308 },
+    { icao: "ESMX", lat: 56.9291, lon: 14.728, elev: 610 },
+]
+
+const GRP_ORIGINS = ["ENGM", "EKCH", "EDDF", "EHAM", "EFHK", "EGLL", "ESGG", "ESSA"]
+
+function grpStandMenuArrivalMessages(): PluginMessage[] {
+    const out: PluginMessage[] = []
+    GRP_STAND_MENU_AIRPORTS.forEach((apt, idx) => {
+        // STGG1 / STSA1 / … — unique, readable destination tag
+        const callsign = `ST${apt.icao.slice(2)}${1 + (idx % 9)}`
+        const origin = GRP_ORIGINS[idx % GRP_ORIGINS.length]!
+        const squawk = String(2000 + idx).padStart(4, "0")
+        out.push(
+            fpUpdate(callsign, origin, apt.icao, idx % 3 === 0 ? "B738" : "A320", {
+                flightRules: "I",
+                rfl: 25000 + (idx % 5) * 1000,
+                arrRwy: "01",
+            }),
+            // Owned by mock myself so STD/stand menu is editable immediately
+            ctrUpdate(callsign, {
+                squawk,
+                groundstate: "ARR",
+                clearance: true,
+                stand: apt.stand,
+                controller: MOCK_MYSELF_CALLSIGN,
+            }),
+            // Slight offset so GPS is near field but not exactly on ARP
+            radarUpdate(callsign, apt.elev + 800, apt.lat + 0.012, apt.lon + 0.01, {
+                groundSpeed: 180,
+                controller: MOCK_MYSELF_CALLSIGN,
+            }),
+        )
+    })
+    // Extra Landvetter / Malmö inbounds so those menus look busier
+    out.push(
+        fpUpdate("STGG2", "ESSA", "ESGG", "A321", {
+            flightRules: "I",
+            rfl: 28000,
+            arrRwy: "03",
+        }),
+        ctrUpdate("STGG2", {
+            squawk: "2210",
+            groundstate: "ARR",
+            stand: "21",
+            controller: MOCK_MYSELF_CALLSIGN,
+        }),
+        radarUpdate("STGG2", ESGG_ELEV + 1200, ESGG_LAT + 0.02, ESGG_LON - 0.015, {
+            groundSpeed: 200,
+            controller: MOCK_MYSELF_CALLSIGN,
+        }),
+        fpUpdate("STMS2", "ESGG", "ESMS", "E190", {
+            flightRules: "I",
+            rfl: 22000,
+            arrRwy: "17",
+        }),
+        ctrUpdate("STMS2", {
+            squawk: "2211",
+            groundstate: "",
+            stand: "9",
+            controller: MOCK_MYSELF_CALLSIGN,
+        }),
+        radarUpdate("STMS2", 236 + 2500, 55.535564 + 0.03, 13.376327 + 0.02, {
+            groundSpeed: 220,
+            controller: MOCK_MYSELF_CALLSIGN,
+        }),
+    )
+    return out
+}
 
 function fpUpdate(
     callsign: string,
@@ -79,6 +188,25 @@ function radarUpdate(
  */
 export const mockPluginMessages: PluginMessage[] = [
     // === Core sample arrivals ===
+    // Landvetter inbound — assumed by mock myself (stand menu / STD editable)
+    fpUpdate("BLX812", "ESSA", "ESGG", "A321", {
+        flightRules: "I",
+        rfl: 28000,
+        arrRwy: "03",
+        star: "SOPAM1A",
+    }),
+    ctrUpdate("BLX812", {
+        squawk: "2612",
+        groundstate: "ARR",
+        clearance: true,
+        stand: "16",
+        controller: MOCK_MYSELF_CALLSIGN,
+    }),
+    radarUpdate("BLX812", ESGG_ELEV + 900, ESGG_LAT + 0.015, ESGG_LON + 0.012, {
+        groundSpeed: 190,
+        controller: MOCK_MYSELF_CALLSIGN,
+    }),
+
     fpUpdate("SAS911", "ENGM", "ESSA", "A320", {
         rfl: 18000,
         arrRwy: "01L",
@@ -393,6 +521,9 @@ export const mockPluginMessages: PluginMessage[] = [
         controller: "ESNQ_TWR",
     }),
     radarUpdate("COOENQ1", ESNQ_ELEV, ESNQ_LAT + 0.008, ESNQ_LON + 0.008),
+
+    // === GRP stand-menu arrivals (one+ per airport with GRP stands) ===
+    ...grpStandMenuArrivalMessages(),
 ]
 
 export interface BackendStateUpdate {
@@ -412,9 +543,35 @@ export const mockBackendStateUpdates: BackendStateUpdate[] = [
     { callsign: "WZZ7890", tsat: "1300" },
 ]
 
+function mockRwyConfigForAirports(
+    icaos: string[],
+): Record<string, Record<string, { arr: boolean; dep: boolean }>> {
+    const out: Record<string, Record<string, { arr: boolean; dep: boolean }>> = {}
+    for (const icao of icaos) {
+        out[icao] = {
+            "01": { arr: true, dep: true },
+            "19": { arr: false, dep: false },
+        }
+    }
+    // Prefer real-ish pairs where we already had them
+    out.ESSA = {
+        "01L": { arr: true, dep: true },
+        "01R": { arr: false, dep: false },
+    }
+    out.ESGG = {
+        "03": { arr: true, dep: true },
+        "21": { arr: false, dep: false },
+    }
+    out.ESMS = {
+        "17": { arr: true, dep: true },
+        "35": { arr: false, dep: false },
+    }
+    return out
+}
+
 export const mockMyselfUpdate: MyselfUpdateMessage = {
     type: "myselfUpdate",
-    callsign: "ESSA_TWR",
+    callsign: MOCK_MYSELF_CALLSIGN,
     name: "Mock Controller",
     frequency: 118.5,
     rating: 5,
@@ -423,26 +580,5 @@ export const mockMyselfUpdate: MyselfUpdateMessage = {
     position: "SA",
     controller: true,
     pluginVersion: "mock",
-    rwyconfig: {
-        ESSA: {
-            "01L": { arr: true, dep: true },
-            "01R": { arr: false, dep: false },
-        },
-        ESMS: {
-            "17": { arr: true, dep: true },
-            "35": { arr: false, dep: false },
-        },
-        ESSV: {
-            "03": { arr: true, dep: true },
-            "21": { arr: false, dep: false },
-        },
-        ESNU: {
-            "14": { arr: true, dep: true },
-            "32": { arr: false, dep: false },
-        },
-        ESNQ: {
-            "21": { arr: true, dep: true },
-            "03": { arr: false, dep: false },
-        },
-    },
+    rwyconfig: mockRwyConfigForAirports(GRP_STAND_MENU_AIRPORTS.map((a) => a.icao)),
 }

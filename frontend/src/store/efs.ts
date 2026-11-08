@@ -868,6 +868,8 @@ export const useEfsStore = defineStore("efs", () => {
     const handoverAssistantAutoAssume = ref(DEFAULT_UI_SETTINGS.handoverAssistantAutoAssume)
     /** ESSA stand menu: full apron columns vs compact highlighted list */
     const standMenuLayout = ref<StandMenuLayout>(DEFAULT_UI_SETTINGS.standMenuLayout)
+    /** Airports with GRP stand menu available (from layout message). */
+    const standMenuAirports = ref<string[]>([])
     /** Handover Assistant dialog open */
     const handoverAssistantOpen = ref(false)
     /** Last primed primary freq (MHz) — used to prefer matching targets after unprime */
@@ -1261,7 +1263,10 @@ export const useEfsStore = defineStore("efs", () => {
             if (isServerMessage(message)) {
                 switch (message.type) {
                     case 'layout':
-                        handleLayoutMessage(message.layout)
+                        handleLayoutMessage(
+                            message.layout,
+                            (message as { standMenuAirports?: string[] }).standMenuAirports,
+                        )
                         break
                     case 'strip':
                         handleStripMessage(
@@ -1429,12 +1434,21 @@ export const useEfsStore = defineStore("efs", () => {
     }
 
     // Handle layout message from server
-    function handleLayoutMessage(newLayout: EfsLayout) {
+    function handleLayoutMessage(newLayout: EfsLayout, menuAirports?: string[]) {
         console.log("received layout:", newLayout)
         const preserved = pendingLayoutHeights.value ?? snapshotSectionHeights()
         pendingLayoutHeights.value = null
         applyPreservedSectionHeights(newLayout, preserved)
         layout.value = newLayout
+        if (menuAirports) {
+            standMenuAirports.value = menuAirports.map((a) => a.toUpperCase())
+        }
+    }
+
+    function hasStandMenuAirport(airport: string | undefined | null): boolean {
+        if (!airport) return false
+        const icao = airport.toUpperCase()
+        return standMenuAirports.value.includes(icao)
     }
 
     // Auto-move animation: maps strip ID -> old rect + cloned DOM node (non-reactive, consumed once)
@@ -4098,6 +4112,8 @@ export const useEfsStore = defineStore("efs", () => {
         handoverAssistantPreferredFreq,
         handoverAssistantAutoAssume,
         standMenuLayout,
+        standMenuAirports,
+        hasStandMenuAirport,
         openHandoverAssistant,
         closeHandoverAssistant,
         dclSoundEnabled,

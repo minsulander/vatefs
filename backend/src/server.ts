@@ -240,10 +240,11 @@ import {
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import {
     loadEssaStandAssign,
-    buildEssaStandMenu,
-    pickEssaAutoStand,
+    buildStandMenu,
+    pickAutoStand,
     resolveAircraftDims,
-    hasEssaStandAssignData,
+    hasStandMenuAirport,
+    standMenuAirports,
     type OccupierInfo,
 } from "./essa-stand-assign.js"
 import {
@@ -600,9 +601,9 @@ if (EUROSCOPE_DIR) {
         console.warn(`Failed to load stand data: ${err instanceof Error ? err.message : err}`)
     }
     try {
-        loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
+        loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, dataDir)
     } catch (err) {
-        console.warn(`Failed to load ESSA stand assign data: ${err instanceof Error ? err.message : err}`)
+        console.warn(`Failed to load stand assign data: ${err instanceof Error ? err.message : err}`)
     }
     try {
         loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE)
@@ -4194,22 +4195,54 @@ function reprocessAllStripsForRoleChange(reason: string) {
 }
 
 // Send layout to a client
-function sendLayout(socket: WebSocket) {
-    const message: LayoutMessage = {
+function layoutMessage(): LayoutMessage {
+    return {
         type: "layout",
         layout: store.getLayout(),
+        standMenuAirports: standMenuAirports(),
     }
-    sendMessage(socket, message)
+}
+
+function sendLayout(socket: WebSocket) {
+    sendMessage(socket, layoutMessage())
     console.log("Sent layout to client")
 }
 
 // Broadcast layout to all clients (e.g., when active runways change and titles need updating)
 function broadcastLayout() {
-    const message: LayoutMessage = {
-        type: "layout",
-        layout: store.getLayout(),
+    broadcast(layoutMessage())
+}
+
+/** Occupancy traffic for stand menu / Auto at one destination airport. */
+function buildStandMenuTraffic(airport: string): OccupierInfo[] {
+    const apt = airport.toUpperCase()
+    const traffic: OccupierInfo[] = []
+    for (const f of flightStore.getAllFlights()) {
+        if (!f.callsign) continue
+        const origin = (f.origin || "").toUpperCase()
+        const destination = (f.destination || "").toUpperCase()
+        traffic.push({
+            callsign: f.callsign,
+            stand: f.stand,
+            latitude: f.latitude,
+            longitude: f.longitude,
+            heading: f.heading,
+            groundstate: f.groundstate,
+            airborne: !!f.airborne,
+            departure: origin === apt,
+            tsat: f.tsat,
+            tobt: f.tobt,
+            eobt: f.eobt,
+            dims: resolveAircraftDims(
+                f.aircraftType,
+                f.wakeTurbulence,
+                f.callsign,
+                f.fplRemarks,
+            ),
+            assigned: !!(f.stand && destination === apt && origin !== apt),
+        })
     }
-    broadcast(message)
+    return traffic
 }
 
 /**
@@ -4944,7 +4977,7 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         try { loadStands(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
             console.warn(`Reload stands failed: ${err instanceof Error ? err.message : err}`)
         }
-        try { loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
+        try { loadEssaStandAssign(EUROSCOPE_DIR, EUROSCOPE_PACKAGE, dataDir) } catch (err) {
             console.warn(`Reload ESSA stand assign failed: ${err instanceof Error ? err.message : err}`)
         }
         try { loadSidData(EUROSCOPE_DIR, EUROSCOPE_PACKAGE) } catch (err) {
@@ -8446,47 +8479,20 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
         case "requestStandMenu": {
             const strip = store.getStrip(message.stripId)
-            if (!strip || !hasEssaStandAssignData()) break
-            if ((strip.ades || "").toUpperCase() !== "ESSA") break
+            if (!strip) break
+            const dest = (strip.ades || "").toUpperCase()
+            if (!hasStandMenuAirport(dest)) break
             const flight = flightStore.getFlight(strip.callsign)
-            const traffic: OccupierInfo[] = []
-            for (const f of flightStore.getAllFlights()) {
-                if (!f.callsign) continue
-                const origin = (f.origin || "").toUpperCase()
-                const destination = (f.destination || "").toUpperCase()
-                traffic.push({
-                    callsign: f.callsign,
-                    stand: f.stand,
-                    latitude: f.latitude,
-                    longitude: f.longitude,
-                    heading: f.heading,
-                    groundstate: f.groundstate,
-                    airborne: !!f.airborne,
-                    // Deps + locals — never Planned from strip stand
-                    departure: origin === "ESSA",
-                    tsat: f.tsat,
-                    tobt: f.tobt,
-                    eobt: f.eobt,
-                    dims: resolveAircraftDims(
-                        f.aircraftType,
-                        f.wakeTurbulence,
-                        f.callsign,
-                        f.fplRemarks,
-                    ),
-                    // Planned/assigned is arrivals only; deps still occupy via GPS/PARK
-                    assigned: !!(f.stand && destination === "ESSA" && origin !== "ESSA"),
-                })
-            }
-            const menu = buildEssaStandMenu({
+            const menu = buildStandMenu({
                 stripId: strip.id,
                 callsign: strip.callsign,
                 origin: flight?.origin ?? strip.adep,
-                destination: flight?.destination ?? strip.ades,
+                destination: dest,
                 aircraftType: flight?.aircraftType ?? strip.aircraftType,
                 wakeTurbulence: flight?.wakeTurbulence ?? strip.wakeTurbulence,
                 fplRemarks: flight?.fplRemarks,
                 currentStand: flight?.stand ?? strip.stand,
-                traffic,
+                traffic: buildStandMenuTraffic(dest),
             })
             if (menu) {
                 sendMessage(socket, {
@@ -8515,38 +8521,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 stand = (flight?.stand || strip.stand || "").trim().toUpperCase()
                 if (!stand) break
             } else if (message.action === "auto") {
-                if (!hasEssaStandAssignData()) break
                 const flight = flightStore.getFlight(strip.callsign)
                 const origin = (flight?.origin ?? strip.adep ?? "").toUpperCase()
                 const destination = (flight?.destination ?? strip.ades ?? "").toUpperCase()
-                if (destination !== "ESSA") break
-                const traffic: OccupierInfo[] = []
-                for (const f of flightStore.getAllFlights()) {
-                    if (!f.callsign) continue
-                    const o = (f.origin || "").toUpperCase()
-                    const d = (f.destination || "").toUpperCase()
-                    traffic.push({
-                        callsign: f.callsign,
-                        stand: f.stand,
-                        latitude: f.latitude,
-                        longitude: f.longitude,
-                        heading: f.heading,
-                        groundstate: f.groundstate,
-                        airborne: !!f.airborne,
-                        departure: o === "ESSA",
-                        tsat: f.tsat,
-                        tobt: f.tobt,
-                        eobt: f.eobt,
-                        dims: resolveAircraftDims(
-                            f.aircraftType,
-                            f.wakeTurbulence,
-                            f.callsign,
-                            f.fplRemarks,
-                        ),
-                        assigned: !!(f.stand && d === "ESSA" && o !== "ESSA"),
-                    })
-                }
-                const picked = pickEssaAutoStand({
+                if (!hasStandMenuAirport(destination)) break
+                const picked = pickAutoStand({
                     stripId: strip.id,
                     callsign: strip.callsign,
                     origin,
@@ -8555,7 +8534,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     wakeTurbulence: flight?.wakeTurbulence ?? strip.wakeTurbulence,
                     fplRemarks: flight?.fplRemarks,
                     currentStand: flight?.stand ?? strip.stand,
-                    traffic,
+                    traffic: buildStandMenuTraffic(destination),
                 })
                 if (!picked) {
                     sendMessage(socket, {
