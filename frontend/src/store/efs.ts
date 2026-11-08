@@ -1573,6 +1573,50 @@ export const useEfsStore = defineStore("efs", () => {
         return true
     }
 
+    /**
+     * Zoom / scribble overlay session — lives in the store so bay FlightStrip
+     * remounts (automove, section reshuffle) do not close the zoom. Only
+     * explicit close (✕ / backdrop / callsign) or strip delete clears it.
+     */
+    type StripZoomAnchor = { left: number; top: number; width: number; height: number }
+    const stripZoomSession = ref<{
+        stripId: string
+        bayId: string
+        sectionId: string
+        anchorRect: StripZoomAnchor | null
+    } | null>(null)
+
+    function openStripZoom(opts: {
+        stripId: string
+        bayId: string
+        sectionId: string
+        anchorRect?: StripZoomAnchor | null
+    }) {
+        stripZoomSession.value = {
+            stripId: opts.stripId,
+            bayId: opts.bayId,
+            sectionId: opts.sectionId,
+            anchorRect: opts.anchorRect ?? null,
+        }
+    }
+
+    function closeStripZoom(stripId?: string) {
+        if (!stripZoomSession.value) return
+        if (stripId && stripZoomSession.value.stripId !== stripId) return
+        stripZoomSession.value = null
+    }
+
+    function syncStripZoomPlacement(strip: FlightStrip) {
+        const z = stripZoomSession.value
+        if (!z || z.stripId !== strip.id) return
+        if (z.bayId === strip.bayId && z.sectionId === strip.sectionId) return
+        stripZoomSession.value = {
+            ...z,
+            bayId: strip.bayId,
+            sectionId: strip.sectionId,
+        }
+    }
+
     // Handle strip message from server
     function handleStripMessage(
         strip: FlightStrip,
@@ -1641,6 +1685,7 @@ export const useEfsStore = defineStore("efs", () => {
         }
         strips.value.set(nextStrip.id, nextStrip)
         stripsVersion.value++
+        syncStripZoomPlacement(nextStrip)
 
         // Bind pending “open zoom” to newly created note / vehicle strip id
         if (
@@ -1726,6 +1771,7 @@ export const useEfsStore = defineStore("efs", () => {
         console.log("received strip delete:", stripId)
         // Capture DOM before unmount so auto-removed strips can fly to trash
         flyStripToTrash(stripId)
+        closeStripZoom(stripId)
         strips.value.delete(stripId)
         stripsVersion.value++
     }
@@ -1764,6 +1810,7 @@ export const useEfsStore = defineStore("efs", () => {
         suppressStripPrintSounds(2500)
         pendingLayoutHeights.value = snapshotSectionHeights()
         // Clear local state
+        closeStripZoom()
         layout.value = { bays: [] }
         strips.value.clear()
         stripsVersion.value++
@@ -3703,6 +3750,7 @@ export const useEfsStore = defineStore("efs", () => {
     })
 
     function deleteStrip(stripId: string) {
+        closeStripZoom(stripId)
         // Optimistically remove from local state
         strips.value.delete(stripId)
         stripsVersion.value++
@@ -4210,6 +4258,9 @@ export const useEfsStore = defineStore("efs", () => {
         createStrip,
         pendingNoteScribbleId,
         consumePendingNoteScribbleOpen,
+        stripZoomSession,
+        openStripZoom,
+        closeStripZoom,
         updateNote,
         updateVehicleStrip,
         updateRemarks,

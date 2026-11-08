@@ -8,15 +8,6 @@
   />
   <AtdDialog v-model="atdDialogOpen" :strip="strip" @confirm="onAtdDialogConfirm" />
   <CoordProposalDialog v-model="coordProposalDialogOpen" :strip="strip" />
-  <StripZoomOverlay
-    v-if="!isLargeView"
-    v-model="largeViewOpen"
-    :strip="strip"
-    :bay-id="bayId"
-    :section-id="sectionId"
-    :anchor-rect="largeViewAnchor"
-  />
-
   <v-dialog v-model="deleteDialogOpen" max-width="300" content-class="delete-dialog-wrapper">
     <div class="delete-dialog">
       <div class="delete-dialog-text">Delete strip for flight {{ strip.callsign }}?</div>
@@ -1738,7 +1729,6 @@ import XflMenu from './XflMenu.vue'
 import TobtMenu, { type TobtMenuKind } from './TobtMenu.vue'
 import AhdMenu from './AhdMenu.vue'
 import HpMenu from './HpMenu.vue'
-import StripZoomOverlay from './StripZoomOverlay.vue'
 import StripCloseButton from './StripCloseButton.vue'
 
 const props = withDefaults(
@@ -2586,19 +2576,22 @@ const atdDialogOpen = ref(false)
 const coordProposalDialogOpen = ref(false)
 const fplDialogOpen = ref(false)
 const deleteDialogOpen = ref(false)
-const largeViewOpen = ref(false)
-const largeViewAnchor = ref<{ left: number; top: number; width: number; height: number } | null>(null)
 
 function openLargeView() {
+  // Zoom session lives in the store so automove / section remounts keep it open
   closeAssignmentMenus()
   const el = stripElement.value
+  let anchorRect: { left: number; top: number; width: number; height: number } | null = null
   if (el) {
     const r = el.getBoundingClientRect()
-    largeViewAnchor.value = { left: r.left, top: r.top, width: r.width, height: r.height }
-  } else {
-    largeViewAnchor.value = null
+    anchorRect = { left: r.left, top: r.top, width: r.width, height: r.height }
   }
-  largeViewOpen.value = true
+  store.openStripZoom({
+    stripId: props.strip.id,
+    bayId: props.bayId,
+    sectionId: props.sectionId,
+    anchorRect,
+  })
 }
 
 function onSizeExpanded() {
@@ -4523,12 +4516,12 @@ function onNoteClick() {
 }
 
 function onNoteClose() {
-  largeViewOpen.value = false
+  store.closeStripZoom(props.strip.id)
   store.deleteStrip(props.strip.id)
 }
 
 function onVehicleTerm() {
-  largeViewOpen.value = false
+  store.closeStripZoom(props.strip.id)
   store.deleteStrip(props.strip.id)
 }
 
