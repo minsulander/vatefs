@@ -2366,7 +2366,11 @@ export const useEfsStore = defineStore("efs", () => {
         }
 
         stripsVersion.value++
-        markManualOrder(targetBayId, storeSectionId)
+        // Only in-bay reorders stick to MAN / sticky order. Cross-bay drops into a
+        // sorted section keep the active sortBy and insert by that order.
+        if (isSameZone) {
+            markManualOrder(targetBayId, storeSectionId)
+        }
 
         // Send update to server (drop intent may be push_back / start_up)
         sendMessage({

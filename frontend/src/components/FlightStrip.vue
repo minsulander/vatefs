@@ -6057,11 +6057,21 @@ function handleTouchDropWithGaps(
   const modeSectionId = opts?.modeSectionId || targetSectionId
   const matchIds = opts?.matchSectionIds
   const modeToggle = store.isModeToggleSectionId(modeSectionId)
+  // Same header: drag payload uses effective bay/section; matchIds cover merged DEP
+  const sameHeader =
+    sourceBayId === targetBayId &&
+    !data.isBottom &&
+    (sourceSectionId === targetSectionId ||
+      sourceSectionId === modeSectionId ||
+      (!!matchIds && matchIds.includes(sourceSectionId)))
+  const isMan = store.hasManualOrder(targetBayId, modeSectionId)
+  // In-bay reorder or already MAN → freeze at drop position; cross-bay keeps sortBy
+  const stickManual = sameHeader || isMan
 
   // Find the top-strips-container within the drop target
   const container = dropTarget.querySelector('.top-strips-container') || dropTarget
   if (!container) {
-    if (modeToggle) {
+    if (modeToggle && stickManual) {
       store.commitManualTopOrder(targetBayId, modeSectionId, [stripId], {
         movedStripId: stripId,
         membershipSectionId: targetSectionId,
@@ -6072,18 +6082,11 @@ function handleTouchDropWithGaps(
     return
   }
 
-  // If section is auto time-sorted, align store positions to what the user sees
-  if (!modeToggle) {
+  // Align DOM→store only when about to stick a manual order (in-bay reorder)
+  if (!modeToggle && sameHeader) {
     store.syncTimeSortSectionFromDom(targetBayId, targetSectionId, container, matchIds)
   }
 
-  // Same header: drag payload uses effective bay/section; matchIds cover merged DEP
-  const sameHeader =
-    sourceBayId === targetBayId &&
-    !data.isBottom &&
-    (sourceSectionId === targetSectionId ||
-      sourceSectionId === modeSectionId ||
-      (!!matchIds && matchIds.includes(sourceSectionId)))
   const isSameSection = sameHeader
   const allStripElements = Array.from(container.querySelectorAll('.flight-strip'))
   const allGapElements = Array.from(container.querySelectorAll('.strip-gap'))
@@ -6101,7 +6104,7 @@ function handleTouchDropWithGaps(
   }
 
   const placeAt = (insertPosition: number) => {
-    if (modeToggle) {
+    if (modeToggle && stickManual) {
       const others = allStripElements
         .map((el) => el.getAttribute('data-strip-id'))
         .filter((id): id is string => !!id && id !== stripId)
@@ -6114,6 +6117,7 @@ function handleTouchDropWithGaps(
       })
       return
     }
+    // Cross-bay into auto-sorted bay: move without entering MAN (display re-sorts)
     store.moveStripToSection(stripId, targetBayId, targetSectionId, insertPosition)
   }
 

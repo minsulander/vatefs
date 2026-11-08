@@ -2825,18 +2825,45 @@ watch(
 )
 
 /**
- * Sections whose display sort ignores a raw drop index (ETA / ATD / runway tier / taxi tier).
- * Time-sort bays (TSAT, CD ALL) freeze to manual on drop, so the pointer index sticks.
+ * Sections whose display sort ignores a raw drop index while auto-sorted.
+ * In-bay reorders enter MAN and keep the pointer index; cross-bay drops into a
+ * sorted bay stay on sortBy — show the predicted sorted slot instead.
  */
 function displayReordersDrop(): boolean {
   if (preferManualOrder.value) return false
+  const id = draggingStripId()
+  const dragged = id ? store.strips.get(id) : undefined
+  // Reordering inside this bay will stick to MAN at the pointer — don't predict sort.
+  if (dragged && stripAlreadyInThisBay(dragged)) return false
   return (
+    timeSortEnabled.value ||
+    paperPendingKlarering.value ||
     etaSortEnabled.value ||
     atdSortEnabled.value ||
     rtcArrSortEnabled.value ||
     runwayLuSortEnabled.value ||
     isTaxiSectionId(props.section.id)
   )
+}
+
+/** Strip already listed under this header (same bay + matching section family, top zone). */
+function stripAlreadyInThisBay(strip: FlightStripData | undefined): boolean {
+  if (!strip || strip.bottom) return false
+  if (strip.bayId !== effectiveBayId.value) return false
+  return sectionIdsForStripMatch().includes(strip.sectionId)
+}
+
+/**
+ * Visual insert index among current top strips for the active sortBy
+ * (does not enter MAN — used for cross-bay drops into auto-sorted bays).
+ */
+function sortedInsertAmongVisible(stripId: string): number {
+  const strip = store.strips.get(stripId)
+  if (!strip) return allTopStrips.value.length
+  const others = allTopStrips.value.filter((s) => s.id !== stripId)
+  const ordered = orderTopStrips([...others, { ...strip }])
+  const idx = ordered.findIndex((s) => s.id === stripId)
+  return idx < 0 ? others.length : idx
 }
 
 /**
@@ -2949,8 +2976,9 @@ function membershipSectionForDrop(stripId: string): string {
 }
 
 /**
- * Place a strip in this section's top zone. Mode-toggle headers (EOBT/TOBT/TSAT)
- * freeze visual order as MAN — including merged DEP spanning pending+cleared.
+ * Place a strip in this section's top zone.
+ * - Already in this bay (or bay is MAN): insert at drop position and enter/keep MAN.
+ * - Cross-bay into auto sortBy: insert by sortBy; do not switch to MAN.
  */
 function placeStripInTop(stripId: string, insertAmongVisible: number) {
   // Touch / generic place into a D-trans divider → transfer via last hover X
@@ -2968,8 +2996,12 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
     store.isModeToggleSectionId(modeSec) ||
     store.isModeToggleSectionId(props.section.id) ||
     isMergedDepDivider.value
+  const strip = store.strips.get(stripId)
+  const alreadyIn = stripAlreadyInThisBay(strip)
+  const isMan = preferManualOrder.value
 
-  if (modeToggle) {
+  // In-bay reorder (or already MAN): freeze at drop position → MAN
+  if (modeToggle && (alreadyIn || isMan)) {
     const others = allTopStrips.value.map((s) => s.id).filter((id) => id !== stripId)
     const at = Math.max(0, Math.min(insertAmongVisible, others.length))
     const ordered = [...others]
@@ -2981,6 +3013,31 @@ function placeStripInTop(stripId: string, insertAmongVisible: number) {
     return
   }
 
+  // Cross-bay into auto-sorted bay: keep sortBy, insert at sorted slot
+  const autoSorted =
+    (timeSortEnabled.value ||
+      paperPendingKlarering.value ||
+      etaSortEnabled.value ||
+      atdSortEnabled.value ||
+      rtcArrSortEnabled.value ||
+      runwayLuSortEnabled.value ||
+      isTaxiSectionId(props.section.id)) &&
+    !isMan
+  if (autoSorted && !alreadyIn) {
+    const at = sortedInsertAmongVisible(stripId)
+    store.moveStripToSection(stripId, bay, membershipSec, at)
+    return
+  }
+
+  if (!alreadyIn) {
+    // Cross-bay into appearance-order bay — no sticky MAN
+    const othersCount = allTopStrips.value.filter((s) => s.id !== stripId).length
+    const logicalPos = logicalInsertFromVisual(insertAmongVisible, othersCount)
+    store.moveStripToSection(stripId, bay, membershipSec, logicalPos)
+    return
+  }
+
+  // In-bay reorder on sticky time-sort / RTC sections
   store.syncTimeSortSectionFromDom(
     bay,
     modeSec,
