@@ -66,6 +66,13 @@ check("TMA exit is first fix, entry is last filed before STAR", () => {
     assert.equal(extractTmaEntryPoint(route), "ELTOK")
 })
 
+check("HAPZI SID does not replace filed TMA exit ARS (#81)", () => {
+    assert.equal(extractTmaExitPoint("HAPZI1G", "ESSA/19R ARS N850 NOSLI"), "ARS")
+    assert.equal(extractTmaExitPoint("HAPZI 1G", "HAPZI ARS DCT NOSLI"), "ARS")
+    assert.equal(extractTmaExitPoint(undefined, "HAPZI1G ARS DCT NOSLI"), "ARS")
+    assert.equal(extractTmaExitPoint("HAPZI1G", "HAPZI TRF DCT"), "TRF")
+})
+
 check("TMA entry ignores STAR legs after IAF (OBCIV)", () => {
     const expanded = "ARS NOSLI ELTOK OBCIV SA865 ERXEC"
     assert.equal(extractTmaEntryPoint(expanded, "ELTOK1G"), "ELTOK")

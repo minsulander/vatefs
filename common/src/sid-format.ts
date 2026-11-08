@@ -318,6 +318,8 @@ export function extractSignificantRouteFixes(
         if (/^[A-Z]{4}$/.test(upper)) continue
         // Skip named SID designators left in the route without /rwy
         if (/^[A-Z]{2,}\d+[A-Z]+$/.test(upper)) continue
+        // HAPZI (SLOW) is a procedure name, never a filed TMA exit (#81)
+        if (/^HAPZI/i.test(upper.replace(/[·.•\s]/g, ""))) continue
         let fix: string | undefined
         // Vector SID in route (ARS6E·KOGAV) → exit is the suffix
         const vector = parseVectorSidName(upper)
@@ -339,13 +341,24 @@ export function extractSignificantRouteFixes(
 /**
  * TMA exit = first significant FPL route point, excluding ADEP/rwy and SID/rwy.
  * SID procedure name is ignored (ROKNI4R/08 ARS … → ARS).
- * `sid` is unused (kept for call-site compatibility).
+ * When `sid` is set, also skip that procedure's name (e.g. HAPZI SID must not
+ * replace filed ARS as the exit — #81).
  */
 export function extractTmaExitPoint(
-    _sid: string | undefined | null,
+    sid: string | undefined | null,
     route: string | undefined | null,
 ): string | undefined {
-    return extractSignificantRouteFixes(route)[0]
+    const fixes = extractSignificantRouteFixes(route)
+    if (!fixes.length) return undefined
+    const sidName =
+        extractFixFromProcedureName(sid) ||
+        (isHapziSid(sid) ? "HAPZI" : undefined)
+    for (const fix of fixes) {
+        if (sidName && fix === sidName) continue
+        if (/^HAPZI$/i.test(fix)) continue
+        return fix
+    }
+    return undefined
 }
 
 /** Fix name from a STAR / procedure designator (ELTOK1G → ELTOK, ALJAC RNP Y → ALJAC). */
