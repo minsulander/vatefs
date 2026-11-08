@@ -1616,7 +1616,7 @@ class EfsStore {
             }
         }
 
-        // Prefer current section rules; fall back to where it was deleted from
+        // Prefer current section rules; fall back to SYSTEM INBOUND, then saved place
         let bayId = saved.bayId
         let sectionId = saved.sectionId
         if (flight) {
@@ -1624,6 +1624,15 @@ class EfsStore {
             if (target) {
                 bayId = target.bayId
                 sectionId = target.sectionId
+            } else {
+                const sysId = 'system_inbound'
+                const sysBay = staticConfig.layout.bays.find((b) =>
+                    b.sections.some((s) => s.id === sysId),
+                )
+                if (sysBay) {
+                    bayId = sysBay.id
+                    sectionId = sysId
+                }
             }
         }
 

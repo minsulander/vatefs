@@ -58,6 +58,10 @@ layout:
           # GND boards (and solo TWR covering GND). Hidden on TWR-only when a
           # separate GND is online — TWR keeps TAXIWAY DEP only (not merged).
           visibleFor: [GND, TWR]
+        # Assignment target for orphan/spawn fallback. Workspace injects the
+        # visible SYSTEM INBOUND header — not shown via role filter / builtins.
+        system_inbound:
+          title: SYSTEM INBOUND
 
     bay2:
       sections:

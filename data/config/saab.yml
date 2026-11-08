@@ -26,6 +26,9 @@ layouts:
           sections:
             tma:
               title: TMA
+            # Orphan/spawn fallback — workspace injects visible header
+            system_inbound:
+              title: SYSTEM INBOUND
         bay2:
           sections:
             # Workspace collapses ctr_arr + ctr_dep titled CTR → one CTR header
@@ -64,6 +67,9 @@ layouts:
             # Not shown in the CTR-only builtin column plan until added.
             ctr_inbound:
               title: CTR INBOUND
+            # Orphan/spawn fallback — workspace injects visible header
+            system_inbound:
+              title: SYSTEM INBOUND
         bay2:
           sections:
             ctr_dep:
@@ -106,6 +112,9 @@ layouts:
               title: RUNWAY ARR
               # ARR RWY: first at bottom
               addFromTop: true
+            # Orphan/spawn fallback — workspace injects visible header
+            system_inbound:
+              title: SYSTEM INBOUND
         bay2:
           sections:
             ctr_dep:

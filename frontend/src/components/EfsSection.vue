@@ -48,6 +48,7 @@
         { 'section-header--workspace-draggable': workspaceMode || store.multiAirport },
         { 'section-header--empty-blocker': isEmptyWorkspaceHeader },
         { 'section-header--dtrans': isDtransDivider },
+        { 'section-header--system-inbound': isSystemInbound },
       ]"
       :title="
         workspaceMode || store.multiAirport
@@ -896,6 +897,11 @@ const dtransVariant = computed((): DtransVariantId | undefined => {
   return isDtransVariantId(v) ? v : undefined
 })
 const isDtransDivider = computed(() => !!dtransVariant.value)
+
+const isSystemInbound = computed(() => {
+  if (workspaceSection.value?.systemInbound) return true
+  return props.section.id === 'system_inbound'
+})
 
 const isEmptyWorkspaceHeader = computed(() => {
   // RTC client empty dividers (catalog → Empty divider)
@@ -1910,6 +1916,7 @@ function tryHandleInfoStripDrop(event: DragEvent, bottom: boolean): boolean {
 
 /** ESSA SAAB header tint: runway / inbound-from-other / other */
 const essaHeaderClass = computed(() => {
+  if (isSystemInbound.value) return undefined
   if (!store.essaRolesMode) return undefined
   const id = props.section.id.toLowerCase()
   const title = (props.section.title || '').toUpperCase()
@@ -2401,6 +2408,10 @@ function sectionIdsForStripMatch(): string[] {
 }
 
 function stripMatchesThisSection(strip: FlightStripData): boolean {
+  // SYSTEM INBOUND hosts orphans whose assigned section is not open.
+  if (props.workspaceMode && isSystemInbound.value) {
+    return ws.stripIsWorkspaceOrphan(strip)
+  }
   const ids = sectionIdsForStripMatch()
   if (!ids.includes(strip.sectionId)) return false
   if (props.workspaceMode) {
@@ -4944,6 +4955,15 @@ function onBottomStripsDropAtEnd(event: DragEvent) {
 }
 
 /* ESSA Direct Transfer divider — same height/chrome as other headers; green fill */
+/* SYSTEM INBOUND catch-all (workspace) — blue; D-trans stays green */
+.section-header--system-inbound {
+  background: #1a4a7a;
+  border-bottom-color: #143a60;
+}
+.section-header--system-inbound .section-title {
+  color: #e8f0f8;
+}
+
 .section-header--dtrans {
   background: #096a2e;
   border-bottom-color: #065022;

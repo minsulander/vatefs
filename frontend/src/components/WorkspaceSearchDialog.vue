@@ -81,12 +81,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useEfsStore } from '@/store/efs'
+import { getWorkspace } from '@/workspace'
 import type { DeletedStripInfo, FlightStrip } from '@vatefs/common'
 
 defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
 
 const store = useEfsStore()
+const ws = getWorkspace()
 const query = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 const flightLookup = ref<{
@@ -131,9 +133,22 @@ watch(
 async function lookupFlight(callsign: string) {
   flightLookupLoading.value = true
   try {
-    const res = await fetch(`/api/flight/${encodeURIComponent(callsign)}`)
+    // Prefer print-flight payload (network + local) for spawn candidates
+    const res = await fetch(`/api/print-flight/${encodeURIComponent(callsign)}`)
     if (!res.ok) {
-      flightLookup.value = null
+      // Fall back to local flight lookup
+      const local = await fetch(`/api/flight/${encodeURIComponent(callsign)}`)
+      if (!local.ok) {
+        flightLookup.value = null
+        return
+      }
+      const data = await local.json()
+      flightLookup.value = {
+        callsign: data.callsign || callsign,
+        aircraftType: data.aircraftType,
+        adep: data.adep || data.origin,
+        ades: data.ades || data.destination,
+      }
       return
     }
     const data = await res.json()
@@ -150,7 +165,19 @@ async function lookupFlight(callsign: string) {
   }
 }
 
-function onSelectEfs(_strip: FlightStrip) {
+function flashStrip(stripId: string) {
+  store.setHighlight(stripId, 'local')
+  window.setTimeout(() => {
+    const s = store.strips.get(stripId)
+    if (s?.highlight === 'local') store.setHighlight(stripId, null)
+  }, 2500)
+}
+
+function onSelectEfs(strip: FlightStrip) {
+  if (store.workspaceMode && ws.stripIsWorkspaceOrphan(strip)) {
+    ws.ensureSystemInboundDivider()
+  }
+  flashStrip(strip.id)
   emit('update:modelValue', false)
 }
 
@@ -160,6 +187,20 @@ function onRestore(stripId: string) {
 }
 
 function onFlightLookup() {
+  const cs = (flightLookup.value?.callsign || trimmed.value).trim().toUpperCase()
+  if (!cs) {
+    emit('update:modelValue', false)
+    return
+  }
+  // Prefer restore when already in trash
+  const trash = store.deletedStrips.find(
+    (s) => (s.callsign || '').toUpperCase() === cs || s.stripId.toUpperCase() === cs,
+  )
+  if (trash) {
+    store.restoreStrip(trash.stripId)
+  } else {
+    store.spawnStrip(cs)
+  }
   emit('update:modelValue', false)
 }
 

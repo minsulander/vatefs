@@ -515,6 +515,10 @@ export function filterEssaLayout(
                         if (section.id === 'inbound' && families.has('APP')) {
                             return false
                         }
+                        // Assignment-only catch-all — workspace injects the visible header
+                        if (section.id === 'system_inbound') {
+                            return false
+                        }
                         const visibleFor = sectionVisibleFor.get(section.id)
                         if (!visibleFor || visibleFor.length === 0) return true
                         return visibleFor.some(f => families.has(f))

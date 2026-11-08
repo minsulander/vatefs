@@ -98,6 +98,24 @@ watchEssaRolesForWorkspace(essaRoles, layout, essaRolesMode, workspaceMode, saab
 
 const searchDialogOpen = ws.searchDialogOpen
 
+/** Auto-add SYSTEM INBOUND when orphans appear (do not auto-remove when empty). */
+watch(
+  () => {
+    void store.stripsVersion
+    void ws.activeLayout.value
+    return store.workspaceMode
+  },
+  (mode) => {
+    if (!mode) return
+    for (const strip of store.strips.values()) {
+      if (ws.stripIsWorkspaceOrphan(strip)) {
+        ws.ensureSystemInboundDivider()
+        return
+      }
+    }
+  },
+)
+
 const bays = computed(() => {
   if (store.workspaceMode && ws.activeLayout.value) {
     return ws.buildDisplayBays(store.layout)

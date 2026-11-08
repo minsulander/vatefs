@@ -3776,6 +3776,12 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'printStrip', callsign: cs || callsign })
     }
 
+    /** Force-create strip for ESSA/OTHER (search network). Prefer restoreStrip if in trash. */
+    function spawnStrip(callsign: string) {
+        const cs = callsign.trim().toUpperCase()
+        sendMessage({ type: 'spawnStrip', callsign: cs || callsign })
+    }
+
     function restoreStrip(stripId: string) {
         sendMessage({ type: 'restoreStrip', stripId })
     }
@@ -4216,6 +4222,7 @@ export const useEfsStore = defineStore("efs", () => {
         deletedStrips,
         listDeletedStrips,
         restoreStrip,
+        spawnStrip,
         GAP_BUFFER,
         atisInfo,
         acknowledgeQnh,

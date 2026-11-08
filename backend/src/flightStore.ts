@@ -1783,7 +1783,13 @@ class FlightStore {
             return { flight, softDeleted: flight.deleted }
         }
 
-        if (!this.isEligibleForStrip(flight) && !this.stripAssignments.has(callsign)) {
+        // Pending inbound handoff: always create/keep a strip even beyond range.
+        const pendingInbound = this.isPendingInboundTransferToMe(flight)
+        if (
+            !this.isEligibleForStrip(flight) &&
+            !this.stripAssignments.has(callsign) &&
+            !pendingInbound
+        ) {
             return { flight }
         }
 
@@ -2094,6 +2100,19 @@ class FlightStore {
         return updated
     }
 
+    /** YAML `system_inbound` assignment target (workspace injects the visible header). */
+    private findSystemInboundPlacement(): { bayId: string; sectionId: string } | undefined {
+        const sectionId = 'system_inbound'
+        for (const bay of this.config.layout.bays) {
+            if (bay.sections.some((s) => s.id === sectionId)) {
+                return { bayId: bay.id, sectionId }
+            }
+        }
+        const fallbackBay = this.config.layout.bays[0]
+        if (fallbackBay) return { bayId: fallbackBay.id, sectionId }
+        return undefined
+    }
+
     /**
      * Handle case where no section rule matches a flight.
      * Logs once per flight and marks it as soft-deleted.
@@ -2137,30 +2156,48 @@ class FlightStore {
         const wasDeleted = flight.deleted ?? false
         const deleteResult = shouldDeleteFlight(flight, this.config)
 
-        if (deleteResult.shouldDelete && !wasDeleted) {
-            // Trash restore of early TERM: keep strip until explicit TERM / disconnect
+        if (deleteResult.shouldDelete) {
+            // Keep pending inbound transfers while beyond range (do not soft-delete / revive if already deleted)
             if (
-                flight.suppressParkDelete &&
-                (deleteResult.ruleId === 'delete_parked' || deleteResult.ruleId === 'delete_parked_local')
+                deleteResult.ruleId === 'delete_beyond_range' &&
+                this.isPendingInboundTransferToMe(flight)
             ) {
-                return {
-                    deleteResult: { shouldDelete: false },
-                    wasDeleted,
+                if (wasDeleted && !flight.manuallyDeleted) {
+                    flight.deleted = false
+                    flight.deletedByBeyondRange = false
+                    flight.lastDeleteRule = undefined
+                    console.log(
+                        `Flight ${callsign} kept/restored — pending inbound transfer (beyond range suppressed)`,
+                    )
+                    return { deleteResult: { shouldDelete: false }, wasDeleted: true }
                 }
+                return { deleteResult: { shouldDelete: false }, wasDeleted }
             }
-            flight.deleted = true
-            flight.lastDeleteRule = deleteResult.ruleId
-            if (deleteResult.ruleId === 'delete_beyond_range') {
-                flight.deletedByBeyondRange = true
-            }
-            if (isParkTrashDeleteRule(deleteResult.ruleId)) {
-                flight.parkTrashFplKey = flightPlanFingerprint(flight)
-            }
-            console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
-            return {
-                deleteResult,
-                wasDeleted,
-                shortCircuit: { flight, softDeleted: true }
+            if (!wasDeleted) {
+                // Trash restore of early TERM: keep strip until explicit TERM / disconnect
+                if (
+                    flight.suppressParkDelete &&
+                    (deleteResult.ruleId === 'delete_parked' || deleteResult.ruleId === 'delete_parked_local')
+                ) {
+                    return {
+                        deleteResult: { shouldDelete: false },
+                        wasDeleted,
+                    }
+                }
+                flight.deleted = true
+                flight.lastDeleteRule = deleteResult.ruleId
+                if (deleteResult.ruleId === 'delete_beyond_range') {
+                    flight.deletedByBeyondRange = true
+                }
+                if (isParkTrashDeleteRule(deleteResult.ruleId)) {
+                    flight.parkTrashFplKey = flightPlanFingerprint(flight)
+                }
+                console.log(`Flight ${callsign} soft-deleted by rule: ${deleteResult.ruleId}`)
+                return {
+                    deleteResult,
+                    wasDeleted,
+                    shortCircuit: { flight, softDeleted: true }
+                }
             }
         }
 
@@ -2271,9 +2308,10 @@ class FlightStore {
         callsign: string,
         flight: Flight,
         isNewStrip: boolean,
-        restored?: boolean
+        restored?: boolean,
+        opts?: { systemInboundFallback?: boolean },
     ): ProcessMessageResult {
-        const targetSection = determineSectionForFlight(flight, this.config)
+        let targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
 
         if (!targetSection) {
@@ -2283,7 +2321,22 @@ class FlightStore {
                 const strip = this.createStrip(flight, currentAssignment.bayId, currentAssignment.sectionId, currentAssignment.position, currentAssignment.bottom)
                 return { flight, strip }
             }
-            return this.handleNoSectionFound(flight)
+            // Spawn / pending inbound: host under SYSTEM INBOUND instead of soft-delete
+            if (
+                opts?.systemInboundFallback ||
+                this.isPendingInboundTransferToMe(flight)
+            ) {
+                const sys = this.findSystemInboundPlacement()
+                if (sys) {
+                    targetSection = sys
+                    console.log(
+                        `Flight ${callsign}: no section rule — placing at SYSTEM INBOUND`,
+                    )
+                }
+            }
+            if (!targetSection) {
+                return this.handleNoSectionFound(flight)
+            }
         }
 
         // Manual paper print: do not place a new strip until explicitly printed
@@ -6198,6 +6251,14 @@ class FlightStore {
     }
 
     /**
+     * Force-create a strip for ESSA/OTHER workspace (search / trash spawn).
+     * Same as printStripFromExternal but falls back to SYSTEM INBOUND when no rule matches.
+     */
+    async spawnStrip(callsign: string): Promise<ProcessMessageResult> {
+        return this.printStripFromExternal(callsign, {}, { systemInboundFallback: true })
+    }
+
+    /**
      * VatFSP / VatIRIS external print — always force-creates a strip from payload
      * (+ local ES / live VATSIM when available). Sweatbox/local skips live VATSIM
      * lookup; missing ADEP/ADES default from myAirports + strip type.
@@ -6220,6 +6281,7 @@ class FlightStore {
             /** "departure" | "arrival" — used for ADEP/ADES defaults */
             stripKind?: "departure" | "arrival"
         } = {},
+        opts?: { systemInboundFallback?: boolean },
     ): Promise<ProcessMessageResult> {
         const cs = callsign.trim().toUpperCase()
         if (!cs) return {}
@@ -6308,7 +6370,9 @@ class FlightStore {
         this.markStripPrinted(flight.callsign)
 
         // Always force-place (ignore radar-range eligibility / finalize early-outs)
-        const created = this.resolveStripResult(flight.callsign, flight, true)
+        const created = this.resolveStripResult(flight.callsign, flight, true, undefined, {
+            systemInboundFallback: opts?.systemInboundFallback,
+        })
         if (!created.strip) return created
         return {
             ...created,

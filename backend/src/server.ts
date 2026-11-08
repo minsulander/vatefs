@@ -7990,6 +7990,47 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             break
         }
 
+        case "spawnStrip": {
+            // ESSA / OTHER workspace force-create (not paper-gated)
+            if (staticConfig.look === "paper") {
+                sendMessage(socket, {
+                    type: "notify",
+                    level: "error",
+                    text: "Use Print for paper-look strips",
+                })
+                break
+            }
+            void (async () => {
+                try {
+                    const result = await flightStore.spawnStrip(message.callsign)
+                    if (result.softDeleted) {
+                        console.log(`[SPAWN] ${message.callsign} soft-deleted by rules`)
+                    } else if (result.strip) {
+                        const applied = applyPrintStripResult(result)
+                        if (applied) {
+                            console.log(
+                                `[SPAWN] Strip spawned for ${message.callsign} -> ${applied.sectionId}`,
+                            )
+                        }
+                    } else {
+                        sendMessage(socket, {
+                            type: "notify",
+                            level: "info",
+                            text: `No FPL found for ${message.callsign.toUpperCase()}`,
+                        })
+                    }
+                } catch (err) {
+                    console.error(`[SPAWN] Failed for ${message.callsign}:`, err)
+                    sendMessage(socket, {
+                        type: "notify",
+                        level: "error",
+                        text: `Failed to spawn ${message.callsign}`,
+                    })
+                }
+            })()
+            break
+        }
+
         case "switchConfig": {
             console.log(`[CONFIG] Client requested config switch to: ${message.file}`)
             switchConfig(message.file, { manual: true })

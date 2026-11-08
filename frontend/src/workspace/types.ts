@@ -79,7 +79,17 @@ export interface WorkspaceSection {
    * Green segmented header + body zones → manualTransfer; strips park until accept.
    */
   dtrans?: DtransVariantId
+  /**
+   * SYSTEM INBOUND catch-all (sectionId `system_inbound`).
+   * Blue header; hosts strips whose rule section is not open on the board.
+   */
+  systemInbound?: boolean
 }
+
+/** Stable YAML / assignment id for the SYSTEM INBOUND catch-all section. */
+export const SYSTEM_INBOUND_SECTION_ID = 'system_inbound'
+
+export const SYSTEM_INBOUND_TITLE = 'SYSTEM INBOUND'
 
 /** Resolve header top Y (px) from yRatio and/or absolute y. */
 export function effectiveSectionY(

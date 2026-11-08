@@ -144,6 +144,8 @@ export function sanitizeWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayou
     if (s.yRatio != null) out.yRatio = s.yRatio
     if (s.height != null) out.height = s.height
     if (s.dtrans != null && isDtransVariantId(s.dtrans)) out.dtrans = s.dtrans
+    if (s.systemInbound) out.systemInbound = true
+    else if (s.sectionId === 'system_inbound') out.systemInbound = true
     return out
   })
 

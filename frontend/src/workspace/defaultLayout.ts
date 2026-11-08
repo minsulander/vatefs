@@ -32,6 +32,8 @@ function roleFamilies(roles: string[]): Set<EssaFamily> {
 /** Whether a section belongs in the built-in default for these roles. */
 export function sectionVisibleForRoles(sectionId: string, roles: string[]): boolean {
   if (sectionId === 'req_push' || sectionId.endsWith('_req_push')) return false
+  // SYSTEM INBOUND is workspace-injected only (never a role builtin).
+  if (sectionId === 'system_inbound') return false
   const families = roleFamilies(roles)
   if (sectionId === 'inbound_gnd') return families.has('TWR') && !families.has('GND') && !families.has('APP')
   if (isEssaDynamicRunwaySectionId(sectionId)) return families.has('TWR')
@@ -743,6 +745,8 @@ export function buildWorkspaceLayoutFromServer(
     for (const sec of bay.sections) {
       // CTR INBOUND is catalog / TMA-only — keep off the CTR-only builtin board
       if (sec.id === 'ctr_inbound') continue
+      // SYSTEM INBOUND is workspace-injected via ensureSystemInboundDivider()
+      if (sec.id === 'system_inbound') continue
       const anno = annotateCatalogSection(sec.id, sec.title, 'saab')
       const resolvedTitle = anno.title ?? sec.title
       sections.push({

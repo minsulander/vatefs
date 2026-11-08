@@ -15,6 +15,8 @@ import type {
   WorkspaceSection,
 } from './types'
 import {
+  SYSTEM_INBOUND_SECTION_ID,
+  SYSTEM_INBOUND_TITLE,
   WORKSPACE_HEADER_H,
   WORKSPACE_MAX_COLUMNS,
   WORKSPACE_MIN_COLUMNS,
@@ -22,6 +24,7 @@ import {
   effectiveSectionY,
   newInstanceId,
 } from './types'
+import type { FlightStrip } from '@vatefs/common'
 import { ESSA_CATALOG_SECTIONS, SAAB_CATALOG_SECTIONS } from './catalog'
 import {
   annotateCatalogSection,
@@ -30,6 +33,7 @@ import {
   defaultEssaStripSize,
   preferredSortFlowForWorkspaceSection,
   serverBayIdForSection,
+  stripSectionIdsForWorkspace,
 } from './defaultLayout'
 import { essaRoleKey, formatEssaRolesLabel } from './roleLabel'
 import {
@@ -1422,6 +1426,68 @@ export function useWorkspace() {
     persistActiveLayout(activeLayout.value)
   }
 
+  function hasSystemInboundDivider(): boolean {
+    return !!activeLayout.value?.sections.some(
+      (s) => s.systemInbound || s.sectionId === SYSTEM_INBOUND_SECTION_ID,
+    )
+  }
+
+  /**
+   * Section ids currently open on the workspace board (excluding SYSTEM INBOUND).
+   * Empty/dtrans dividers contribute their instanceId (manual park home).
+   */
+  function openWorkspaceSectionIds(): Set<string> {
+    const layout = activeLayout.value
+    const ids = new Set<string>()
+    if (!layout) return ids
+    const store = useEfsStore()
+    const mode = store.saabLayoutsMode && !store.essaRolesMode ? 'saab' : 'essa'
+    for (const s of layout.sections) {
+      if (s.systemInbound || s.sectionId === SYSTEM_INBOUND_SECTION_ID) continue
+      if (s.sectionId) {
+        for (const id of stripSectionIdsForWorkspace(s.sectionId, {
+          member: s.member,
+          groupId: s.groupId,
+          mode,
+        })) {
+          ids.add(id)
+        }
+      } else {
+        ids.add(s.instanceId)
+      }
+    }
+    return ids
+  }
+
+  /** True when the strip's assigned section is not among open workspace headers. */
+  function stripIsWorkspaceOrphan(strip: FlightStrip): boolean {
+    if (!activeLayout.value) return false
+    if (strip.sectionId === SYSTEM_INBOUND_SECTION_ID) return true
+    return !openWorkspaceSectionIds().has(strip.sectionId)
+  }
+
+  /** Auto-add SYSTEM INBOUND (blue) when orphans need a host. Does not auto-remove. */
+  function ensureSystemInboundDivider(column = 0) {
+    const layout = activeLayout.value
+    if (!layout) return
+    if (hasSystemInboundDivider()) return
+    const col = Math.min(layout.columnCount - 1, Math.max(0, column))
+    const sec: WorkspaceSection = {
+      instanceId: newInstanceId('sysin'),
+      sectionId: SYSTEM_INBOUND_SECTION_ID,
+      title: SYSTEM_INBOUND_TITLE,
+      anchorColumn: col,
+      stripSize: 'normal',
+      sortFlow: getDefaultSortFlow(),
+      systemInbound: true,
+    }
+    activeLayout.value = {
+      ...layout,
+      sections: insertSectionWithoutOverlap(sec, layout.sections),
+    }
+    persistActiveLayout(activeLayout.value)
+  }
+
   function addSectionFromCatalog(
     sectionId: string,
     title: string,
@@ -1606,6 +1672,14 @@ export function useWorkspace() {
           }
         }
         const serverSec = findServerSection(serverLayout, s.sectionId)
+        if (s.systemInbound || s.sectionId === SYSTEM_INBOUND_SECTION_ID) {
+          return {
+            id: SYSTEM_INBOUND_SECTION_ID,
+            title: SYSTEM_INBOUND_TITLE,
+            height,
+            addFromTop: s.sortFlow === 'newestTop',
+          }
+        }
         // Runway + GND peer lists stay live from the server. INBOUND APP vs
         // INBOUND TWR-E,TWR-W share YAML id `inbound` — keep the workspace
         // catalog title so the server role retitle cannot turn TWR into APP.
@@ -2039,6 +2113,10 @@ export function useWorkspace() {
     closeSection,
     addEmptyHeader,
     addDtransDivider,
+    hasSystemInboundDivider,
+    openWorkspaceSectionIds,
+    stripIsWorkspaceOrphan,
+    ensureSystemInboundDivider,
     addSectionFromCatalog,
     syncRunwaySectionsFromServer,
     buildDisplayBays,
