@@ -1035,12 +1035,6 @@
             <button
               type="button"
               class="exp-chip"
-              :class="{ active: hasVectRemarkFlag }"
-              @click.stop="onExpVect"
-            >VECT</button>
-            <button
-              type="button"
-              class="exp-chip"
               :class="clrChipClass"
               :title="clrChipLabel === 'DCL' ? 'Data-link clearance' : 'Clearance'"
               @click.stop="onClncMenuClick"
@@ -1535,7 +1529,7 @@
             }"
             :title="`Departure route / ${sidCellLabel}`"
             @click.stop="onSidClick"
-          >{{ store.displaySidForStrip(strip) || sidCellLabel }}</div>
+          >{{ sidCellText }}</div>
           <!-- OTHER/RTC ARR: empty framed SID slot (no data / no edit) -->
           <div
             v-else-if="!isCompactBay && useSaabSharedLayout && !hideArrGroundAssignFields"
@@ -1683,21 +1677,16 @@ import {
   extractTmaExitPoint,
   formatEfsLevel,
   formatStripAltitude,
-  formatTrackSidDisplay,
   getEssaRwyCombination,
-  hasVectRemark,
   isHeavyAsLeaderAircraftType,
   isIfrSidEligible,
   isLocalInboundPresentation,
-  isTrackSidName,
-  isSlowSid,
-  isOffExitVectorSid,
+  isTwoHeadingTrackSid,
   needsEssaEastSidBox,
   normalizeEssaRwy,
   requiresAccCoordination,
   sidFieldLabel,
   withPobInRemarks,
-  withVectRemark,
 } from '@vatefs/common'
 import type { FlightStrip } from '@/types/efs'
 import { useEfsStore } from '@/store/efs'
@@ -2547,6 +2536,14 @@ onUnmounted(() => {
 const sidCellLabel = computed(() =>
   sidFieldLabel(props.strip.adep, store.multiAirport),
 )
+
+/** SID cell contents — V/Z: never show SID/DEP RTE placeholder, only real values. */
+const sidCellText = computed(() => {
+  const shown = store.displaySidForStrip(props.strip)
+  if (shown) return shown
+  if (props.strip.flightRules === 'V' || props.strip.flightRules === 'Z') return ''
+  return sidCellLabel.value
+})
 
 /** CFTO / ATD / DEPA — green frame on top-expander DEP (not ▲ highlight). */
 const isDepDeparted = computed(
@@ -3421,21 +3418,25 @@ const unclearedFieldHighlight = computed(() => {
 
 /**
  * Amber SID:
- * - No clearance yet (any shown SID)
- * - After clearance: still amber for VFR / track·SLOW / radar-vector ve SIDs
+ * - Uncleared + any shown SID → orange (unchanged for normal traffic)
+ * - After CLR → orange only for two-heading track while AHD still set
  */
 const sidHighlight = computed(() => {
   const raw = (props.strip.sid || '').trim()
   const shown = store.displaySidForStrip(props.strip)
   if (!shown) return false
+
+  // No clearance yet — keep orange for all traffic with a SID value
   if (unclearedFieldHighlight.value) return true
-  if (props.strip.flightRules === 'V' || /^VFR/i.test(raw)) return true
-  // Off-exit radar-vector (ARS6E·KOGAV / "ARS 6E veKOGAV") — same orange as SLOW.
-  // Same-exit ARS6E·ARS displays as "ARS 6E" and must not amber.
-  if (isOffExitVectorSid(raw) || /[A-Z]{2,}\s+\d+[A-Z]+\s+ve[A-Z]{2,}/i.test(shown)) return true
-  if (isSlowSid(raw) || isSlowSid(shown) || formatTrackSidDisplay(raw)) return true
-  // Formatted SLOW display: 120veBABAP / 010·240veNOSLI
-  if (/\d{3}(·\d{3})?ve[A-Z]{2,}/i.test(shown)) return true
+
+  // Cleared: orange only while first heading of a two-heading track is still in AHD
+  if (
+    isTwoHeadingTrackSid(raw) &&
+    !!props.strip.assignedHeading &&
+    props.strip.assignedHeading !== 'LLZ'
+  ) {
+    return true
+  }
   return false
 })
 
@@ -4097,7 +4098,7 @@ function onPaperAtisQnhClick() {
 
 /**
  * Top ▲ aggregate (open or closed): red > green.
- * URNAV/VECT orange chips do not drive the arrow.
+ * URNAV orange chip does not drive the arrow.
  */
 const topArrowClass = computed(() => {
   if (qnhChipRed.value || atisStale.value || sigState.value === 'remind') {
@@ -4216,13 +4217,6 @@ function onExpUrnav() {
   }
 }
 
-/** Highlight when VECT appears in remarks/scratchpad */
-const hasVectRemarkFlag = computed(() => hasVectRemark(props.strip.remarks))
-
-function onExpVect() {
-  if (!canEditAssignedData.value) return
-  store.updateRemarks(props.strip.id, withVectRemark(props.strip.remarks, !hasVectRemarkFlag.value))
-}
 const effectiveActionCount = computed(() => displayActions.value.length)
 
 // Remarks state
@@ -6472,6 +6466,21 @@ function closeAssignmentMenus() {
 
 function onSidClick(event: MouseEvent) {
   if (!canEditAssignedData.value || isArrLayout.value || isPaperEmptyFlightHolder.value) return
+
+  // Airborne + CLR + two-heading track + AHD: SID click clears first heading (black SID)
+  const raw = (props.strip.sid || '').trim()
+  if (
+    (props.strip.stripType === 'departure' || props.strip.stripType === 'local') &&
+    props.strip.clearance &&
+    props.strip.airborne === true &&
+    isTwoHeadingTrackSid(raw) &&
+    !!props.strip.assignedHeading &&
+    props.strip.assignedHeading !== 'LLZ'
+  ) {
+    store.applyAssignedHeading(props.strip.id, '0')
+    return
+  }
+
   menuPosition.value = menuCoordsFromEvent(event)
   closeAssignmentMenus()
   sidRouteMenuOpen.value = true

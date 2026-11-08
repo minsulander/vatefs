@@ -707,6 +707,8 @@ function onSelect(sid: string) {
       store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, wantSlow))
     }
   }
+  // Two-heading track: AHD = first heading (no VECT); strip shows second as XXXveEXIT
+  store.maybeApplyTwoHeadingSlowFirstAhd(props.strip.id, sid)
   close()
 }
 

@@ -26,6 +26,8 @@ import {
     isIfrSidEligible,
     isSlowSid,
     isTrackSidName,
+    isTwoHeadingTrackSid,
+    parseTrackSidParts,
     isLopFprDepAirport,
     fprDepDisplayFix,
     hasSlowRemark,
@@ -2721,22 +2723,69 @@ export const useEfsStore = defineStore("efs", () => {
         return isIfrSidEligible(strip.flightRules)
     }
 
-    /** Auto-set VECT on AHD only while still on ground. */
+    /** Wipe SID / show ve{exit} on AHD only while still on ground (not for slow SID). */
     function shouldAutoVectOnAhd(strip: FlightStrip): boolean {
         return isVectCapableStrip(strip) && strip.airborne !== true
     }
 
     /**
-     * Slow/track SID selected: keep SLOW flag and do not enter VECT mode when AHD is set.
-     * Controller can still pick another SID/clearance manually.
+     * Slow/track SID selected: keep SLOW flag and SID when AHD is set (dual-heading LOP).
      */
     function isSlowSidSelected(strip: FlightStrip): boolean {
         return isSlowSid(strip.sid)
     }
 
     /**
-     * Set/clear AHD. For IFR DEP/local on ground: clear SID + add VECT (SID cell → ve{exit}).
-     * Exception: Slow-SID kept → no VECT, SLOW flag stays. Arrivals / airborne: heading only.
+     * After assigning a two-heading track SID, set AHD to the first heading (no VECT).
+     * Optimistically pins `sid` first so isSlowSidSelected skips VECT.
+     * Also used to reconcile strips that already have a two-heading SID (ES/FPL)
+     * without going through assignSid again.
+     */
+    function maybeApplyTwoHeadingSlowFirstAhd(stripId: string, sid: string) {
+        const parts = parseTrackSidParts(sid)
+        if (!parts?.secondHeading) return
+        const strip = strips.value.get(stripId)
+        if (!strip) return
+        if (!isIfrSidEligible(strip.flightRules)) return
+        if (strip.stripType !== 'departure' && strip.stripType !== 'local') return
+        if (strip.airborne === true) return
+        if (strip.assignedHeading && strip.assignedHeading !== 'LLZ') return
+        strips.value.set(stripId, {
+            ...strips.value.get(stripId)!,
+            sid,
+        })
+        stripsVersion.value++
+        applyAssignedHeading(stripId, parts.firstHeading)
+    }
+
+    /** stripId|sid keys already reconciled (or AHD cleared after airborne — do not re-apply). */
+    const twoHdgAhdReconciled = new Set<string>()
+
+    function reconcileTwoHeadingSlowFirstAhds() {
+        for (const strip of strips.value.values()) {
+            const sid = (strip.sid || '').trim()
+            if (!sid || !isTwoHeadingTrackSid(sid)) continue
+            if (!isIfrSidEligible(strip.flightRules)) continue
+            if (strip.stripType !== 'departure' && strip.stripType !== 'local') continue
+            const key = `${strip.id}|${sid}`
+            if (strip.assignedHeading && strip.assignedHeading !== 'LLZ') {
+                twoHdgAhdReconciled.add(key)
+                continue
+            }
+            // Airborne with AHD cleared (second heading done) — latch so we don't bounce AHD back
+            if (strip.airborne === true) {
+                twoHdgAhdReconciled.add(key)
+                continue
+            }
+            if (twoHdgAhdReconciled.has(key)) continue
+            twoHdgAhdReconciled.add(key)
+            maybeApplyTwoHeadingSlowFirstAhd(strip.id, sid)
+        }
+    }
+
+    /**
+     * Set/clear AHD. For IFR DEP/local on ground: clear SID (SID cell → ve{exit}).
+     * Exception: Slow-SID kept, SLOW flag stays. No VECT remark. Arrivals / airborne: heading only.
      */
     function applyAssignedHeading(stripId: string, heading: string) {
         const strip = strips.value.get(stripId)
@@ -2744,12 +2793,12 @@ export const useEfsStore = defineStore("efs", () => {
 
         const padded = heading.trim()
         const clearing = !padded || padded === '0' || padded === '000'
-        // Slow-SID + AHDG: keep SID/SLOW, never auto-add VECT
-        const autoVect = shouldAutoVectOnAhd(strip) && !isSlowSidSelected(strip)
+        // Slow-SID + AHDG: keep SID/SLOW (dual-heading LOP)
+        const wipeSidOnAhd = shouldAutoVectOnAhd(strip) && !isSlowSidSelected(strip)
 
         if (clearing) {
             sendAssignment(stripId, 'assignHeading', '0')
-            // Clear VECT for IFR DEP/local even if now airborne
+            // Drop legacy VECT scratch if present
             if (isVectCapableStrip(strip) && hasVectRemark(strip.remarks)) {
                 updateRemarks(stripId, withVectRemark(strip.remarks, false))
             }
@@ -2775,7 +2824,7 @@ export const useEfsStore = defineStore("efs", () => {
 
         const hdg = String(Math.min(360, Math.max(1, parseInt(padded, 10) || 0))).padStart(3, '0')
 
-        if (autoVect) {
+        if (wipeSidOnAhd) {
             if (essaPreferredSids.value.has(stripId)) {
                 const next = new Map(essaPreferredSids.value)
                 next.delete(stripId)
@@ -2790,12 +2839,8 @@ export const useEfsStore = defineStore("efs", () => {
 
         sendAssignment(stripId, 'assignHeading', hdg)
 
-        if (autoVect && !hasVectRemark(strip.remarks)) {
-            updateRemarks(stripId, withVectRemark(strip.remarks, true))
-        }
-
         const nextRoute = (() => {
-            if (!autoVect) return strip.route || ''
+            if (!wipeSidOnAhd) return strip.route || ''
             const route = strip.route || ''
             if (!hasForcedSidInRoute(route)) return route
             const tokens = route.trim().split(/\s+/).filter(Boolean)
@@ -2805,7 +2850,7 @@ export const useEfsStore = defineStore("efs", () => {
         strips.value.set(stripId, {
             ...strips.value.get(stripId)!,
             assignedHeading: hdg,
-            sid: autoVect ? undefined : strip.sid,
+            sid: wipeSidOnAhd ? undefined : strip.sid,
             direct: undefined,
             route: nextRoute,
         })
@@ -3441,6 +3486,7 @@ export const useEfsStore = defineStore("efs", () => {
     /**
      * SID shown on strip.
      * - AHD set → ve{TMA exit} (SID/preferred cleared)
+     * - Slow/track SID kept with AHD → formatSidForDisplay (e.g. 240veNOSLI), never ve{exit}
      * - ESE preferred preview when FPL has no forced SID/rwy (after clear in ES/EFS)
      * - Forced SID in FPL (RNAV / track / VFR) always wins when present
      */
@@ -3448,6 +3494,16 @@ export const useEfsStore = defineStore("efs", () => {
         // Assigned DCT: show the waypoint name in the SID cell (not "FPR")
         const dct = (strip.direct || '').trim().toUpperCase()
         if (dct) return dct
+
+        // V / Z: never show or auto-preview SID (no preferred / ES GetSid / FPR)
+        if (strip.flightRules === 'V' || strip.flightRules === 'Z') {
+            return ''
+        }
+
+        // Slow SID + AHD (dual-heading first hdg): keep track display, do not collapse to ve{exit}
+        if (isSlowSid(strip.sid)) {
+            return formatSidForDisplay(strip.sid || '', strip.tmaExit, isPaperLook.value)
+        }
 
         const exit = strip.tmaExit || extractTmaExitPoint(undefined, strip.route)
         // Vector IFR DEP/local: ve{exit} while AHD/VECT — never for arrivals
@@ -3461,11 +3517,7 @@ export const useEfsStore = defineStore("efs", () => {
 
         // FPR airports: first FPL fix when DEP RWY is set (ES GetDepartureRwy,
         // FPL ADEP/rwy, or strip.runway from ES-active DEP — same as RWY cell).
-        // VFR/Z: never auto-preview FPR — only show an entered SID (e.g. VFR·NORTH).
         if (isLopFprDepAirport(strip.adep) && !hasForcedSidInRoute(strip.route)) {
-            if (strip.flightRules === 'V' || strip.flightRules === 'Z') {
-                return formatSidForDisplay(strip.sid || '', strip.tmaExit, isPaperLook.value)
-            }
             const fromFpl = fprDepDisplayFix(strip.adep, strip.route, strip.runway, strip.flightRules)
             return formatSidForDisplay(
                 fromFpl || strip.sid || '',
@@ -3618,6 +3670,7 @@ export const useEfsStore = defineStore("efs", () => {
                 return
             }
             sendAssignment(stripId, 'assignSid', data.sid)
+            maybeApplyTwoHeadingSlowFirstAhd(stripId, data.sid)
             void refreshEssaPreferredSids()
         } catch {
             // ignore
@@ -3643,6 +3696,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (preferredSidRefreshTimer) clearTimeout(preferredSidRefreshTimer)
         preferredSidRefreshTimer = setTimeout(() => {
             preferredSidRefreshTimer = null
+            reconcileTwoHeadingSlowFirstAhds()
             if (essaRolesMode.value) void refreshEssaPreferredSids()
             else void refreshSidAltitudeCache()
         }, 250)
@@ -4108,6 +4162,7 @@ export const useEfsStore = defineStore("efs", () => {
         sendStripAction,
         sendAssignment,
         applyAssignedHeading,
+        maybeApplyTwoHeadingSlowFirstAhd,
         applyAssignedDirect,
         deleteStrip,
         deletedStrips,

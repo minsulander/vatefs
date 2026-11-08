@@ -272,6 +272,8 @@ import {
     isIfrSidEligible,
     isSlowSid,
     isTrackSidName,
+    isTwoHeadingTrackSid,
+    parseTrackSidParts,
     normalizeEssaRwy,
     parseRflToFeet,
     resolveEssaHeavyPreferredDepRwy,
@@ -932,10 +934,59 @@ function pushPaperStripIfNeeded(stripId: string | undefined) {
 }
 
 /**
+ * Two-heading track SID (e.g. 360·120·TOVRI) → AHD = first heading, keep SID (no VECT).
+ * Returns true when AHD was set/sent. Idempotent while ahdg already matches.
+ */
+function ensureTwoHeadingFirstAhd(flight: {
+    callsign: string
+    sid?: string
+    sidDisplayOverride?: string
+    ahdg?: number
+    llz?: boolean
+    airborne?: boolean
+    flightRules?: string
+    origin?: string
+    direct?: string
+}): boolean {
+    if (flight.airborne === true || flight.llz) return false
+    if (!isIfrSidEligible(flight.flightRules)) return false
+    const origin = (flight.origin || "").toUpperCase()
+    const myAirports = staticConfig.myAirports || []
+    if (!origin || !myAirports.some((a) => a.toUpperCase() === origin)) return false
+
+    const sid = flight.sid || flight.sidDisplayOverride
+    if (!sid || !isTwoHeadingTrackSid(sid)) return false
+    const parts = parseTrackSidParts(sid)
+    const hdg = parts ? parseInt(parts.firstHeading, 10) || 0 : 0
+    if (hdg <= 0) return false
+    if ((flight.ahdg ?? 0) === hdg) return false
+
+    flight.ahdg = hdg
+    flight.direct = undefined
+    sendUdp(JSON.stringify({
+        type: "assignDirect",
+        callsign: flight.callsign,
+        point: "",
+    } satisfies OutboundPluginCommand))
+    sendUdp(JSON.stringify({
+        type: "assignHeading",
+        callsign: flight.callsign,
+        heading: hdg,
+    } satisfies OutboundPluginCommand))
+    console.log(
+        `[ASSIGN] two-heading SID ${sid} → AHD ${String(hdg).padStart(3, "0")} on ${flight.callsign}`,
+    )
+    return true
+}
+
+/**
  * After flight state changes in mock mode, re-evaluate section rules and broadcast.
  * Handles section moves, position shifts, and gap adjustments.
  */
 function reevaluateAndBroadcast(callsign: string) {
+    const flightBefore = flightStore.getFlight(callsign)
+    if (flightBefore) ensureTwoHeadingFirstAhd(flightBefore)
+
     const result = flightStore.reevaluateStrip(callsign)
 
     // Soft-delete (e.g. Auto PARK → delete_parked): stash in trash + remove from clients
@@ -2900,10 +2951,13 @@ function cancelPreferredSidAfterDepRwy(stripId: string) {
 }
 
 function isVectorDeparture(flight: Flight, strip?: FlightStrip): boolean {
-    if ((flight.ahdg ?? 0) > 0) return true
-    if (strip?.assignedHeading) return true
     if (hasVectRemark(flight.remarks)) return true
     if (strip && hasVectRemark(strip.remarks)) return true
+    // Slow/track SID + first-heading AHD is dual-heading LOP — not radar VECT
+    const sid = flight.sid || strip?.sid
+    if (isSlowSid(sid)) return false
+    if ((flight.ahdg ?? 0) > 0) return true
+    if (strip?.assignedHeading) return true
     return false
 }
 
@@ -3025,6 +3079,9 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             const scratchValue = flightScratchValue(f)
             sendUdp(JSON.stringify({ type: "setScratch", callsign, value: scratchValue } satisfies OutboundPluginCommand))
         }
+
+        // Auto LOP / preferred SID: two-heading track → AHD with CFL+SID
+        ensureTwoHeadingFirstAhd(f)
 
         const updatedStrip = flightStore.regenerateStrip(callsign)
         if (updatedStrip) {
@@ -3509,6 +3566,9 @@ function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferred
             flight.cfl = sidAlt
         }
     }
+
+    // Auto LOP+SSR: with SID+CFL, also set first AHD for two-heading track SIDs
+    ensureTwoHeadingFirstAhd(flight)
 
     // Never invent a code (not even in --mock). Never re-allocate when ASSR already known.
     if (hasValidAssignedSquawk(flight.squawk)) {
@@ -7085,6 +7145,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         setTimeout(pushSlowScratch, 300)
                         setTimeout(pushSlowScratch, 900)
                     }
+                    // Two-heading track SID → AHD = first heading (no VECT / SID wipe)
+                    if (flightForAssign) ensureTwoHeadingFirstAhd(flightForAssign)
                 }
                 if (flightForAssign && message.assignType === "assignDepartureRunway") {
                     // Runway change clears SID in ES — drop override too
@@ -7126,7 +7188,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         const vectCapable =
                             (strip.stripType === "departure" || strip.stripType === "local") &&
                             isIfrSidEligible(strip.flightRules || flightForAssign.flightRules)
-                        const autoVect = vectCapable && flightForAssign.airborne !== true
+                        // Slow/track SID + AHD: keep SID/SLOW, never VECT (mirror frontend)
+                        const autoVect =
+                            vectCapable &&
+                            flightForAssign.airborne !== true &&
+                            !isSlowSid(flightForAssign.sid)
                         if (hdg > 0) {
                             cancelPreferredSidAfterDepRwy(strip.id)
                             flightForAssign.direct = undefined
@@ -7136,14 +7202,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 point: "",
                             } satisfies OutboundPluginCommand))
                             if (autoVect) {
+                                // Clear SID for radar-vector AHD (no VECT remark flag)
                                 flightForAssign.sidDisplayOverride = undefined
                                 flightForAssign.sid = undefined
-                                if (!hasVectRemark(flightForAssign.remarks)) {
-                                    flightForAssign.remarks = withVectRemark(flightForAssign.remarks, true) || undefined
-                                    console.log(`[REMARKS] ${strip.callsign}: set VECT (AHD ${String(hdg).padStart(3, "0")})`)
+                                if (hasVectRemark(flightForAssign.remarks)) {
+                                    flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
+                                    flightStore.holdScratchFields(flightForAssign, 3000)
+                                    pushFlightScratch(strip.callsign, flightForAssign)
                                 }
-                                flightStore.holdScratchFields(flightForAssign, 3000)
-                                pushFlightScratch(strip.callsign, flightForAssign)
                                 const route = flightForAssign.route || ""
                                 if (hasForcedSidInRoute(route)) {
                                     const tokens = route.trim().split(/\s+/).filter(Boolean)

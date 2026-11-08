@@ -508,11 +508,18 @@ async function applyPreferredSid(): Promise<string | undefined> {
       if (stickyEs) {
         // Forced FPL / track / VFR — keep ES selection for display and CFL
         preferredSidMatched.value = props.strip.sid!
+        // Two-heading already on strip (e.g. from ES) but AHD never set
+        if (!props.strip.assignedHeading) {
+          store.maybeApplyTwoHeadingSlowFirstAhd(props.strip.id, props.strip.sid!)
+        }
         return props.strip.sid
       }
       preferredSidMatched.value = data.sid
       // ES GetSid already matches preferred (ESE prio) — do not force into FPL
       if (sidsMatch(props.strip.sid, data.sid)) {
+        if (!props.strip.assignedHeading) {
+          store.maybeApplyTwoHeadingSlowFirstAhd(props.strip.id, data.sid)
+        }
         return data.sid
       }
       // Wrong / missing ES SID — force preferred SID into the flight plan
@@ -524,6 +531,7 @@ async function applyPreferredSid(): Promise<string | undefined> {
           store.updateRemarks(props.strip.id, withSlowRemark(props.strip.remarks, wantSlow))
         }
       }
+      store.maybeApplyTwoHeadingSlowFirstAhd(props.strip.id, data.sid)
       return data.sid
     }
     return data.sid ?? undefined
