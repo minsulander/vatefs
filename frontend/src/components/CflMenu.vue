@@ -130,6 +130,11 @@ const cflOptions = computed<CflOption[]>(() => buildCflMenuOptions(transitionAlt
 
 const currentLabel = computed(() => (props.strip.clearedAltitude || '').trim().toUpperCase())
 
+function isCoarsePointer(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(pointer: coarse)').matches
+}
+
 watch(
   () => props.modelValue,
   async (open) => {
@@ -140,9 +145,12 @@ watch(
       await nextTick()
       scrollToSelected()
       // Layout settles after APPCLR rows mount — then focus + select manual entry
+      // Skip autofocus on iPad/touch: keyboard steals list scroll (#79)
       requestAnimationFrame(() => {
         scrollToSelected()
-        focusPopupInput(() => manualInput.value)
+        if (!isCoarsePointer()) {
+          focusPopupInput(() => manualInput.value)
+        }
       })
     } else {
       manualText.value = ''
@@ -411,10 +419,14 @@ function onSelectApp(app: string) {
 .cfl-menu-list {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   background: #d8d8d8;
   max-height: min(40vh, calc(280px * var(--s)));
   overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .cfl-menu-app {
