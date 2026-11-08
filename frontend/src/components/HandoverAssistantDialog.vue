@@ -48,7 +48,7 @@
           <div class="handover-how-role">Relieved</div>
           <ul class="handover-how-list">
             <li>Unprime keeps your strips visible</li>
-            <li>Auto-opens on unprime after ≥5 min primed (or open from the main menu)</li>
+            <li>Auto-opens on a stable unprime after ≥5 min primed (not on reload; or open from the main menu)</li>
             <li>Pick an ES* target to transfer strips you assume</li>
             <li>Partial failures are toasted</li>
           </ul>

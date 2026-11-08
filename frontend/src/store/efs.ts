@@ -882,6 +882,15 @@ export const useEfsStore = defineStore("efs", () => {
      */
     let primaryPrimedSinceMs: number | undefined
     const HANDOVER_AUTO_OPEN_MIN_PRIMED_MS = 5 * 60 * 1000
+    /**
+     * After WS connect/reload, ignore unprime→auto-open for a while.
+     * Status/myselfUpdate often flickers 199.998 or omits frequency during startup.
+     */
+    let handoverConnectGraceUntilMs = 0
+    const HANDOVER_CONNECT_GRACE_MS = 60_000
+    /** Debounce genuine unprime so brief primed→199.998→primed flicker does not open HA. */
+    let handoverUnprimeOpenTimer: ReturnType<typeof setTimeout> | undefined
+    const HANDOVER_UNPRIME_DEBOUNCE_MS = 2500
     /** True when TopSkyCPDLChoppieCode.txt has a valid code (backend). */
     const hoppieFileCodePresent = ref(false)
     /** True after first userSettings apply — used for one-shot CID prompt */
@@ -1076,13 +1085,40 @@ export const useEfsStore = defineStore("efs", () => {
         handoverAssistantOpen.value = false
     }
 
+    function clearHandoverUnprimeOpenTimer() {
+        if (handoverUnprimeOpenTimer != null) {
+            clearTimeout(handoverUnprimeOpenTimer)
+            handoverUnprimeOpenTimer = undefined
+        }
+    }
+
     /**
      * Track primary frequency for unprime → auto-open Handover Assistant.
      * Call whenever myFrequency is updated from status / myselfUpdate.
-     * Auto-open only if primary was primed ≥5 minutes (avoids connect-time false opens).
+     * Auto-open only on an explicit unprimed freq (e.g. 199.998) after ≥5 min primed,
+     * still logged in as controller, outside connect grace, and stable for a debounce.
+     * Missing frequency is ignored (status omit) unless `forceClear` (CT0 / logout).
      * Manual menu open is not gated here.
      */
-    function onMyFrequencyUpdated(next: number | undefined) {
+    function onMyFrequencyUpdated(
+        next: number | undefined,
+        opts?: { stillController?: boolean; forceClear?: boolean },
+    ) {
+        const stillController = opts?.stillController ?? isController.value
+
+        // CT0 / logout — drop tracking, never auto-open HA
+        if (opts?.forceClear || (next === undefined && stillController === false)) {
+            clearHandoverUnprimeOpenTimer()
+            myFrequency.value = undefined
+            primaryPrimedSinceMs = undefined
+            return
+        }
+
+        // Status frames often omit frequency — do not treat as unprime
+        if (next === undefined) {
+            return
+        }
+
         const prev = myFrequency.value
         const wasPrimed = isPrimedPrimaryFrequency(prev)
         const nowPrimed = isPrimedPrimaryFrequency(next)
@@ -1092,9 +1128,11 @@ export const useEfsStore = defineStore("efs", () => {
         myFrequency.value = next
 
         if (!wasPrimed && nowPrimed) {
-            // Fresh prime (connect or after unprime) — start the session timer
+            // Re-primed (or first prime) — cancel any pending unprime open
+            clearHandoverUnprimeOpenTimer()
             primaryPrimedSinceMs = Date.now()
         } else if (wasPrimed && nowPrimed) {
+            clearHandoverUnprimeOpenTimer()
             // Primed → primed (freq/AoR switch): keep timer; still continuous priming
             if (primaryPrimedSinceMs == null) {
                 primaryPrimedSinceMs = Date.now()
@@ -1103,18 +1141,34 @@ export const useEfsStore = defineStore("efs", () => {
             const primedMs =
                 primaryPrimedSinceMs != null ? Date.now() - primaryPrimedSinceMs : 0
             primaryPrimedSinceMs = undefined
-            if (
+            const inGrace = Date.now() < handoverConnectGraceUntilMs
+            const canAutoOpen =
+                stillController &&
+                !inGrace &&
                 primedMs >= HANDOVER_AUTO_OPEN_MIN_PRIMED_MS &&
                 countAssumedFlightStrips() > 0
-            ) {
-                openHandoverAssistant({
-                    preferredFrequency: lastPrimedFrequency,
-                    reason: 'primary frequency dropped',
-                })
+            if (canAutoOpen) {
+                clearHandoverUnprimeOpenTimer()
+                const pref = lastPrimedFrequency
+                handoverUnprimeOpenTimer = setTimeout(() => {
+                    handoverUnprimeOpenTimer = undefined
+                    // Still unprimed / controller / assumed after debounce?
+                    if (isPrimedPrimaryFrequency(myFrequency.value)) return
+                    if (!isController.value) return
+                    if (Date.now() < handoverConnectGraceUntilMs) return
+                    if (countAssumedFlightStrips() <= 0) return
+                    openHandoverAssistant({
+                        preferredFrequency: pref,
+                        reason: 'primary frequency dropped',
+                    })
+                }, HANDOVER_UNPRIME_DEBOUNCE_MS)
             } else if (countAssumedFlightStrips() > 0) {
-                console.log(
-                    `[Handover Assistant] Skip auto-open (primed only ${(primedMs / 1000).toFixed(0)}s, need ≥300s)`,
-                )
+                const why = !stillController
+                    ? 'not controller'
+                    : inGrace
+                      ? 'connect grace'
+                      : `primed only ${(primedMs / 1000).toFixed(0)}s, need ≥300s`
+                console.log(`[Handover Assistant] Skip auto-open (${why})`)
             }
         } else {
             // Unprimed → unprimed
@@ -1188,6 +1242,9 @@ export const useEfsStore = defineStore("efs", () => {
         socket.onopen = () => {
             console.log("socket opened")
             connected.value = true
+            // Suppress HA auto-open across reload / reconnect frequency flicker
+            handoverConnectGraceUntilMs = Date.now() + HANDOVER_CONNECT_GRACE_MS
+            clearHandoverUnprimeOpenTimer()
             // Server sends initial state on connect — don't print-sound the backlog
             suppressStripPrintSounds(2500)
             // Re-request trash in case the connect snapshot raced; localStorage already hydrated
@@ -1771,9 +1828,16 @@ export const useEfsStore = defineStore("efs", () => {
         backendVersion.value = message.backendVersion
         pluginVersion.value = message.pluginVersion
         cdmPluginVersion.value = message.cdmPluginVersion
-        onMyFrequencyUpdated(
-            typeof message.frequency === 'number' ? message.frequency : undefined,
-        )
+        {
+            const stillController = message.isController ?? false
+            if (typeof message.frequency === 'number') {
+                onMyFrequencyUpdated(message.frequency, { stillController })
+            } else if (!stillController) {
+                // CT0 / logout — clear freq; never auto-open HA
+                onMyFrequencyUpdated(undefined, { stillController: false, forceClear: true })
+            }
+            // else: frequency omitted while still controller — keep previous (not an unprime)
+        }
         isController.value = message.isController ?? false
         multiAirport.value = message.multiAirport ?? false
         // Only update when present — `?? false` was clearing mode on partial status frames
