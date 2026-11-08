@@ -15,7 +15,7 @@ import { isDtransVariantId } from './dtrans'
 export const workspaceSharedRevision = shallowRef(0)
 
 function emptyShared(): SharedWorkspaceStore {
-  return { version: 1, userDefaults: {}, layouts: [], defaultSortFlow: 'newestBottom' }
+  return { version: 1, userDefaults: {}, layouts: [], defaultSortFlow: 'newestTop' }
 }
 
 function emptyActive(): Pick<WorkspaceStoreFile, 'active' | 'activeByRoleKey'> {
@@ -343,7 +343,7 @@ export function saveWorkspaceStore(store: WorkspaceStoreFile): void {
 }
 
 export function getDefaultSortFlow(): SortFlow {
-  return loadWorkspaceStore().defaultSortFlow ?? 'newestBottom'
+  return loadWorkspaceStore().defaultSortFlow ?? 'newestTop'
 }
 
 export function setDefaultSortFlow(flow: SortFlow): void {

@@ -69,9 +69,10 @@ function classifyRunwaySections(serverLayout: EfsLayout): {
   for (const bay of serverLayout.bays) {
     const ids = new Set(bay.sections.map((s) => s.id))
     const arrSide = ids.has('ctr_arr') || ids.has('taxi_arr')
-    const depSide = ids.has('ctr_dep')
+    const depSide = ids.has('ctr_dep') || ids.has('taxi_dep') || ids.has('push_start')
     for (const sec of bay.sections) {
       if (!isEssaDynamicRunwaySectionId(sec.id)) continue
+      // FATO (07/25) is collected for both lists; column plans place it explicitly
       if (arrSide && !depSide) arr.push(sec)
       else if (depSide && !arrSide) dep.push(sec)
       else if (arrSide) arr.push(sec)
@@ -95,7 +96,7 @@ type SecDraft = {
 
 /**
  * ESSA divider strip-size defaults:
- * - INBOUND APP / INBOUND ACC → compact
+ * - All INBOUND* dividers → compact
  * - CD / CD ALL → expanded
  * - else normal
  */
@@ -105,18 +106,57 @@ export function defaultEssaStripSize(
 ): SectionStripSize {
   if (!sectionId) return 'normal'
   const t = (title || '').toUpperCase().trim()
-  if (sectionId === 'inbound_acc' || t === 'INBOUND ACC') return 'compact'
-  if (sectionId === 'inbound') {
-    // INBOUND TWR-* stays normal; APP (and bare INBOUND) → compact
-    if (t.startsWith('INBOUND TWR')) return 'normal'
-    if (t === 'INBOUND APP' || t === 'INBOUND' || t.startsWith('INBOUND APP')) {
-      return 'compact'
-    }
+  if (
+    sectionId === 'inbound_acc' ||
+    sectionId === 'inbound_gnd' ||
+    sectionId === 'inbound' ||
+    sectionId.startsWith('inbound_') ||
+    t.startsWith('INBOUND')
+  ) {
+    return 'compact'
   }
   if (sectionId === 'pending_dep') {
     if (t === 'CD' || t === 'CD ALL' || t.startsWith('CD ') || !t) return 'expanded'
   }
   return 'normal'
+}
+
+function isFatoSection(sec: Section): boolean {
+  return (
+    sec.id === 'runway_07_25' || (sec.title || '').toUpperCase().trim() === 'FATO'
+  )
+}
+
+function withoutFato(secs: Section[]): Section[] {
+  return secs.filter((s) => !isFatoSection(s))
+}
+
+/** FATO (07/25) draft when present on the live server layout. */
+function fatoDraft(
+  runways: { arr: Section[]; dep: Section[] },
+  yRatio?: number,
+): SecDraft | undefined {
+  const fato = [...runways.arr, ...runways.dep].find(isFatoSection)
+  if (!fato) return undefined
+  return {
+    sectionId: fato.id,
+    title: fato.title || 'FATO',
+    ...(yRatio != null ? { yRatio } : {}),
+  }
+}
+
+function cdPendingDraft(): SecDraft {
+  return {
+    sectionId: 'pending_dep',
+    title: 'CD',
+    groupId: 'cd_all',
+    member: 'pending',
+    addFromTop: true,
+  }
+}
+
+function tsatEobtDraft(): SecDraft {
+  return { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: true }
 }
 
 function draftToSection(
@@ -172,6 +212,7 @@ function inboundTwrMergedDraft(serverLayout: EfsLayout): SecDraft {
     sectionId: 'inbound',
     title,
     groupId: 'inbound_twr',
+    addFromTop: true,
   }
 }
 
@@ -185,7 +226,7 @@ function runwayDrafts(secs: Section[], defaultAddFromTop = false): SecDraft[] {
 
 /**
  * Profile column plans for built-in DEFAULT only (not saved layouts).
- * Column lists are top→bottom; ARR RWY always above TAXIWAY ARR when present.
+ * DEP/CD left → ARR/INBOUND right. Column lists are top→bottom.
  */
 function essaDefaultColumnPlan(
   families: Set<EssaFamily>,
@@ -197,256 +238,185 @@ function essaDefaultColumnPlan(
   const hasTwr = families.has('TWR')
   const hasApp = families.has('APP')
 
-  // APP only (tower/ground staffed elsewhere): INBOUND ACC | TMA ARR | TMA DEP | empty
+  const arrRwys = withoutFato(runways.arr)
+  const depRwys = withoutFato(runways.dep)
+  const fatoBottomThird = fatoDraft(runways, 2 / 3)
+  // TWR-alone: align FATO with ARR/DEP RWY (third header in those stacks)
+  const fatoAlignRwy = fatoDraft(runways, 2 / 3)
+
+  const inboundAcc: SecDraft = { sectionId: 'inbound_acc', title: 'INBOUND ACC', addFromTop: true }
+  const inboundApp: SecDraft = { sectionId: 'inbound', title: 'INBOUND APP', addFromTop: true }
+  const tmaArr: SecDraft = {
+    sectionId: 'ctr_arr',
+    title: 'TMA ARR',
+    groupId: 'essa_tma',
+    member: 'arr',
+    addFromTop: true,
+  }
+  const tmaDep: SecDraft = {
+    sectionId: 'ctr_dep',
+    title: 'TMA DEP',
+    groupId: 'essa_tma',
+    member: 'dep',
+    addFromTop: true,
+  }
+  const ctrArr: SecDraft = { sectionId: 'ctr_arr', addFromTop: true }
+  const pushStart: SecDraft = { sectionId: 'push_start', addFromTop: true }
+  const taxiDep: SecDraft = { sectionId: 'taxi_dep', addFromTop: true }
+  const taxiArr: SecDraft = { sectionId: 'taxi_arr', addFromTop: true }
+  const inboundGnd: SecDraft = { sectionId: 'inbound_gnd', addFromTop: true }
+
+  // Rightmost inbound header: APP covering → INBOUND ACC; else INBOUND APP
+  const inboundRight = hasApp ? inboundAcc : inboundApp
+  const arrHeader = hasApp ? tmaArr : ctrArr
+
+  // APP only: empty | TMA DEP | TMA ARR | INBOUND ACC
   if (hasApp && !hasTwr && !hasGnd && !hasCd) {
     return {
       columnCount: 4,
       columns: [
-        [{ sectionId: 'inbound_acc', title: 'INBOUND ACC' }],
-        [
-          {
-            sectionId: 'ctr_arr',
-            title: 'TMA ARR',
-            groupId: 'essa_tma',
-            member: 'arr',
-          },
-        ],
-        [
-          {
-            sectionId: 'ctr_dep',
-            title: 'TMA DEP',
-            groupId: 'essa_tma',
-            member: 'dep',
-            addFromTop: false,
-          },
-        ],
-        [],
-      ],
-    }
-  }
-
-  // APP + TWR (+ optional GND/CD): same ground columns as TWR combos, but
-  // INBOUND ACC and TMA ARR / TMA DEP instead of INBOUND APP / CTR ARR / CTR DEP.
-  if (hasApp && hasTwr) {
-    const inboundAcc: SecDraft = { sectionId: 'inbound_acc', title: 'INBOUND ACC' }
-    const tmaArr: SecDraft = {
-      sectionId: 'ctr_arr',
-      title: 'TMA ARR',
-      groupId: 'essa_tma',
-      member: 'arr',
-    }
-    const tmaDep: SecDraft = {
-      sectionId: 'ctr_dep',
-      title: 'TMA DEP',
-      groupId: 'essa_tma',
-      member: 'dep',
-      addFromTop: false,
-    }
-
-    if (hasGnd && hasCd) {
-      return {
-        columnCount: 4,
-        columns: [
-          [inboundAcc, tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
-          [tmaDep, ...runwayDrafts(runways.dep)],
-          [
-            { sectionId: 'taxi_dep', addFromTop: false },
-            { sectionId: 'push_start', addFromTop: true },
-          ],
-          [
-            { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false },
-            {
-              sectionId: 'pending_dep',
-              title: 'CD',
-              groupId: 'cd_all',
-              member: 'pending',
-              addFromTop: false,
-            },
-          ],
-        ],
-      }
-    }
-    if (hasGnd) {
-      return {
-        columnCount: 4,
-        columns: [
-          [inboundAcc, tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
-          [tmaDep, ...runwayDrafts(runways.dep)],
-          [
-            { sectionId: 'taxi_dep', addFromTop: false },
-            { sectionId: 'push_start', addFromTop: true },
-          ],
-          [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
-        ],
-      }
-    }
-    // APP + TWR (no GND)
-    return {
-      columnCount: 4,
-      columns: [
+        [{ sectionId: null }],
+        [tmaDep],
+        [tmaArr],
         [inboundAcc],
-        [tmaArr, ...runwayDrafts(runways.arr), { sectionId: 'taxi_arr' }],
-        [tmaDep, ...runwayDrafts(runways.dep)],
-        [
-          { sectionId: 'taxi_dep', addFromTop: false },
-          { sectionId: 'inbound_gnd' },
-        ],
       ],
     }
   }
 
-  // CD alone — TSAT | EOBT (bottom ⅓) | CD | empty divider (bottom half).
+  // CD alone: CD | EOBT (bottom 25%) | TSAT | empty (bottom 25%)
   if (hasCd && !hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
       columns: [
-        [
-          {
-            sectionId: 'cleared_tsat',
-            title: 'TSAT',
-            groupId: 'cd_cleared',
-            member: 'tsat',
-            addFromTop: false,
-          },
-        ],
+        [cdPendingDraft()],
         [
           {
             sectionId: 'cleared_eobt',
             title: 'EOBT',
             groupId: 'cd_cleared',
             member: 'eobt',
-            addFromTop: false,
-            yRatio: 2 / 3,
+            addFromTop: true,
+            yRatio: 0.75,
           },
         ],
         [
           {
-            sectionId: 'pending_dep',
-            title: 'CD',
-            groupId: 'cd_all',
-            member: 'pending',
-            addFromTop: false,
+            sectionId: 'cleared_tsat',
+            title: 'TSAT',
+            groupId: 'cd_cleared',
+            member: 'tsat',
+            addFromTop: true,
           },
         ],
+        [{ sectionId: null, yRatio: 0.75 }],
+      ],
+    }
+  }
+
+  // GND alone: TSAT/EOBT | PUSH+TAXI DEP | INBOUND TWR+TAXI ARR | empty (bottom 50%)
+  if (!hasCd && hasGnd && !hasTwr && !hasApp) {
+    return {
+      columnCount: 4,
+      columns: [
+        [tsatEobtDraft()],
+        [pushStart, taxiDep],
+        [inboundTwrMergedDraft(serverLayout), taxiArr],
         [{ sectionId: null, yRatio: 0.5 }],
       ],
     }
   }
 
-  // GND alone
-  if (!hasCd && hasGnd && !hasTwr) {
+  // CD + GND (no TWR): CD | TSAT/EOBT | PUSH+TAXI DEP | INBOUND TWR+TAXI ARR
+  if (hasCd && hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
       columns: [
-        [inboundTwrMergedDraft(serverLayout), { sectionId: 'taxi_arr' }],
-        [{ sectionId: 'taxi_dep', addFromTop: false }],
-        [{ sectionId: 'push_start', addFromTop: true }],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
+        [cdPendingDraft()],
+        [tsatEobtDraft()],
+        [pushStart, taxiDep],
+        [inboundTwrMergedDraft(serverLayout), taxiArr],
       ],
     }
   }
 
-  // TWR alone — no TAXIWAY ARR (soft-delete when separate GND assumes vacated ARR)
+  // TWR alone (+ optional APP): empty+INBOUND GND | TAXI DEP+DEP RWY | CTR/TMA ARR+ARR RWY | INBOUND APP/ACC
   if (!hasCd && !hasGnd && hasTwr) {
     return {
       columnCount: 4,
       columns: [
-        [{ sectionId: 'inbound' }],
-        [
-          { sectionId: 'ctr_arr' },
-          ...runwayDrafts(runways.arr),
-        ],
-        [
-          { sectionId: 'ctr_dep', addFromTop: false },
-          ...runwayDrafts(runways.dep),
-        ],
-        [
-          { sectionId: 'taxi_dep', addFromTop: false },
-          { sectionId: 'inbound_gnd' },
-        ],
+        [{ sectionId: null }, inboundGnd],
+        [taxiDep, ...runwayDrafts(depRwys, true)],
+        [arrHeader, ...runwayDrafts(arrRwys, true)],
+        [inboundRight],
       ],
     }
   }
 
-  // CD + GND (no TWR) — no INBOUND GND; TSAT/EOBT left of CD
-  if (hasCd && hasGnd && !hasTwr) {
-    return {
-      columnCount: 4,
-      columns: [
-        [inboundTwrMergedDraft(serverLayout), { sectionId: 'taxi_arr' }],
-        [
-          { sectionId: 'taxi_dep', addFromTop: false },
-          { sectionId: 'push_start', addFromTop: true },
-        ],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
-        [
-          {
-            sectionId: 'pending_dep',
-            title: 'CD',
-            groupId: 'cd_all',
-            member: 'pending',
-            addFromTop: false,
-          },
-        ],
-      ],
-    }
-  }
-
-  // GND + TWR (no CD) — ARR RWY above TAXI ARR; no inbound_gnd
+  // GND + TWR (+ optional APP): TSAT+PUSH | TAXI DEP+DEP RWY |
+  // CTR ARR (top) + ARR RWY (mid-bay) + TAXI ARR (bottom 25%) | INBOUND+FATO (bottom 25%)
   if (!hasCd && hasGnd && hasTwr) {
+    const fatoBottomQuarter = fatoDraft(runways, 0.75)
     return {
       columnCount: 4,
       columns: [
+        [tsatEobtDraft(), pushStart],
+        [taxiDep, ...runwayDrafts(depRwys, true)],
         [
-          { sectionId: 'inbound' },
-          { sectionId: 'ctr_arr' },
-          ...runwayDrafts(runways.arr),
-          { sectionId: 'taxi_arr' },
+          { ...arrHeader, yRatio: 0 },
+          ...runwayDrafts(arrRwys, true).map((d, i) => ({
+            ...d,
+            // Mid-bay (50%); extra pairs nudge slightly below the first
+            yRatio: 0.5 + i * 0.05,
+          })),
+          { ...taxiArr, yRatio: 0.75 },
         ],
-        [
-          { sectionId: 'ctr_dep', addFromTop: false },
-          ...runwayDrafts(runways.dep),
-        ],
-        [
-          { sectionId: 'taxi_dep', addFromTop: false },
-          { sectionId: 'push_start', addFromTop: true },
-        ],
-        [{ sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false }],
+        fatoBottomQuarter ? [inboundRight, fatoBottomQuarter] : [inboundRight],
       ],
     }
   }
 
-  // CD + GND + TWR — TSAT/EOBT stacked above CD; ARR RWY above taxi
+  // CD + GND + TWR (+ optional APP)
   if (hasCd && hasGnd && hasTwr) {
     return {
       columnCount: 4,
       columns: [
-        [
-          { sectionId: 'inbound' },
-          { sectionId: 'ctr_arr' },
-          ...runwayDrafts(runways.arr),
-          { sectionId: 'taxi_arr' },
-        ],
-        [
-          { sectionId: 'ctr_dep', addFromTop: false },
-          ...runwayDrafts(runways.dep),
-        ],
-        [
-          { sectionId: 'taxi_dep', addFromTop: false },
-          { sectionId: 'push_start', addFromTop: true },
-        ],
-        [
-          { sectionId: 'cleared', title: 'TSAT / EOBT', addFromTop: false },
-          {
-            sectionId: 'pending_dep',
-            title: 'CD',
-            groupId: 'cd_all',
-            member: 'pending',
-            addFromTop: false,
-          },
-        ],
+        [cdPendingDraft(), tsatEobtDraft()],
+        [pushStart, taxiDep, ...runwayDrafts(depRwys, true)],
+        [arrHeader, ...runwayDrafts(arrRwys, true), taxiArr],
+        fatoBottomThird ? [inboundRight, fatoBottomThird] : [inboundRight],
       ],
     }
+  }
+
+  // CD + TWR (no GND) — rare; treat like TWR with CD leftmost
+  if (hasCd && !hasGnd && hasTwr) {
+    return {
+      columnCount: 4,
+      columns: [
+        [cdPendingDraft(), tsatEobtDraft()],
+        [inboundGnd, taxiDep, ...runwayDrafts(depRwys, true)],
+        [inboundRight, arrHeader, ...runwayDrafts(arrRwys, true)],
+        fatoAlignRwy ? [fatoAlignRwy] : [],
+      ],
+    }
+  }
+
+  // APP + GND (no TWR): like GND with INBOUND ACC on the right
+  if (hasApp && hasGnd && !hasTwr) {
+    const cols: SecDraft[][] = hasCd
+      ? [
+          [cdPendingDraft()],
+          [tsatEobtDraft()],
+          [pushStart, taxiDep],
+          [inboundAcc, taxiArr],
+        ]
+      : [
+          [tsatEobtDraft()],
+          [pushStart, taxiDep],
+          [inboundAcc, taxiArr],
+          [{ sectionId: null, yRatio: 0.5 }],
+        ]
+    return { columnCount: 4, columns: cols }
   }
 
   // Fallback (e.g. empty roles): empty board
@@ -737,7 +707,7 @@ export function buildWorkspaceLayoutFromServer(
     defaultSortFlow?: SortFlow
   },
 ): WorkspaceLayout {
-  const defaultFlow = opts?.defaultSortFlow ?? 'newestBottom'
+  const defaultFlow = opts?.defaultSortFlow ?? 'newestTop'
   const sections: WorkspaceSection[] = []
   let col = 0
   for (const bay of serverLayout.bays) {
@@ -901,7 +871,7 @@ export function buildDefaultWorkspaceLayout(
   roles: string[],
   opts?: { defaultSortFlow?: SortFlow },
 ): WorkspaceLayout {
-  const defaultFlow = opts?.defaultSortFlow ?? 'newestBottom'
+  const defaultFlow = opts?.defaultSortFlow ?? 'newestTop'
   const families = roleFamilies(roles)
   const runways = families.has('TWR')
     ? classifyRunwaySections(serverLayout)

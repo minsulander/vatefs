@@ -153,15 +153,65 @@ function serverBayIndexForSection(serverLayout: EfsLayout, sectionId: string): n
 }
 
 function preferredRunwayColumn(layout: WorkspaceLayout, serverLayout: EfsLayout, sectionId: string): number {
-  const bayIdx = serverBayIndexForSection(serverLayout, sectionId)
-  if (bayIdx >= 0) return Math.min(layout.columnCount - 1, bayIdx)
-  const withCtrDep = layout.sections.find((s) => s.sectionId === 'ctr_dep')
-  if (withCtrDep) return withCtrDep.anchorColumn
+  const title = (
+    serverLayout.bays.flatMap((b) => b.sections).find((s) => s.id === sectionId)?.title || ''
+  )
+    .toUpperCase()
+    .trim()
+  const isFato = sectionId === 'runway_07_25' || title === 'FATO'
+
+  // FATO: column that already hosts FATO, else under INBOUND APP/ACC, else rightmost
+  if (isFato) {
+    const existingFato = layout.sections.find(
+      (s) =>
+        s.sectionId === 'runway_07_25' ||
+        (s.title || '').toUpperCase().trim() === 'FATO',
+    )
+    if (existingFato) return existingFato.anchorColumn
+    const inboundCol = layout.sections.find(
+      (s) =>
+        s.sectionId === 'inbound' ||
+        s.sectionId === 'inbound_acc' ||
+        (s.title || '').toUpperCase().startsWith('INBOUND APP') ||
+        (s.title || '').toUpperCase() === 'INBOUND ACC',
+    )
+    if (inboundCol) return inboundCol.anchorColumn
+    return Math.min(layout.columnCount - 1, layout.columnCount - 1)
+  }
+
+  // DEP RWY: column with TAXI DEP / PUSH (no CTR ARR). ARR RWY: column with CTR/TMA ARR.
+  const serverBay = serverBayIndexForSection(serverLayout, sectionId)
+  const depBayHas = (id: string) => {
+    if (serverBay < 0) return false
+    const bay = serverLayout.bays[serverBay]
+    return !!bay?.sections.some((s) => s.id === id)
+  }
+  const preferDep =
+    depBayHas('ctr_dep') ||
+    depBayHas('taxi_dep') ||
+    (!depBayHas('ctr_arr') && !depBayHas('taxi_arr'))
+
+  if (preferDep) {
+    const depCol =
+      layout.sections.find((s) => s.sectionId === 'taxi_dep') ||
+      layout.sections.find((s) => s.sectionId === 'push_start') ||
+      layout.sections.find((s) => s.sectionId === 'ctr_dep')
+    if (depCol) return depCol.anchorColumn
+  } else {
+    const arrCol =
+      layout.sections.find((s) => s.sectionId === 'ctr_arr') ||
+      layout.sections.find((s) => s.sectionId === 'taxi_arr')
+    if (arrCol) return arrCol.anchorColumn
+  }
+
   const existingRwy = layout.sections.find(
-    (s) => s.sectionId && isEssaDynamicRunwaySectionId(s.sectionId),
+    (s) =>
+      s.sectionId &&
+      isEssaDynamicRunwaySectionId(s.sectionId) &&
+      s.sectionId !== 'runway_07_25',
   )
   if (existingRwy) return existingRwy.anchorColumn
-  return Math.min(layout.columnCount - 1, 1)
+  return Math.min(layout.columnCount - 1, preferDep ? 1 : 2)
 }
 
 export function useWorkspace() {
@@ -348,6 +398,23 @@ export function useWorkspace() {
             : sec.addFromTop === true
               ? 'newestTop'
               : defaultFlow)
+      // GND+TWR ARR column: pin new ARR RWY to mid-bay when TAXI ARR sits at bottom 25%
+      const taxiAtBottomQuarter = layoutNow.sections.some(
+        (s) =>
+          s.anchorColumn === col &&
+          s.sectionId === 'taxi_arr' &&
+          s.yRatio != null &&
+          s.yRatio >= 0.7,
+      )
+      const existingArrRwys = layoutNow.sections.filter(
+        (s) =>
+          s.anchorColumn === col &&
+          s.sectionId &&
+          isEssaDynamicRunwaySectionId(s.sectionId) &&
+          s.sectionId !== 'runway_07_25',
+      ).length
+      const arrRwyYRatio =
+        afterCtrArr && taxiAtBottomQuarter ? 0.5 + existingArrRwys * 0.05 : undefined
       const next = insertSectionWithoutOverlap(
         {
           instanceId: sec.id,
@@ -356,6 +423,7 @@ export function useWorkspace() {
           anchorColumn: col,
           stripSize: 'normal',
           sortFlow,
+          ...(arrRwyYRatio != null ? { yRatio: arrRwyYRatio } : {}),
         },
         layoutNow.sections,
       )
@@ -1129,7 +1197,21 @@ export function useWorkspace() {
     const usesY = hadY || columnUsesAbsoluteY(col, all)
 
     let next = sec
-    if (usesY) {
+    const bodyH =
+      columnBodyHeightByCol.value[col] ??
+      columnBodyEl(col)?.getBoundingClientRect().height ??
+      0
+    if (sec.yRatio != null && bodyH > 0) {
+      // Honour explicit mid/bottom pins (e.g. ARR RWY mid-bay, TAXI ARR bottom 25%)
+      const headerH = measureHeaderHeight()
+      const maxY = Math.max(0, bodyH - headerH)
+      const desired = Math.min(maxY, Math.round(sec.yRatio * bodyH))
+      const probe = { ...sec, y: desired }
+      const y = collideHeaderY(probe, col, desired, [...all, probe], {
+        allowMergeOverlap: false,
+      })
+      next = { ...sec, y, yRatio: bodyH > 0 ? y / bodyH : sec.yRatio }
+    } else if (usesY) {
       const headerH = measureHeaderHeight()
       const sorted = all
         .filter((s) => s.anchorColumn === col && s.y != null)

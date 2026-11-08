@@ -3316,21 +3316,20 @@ async function runScheduledAutoFit() {
   try {
     do {
       autoFitQueued = false
+      // newestTop = first at bottom: size/scroll priority at the bottom end.
+      // newestBottom = first on top: keep the top end in view.
+      const firstAtBottom = workspaceSortFlow.value === 'newestTop'
       await runAutoFitStripSize({
         container: el,
         visualIds: topStripIds.value,
-        // Size priority follows first-in-sequence, not insert addFromTop.
-        // ESSA/SAAB INBOUND APP: earliest at visual bottom (preferTop:false).
-        // CD / TSAT / EOBT: earliest on top (preferTop:true) with first-on-top flow.
-        preferTop: !(hasEssa.value && isInboundAppSection.value),
+        preferTop: !firstAtBottom,
         canCompact: stripCanCompact,
         allowSizeFit: modeAllowsFit && !overflowHandlesExtra,
         growBack:
           store.autoFitStripSizeMode !== 'off' &&
           store.autoFitStripSizeGrowBack &&
           !overflowHandlesExtra,
-        // INBOUND APP (first at bottom): keep bottom in view. CD/TSAT first on top.
-        scrollToBottom: !!(hasEssa.value && isInboundAppSection.value),
+        scrollToBottom: firstAtBottom,
       })
     } while (autoFitQueued && !autoFitApplying.value)
     // Scrollbar appearing/disappearing must not immediately re-run fit
@@ -3360,6 +3359,7 @@ watch(
     uiScalePercent,
     () => sectionOverflowPlan.value?.hasOverflowPath,
     workspaceStripSize,
+    workspaceSortFlow,
   ],
   () => {
     scheduleAutoFitRecheck(true)

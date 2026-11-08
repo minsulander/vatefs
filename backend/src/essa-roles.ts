@@ -674,8 +674,8 @@ export function essaRunwayPairsFingerprint(placements: EssaRunwaySectionPlacemen
 
 /**
  * Replace static arr_runway/dep_runway with one header per physical strip in use.
- * Single pair → CTR DEP column. Extra ARR-only pairs → leftmost bay between
- * CTR ARR and TAXI ARR. Never move ARR-preferred headers into the DEP column
+ * Single pair → CTR DEP bay. Extra ARR-only pairs → ARR bay between
+ * CTR ARR and TAXI ARR. Never move ARR-preferred headers into the DEP bay
  * just to fill an empty DEP stack (that caused bay jumping).
  */
 export function applyEssaRunwayPairLayout(
@@ -724,11 +724,11 @@ export function applyEssaRunwayPairLayout(
     const insertStack = (bayId: string, afterSectionId: string, stack: EssaRunwaySectionPlacement[]) => {
         let after = afterSectionId
         for (const p of stack) {
-            // ARR column: first at bottom (addFromTop). DEP column: first on top.
+            // ESSA/OTHER mirrored boards: newestTop everywhere (first at bottom).
             const section: Section = {
                 id: p.sectionId,
                 title: p.title,
-                addFromTop: !p.preferDepColumn,
+                addFromTop: true,
             }
             insertAfter(bayId, after, section)
             after = p.sectionId

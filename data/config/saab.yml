@@ -17,124 +17,131 @@ include:
   - saab-rules.yml
 
 layouts:
-  # 1RWY · 3 BAYS — L→R: TMA | CTR + RUNWAY | TAXIWAY + DEP
+  # 1RWY · 3 BAYS — L→R: DEP+TAXIWAY | CTR+RUNWAY | INBOUND+TMA
+  # Departures from top-left; arrivals from top-right. Sort-flow: newestTop.
   1rwy3:
     name: 1RWY
     layout:
       bays:
         bay1:
           sections:
-            tma:
-              title: TMA
-            # Orphan/spawn fallback — workspace injects visible header
-            system_inbound:
-              title: SYSTEM INBOUND
+            pending_dep:
+              title: DEP
+              addFromTop: true
+            cleared:
+              title: DEP
+              addFromTop: true
+            taxi:
+              title: TAXIWAY
+              addFromTop: true
         bay2:
           sections:
             # Workspace collapses ctr_arr + ctr_dep titled CTR → one CTR header
             ctr_arr:
               title: CTR
+              addFromTop: true
             ctr_dep:
               title: CTR
+              addFromTop: true
             runway:
               title: RUNWAY
-              addFromTop: false
+              addFromTop: true
         bay3:
           sections:
-            taxi:
-              title: TAXIWAY
-              addFromTop: false
-            pending_dep:
-              title: DEP
-            cleared:
-              title: DEP
+            inbound:
+              title: INBOUND
+              addFromTop: true
+            tma:
+              title: TMA
+              addFromTop: true
+            # Orphan/spawn fallback — workspace injects visible header
+            system_inbound:
+              title: SYSTEM INBOUND
 
-  # 1RWY · 4 BAYS — L→R: INBOUND+CTR ARR | CTR DEP+RUNWAY | TAXI+PUSH | CLEARED+PENDING
+  # 1RWY · 4 BAYS — L→R: PENDING+CLEARED | PUSH+TAXI | RUNWAY+CTR DEP | INBOUND+CTR ARR
   1rwy4:
     name: 1RWY
     layout:
       bays:
         bay1:
           sections:
+            pending_dep:
+              title: PENDING CLR
+              addFromTop: true
+            cleared:
+              title: CLEARED
+              addFromTop: true
+        bay2:
+          sections:
+            push_start:
+              title: PUSH&START
+              addFromTop: true
+            taxi:
+              title: TAXIWAY
+              addFromTop: true
+        bay3:
+          sections:
+            runway:
+              title: RUNWAY
+              addFromTop: true
+            ctr_dep:
+              title: CTR DEP
+              addFromTop: true
+        bay4:
+          sections:
             inbound:
               title: INBOUND
-              # First at bottom (newest on top)
               addFromTop: true
             ctr_arr:
               title: CTR ARR
               addFromTop: true
             # Declared for sectionRules / catalog (TMA-only coverage default).
-            # Not shown in the CTR-only builtin column plan until added.
             ctr_inbound:
               title: CTR INBOUND
             # Orphan/spawn fallback — workspace injects visible header
             system_inbound:
               title: SYSTEM INBOUND
-        bay2:
-          sections:
-            ctr_dep:
-              title: CTR DEP
-              addFromTop: false
-            runway:
-              title: RUNWAY
-              addFromTop: false
-        bay3:
-          sections:
-            taxi:
-              title: TAXIWAY
-              addFromTop: false
-            push_start:
-              title: PUSH&START
-              # First on top (newest at bottom)
-              addFromTop: false
-        bay4:
-          sections:
-            cleared:
-              title: CLEARED
-            pending_dep:
-              title: PENDING CLR
 
-  # 2RWY · 4 BAYS — L→R: INBOUND+CTR ARR+RWY ARR | CTR DEP+RWY DEP | TAXI+PUSH | CLEARED+PENDING
+  # 2RWY · 4 BAYS — L→R: PENDING+CLEARED | PUSH+TAXI | RUNWAY DEP+CTR DEP | INBOUND+CTR ARR+RWY ARR
   2rwy4:
     name: 2RWY
     layout:
       bays:
         bay1:
           sections:
+            pending_dep:
+              title: PENDING CLR
+              addFromTop: true
+            cleared:
+              title: CLEARED
+              addFromTop: true
+        bay2:
+          sections:
+            push_start:
+              title: PUSH&START
+              addFromTop: true
+            taxi:
+              title: TAXIWAY
+              addFromTop: true
+        bay3:
+          sections:
+            dep_runway:
+              title: RUNWAY DEP
+              addFromTop: true
+            ctr_dep:
+              title: CTR DEP
+              addFromTop: true
+        bay4:
+          sections:
             inbound:
               title: INBOUND
-              # First at bottom (newest on top)
               addFromTop: true
             ctr_arr:
               title: CTR ARR
               addFromTop: true
             arr_runway:
               title: RUNWAY ARR
-              # ARR RWY: first at bottom
               addFromTop: true
             # Orphan/spawn fallback — workspace injects visible header
             system_inbound:
               title: SYSTEM INBOUND
-        bay2:
-          sections:
-            ctr_dep:
-              title: CTR DEP
-              addFromTop: false
-            dep_runway:
-              title: RUNWAY DEP
-              addFromTop: false
-        bay3:
-          sections:
-            taxi:
-              title: TAXIWAY
-              addFromTop: false
-            push_start:
-              title: PUSH&START
-              # First on top (newest at bottom)
-              addFromTop: false
-        bay4:
-          sections:
-            cleared:
-              title: CLEARED
-            pending_dep:
-              title: PENDING CLR
