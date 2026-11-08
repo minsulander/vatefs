@@ -315,6 +315,15 @@ export function essaRunwaySectionId(pair: EssaPhysicalRwyPair): string {
     return `runway_${pair.id}`
 }
 
+/** Resolve physical pair from a dynamic runway section id (`runway_01R_19L`). */
+export function essaPhysicalPairFromSectionId(
+    sectionId: string | undefined | null,
+): EssaPhysicalRwyPair | undefined {
+    if (!sectionId || !isEssaDynamicRunwaySectionId(sectionId)) return undefined
+    const pairId = sectionId.slice('runway_'.length)
+    return ESSA_PHYSICAL_RWY_PAIRS.find((p) => p.id === pairId)
+}
+
 /** Header title: "RUNWAY 01L/19R" or pair.headerTitle (e.g. FATO) */
 export function formatEssaRunwaySectionTitle(pair: EssaPhysicalRwyPair): string {
     return pair.headerTitle ?? `RUNWAY ${pair.label}`

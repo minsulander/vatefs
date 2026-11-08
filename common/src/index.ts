@@ -61,6 +61,7 @@ export {
     essaRwyQuickrefImageId,
     essaRwyQuickrefImageUrl,
     essaPhysicalPairForRunway,
+    essaPhysicalPairFromSectionId,
     essaRunwaySectionId,
     formatEssaRunwaySectionTitle,
     isEssaDynamicRunwaySectionId,

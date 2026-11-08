@@ -491,7 +491,7 @@ export interface MoveRule {
     command?: EuroscopeCommand
 
     /**
-     * Multiple commands (e.g. undo TXO → CD ALL: ONFREQ + clear CLR).
+     * Multiple commands (e.g. undo TXO → CD ALL: clear GS + clear CLR).
      * If set, takes precedence over `command`.
      */
     commands?: EuroscopeCommand[]

@@ -68,6 +68,7 @@ import {
     formatCflMenuLabel,
     formatFaaEquipDisplay,
     essaPhysicalPairForRunway,
+    essaPhysicalPairFromSectionId,
     hasForcedSidInRoute,
     isIfrSidEligible,
     isRunwayOrderSectionId,
@@ -1111,6 +1112,9 @@ class FlightStore {
      * (e.g. DEP 08 while config is 01L). Runways already present (01L while
      * config is 01L/01L) do not open a second bay.
      *
+     * Also keeps a header for any `runway_*` section that still has a strip
+     * assignment (so headers are never dropped while traffic sits there).
+     *
      * DEP uses ES depRwy or forced `/rwy` on the first route term — not the
      * active-config fallback (that would never open an "extra" header).
      */
@@ -1145,11 +1149,19 @@ class FlightStore {
 
         for (const flight of this.flights.values()) {
             if (flight.deleted || flight.manuallyDeleted) continue
-            if (!this.stripAssignments.has(flight.callsign)) continue
+            const assignment = this.stripAssignments.get(flight.callsign)
+            if (!assignment) continue
             const originIsEssa = flight.origin === 'ESSA'
             const destIsEssa = flight.destination === 'ESSA'
             if (destIsEssa) consider(flight.arrRwy, arr)
             if (originIsEssa) consider(forcedDepRwy(flight), dep)
+
+            // Keep header for the pair the strip is currently sitting under
+            const sittingPair = essaPhysicalPairFromSectionId(assignment.sectionId)
+            if (sittingPair && !activePairs.has(sittingPair.id)) {
+                const into = destIsEssa && !originIsEssa ? arr : originIsEssa && !destIsEssa ? dep : destIsEssa ? arr : dep
+                into.add(sittingPair.ends[0])
+            }
         }
         return {
             arr: [...arr].sort(),
@@ -1254,17 +1266,19 @@ class FlightStore {
     applyOptimisticGroundstate(callsign: string, state: string): void {
         const flight = this.flights.get(callsign)
         if (!flight) return
-        const next = state as GroundState
+        // Plugin clear token — store empty locally (never persist "NOSTATE" as GS)
+        const normalized = state === 'NOSTATE' ? '' : state
+        const next = normalized as GroundState
         const prev = (flight.groundstate || '').toUpperCase()
-        // Remember pre-READY state so cancel READY can restore (not always ONFREQ)
+        // Remember pre-READY state so cancel READY can restore (not always empty)
         if (next === 'DE-ICE' && prev !== 'DE-ICE') {
             flight.groundstateBeforeReady = flight.groundstate ?? ''
         } else if (next !== 'DE-ICE' && prev === 'DE-ICE') {
             flight.groundstateBeforeReady = undefined
         }
         flight.groundstate = next
-        if (state === 'PARK') flight.airborne = false
-        if (!state) {
+        if (normalized === 'PARK') flight.airborne = false
+        if (!normalized) {
             flight.groundstateClearedUntil = Date.now() + 3000
             flight.groundstateHoldUntil = undefined
         } else {
@@ -1276,15 +1290,15 @@ class FlightStore {
 
     /**
      * Cancel READY (DE-ICE): restore groundstate from before READY was set.
-     * Falls back to ONFREQ only when we never recorded a prior state.
+     * Falls back to empty when we never recorded a prior state (do not write ONFREQ).
      */
     restoreGroundstateBeforeReady(callsign: string): GroundState {
         const flight = this.flights.get(callsign)
-        if (!flight) return 'ONFREQ'
+        if (!flight) return ''
         const restore =
             flight.groundstateBeforeReady !== undefined
                 ? flight.groundstateBeforeReady
-                : 'ONFREQ'
+                : ''
         flight.groundstateBeforeReady = undefined
         this.applyOptimisticGroundstate(callsign, restore)
         return restore
@@ -3647,6 +3661,7 @@ class FlightStore {
         }
         // Soft G/A must not wipe CTL that was already set before/when G/A was applied.
         // Paper: once CTL is on the strip, ignore VCH clearing it (landing / ATA / list).
+        // Digital ESSA: ignore VCH CTL clear while still airborne on approach (not TXIN).
         // CTL hold: controller just set CTL/CTL_GS — ignore VCH clear while clearScratchpad races.
         // Explicit EFS unsetCTL / move rules set flight.clearedToLand = false locally first.
         if (message.clearedToLand !== undefined) {
@@ -3658,15 +3673,32 @@ class FlightStore {
                 message.clearedToLand === false &&
                 !!flight.clearedToLand &&
                 this.config.look === 'paper'
+            const gsUpper = (flight.groundstate || '').toUpperCase()
+            const digitalEssaApproachKeepCtl =
+                message.clearedToLand === false &&
+                !!flight.clearedToLand &&
+                this.config.look !== 'paper' &&
+                isEssaRolesConfig(this.config) &&
+                !!flight.airborne &&
+                gsUpper !== 'TXIN'
             const ctlHoldKeep =
                 message.clearedToLand === false &&
                 !!flight.clearedToLand &&
                 ctlHoldActive
-            if (!softGaKeepCtl && !paperKeepCtl && !ctlHoldKeep) {
+            if (
+                !softGaKeepCtl &&
+                !paperKeepCtl &&
+                !digitalEssaApproachKeepCtl &&
+                !ctlHoldKeep
+            ) {
                 flight.clearedToLand = message.clearedToLand
                 if (!message.clearedToLand) {
                     flight.clearedToLandHoldUntil = undefined
                 }
+            } else if (digitalEssaApproachKeepCtl) {
+                console.log(
+                    `[ASSIGN] ${callsign} clearedToLand: false ignored (airborne approach hold)`,
+                )
             }
         }
         if (message.communicationType !== undefined) {

@@ -718,26 +718,12 @@ export function determineSectionForFlight(
             }
             let sectionId = rule.sectionId
             // ESSA: map legacy arr_runway/dep_runway onto physical RWY pair sections
+            // (FPL/manual arrRwy/depRwy only — no GPS override)
             if (isEssaRolesConfig(config) && isEssaLegacyRunwaySectionId(sectionId)) {
-                let geoEnds: { leIdent: string; heIdent: string } | undefined
-                if (
-                    flight.latitude !== undefined &&
-                    flight.longitude !== undefined &&
-                    flight.currentAltitude !== undefined
-                ) {
-                    const geo = isOnAnyRunway(
-                        flight.latitude,
-                        flight.longitude,
-                        flight.currentAltitude,
-                        config.myAirports
-                    )
-                    if (geo?.onRunway && geo.runway) geoEnds = geo.runway
-                }
                 const pair = resolveEssaPairForFlight(
                     flight,
                     config.activeRunways,
                     config.myAirports,
-                    geoEnds
                 )
                 if (pair) {
                     const pairSectionId = essaRunwaySectionId(pair)

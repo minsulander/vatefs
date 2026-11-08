@@ -130,4 +130,21 @@ check("no strip → assigned runway ignored", () => {
     assert.deepEqual(flightStore.getEssaAssignedRunways(), { arr: [], dep: [] })
 })
 
+check("strip sitting on runway_08_26 keeps 08/26 header even without arrRwy", () => {
+    flightStore.clear()
+    seed(
+        {
+            callsign: "NDF1",
+            origin: "ENGM",
+            destination: "ESSA",
+            // No arrRwy — only the bay assignment should keep the header
+            airborne: true,
+            firstSeen: Date.now(),
+            lastUpdate: Date.now(),
+        },
+        "runway_08_26",
+    )
+    assert.deepEqual(flightStore.getEssaAssignedRunways(), { arr: ["08"], dep: [] })
+})
+
 console.log("\nessa-assigned-rwy-headers tests done")

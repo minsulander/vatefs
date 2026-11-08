@@ -265,12 +265,14 @@ import {
     isPushStartFamilySectionId,
 } from "@vatefs/common"
 import {
+    essaPhysicalPairFromSectionId,
     hasForcedSidInRoute,
     hasSlowRemark,
     hasVectRemark,
     isIfrSidEligible,
     isSlowSid,
     isTrackSidName,
+    normalizeEssaRwy,
     parseRflToFeet,
     resolveEssaHeavyPreferredDepRwy,
     resolveLopAutoDirect,
@@ -1265,7 +1267,8 @@ function mapStripActionToPluginCommand(action: string, callsign: string): Outbou
             // Rejected takeoff: undo CFTO → LINEUP; UI then offers TAXI OUT / TAXI IN
             return { type: "setGroundState", callsign, state: "LINEUP" }
         case "FRQ":
-            return { type: "setGroundState", callsign, state: "ONFREQ" }
+            // Clear GS — do not write ONFREQ (GRP FREQ is read-only from ES)
+            return { type: "setGroundState", callsign, state: "NOSTATE" }
         case "STUP":
             return { type: "setGroundState", callsign, state: "STUP" }
         case "DEICE":
@@ -6030,6 +6033,71 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     }
                 }
 
+                // ESSA: drag onto a physical RWY header → pin arrRwy/depRwy to that pair
+                // so rules follow FPL/manual assignment (not GPS).
+                if (
+                    flight &&
+                    isEssaRolesConfig(staticConfig) &&
+                    fromSectionId !== result.strip.sectionId
+                ) {
+                    const dropPair = essaPhysicalPairFromSectionId(result.strip.sectionId)
+                    if (dropPair) {
+                        const stripType = result.strip.stripType
+                        const preferArr =
+                            stripType === "arrival" ||
+                            (stripType === "local" && !!flight.airborne) ||
+                            (stripType !== "departure" &&
+                                flight.destination === "ESSA" &&
+                                flight.origin !== "ESSA")
+                        const current = preferArr ? flight.arrRwy : flight.depRwy
+                        const currentNorm = current ? normalizeEssaRwy(current) : ""
+                        const alreadyOnPair = dropPair.ends.some(
+                            (e) => normalizeEssaRwy(e) === currentNorm,
+                        )
+                        if (!alreadyOnPair) {
+                            const essaActive = staticConfig.activeRunways?.["ESSA"]
+                            const activeList = preferArr
+                                ? essaActive?.arr ?? []
+                                : essaActive?.dep ?? []
+                            let pick =
+                                activeList
+                                    .map((r) => normalizeEssaRwy(r))
+                                    .find((r) =>
+                                        dropPair.ends.some((e) => normalizeEssaRwy(e) === r),
+                                    ) ?? dropPair.ends[0]
+                            pick = normalizeEssaRwy(pick)
+                            if (preferArr) {
+                                flight.arrRwy = pick
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "assignArrivalRunway",
+                                        callsign: result.strip.callsign,
+                                        runway: pick,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: arrRwy → ${pick} (drag to ${dropPair.label})`,
+                                )
+                            } else {
+                                flight.depRwy = pick
+                                flight.sidDisplayOverride = undefined
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "assignDepartureRunway",
+                                        callsign: result.strip.callsign,
+                                        runway: pick,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                console.log(
+                                    `[MOVE] ${result.strip.callsign}: depRwy → ${pick} (drag to ${dropPair.label})`,
+                                )
+                            }
+                            stateChanged = true
+                            maybeRefreshEssaRunwayHeaders()
+                        }
+                    }
+                }
+
                 if (stateChanged && flight) {
                     reevaluateAndBroadcast(result.strip.callsign)
                 }
@@ -6595,7 +6663,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     TXO: "TAXI",
                     TXI: "TXIN",
                     PARK: "PARK",
-                    FRQ: "ONFREQ",
+                    FRQ: "",
                     STUP: "STUP",
                     DEICE: "DE-ICE",
                     READY: "DE-ICE",
@@ -6755,7 +6823,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             break
                         }
                         case "FRQ":
-                            flightStore.applyOptimisticGroundstate(strip.callsign, "ONFREQ")
+                            flightStore.applyOptimisticGroundstate(strip.callsign, "")
                             break
                         case "STUP":
                             flightStore.applyOptimisticGroundstate(strip.callsign, "STUP")
@@ -6810,7 +6878,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 JSON.stringify({
                                     type: "setGroundState",
                                     callsign: strip.callsign,
-                                    state: restored || "ONFREQ",
+                                    state: restored || "NOSTATE",
                                 } satisfies OutboundPluginCommand),
                             )
                         }

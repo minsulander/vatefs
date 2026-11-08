@@ -2559,6 +2559,7 @@ const isDepDeparted = computed(
 // Ground state: DEP/local flow then ARR flow (NSTS → … → DEPA | ARR → TXIN → PARK)
 const groundStateOptions = [
   { code: '---', label: 'No State', action: 'NOGS', groundstate: '' },
+  // FRQ action clears GS (NOSTATE); groundstate ONFREQ only for display when ES reports it
   { code: 'FRQ', label: 'On Freq', action: 'FRQ', groundstate: 'ONFREQ' },
   { code: 'RDY', label: 'De-ice', action: 'DEICE', groundstate: 'DE-ICE' },
   { code: 'S/U', label: 'Startup', action: 'STUP', groundstate: 'STUP' },

@@ -771,13 +771,11 @@ export function isEssaLegacyRunwaySectionId(sectionId: string): boolean {
 }
 
 /**
- * Pick the physical pair for a flight (geo runway, else FPL assignment, else active RWY).
+ * Pick the physical pair for a flight (FPL/manual arrRwy/depRwy, else active RWY).
+ * GPS/geo is intentionally ignored — section placement follows assigned runway only.
  */
 export function resolveEssaPairForFlight(
     flight: {
-        latitude?: number
-        longitude?: number
-        currentAltitude?: number
         origin?: string
         destination?: string
         airborne?: boolean
@@ -786,15 +784,7 @@ export function resolveEssaPairForFlight(
     },
     activeRunways: Record<string, { arr: string[]; dep: string[] }> | undefined,
     airports: string[],
-    geoRunwayEnds?: { leIdent: string; heIdent: string }
 ): EssaPhysicalRwyPair | undefined {
-    if (geoRunwayEnds) {
-        const fromGeo =
-            essaPhysicalPairForRunway(geoRunwayEnds.leIdent) ??
-            essaPhysicalPairForRunway(geoRunwayEnds.heIdent)
-        if (fromGeo) return fromGeo
-    }
-
     const originIsOurs = flight.origin !== undefined && airports.includes(flight.origin)
     const destIsOurs = flight.destination !== undefined && airports.includes(flight.destination)
 

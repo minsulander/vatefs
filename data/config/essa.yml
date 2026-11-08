@@ -840,7 +840,7 @@ moveRules:
       type: setGroundstate
       value: PUSH
 
-  # TAXI DEP → TSAT: revert TXO (keep CLR)
+  # TAXI DEP → TSAT: revert TXO (keep CLR) — clear GS (do not write ONFREQ)
   undo_taxi_to_cleared:
     fromSectionId: taxi_dep
     toSectionId: cleared
@@ -848,7 +848,7 @@ moveRules:
     priority: 20
     command:
       type: setGroundstate
-      value: ONFREQ
+      value: ""
 
   # TAXI DEP → CD ALL: revert TXO + CLR
   undo_taxi_to_pending:
@@ -858,7 +858,7 @@ moveRules:
     priority: 20
     commands:
       - type: setGroundstate
-        value: ONFREQ
+        value: ""
       - type: setClearance
         value: false
 
@@ -870,7 +870,7 @@ moveRules:
     priority: 20
     commands:
       - type: setGroundstate
-        value: ONFREQ
+        value: ""
       - type: setClearance
         value: false
 

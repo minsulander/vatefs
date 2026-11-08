@@ -720,14 +720,14 @@ moveRules:
       type: setClearance
       value: false
 
-  # PUSH&START -> CLEARED: Set groundstate to ONFREQ
+  # PUSH&START -> CLEARED: clear GS (do not write ONFREQ)
   undo_push_to_cleared:
     fromSectionId: push_start
     toSectionId: cleared
     direction: either
     command:
       type: setGroundstate
-      value: ONFREQ
+      value: ""
 
   # TAXI -> PUSH&START: Set groundstate to PUSH
   undo_taxi_to_push:
@@ -746,7 +746,7 @@ moveRules:
     priority: 20
     command:
       type: setGroundstate
-      value: ONFREQ
+      value: ""
 
   # TAXI -> PENDING / CD ALL: revert TXO + CLR
   undo_taxi_to_pending:
@@ -756,7 +756,7 @@ moveRules:
     priority: 20
     commands:
       - type: setGroundstate
-        value: ONFREQ
+        value: ""
       - type: setClearance
         value: false
 
@@ -768,6 +768,6 @@ moveRules:
     priority: 20
     commands:
       - type: setGroundstate
-        value: ONFREQ
+        value: ""
       - type: setClearance
         value: false
