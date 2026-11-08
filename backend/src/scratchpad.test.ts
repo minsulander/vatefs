@@ -6,12 +6,15 @@ import assert from "node:assert/strict"
 import {
     buildCombinedScratch,
     buildFlightScratch,
+    cdmScratchToken,
+    formatCtotScratchHhmm,
     groundstateFromScratch,
     isProtocolScratch,
     isHandoverAssistantScratch,
     parseCombinedScratch,
     shouldClearHandoverScratch,
     standFromGrpScratch,
+    stripLeadingCdmScratchToken,
 } from "./scratchpad.js"
 
 let passed = 0
@@ -203,6 +206,57 @@ check("buildFlightScratch omits HP when scratch-cleared", () => {
         buildFlightScratch({ remarks: "URNAV", hp: "Y2" }),
         ".URNAV /Y2",
     )
+})
+
+check("formatCtotScratchHhmm", () => {
+    assert.equal(formatCtotScratchHhmm("1345"), "13:45")
+    assert.equal(formatCtotScratchHhmm("845"), "08:45")
+    assert.equal(formatCtotScratchHhmm("13:45"), "13:45")
+    assert.equal(formatCtotScratchHhmm(""), undefined)
+})
+
+check("cdmScratchToken prefers CTOT over SLC", () => {
+    assert.equal(cdmScratchToken({ ctot: "1345" }), "13:45")
+    assert.equal(cdmScratchToken({ ctot: "1345", ctotCancelled: true }), "13:45")
+    assert.equal(cdmScratchToken({ ctotCancelled: true }), " SLC")
+    assert.equal(cdmScratchToken({ cdmSts: "SLC" }), " SLC")
+    assert.equal(cdmScratchToken({ cdmSts: "SCL" }), " SLC")
+    assert.equal(cdmScratchToken({ cdmSts: "FLS" }), undefined)
+    assert.equal(cdmScratchToken({}), undefined)
+    // Written form always has leading space for SLC (never bare SLC)
+    assert.notEqual(cdmScratchToken({ ctotCancelled: true }), "SLC")
+})
+
+check("build prefixes CTOT/SLC ahead of remarks/HP", () => {
+    assert.equal(buildCombinedScratch("URNAV", "Y2", "13:45"), "13:45 .URNAV /Y2")
+    assert.equal(buildCombinedScratch(undefined, "Y2", "13:45"), "13:45 /Y2")
+    assert.equal(buildCombinedScratch(undefined, undefined, "13:45"), "13:45")
+    assert.equal(buildCombinedScratch("URNAV", "Y2", " SLC"), " SLC .URNAV /Y2")
+    assert.equal(buildCombinedScratch(undefined, undefined, " SLC"), " SLC")
+    assert.equal(buildCombinedScratch(undefined, "Y2", " SLC"), " SLC /Y2")
+    assert.equal(
+        buildFlightScratch({ remarks: "URNAV", hp: "Y2", ctot: "1345" }, { cdmToken: "13:45" }),
+        "13:45 .URNAV /Y2",
+    )
+})
+
+check("parse strips leading CTOT/SLC before remarks/HP", () => {
+    assert.deepEqual(parseCombinedScratch("13:45"), { remarks: undefined, hp: undefined })
+    assert.deepEqual(parseCombinedScratch("13:45 .URNAV /Y2"), {
+        remarks: "URNAV",
+        hp: "Y2",
+    })
+    assert.deepEqual(parseCombinedScratch(" SLC"), { remarks: undefined, hp: undefined })
+    assert.deepEqual(parseCombinedScratch(" SLC /Y2"), {
+        remarks: undefined,
+        hp: "Y2",
+    })
+    assert.deepEqual(parseCombinedScratch(" SLC .URNAV /Y2"), {
+        remarks: "URNAV",
+        hp: "Y2",
+    })
+    // Bare SLC (no leading space) is not our written form — leave as non-remarks
+    assert.equal(stripLeadingCdmScratchToken("SLC"), "SLC")
 })
 
 console.log(`scratchpad: ${passed} passed`)

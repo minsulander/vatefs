@@ -11,10 +11,10 @@
             <div class="ui-scale-option mb-4">
                 <div class="ui-scale-label">
                     <span>UI scale</span>
-                    <span class="ui-scale-value">{{ uiScalePercent }}%</span>
+                    <span class="ui-scale-value">{{ uiScaleDraft }}%</span>
                 </div>
                 <v-slider
-                    :model-value="uiScalePercent"
+                    :model-value="uiScaleDraft"
                     :min="UI_SCALE_PERCENT_MIN"
                     :max="UI_SCALE_PERCENT_MAX"
                     :step="UI_SCALE_PERCENT_STEP"
@@ -23,10 +23,12 @@
                     thumb-label
                     hide-details
                     class="ui-scale-slider"
-                    @update:model-value="onUiScale"
+                    @update:model-value="onUiScaleDrag"
+                    @end="onUiScaleCommit"
                 />
                 <p class="text-caption text-grey mt-1">
                     Scales bars, menus, and dialogs. Flight strips still follow bay column width.
+                    Applies when you release the slider.
                 </p>
             </div>
 
@@ -489,6 +491,22 @@
                 When on, show <strong>A</strong> next to TOBT if ATC set it. Pilot <strong>P</strong>
                 always shows when applicable. Default: show A.
             </p>
+
+            <template v-if="efs.essaRolesMode">
+                <v-switch
+                    color="white"
+                    base-color="grey-darken-1"
+                    hide-details
+                    label="Add CTOT/SLC to scratchpad"
+                    class="mt-2"
+                    :model-value="efs.ctotInScratchpad"
+                    @update:model-value="onCtotInScratchpad"
+                />
+                <p class="text-caption text-grey ml-13" style="margin-top: -15px">
+                    Prefix CTOT as HH:MM (or spaced SLC when cancelled) on the EuroScope scratchpad for
+                    ESSA departures, ahead of remarks/HP. Default: on.
+                </p>
+            </template>
         </v-container>
     </v-main>
 </template>
@@ -519,6 +537,11 @@ function isStripPrintMode(value: unknown): value is "auto" | "manual" {
 
 const efs = useEfsStore()
 const uiScalePercent = useUiScalePercent()
+/** Draft while dragging — commit to --efs-scale only on slider release (like zoom Size). */
+const uiScaleDraft = ref(uiScalePercent.value)
+watch(uiScalePercent, (v) => {
+    uiScaleDraft.value = v
+})
 const scribbleMode = useStripScribbleMode()
 const defaultSortFlow = ref<SortFlow>(getDefaultSortFlow())
 
@@ -619,9 +642,16 @@ onMounted(() => {
     void loadFspInfo()
 })
 
-function onUiScale(value: number | number[]) {
+function onUiScaleDrag(value: number | number[]) {
     const n = Array.isArray(value) ? value[0] : value
     if (typeof n !== "number" || !Number.isFinite(n)) return
+    uiScaleDraft.value = n
+}
+
+function onUiScaleCommit(value: number | number[]) {
+    const n = Array.isArray(value) ? value[0] : value
+    if (typeof n !== "number" || !Number.isFinite(n)) return
+    uiScaleDraft.value = n
     setUiScalePercent(n)
 }
 
@@ -726,6 +756,11 @@ function onAutoFitStripSizeGrowBack(value: boolean | null) {
 function onShowTobtSetByA(value: boolean | null) {
     if (typeof value !== "boolean") return
     efs.updateUserSettings({ showTobtSetByA: value })
+}
+
+function onCtotInScratchpad(value: boolean | null) {
+    if (typeof value !== "boolean") return
+    efs.updateUserSettings({ ctotInScratchpad: value })
 }
 
 function onSyncEnabled(value: boolean | null) {

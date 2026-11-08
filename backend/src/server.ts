@@ -124,8 +124,12 @@ import {
     forgetStripCftoAtd,
     resolveRealm,
 } from "./vatefs-sync.js"
-import { stripNmSuffix, isAppOrDepCallsign } from "./iris-efs-order.js"
-import { isIrisStripviewPlacement } from "./iris-efs-order.js"
+import {
+    stripNmSuffix,
+    isAppOrDepCallsign,
+    isIrisStripviewPlacement,
+    rolesAllowEssaStripviewPublish,
+} from "./iris-efs-order.js"
 import {
     isEssaSharedTaxiOutSection,
     localInsertIndexFromPeerRanks,
@@ -361,7 +365,7 @@ import {
     loadWorkspaceStore,
     saveWorkspaceStore,
 } from "./workspace-store.js"
-import { buildCombinedScratch, buildFlightScratch } from "./scratchpad.js"
+import { buildFlightScratch, cdmScratchToken } from "./scratchpad.js"
 import { parseDclRequestTelex } from "./dcl-request.js"
 
 // __filename and __dirname are provided by esbuild's CJS output
@@ -529,7 +533,25 @@ const localFeedState = {
     cdmLocal: { ok: false, detail: "Not found" } as FeedStatusItem,
 }
 
+/**
+ * Hoppie/DCL missing-code WARN only when this session can run DCL
+ * (exactly one of ESSA/ESGG in myAirports with a template). Elsewhere → N/A.
+ */
+function hoppieDclFeedApplies(): boolean {
+    const dclAirports = getDclAirports()
+    const myDcl = (staticConfig.myAirports ?? []).filter((a) =>
+        dclAirports.includes(a.toUpperCase()) || dclAirports.includes(a),
+    )
+    // Same exclusivity as getDclCallsign (mock always applies)
+    if (cliArgs.mock) return true
+    return myDcl.length === 1
+}
+
 function refreshHoppieConfigFeedState() {
+    if (!hoppieDclFeedApplies()) {
+        localFeedState.hoppieConfig = { ok: true, detail: "N/A (DCL not for this airport)" }
+        return
+    }
     const source = getHoppieLogonSource()
     const codeOk = source !== "none"
     const tmplCount = getDclAirports().length
@@ -1092,6 +1114,57 @@ type OutboundPluginCommand =
       }
 
 /**
+ * ESSA IFR DEP (same CDM eligibility): origin ESSA, I/Y, not local.
+ */
+function isEssaCdmDepFlight(flight: Flight): boolean {
+    const rules = (flight.flightRules || "").toUpperCase()
+    if (rules !== "I" && rules !== "Y") return false
+    if ((flight.origin || "").toUpperCase() !== "ESSA") return false
+    const dest = flight.destination
+    if (
+        dest &&
+        staticConfig.myAirports.includes(flight.origin!) &&
+        staticConfig.myAirports.includes(dest)
+    ) {
+        return false
+    }
+    return true
+}
+
+/** Leading CTOT/SLC token when ESSA mode + setting + ESSA CDM DEP. */
+function cdmTokenForFlightScratch(flight: Flight): string | undefined {
+    if (!isEssaRolesConfig(staticConfig)) return undefined
+    if (!currentUiSettings.ctotInScratchpad) return undefined
+    if (!isEssaCdmDepFlight(flight)) return undefined
+    return cdmScratchToken(flight)
+}
+
+/** Persistent EuroScope scratch: optional leading CTOT/SLC + remarks/HP. */
+function flightScratchValue(flight: Flight): string {
+    return buildFlightScratch(flight, { cdmToken: cdmTokenForFlightScratch(flight) })
+}
+
+function pushFlightScratch(callsign: string, flight: Flight) {
+    sendUdp(
+        JSON.stringify({
+            type: "setScratch",
+            callsign,
+            value: flightScratchValue(flight),
+        } satisfies OutboundPluginCommand),
+    )
+}
+
+/** Rewrite scratch for all ESSA CDM DEPs (e.g. after ctotInScratchpad toggle). */
+function resyncCtotScratchpads() {
+    if (!isEssaRolesConfig(staticConfig)) return
+    for (const strip of store.getAllStrips()) {
+        const flight = flightStore.getFlight(strip.callsign)
+        if (!flight || !isEssaCdmDepFlight(flight)) continue
+        pushFlightScratch(strip.callsign, flight)
+    }
+}
+
+/**
  * Clear HS on APP/DEP handoff. HP stays on the strip until removed; only ensure
  * it is off the EuroScope scratch (same as airborne/CFTO).
  */
@@ -1108,13 +1181,7 @@ function clearHsHpForAppDepTransfer(flight: Flight, callsign: string) {
     }
     if (flight.hp && !flight.hpScratchCleared) {
         flight.hpScratchCleared = true
-        sendUdp(
-            JSON.stringify({
-                type: "setScratch",
-                callsign,
-                value: buildFlightScratch(flight),
-            } satisfies OutboundPluginCommand),
-        )
+        pushFlightScratch(callsign, flight)
     }
 }
 
@@ -1948,20 +2015,11 @@ function canPublishEssaStripview(): boolean {
             if (apt.toUpperCase() !== "ESSA") continue
             // DEL included: alone on AD must overwrite stale TWR/GND order (else IRIS
             // keeps old traffic and never shows a clean/empty stripview).
-            return roles.some((r) => r === "TWR" || r === "GND" || r === "DEL")
+            return rolesAllowEssaStripviewPublish(roles)
         }
     }
     // Fallback before myRolesByAirport is primed: physical ESSA layout roles
-    const roles = staticConfig.essaRoles ?? []
-    return roles.some(
-        (r) =>
-            r === "TWR-E" ||
-            r === "TWR-W" ||
-            String(r).startsWith("TWR") ||
-            String(r).startsWith("GND") ||
-            String(r).startsWith("CD") ||
-            String(r) === "DEL",
-    )
+    return rolesAllowEssaStripviewPublish(staticConfig.essaRoles ?? [])
 }
 
 /** True when this session covers ESSA tower (top-down or ESSA_*_TWR). */
@@ -2715,6 +2773,7 @@ async function loginHoppie(): Promise<void> {
  * and Hoppie network status.
  */
 function recalculateDclAvailability() {
+    refreshHoppieConfigFeedState()
     if (isOfflineVatsimRealm()) {
         if (hoppieService) {
             hoppieService.logout()
@@ -2960,7 +3019,7 @@ function schedulePreferredSidAfterDepRwy(strip: FlightStrip, flight: Flight, run
             }
             flightStore.markSlowRemarkManual(f)
             flightStore.holdScratchFields(f, 3000)
-            const scratchValue = buildFlightScratch(f)
+            const scratchValue = flightScratchValue(f)
             sendUdp(JSON.stringify({ type: "setScratch", callsign, value: scratchValue } satisfies OutboundPluginCommand))
         }
 
@@ -3121,17 +3180,11 @@ function assumePendingAppInboundOnCtl(strip: {
 }
 
 /**
- * ESGG paper: assume an unowned DEP/local before a ground-flow EuroScope write
- * (clearance / PUSH / TAXI / strip buttons). Any covering role (incl. TWR top-down).
- * Never called on undo — no RELEASE. Does not steal another controller's track.
+ * ESGG paper: assume an unowned strip (no controller / SI). Does not steal.
+ * Returns false if already mine or owned by another.
  */
-function assumeUntrackedPaperDepLocal(
-    flight: Flight,
-    stripType: string | undefined,
-    reason: string,
-): boolean {
+function assumeUntrackedPaperFlight(flight: Flight, reason: string): boolean {
     if (staticConfig.look !== "paper") return false
-    if (stripType !== "departure" && stripType !== "local") return false
 
     const myCs = (staticConfig.myCallsign || "").toUpperCase()
     const mySi = (staticConfig.myPositionId || "").toUpperCase()
@@ -3155,9 +3208,23 @@ function assumeUntrackedPaperDepLocal(
     flight.handoffTargetControllerId = undefined
     flight.handoffOptimisticUntil = undefined
     flight.ownershipOptimisticUntil = Date.now() + 5000
-    console.log(`[GROUND WRITE] ${flight.callsign}: ASSUME (${reason})`)
+    console.log(`[PAPER] ${flight.callsign}: ASSUME (${reason})`)
     maybeAutoPrepOnAssume(flight.callsign)
     return true
+}
+
+/**
+ * ESGG paper: assume an unowned DEP/local before a ground-flow EuroScope write
+ * (clearance / PUSH / TAXI / strip buttons). Any covering role (incl. TWR top-down).
+ * Never called on undo — no RELEASE. Does not steal another controller's track.
+ */
+function assumeUntrackedPaperDepLocal(
+    flight: Flight,
+    stripType: string | undefined,
+    reason: string,
+): boolean {
+    if (stripType !== "departure" && stripType !== "local") return false
+    return assumeUntrackedPaperFlight(flight, reason)
 }
 
 /**
@@ -3942,6 +4009,7 @@ function handleDclRequest(from: string, packet: string) {
     )
     flight.dclStatus = "REQUEST"
     flight.dclMessage = packet
+    flight.dclRequestAtis = parsed.atis?.toUpperCase() || undefined
     // Pilot remarks force manual review (same as DCL mode manual) — never auto-send
     flight.dclRequestHasRemarks = !!requestRemarks
 
@@ -4901,7 +4969,7 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
         localFeedState.esaaPackage = esaaPkg
             ? { ok: true, detail: path.resolve(esaaPkg) }
             : { ok: false, detail: "Not found" }
-        localFeedState.hoppieConfig = { ok: false, detail: "Not loaded" }
+        refreshHoppieConfigFeedState()
         applyCdmLocalFeedState(undefined)
     }
 
@@ -4912,6 +4980,7 @@ async function reloadParsedAndNetworkFeeds(): Promise<void> {
     startAtisService()
     forceViffPoll()
     recalculateDclAvailability()
+    refreshHoppieConfigFeedState()
     broadcastStatus()
     broadcastUserSettings()
     console.log("Feed reload complete")
@@ -5220,6 +5289,24 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                 : "drag out of transfer pin"
                         })`,
                     )
+                } else if (
+                    // #77: no overlaying sector — drag ARR/local across bays assumes unowned strips
+                    // (same as right-click ASSUME). Skip same-section reorder and owned traffic.
+                    flight &&
+                    staticConfig.look === "paper" &&
+                    !!fromSectionId &&
+                    fromSectionId !== canonicalTargetSectionId &&
+                    arrOrLocalStrip &&
+                    !wasIncomingTransfer
+                ) {
+                    if (
+                        assumeUntrackedPaperFlight(
+                            flight,
+                            `drag ${fromSectionId}→${canonicalTargetSectionId}`,
+                        )
+                    ) {
+                        stateChanged = true
+                    }
                 }
 
                 // Evaluate move rules if section changed (canonical YAML ids)
@@ -6436,13 +6523,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         !flight.hpScratchCleared
                     ) {
                         flight.hpScratchCleared = true
-                        sendUdp(
-                            JSON.stringify({
-                                type: "setScratch",
-                                callsign: strip.callsign,
-                                value: buildFlightScratch(flight),
-                            } satisfies OutboundPluginCommand),
-                        )
+                        pushFlightScratch(strip.callsign, flight)
                     }
                 }
 
@@ -6492,18 +6573,18 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     pushPaperStripIfNeeded(strip.id)
                 }
 
-                // When toggling clearance flag (user pressed OK for voice clearance), clear DCL state
+                // Voice OK: clear active DCL flow but keep request text/ATIS for review (#75)
                 if (message.action === "toggleClearanceFlag") {
                     if (flight && flight.dclStatus) {
-                        console.log(`[DCL] Clearing DCL state for ${strip.callsign} (voice clearance)`)
-                        flight.dclStatus = undefined
-                        flight.dclMessage = undefined
+                        console.log(`[DCL] Voice clearance for ${strip.callsign} — keep message log`)
+                        flight.dclStatus = "DONE"
                         flight.dclRequestHasRemarks = undefined
                         flight.dclClearance = undefined
                         flight.dclSeqNumber = undefined
                         flight.dclPdcNumber = undefined
                         flight.dclSentAt = undefined
                         flight.dclRequestedAt = undefined
+                        // dclMessage / dclRequestAtis retained for ClearanceDialog / DCL log
                     }
                 }
 
@@ -6878,12 +6959,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             const f = flightStore.getFlight(strip.callsign)
                             if (!f || !hasSlowRemark(f.remarks)) return
                             flightStore.holdScratchFields(f, 2000)
-                            const scratchValue = buildFlightScratch(f)
-                            sendUdp(JSON.stringify({
-                                type: "setScratch",
-                                callsign: strip.callsign,
-                                value: scratchValue,
-                            } satisfies OutboundPluginCommand))
+                            pushFlightScratch(strip.callsign, f)
                         }
                         pushSlowScratch()
                         setTimeout(pushSlowScratch, 300)
@@ -6947,12 +7023,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                                     console.log(`[REMARKS] ${strip.callsign}: set VECT (AHD ${String(hdg).padStart(3, "0")})`)
                                 }
                                 flightStore.holdScratchFields(flightForAssign, 3000)
-                                const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
-                                sendUdp(JSON.stringify({
-                                    type: "setScratch",
-                                    callsign: strip.callsign,
-                                    value: scratchValue,
-                                } satisfies OutboundPluginCommand))
+                                pushFlightScratch(strip.callsign, flightForAssign)
                                 const route = flightForAssign.route || ""
                                 if (hasForcedSidInRoute(route)) {
                                     const tokens = route.trim().split(/\s+/).filter(Boolean)
@@ -6968,11 +7039,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             } else if (hadLlz) {
                                 // Leaving LLZ for a numeric ARR heading — restore remarks scratch
                                 flightStore.holdScratchFields(flightForAssign, 3000)
-                                sendUdp(JSON.stringify({
-                                    type: "setScratch",
-                                    callsign: strip.callsign,
-                                    value: buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp),
-                                } satisfies OutboundPluginCommand))
+                                pushFlightScratch(strip.callsign, flightForAssign)
                             }
                         } else {
                             let restoreScratch = hadLlz
@@ -7000,11 +7067,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             }
                             if (restoreScratch) {
                                 flightStore.holdScratchFields(flightForAssign, 3000)
-                                sendUdp(JSON.stringify({
-                                    type: "setScratch",
-                                    callsign: strip.callsign,
-                                    value: buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp),
-                                } satisfies OutboundPluginCommand))
+                                pushFlightScratch(strip.callsign, flightForAssign)
                             } else if (vectCapable) {
                                 // Still pin briefly so a stale .VECT echo cannot resurrect VECT
                                 flightStore.holdScratchFields(flightForAssign, 3000)
@@ -7026,12 +7089,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             flightForAssign.remarks = withVectRemark(flightForAssign.remarks, false) || undefined
                             console.log(`[REMARKS] ${strip.callsign}: clear VECT (DCT ${point})`)
                             flightStore.holdScratchFields(flightForAssign, 3000)
-                            const scratchValue = buildCombinedScratch(flightForAssign.remarks, flightForAssign.hp)
-                            sendUdp(JSON.stringify({
-                                type: "setScratch",
-                                callsign: strip.callsign,
-                                value: scratchValue,
-                            } satisfies OutboundPluginCommand))
+                            pushFlightScratch(strip.callsign, flightForAssign)
                         }
                         sendUdp(JSON.stringify({
                             type: "assignHeading",
@@ -7379,7 +7437,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             clearHsHpForAppDepTransfer(flight, strip.callsign)
                         }
                         // Restore remarks/HP scratch after peers have seen EFSHO
-                        const restore = buildFlightScratch(flight)
+                        const restore = flightScratchValue(flight)
                         setTimeout(() => {
                             sendUdp(
                                 JSON.stringify({
@@ -7545,6 +7603,14 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             if (typeof incoming.showTobtSetByA === "boolean") {
                 currentUiSettings.showTobtSetByA = incoming.showTobtSetByA
                 update.showTobtSetByA = incoming.showTobtSetByA
+            }
+            if (typeof incoming.ctotInScratchpad === "boolean") {
+                const prevCtotScratch = currentUiSettings.ctotInScratchpad
+                currentUiSettings.ctotInScratchpad = incoming.ctotInScratchpad
+                update.ctotInScratchpad = incoming.ctotInScratchpad
+                if (prevCtotScratch !== incoming.ctotInScratchpad) {
+                    resyncCtotScratchpads()
+                }
             }
             if (
                 incoming.stripPrintSound === "off" ||
@@ -8022,7 +8088,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     flightStore.markSlowRemarkManual(flight)
                     // Hold across AmendFlightPlan / ES scratch clears so SLOW does not flash off
                     flightStore.holdScratchFields(flight, 3000)
-                    const scratchValue = buildFlightScratch(flight)
+                    const scratchValue = flightScratchValue(flight)
                     sendUdp(JSON.stringify({ type: "setScratch", callsign: remarkStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
                     // Clearing SLOW: re-sync CFL to non-slow climb (fixes 3.0 stuck after SLOW off)
                     if (prevSlow && !nextSlow && flight.origin && (!flight.cfl || flight.cfl === 3000)) {
@@ -8080,7 +8146,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
             // Manual edit re-syncs HP to EuroScope scratch (or clears both)
             flight.hpScratchCleared = undefined
             flightStore.holdScratchFields(flight, 3000)
-            const scratchValue = buildFlightScratch(flight)
+            const scratchValue = flightScratchValue(flight)
             sendUdp(JSON.stringify({ type: "setScratch", callsign: hpStrip.callsign, value: scratchValue } satisfies OutboundPluginCommand))
             const updatedStrip = flightStore.regenerateStrip(hpStrip.callsign)
             if (updatedStrip) {
@@ -10769,9 +10835,8 @@ function checkDclTimeouts() {
                     `/data2/${seq}/${flight.dclSeqNumber}/NE/ATC REQUEST STATUS . . FSM ${time} ${date} ${dclCallsign ?? "----"} @${flight.callsign}@ ACK NOT RECEIVED @CLEARANCE CANCELLED @REVERT TO VOICE PROCEDURES`,
                 )
 
-                // Reset DCL state
+                // Cancel flow but keep request text for DCL log (#75)
                 flight.dclStatus = undefined
-                flight.dclMessage = undefined
                 flight.dclRequestHasRemarks = undefined
                 flight.dclClearance = undefined
                 flight.dclSeqNumber = undefined
@@ -10899,6 +10964,7 @@ function applyViffPoll(result: ViffPollResult) {
             const stsUpper = newSts?.trim().toUpperCase()
             const isSlc = stsUpper === "SLC" || stsUpper === "SCL"
             const CTOT_SLC_GRACE_MS = 180_000
+            const scratchTokenBefore = cdmTokenForFlightScratch(flight)
             // Local spoof / ES CDM pin: protect TOBT/TSAT/TTOT and avoid wiping spoofed
             // CTOT/cdmSts. Still take network CTOT upgrades + regulation reason (CDM_data
             // often has only "flowRestriction", which we strip — vIFF has EDDH etc.).
@@ -10963,6 +11029,9 @@ function applyViffPoll(result: ViffPollResult) {
                     changed = true
                 }
             }
+            if (scratchTokenBefore !== cdmTokenForFlightScratch(flight)) {
+                pushFlightScratch(strip.callsign, flight)
+            }
             // Do not clear TOBT/TSAT/TTOT when HTTP omits the flight
             if (newTobt !== undefined && flight.tobt !== newTobt) {
                 flight.tobt = newTobt
@@ -11015,6 +11084,7 @@ function applyViffPoll(result: ViffPollResult) {
             flight.ttot ||
             flight.tobtSetBy
         ) {
+            const scratchTokenBefore = cdmTokenForFlightScratch(flight)
             flight.ctot = undefined
             flight.ctotCancelled = undefined
             flight.ctotClearedAt = undefined
@@ -11030,6 +11100,9 @@ function applyViffPoll(result: ViffPollResult) {
             flight.localCdmTtot = undefined
             flight.localCdmAt = undefined
             changed = true
+            if (scratchTokenBefore !== cdmTokenForFlightScratch(flight)) {
+                pushFlightScratch(strip.callsign, flight)
+            }
         }
 
         if (changed) {
@@ -11188,6 +11261,11 @@ function pollLocalCdmDataFiles() {
         for (const strip of result.strips) {
             broadcastStrip(strip)
             console.log(`[CDM] Local file update ${strip.callsign} TOBT=${strip.tobt || "-"} TSAT=${strip.tsat || "-"} TTOT=${strip.ttot || "-"}`)
+            // Local CDM_data can change CTOT — refresh leading scratch token when gated
+            const flight = flightStore.getFlight(strip.callsign)
+            if (flight && isEssaCdmDepFlight(flight)) {
+                pushFlightScratch(strip.callsign, flight)
+            }
         }
     }
 }

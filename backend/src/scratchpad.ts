@@ -10,6 +10,7 @@
  *   /Y2            — HP only (single alphanumeric token)
  *   .SLOW          — slow flag (leading dot, same as other remarks)
  *   SLOW           — bare TopSky form still accepted when reading
+ *   13:45 .URNAV /Y2 — optional leading CTOT (HH:MM) or " SLC" (leading space)
  *
  * Protocol scratches (/ROF/…, /LAM/ROF/…, /EFSROF/…, /RJC/…, etc.) must not
  * touch remarks or HP — return null to leave existing fields unchanged.
@@ -22,17 +23,62 @@ export { groundstateFromScratch, isGroundstateToken }
 /** @deprecated use isGroundstateToken */
 export const isSwedishGroundstateScratch = isGroundstateToken
 
-/** Persistent scratch: remarks + HP only (never DepC / coo). */
+/** Leading CTOT HH:MM, or leading-space SLC/SCL (FLEG-safe). */
+const LEADING_CDM_SCRATCH_RE = /^(?:(\d{2}:\d{2})|(\s+(?:SLC|SCL)))(?:\s+|$)/i
+
+/** Format HHmm → HH:MM for scratchpad CTOT. */
+export function formatCtotScratchHhmm(ctot: string | undefined | null): string | undefined {
+    if (!ctot) return undefined
+    const digits = String(ctot).replace(/\D/g, "")
+    if (digits.length < 3) return undefined
+    const n = digits.length === 3 ? digits.padStart(4, "0") : digits.slice(0, 4)
+    if (n.length < 4) return undefined
+    return `${n.slice(0, 2)}:${n.slice(2, 4)}`
+}
+
+/**
+ * ESSA CTOT/SLC scratch token (leading).
+ * Live CTOT → `HH:MM`; cancel latch / live SLC → ` SLC` (leading space for FLEG).
+ */
+export function cdmScratchToken(flight: {
+    ctot?: string
+    ctotCancelled?: boolean
+    cdmSts?: string
+}): string | undefined {
+    const hhmm = formatCtotScratchHhmm(flight.ctot)
+    if (hhmm) return hhmm
+    if (flight.ctotCancelled) return " SLC"
+    const sts = flight.cdmSts?.trim().toUpperCase()
+    if (sts === "SLC" || sts === "SCL") return " SLC"
+    return undefined
+}
+
+/** Strip a leading CTOT/SLC token written by VatEFS; returns remainder for remarks/HP parse. */
+export function stripLeadingCdmScratchToken(scratch: string): string {
+    const m = scratch.match(LEADING_CDM_SCRATCH_RE)
+    if (!m) return scratch
+    return scratch.slice(m[0].length)
+}
+
+/** Persistent scratch: optional leading CTOT/SLC + remarks + HP (never DepC / coo). */
 export function buildCombinedScratch(
     remarks: string | undefined,
     hp: string | undefined,
+    cdmToken?: string | undefined,
 ): string {
     const r = remarks?.trim()
     const h = hp?.trim().toUpperCase()
-    if (r && h) return `.${r} /${h}`
-    if (h) return `/${h}`
-    if (r) return `.${r}`
-    return ""
+    let base = ""
+    if (r && h) base = `.${r} /${h}`
+    else if (h) base = `/${h}`
+    else if (r) base = `.${r}`
+
+    const c = cdmToken
+    if (c == null || c === "") return base
+    // SLC form already includes a leading space; HH:MM needs a separator before notes.
+    if (!base) return c
+    if (c.startsWith(" ")) return `${c} ${base}`
+    return `${c} ${base}`
 }
 
 /**
@@ -43,10 +89,16 @@ export function buildFlightScratch(flight: {
     remarks?: string
     hp?: string
     hpScratchCleared?: boolean
-}): string {
+    ctot?: string
+    ctotCancelled?: boolean
+    cdmSts?: string
+}, opts?: { cdmToken?: string | undefined }): string {
+    const cdmToken =
+        opts && "cdmToken" in opts ? opts.cdmToken : undefined
     return buildCombinedScratch(
         flight.remarks,
         flight.hpScratchCleared ? undefined : flight.hp,
+        cdmToken,
     )
 }
 
@@ -152,6 +204,15 @@ export function parseCombinedScratch(scratch: string): {
 
     if (scratch === "") {
         return { remarks: undefined, hp: undefined }
+    }
+
+    // Strip leading CTOT HH:MM or " SLC"/" SCL" before remarks/HP parse
+    const withoutCdm = stripLeadingCdmScratchToken(scratch)
+    if (withoutCdm !== scratch) {
+        if (!withoutCdm.trim()) {
+            return { remarks: undefined, hp: undefined }
+        }
+        return parseCombinedScratch(withoutCdm)
     }
 
     if (scratch.toUpperCase() === "SLOW") {

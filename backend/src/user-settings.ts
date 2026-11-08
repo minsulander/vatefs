@@ -76,6 +76,7 @@ export interface UserSettings {
     rtcAssrSimulation?: boolean
     contactMeEnabled?: boolean
     showTobtSetByA?: boolean
+    ctotInScratchpad?: boolean
     stripPrintSound?: StripPrintSound
     stripPrintMode?: StripPrintMode
     /** Accept VatIRIS FSP print API (default off) */
@@ -208,6 +209,10 @@ export function resolveUiSettings(saved: UserSettings): UiSettings {
             typeof saved.showTobtSetByA === "boolean"
                 ? saved.showTobtSetByA
                 : DEFAULT_UI_SETTINGS.showTobtSetByA,
+        ctotInScratchpad:
+            typeof saved.ctotInScratchpad === "boolean"
+                ? saved.ctotInScratchpad
+                : DEFAULT_UI_SETTINGS.ctotInScratchpad,
         stripPrintSound: isStripPrintSound(saved.stripPrintSound)
             ? saved.stripPrintSound
             : DEFAULT_UI_SETTINGS.stripPrintSound,

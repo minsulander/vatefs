@@ -180,6 +180,8 @@ export interface FlightStrip {
     dclMessage?: string           // Original pilot request text
     /** Pilot telex had free-text after ATIS — show DCL (not ACK CLR) and open CLR dialog. */
     dclRequestHasRemarks?: boolean
+    /** ATIS letter from pilot PREDEP request (#75). */
+    dclRequestAtis?: string
     dclClearance?: string         // Filled-out clearance template for preview
     /**
      * Paper CLR-read: DCL text was dismissed. Hides the DCL mark and the left
@@ -462,6 +464,11 @@ export interface UiSettings {
      */
     showTobtSetByA: boolean
     /**
+     * ESSA mode: prefix CTOT (HH:MM) or " SLC" on EuroScope scratchpad for ESSA DEPs.
+     * Default on.
+     */
+    ctotInScratchpad: boolean
+    /**
      * Play a printer-style sound in the browser when a new strip is added.
      * Default: short. Suppressed during bulk refresh / reconnect sync.
      * Only used when config look is paper.
@@ -539,6 +546,7 @@ export const DEFAULT_UI_SETTINGS: UiSettings = {
     rtcAssrSimulation: true,
     contactMeEnabled: true,
     showTobtSetByA: true,
+    ctotInScratchpad: true,
     stripPrintSound: 'short',
     stripPrintMode: 'auto',
     fspServerEnabled: false,

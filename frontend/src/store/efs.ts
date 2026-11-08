@@ -853,6 +853,7 @@ export const useEfsStore = defineStore("efs", () => {
     /** Manual (non-ES) SSR codes while in coordination hide mode. */
     const manualSsrByStripId = ref(new Map<string, string>())
     const showTobtSetByA = ref(DEFAULT_UI_SETTINGS.showTobtSetByA)
+    const ctotInScratchpad = ref(DEFAULT_UI_SETTINGS.ctotInScratchpad)
     const stripPrintSound = ref<StripPrintSound>(DEFAULT_UI_SETTINGS.stripPrintSound)
     const stripPrintMode = ref<StripPrintMode>(DEFAULT_UI_SETTINGS.stripPrintMode)
     const fspServerEnabled = ref(DEFAULT_UI_SETTINGS.fspServerEnabled)
@@ -939,6 +940,10 @@ export const useEfsStore = defineStore("efs", () => {
             typeof settings.showTobtSetByA === 'boolean'
                 ? settings.showTobtSetByA
                 : DEFAULT_UI_SETTINGS.showTobtSetByA
+        ctotInScratchpad.value =
+            typeof settings.ctotInScratchpad === 'boolean'
+                ? settings.ctotInScratchpad
+                : DEFAULT_UI_SETTINGS.ctotInScratchpad
         stripPrintSound.value = isStripPrintSound(settings.stripPrintSound)
             ? settings.stripPrintSound
             : DEFAULT_UI_SETTINGS.stripPrintSound
@@ -1005,6 +1010,7 @@ export const useEfsStore = defineStore("efs", () => {
         if (typeof partial.rtcAssrSimulation === 'boolean') rtcAssrSimulation.value = partial.rtcAssrSimulation
         if (typeof partial.contactMeEnabled === 'boolean') contactMeEnabled.value = partial.contactMeEnabled
         if (typeof partial.showTobtSetByA === 'boolean') showTobtSetByA.value = partial.showTobtSetByA
+        if (typeof partial.ctotInScratchpad === 'boolean') ctotInScratchpad.value = partial.ctotInScratchpad
         if (isStripPrintSound(partial.stripPrintSound)) stripPrintSound.value = partial.stripPrintSound
         if (isStripPrintMode(partial.stripPrintMode)) stripPrintMode.value = partial.stripPrintMode
         if (typeof partial.fspServerEnabled === 'boolean') fspServerEnabled.value = partial.fspServerEnabled
@@ -3926,6 +3932,7 @@ export const useEfsStore = defineStore("efs", () => {
         isRwyFlagActive,
         setRwyFlag,
         showTobtSetByA,
+        ctotInScratchpad,
         essaRwyAutoPreferId,
         essaPreferredSids,
         essaPreferredCfls,
