@@ -5840,6 +5840,7 @@ class FlightStore {
             tsac: cdmEligible ? flight.tsac : undefined,
             ctoc: cdmEligible ? flight.ctoc : undefined,
             qnhGiven: flight.qnhGiven,
+            qnhRemind: flight.qnhRemind || undefined,
             atisGiven: flight.atisGiven,
             sigState: flight.sigState,
             weatherGiven: flight.weatherGiven || undefined,
@@ -6281,6 +6282,7 @@ class FlightStore {
         flight.dclDismissed = undefined
         flight.syncedDclMark = undefined
         flight.qnhGiven = undefined
+        flight.qnhRemind = undefined
         flight.atisGiven = undefined
         flight.sigState = undefined
         flight.weatherGiven = undefined

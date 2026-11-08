@@ -70,6 +70,8 @@ export type StripEfsFields = {
     position?: number
     clearanceRead?: boolean
     qnhGiven?: number | null
+    /** SAAB QNH manual red remind; null clears on peers when includeQnhAtisClear */
+    qnhRemind?: boolean | null
     atisGiven?: string | null
     /** SAAB SIG chip; null clears on peers when includeQnhAtisClear */
     sigState?: 'remind' | 'done' | null
@@ -604,10 +606,12 @@ export function buildStripEfsFields(
     fields.highlight = strip.highlight === "global" ? "global" : null
     if (opts?.includeQnhAtisClear) {
         fields.qnhGiven = strip.qnhGiven ?? null
+        fields.qnhRemind = strip.qnhRemind ? true : null
         fields.atisGiven = strip.atisGiven ?? null
         fields.sigState = strip.sigState ?? null
     } else {
         if (strip.qnhGiven != null) fields.qnhGiven = strip.qnhGiven
+        if (strip.qnhRemind) fields.qnhRemind = true
         if (strip.atisGiven) fields.atisGiven = strip.atisGiven
         if (strip.sigState) fields.sigState = strip.sigState
     }

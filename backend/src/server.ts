@@ -4310,6 +4310,7 @@ function applyRemoteScribble(
               dclMark?: boolean
               clrReadSuppressed?: boolean
               qnhGiven?: number | null
+              qnhRemind?: boolean | null
               atisGiven?: string | null
               sigState?: 'remind' | 'done' | null
               noteText?: string
@@ -4631,6 +4632,13 @@ function applyRemoteScribble(
                     const next = meta.qnhGiven == null ? undefined : meta.qnhGiven
                     if (flight.qnhGiven !== next) {
                         flight.qnhGiven = next
+                        flagsChanged = true
+                    }
+                }
+                if (meta && "qnhRemind" in meta) {
+                    const next = meta.qnhRemind ? true : undefined
+                    if (flight.qnhRemind !== next) {
+                        flight.qnhRemind = next
                         flagsChanged = true
                     }
                 }
@@ -8948,12 +8956,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(`[QNH] Invalid QNH ${qnh} for ${qnhStrip.callsign}`)
                 break
             }
-            flight.qnhGiven = qnh ?? undefined
-            if (qnh == null) {
+            if (qnh != null) {
+                flight.qnhGiven = qnh
+                flight.qnhRemind = undefined
+                if (message.atis !== undefined) {
+                    const letter = (message.atis || "").trim().toUpperCase()
+                    flight.atisGiven = letter || undefined
+                }
+            } else if (message.remind) {
+                flight.qnhGiven = undefined
                 flight.atisGiven = undefined
-            } else if (message.atis !== undefined) {
-                const letter = (message.atis || "").trim().toUpperCase()
-                flight.atisGiven = letter || undefined
+                flight.qnhRemind = true
+            } else {
+                flight.qnhGiven = undefined
+                flight.atisGiven = undefined
+                flight.qnhRemind = undefined
             }
             const updated = flightStore.regenerateStrip(qnhStrip.callsign)
             if (updated) {
@@ -8961,8 +8978,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 void pushStripFlagsToRemote(updated.id)
             }
             console.log(
-                `[QNH] ${qnhStrip.callsign} given → ${qnh ?? "(clear)"}` +
-                    (flight.atisGiven ? ` ATIS ${flight.atisGiven}` : ""),
+                `[QNH] ${qnhStrip.callsign} → ${
+                    qnh != null ? qnh : message.remind ? "remind" : "(clear)"
+                }` + (flight.atisGiven ? ` ATIS ${flight.atisGiven}` : ""),
             )
             break
         }

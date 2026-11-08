@@ -83,6 +83,11 @@ export interface FlightStrip {
     ctoc?: string
     /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
     qnhGiven?: number
+    /**
+     * SAAB QNH chip manual red remind (no stamp yet).
+     * Synced like SIG; omitted = off. Cleared when stamping or clearing QNH.
+     */
+    qnhRemind?: boolean
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
     /**

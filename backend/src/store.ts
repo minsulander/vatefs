@@ -151,6 +151,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "tsac",
     "ctoc",
     "qnhGiven",
+    "qnhRemind",
     "sigState",
     "atisGiven",
     "weatherGiven",

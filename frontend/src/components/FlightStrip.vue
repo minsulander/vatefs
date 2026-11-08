@@ -1010,8 +1010,8 @@
           <button
             type="button"
             class="exp-chip"
-            :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhStale }"
-            :disabled="!canSetQnh && !qnhGivenMatches && !qnhStale"
+            :class="{ 'exp-qnh-ok': qnhGivenMatches, 'exp-qnh-stale': qnhChipRed }"
+            :disabled="!canSetQnh && !qnhGivenMatches && !qnhChipRed"
             :title="qnhChipTitle"
             @click.stop="onExpQnh"
           >QNH</button>
@@ -3928,7 +3928,7 @@ const qnhGivenMatches = computed(() => {
 })
 
 /**
- * QNH red:
+ * QNH auto-red:
  * - stamped green value no longer matches live QNH (always), or
  * - clearance set, not green, live QNH differs from assumed-read baseline.
  */
@@ -3942,6 +3942,11 @@ const qnhStale = computed(() => {
   const base = qnhClearanceBaselineByStripId.get(props.strip.id)
   return base != null && base !== cur
 })
+
+/** Red chip: auto-stale and/or manual remind (green wins over remind). */
+const qnhChipRed = computed(
+  () => !qnhGivenMatches.value && (qnhStale.value || !!props.strip.qnhRemind),
+)
 
 /** Green ATIS: both letter and QNH still match what was acknowledged. */
 const atisGivenMatches = computed(() => {
@@ -4003,13 +4008,14 @@ const atisChipTitle = computed(() => {
 })
 
 const qnhChipTitle = computed(() => {
+  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given - click to clear`
   if (qnhStale.value) {
     const from =
       props.strip.qnhGiven ?? qnhClearanceBaselineByStripId.get(props.strip.id) ?? '?'
     return `QNH changed (${from} → ${currentQnh.value}) - click to acknowledge`
   }
-  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given - click to clear`
-  return currentQnh.value != null ? `QNH ${currentQnh.value}` : 'QNH'
+  if (props.strip.qnhRemind) return 'QNH remind - click to acknowledge'
+  return currentQnh.value != null ? `QNH ${currentQnh.value} - click to remind` : 'QNH'
 })
 
 function onPaperAtisQnhClick() {
@@ -4037,7 +4043,7 @@ function onPaperAtisQnhClick() {
  * URNAV/VECT orange chips do not drive the arrow.
  */
 const topArrowClass = computed(() => {
-  if (qnhStale.value || atisStale.value || sigState.value === 'remind') {
+  if (qnhChipRed.value || atisStale.value || sigState.value === 'remind') {
     return { 'arrow-red': true }
   }
   if (
@@ -4058,6 +4064,7 @@ const topArrowTitle = computed(() => {
       props.strip.qnhGiven ?? qnhClearanceBaselineByStripId.get(props.strip.id) ?? '?'
     return `QNH changed (${from} → ${currentQnh.value}) - open menu & press QNH`
   }
+  if (props.strip.qnhRemind) return 'QNH remind - open menu & press QNH'
   if (atisStale.value) {
     const from =
       (props.strip.atisGiven || '').trim().toUpperCase() ||
@@ -4094,7 +4101,8 @@ const callsignBoxTitle = computed(() => {
 })
 
 /**
- * QNH: red/white → green (stamp); green → white (clear).
+ * QNH (like SIG): white → red (remind) → green (stamp) → white.
+ * Auto-stale red also advances to green on click.
  * With clearance still set after clear-to-white, re-baseline assumed-read.
  */
 function onExpQnh() {
@@ -4104,8 +4112,13 @@ function onExpQnh() {
     if (props.strip.clearance) captureClearanceBaselines(props.strip.id)
     return
   }
+  if (qnhChipRed.value) {
+    if (currentQnh.value == null) return
+    store.setQnhGiven(props.strip.id, currentQnh.value)
+    return
+  }
   if (currentQnh.value == null) return
-  store.setQnhGiven(props.strip.id, currentQnh.value)
+  store.setQnhGiven(props.strip.id, null, undefined, true)
 }
 
 /**

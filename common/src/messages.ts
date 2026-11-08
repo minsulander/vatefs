@@ -792,14 +792,19 @@ export interface SetAtdMessage {
     atd: string
 }
 
-/** Record QNH given to pilot (hPa), or clear with null */
+/** Record QNH given to pilot (hPa), clear with null, or set manual red remind */
 export interface SetQnhGivenMessage {
     type: 'setQnhGiven'
     stripId: string
-    /** Current ATIS QNH in hPa, or null to clear */
+    /** Current ATIS QNH in hPa, or null to clear / enter remind */
     qnh: number | null
     /** ATIS letter stamped with QNH (paper col 6); cleared when qnh is null */
     atis?: string | null
+    /**
+     * Manual red remind (no stamp). Only when `qnh` is null.
+     * `true` → remind on; omit/false with null qnh → clear stamp + remind.
+     */
+    remind?: boolean
 }
 
 /** SAAB top-expander SIG chip — synced to peers like QNH */

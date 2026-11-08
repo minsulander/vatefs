@@ -2934,14 +2934,29 @@ export const useEfsStore = defineStore("efs", () => {
         sendMessage({ type: 'setAtd', stripId, atd: normalized })
     }
 
-    /** Record QNH (+ optional ATIS letter) given to pilot, or clear with null. */
-    function setQnhGiven(stripId: string, qnh: number | null, atis?: string | null) {
+    /**
+     * Record QNH (+ optional ATIS letter) given to pilot, clear with null,
+     * or set manual red remind (`remind: true` with `qnh: null`).
+     */
+    function setQnhGiven(
+        stripId: string,
+        qnh: number | null,
+        atis?: string | null,
+        remind?: boolean,
+    ) {
         const strip = strips.value.get(stripId)
         if (strip) {
+            const nextRemind = qnh != null ? undefined : remind ? true : undefined
             strips.value.set(stripId, {
                 ...strip,
                 qnhGiven: qnh ?? undefined,
-                atisGiven: qnh == null ? undefined : (atis != null ? (atis || undefined) : strip.atisGiven),
+                qnhRemind: nextRemind,
+                atisGiven:
+                    qnh == null
+                        ? undefined
+                        : atis != null
+                          ? atis || undefined
+                          : strip.atisGiven,
             })
             stripsVersion.value++
         }
@@ -2950,6 +2965,7 @@ export const useEfsStore = defineStore("efs", () => {
             stripId,
             qnh,
             ...(atis !== undefined ? { atis } : {}),
+            ...(qnh == null && remind ? { remind: true } : {}),
         })
     }
 

@@ -159,6 +159,8 @@ export interface Flight {
     ctoc?: string
     /** QNH (hPa) last given to the pilot — highlight top ▲ when ATIS QNH differs */
     qnhGiven?: number
+    /** SAAB QNH chip manual red remind (synced); omit = off */
+    qnhRemind?: boolean
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
     /** SAAB top-expander SIG: remind / done (synced); omit = off */
