@@ -1130,7 +1130,7 @@
             title="Normal size"
             @click.stop="onSizeNormal"
           >
-            <!-- Match ▲ highlight (REA green / QNH stale red) on restore clickzone -->
+            <!-- Match top ▲ aggregate (red / green) on restore clickzone -->
             <span
               class="compact-gutter-half compact-gutter-top"
               :class="topArrowClass"
@@ -3761,19 +3761,39 @@ const xflCellTitle = computed(() => {
   }
   return 'EuroScope XFL - click to request exit coordination'
 })
+/** GS where confirmed DCL stays filled green (drives ▲). TAXI+ → frame only. */
+const DCL_FILL_GROUNDSTATES = new Set(['', 'NSTS', 'ONFREQ', 'DE-ICE', 'STUP', 'PUSH'])
+
+const dclConfirmed = computed(() => {
+  const s = props.strip.dclStatus
+  return s === 'DONE' || s === 'WILCO'
+})
+
+const dclFillGroundstate = computed(() => {
+  const gs = (props.strip.groundstate || '').toUpperCase()
+  return DCL_FILL_GROUNDSTATES.has(gs)
+})
+
 /**
- * Top-expander CLR chip colors.
- * Green = clearance flag only (never Hoppie-online, never arrow-rea).
- * DCL request/error still surface on the chip for active Hoppie flows.
+ * Top-expander CLR/DCL chip.
+ * Fill green (▲) = DCL confirmed + early GS; frame green (no ▲) = voice CLR or
+ * DCL confirmed after TAXI+. SENT stays neutral (awaiting WILCO).
  */
 const clrChipClass = computed(() => {
   const s = props.strip.dclStatus
   if (s === 'REQUEST') return 'dcl-request'
   if (s === 'INVALID' || s === 'UNABLE' || s === 'REJECTED') return 'dcl-err'
-  if (s === 'SENT' || s === 'DONE' || s === 'WILCO') return 'exp-clr-ok'
-  if (props.strip.clearance) return 'exp-clr-ok'
+  if (dclConfirmed.value) {
+    return dclFillGroundstate.value ? 'exp-clr-ok' : 'exp-clr-frame'
+  }
+  if (props.strip.clearance) return 'exp-clr-frame'
   return ''
 })
+
+/** Filled DCL green drives the top ▲; frame CLR/DCL does not. */
+const clrDrivesTopArrowGreen = computed(
+  () => dclConfirmed.value && dclFillGroundstate.value,
+)
 
 /** ESSA: show DCL when Hoppie flow is active or pilot is online on Hoppie. */
 const hoppieOnlineForClr = ref(false)
@@ -3891,12 +3911,24 @@ const currentAtisLetter = computed(() => {
   return letter || undefined
 })
 
-/** Red when acknowledged value differs from current (changed since last click). */
-const qnhStale = computed(() => {
-  const given = props.strip.qnhGiven
-  const cur = currentQnh.value
-  return given != null && cur != null && given !== cur
-})
+/**
+ * Assumed-read baselines when clearance is set (not green — session only).
+ * Used so CLR + QNH/ATIS change can go red without auto-stamping green.
+ */
+const qnhClearanceBaselineByStripId = new Map<string, number>()
+const atisClearanceBaselineByStripId = new Map<string, string>()
+
+function captureClearanceBaselines(stripId: string) {
+  const qnh = currentQnh.value
+  if (qnh != null) qnhClearanceBaselineByStripId.set(stripId, qnh)
+  const letter = currentAtisLetter.value
+  if (letter) atisClearanceBaselineByStripId.set(stripId, letter)
+}
+
+function clearClearanceBaselines(stripId: string) {
+  qnhClearanceBaselineByStripId.delete(stripId)
+  atisClearanceBaselineByStripId.delete(stripId)
+}
 
 const qnhGivenMatches = computed(() => {
   const given = props.strip.qnhGiven
@@ -3905,15 +3937,19 @@ const qnhGivenMatches = computed(() => {
 })
 
 /**
- * ATIS red when the stamped letter/QNH pair no longer matches current
- * (changed since last ATIS click). Not stale for QNH-only stamps.
+ * QNH red:
+ * - stamped green value no longer matches live QNH (always), or
+ * - clearance set, not green, live QNH differs from assumed-read baseline.
  */
-const atisStale = computed(() => {
-  const given = (props.strip.atisGiven || '').trim().toUpperCase()
-  if (!given) return false
-  const cur = currentAtisLetter.value
-  const letterChanged = !!cur && given !== cur
-  return letterChanged || qnhStale.value
+const qnhStale = computed(() => {
+  const cur = currentQnh.value
+  if (cur == null) return false
+  const given = props.strip.qnhGiven
+  if (given != null && given !== cur) return true
+  if (qnhGivenMatches.value) return false
+  if (!props.strip.clearance) return false
+  const base = qnhClearanceBaselineByStripId.get(props.strip.id)
+  return base != null && base !== cur
 })
 
 /** Green ATIS: both letter and QNH still match what was acknowledged. */
@@ -3921,6 +3957,26 @@ const atisGivenMatches = computed(() => {
   const letter = (props.strip.atisGiven || '').trim().toUpperCase()
   const curLetter = currentAtisLetter.value
   return !!letter && !!curLetter && letter === curLetter && qnhGivenMatches.value
+})
+
+/**
+ * ATIS red (same idea as QNH): green stamp drifted, or clearance + letter/QNH
+ * changed from assumed-read baseline.
+ */
+const atisStale = computed(() => {
+  const curLetter = currentAtisLetter.value
+  const givenLetter = (props.strip.atisGiven || '').trim().toUpperCase()
+  if (givenLetter) {
+    if (curLetter && givenLetter !== curLetter) return true
+    if (qnhStale.value) return true
+    return false
+  }
+  if (atisGivenMatches.value) return false
+  if (!props.strip.clearance) return false
+  const baseLetter = atisClearanceBaselineByStripId.get(props.strip.id)
+  const letterDrift = !!curLetter && !!baseLetter && baseLetter !== curLetter
+  const qnhDrift = qnhStale.value
+  return letterDrift || qnhDrift
 })
 
 const canSetQnh = computed(() =>
@@ -3945,7 +4001,11 @@ const canStampAtisQnh = computed(
 
 const atisChipTitle = computed(() => {
   if (atisStale.value) {
-    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) - click to acknowledge`
+    const from =
+      (props.strip.atisGiven || '').trim().toUpperCase() ||
+      atisClearanceBaselineByStripId.get(props.strip.id) ||
+      '?'
+    return `ATIS changed (${from} → ${currentAtisLetter.value}) - click to acknowledge`
   }
   if (atisGivenMatches.value) return `ATIS ${currentAtisLetter.value} given - click to clear`
   return `ATIS ${currentAtisLetter.value || ''}`
@@ -3953,7 +4013,9 @@ const atisChipTitle = computed(() => {
 
 const qnhChipTitle = computed(() => {
   if (qnhStale.value) {
-    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) - click to acknowledge`
+    const from =
+      props.strip.qnhGiven ?? qnhClearanceBaselineByStripId.get(props.strip.id) ?? '?'
+    return `QNH changed (${from} → ${currentQnh.value}) - click to acknowledge`
   }
   if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given - click to clear`
   return currentQnh.value != null ? `QNH ${currentQnh.value}` : 'QNH'
@@ -3979,21 +4041,45 @@ function onPaperAtisQnhClick() {
   store.setQnhGiven(props.strip.id, curQnh, curAtis)
 }
 
-/** Top ▲: QNH/ATIS stale (red) overrides REA (green) */
+/**
+ * Top ▲ aggregate (open or closed): red > green.
+ * URNAV/VECT orange chips do not drive the arrow.
+ */
 const topArrowClass = computed(() => {
-  if (qnhStale.value || atisStale.value) return { 'arrow-qnh-stale': true }
-  if (isRea.value) return { 'arrow-rea': true }
+  if (qnhStale.value || atisStale.value || sigState.value === 'remind') {
+    return { 'arrow-red': true }
+  }
+  if (
+    isRea.value ||
+    sigState.value === 'done' ||
+    qnhGivenMatches.value ||
+    atisGivenMatches.value ||
+    clrDrivesTopArrowGreen.value
+  ) {
+    return { 'arrow-green': true }
+  }
   return {}
 })
 
 const topArrowTitle = computed(() => {
   if (qnhStale.value) {
-    return `QNH changed (${props.strip.qnhGiven} → ${currentQnh.value}) - open menu & press QNH`
+    const from =
+      props.strip.qnhGiven ?? qnhClearanceBaselineByStripId.get(props.strip.id) ?? '?'
+    return `QNH changed (${from} → ${currentQnh.value}) - open menu & press QNH`
   }
   if (atisStale.value) {
-    return `ATIS changed (${props.strip.atisGiven} → ${currentAtisLetter.value}) - open menu & press ATIS`
+    const from =
+      (props.strip.atisGiven || '').trim().toUpperCase() ||
+      atisClearanceBaselineByStripId.get(props.strip.id) ||
+      '?'
+    return `ATIS changed (${from} → ${currentAtisLetter.value}) - open menu & press ATIS`
   }
+  if (sigState.value === 'remind') return 'SIG remind'
   if (isRea.value) return 'REA set'
+  if (sigState.value === 'done') return 'SIG reminded'
+  if (qnhGivenMatches.value) return `QNH ${currentQnh.value} given`
+  if (atisGivenMatches.value) return `ATIS ${currentAtisLetter.value} given`
+  if (clrDrivesTopArrowGreen.value) return 'DCL confirmed'
   return topExpanded.value ? 'Close top menu' : 'Top menu'
 })
 
@@ -4017,13 +4103,14 @@ const callsignBoxTitle = computed(() => {
 })
 
 /**
- * QNH key: green → white (clear); amber/white → green (ack current).
- * Amber only when qnhGiven differs from current QNH.
+ * QNH: red/white → green (stamp); green → white (clear).
+ * With clearance still set after clear-to-white, re-baseline assumed-read.
  */
 function onExpQnh() {
   if (!canEditAssignedData.value) return
   if (qnhGivenMatches.value) {
     store.setQnhGiven(props.strip.id, null)
+    if (props.strip.clearance) captureClearanceBaselines(props.strip.id)
     return
   }
   if (currentQnh.value == null) return
@@ -4031,13 +4118,13 @@ function onExpQnh() {
 }
 
 /**
- * ATIS key: green → white; amber/white → green (stamp letter + QNH).
- * Amber when ATIS letter (or QNH) changed since last ack.
+ * ATIS: same cycle as QNH (stamp letter + QNH; clear re-baselines if cleared).
  */
 function onExpAtis() {
   if (!canEditAssignedData.value) return
   if (atisGivenMatches.value) {
     store.setQnhGiven(props.strip.id, null)
+    if (props.strip.clearance) captureClearanceBaselines(props.strip.id)
     return
   }
   if (currentQnh.value == null || !currentAtisLetter.value) return
@@ -6152,20 +6239,27 @@ function onActionPointerUp(e: PointerEvent, action: string) {
   onActionClick(action)
 }
 
-/** Clearance success stamps current QNH(+ATIS) green — no separate QNH click at CLR. */
-function stampQnhAtisOnAckClr() {
-  if (currentQnh.value == null) return
-  if (currentAtisLetter.value) {
-    store.setQnhGiven(props.strip.id, currentQnh.value, currentAtisLetter.value)
-  } else {
-    store.setQnhGiven(props.strip.id, currentQnh.value)
-  }
-}
-
+/** Clearance: assume QNH/ATIS read (baseline) — do not stamp green. */
 watch(
   () => props.strip.clearance,
   (now, was) => {
-    if (now && !was) stampQnhAtisOnAckClr()
+    const id = props.strip.id
+    if (now && !was) captureClearanceBaselines(id)
+    else if (!now && was) clearClearanceBaselines(id)
+  },
+)
+
+/** First live QNH/ATIS after clearance with no baseline yet — capture assumed-read. */
+watch(
+  () => [props.strip.clearance, currentQnh.value, currentAtisLetter.value, props.strip.id] as const,
+  ([cleared, qnh, letter, id]) => {
+    if (!cleared) return
+    if (qnh != null && !qnhClearanceBaselineByStripId.has(id) && props.strip.qnhGiven == null) {
+      qnhClearanceBaselineByStripId.set(id, qnh)
+    }
+    if (letter && !atisClearanceBaselineByStripId.has(id) && !(props.strip.atisGiven || '').trim()) {
+      atisClearanceBaselineByStripId.set(id, letter)
+    }
   },
 )
 
@@ -6184,7 +6278,6 @@ function onActionClick(action: string) {
     if (showAckClrLabel.value) {
       // Explicit set-true — networked/touch doubles must not toggle CLR off
       store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
-      stampQnhAtisOnAckClr()
       return
     }
     clncDialogOpen.value = true
@@ -6217,7 +6310,6 @@ function onActionTouch(event: TouchEvent, action: string) {
     if (!canEditAssignedData.value) return
     if (showAckClrLabel.value) {
       store.sendStripAction(props.strip.id, 'toggleClearanceFlag', true)
-      stampQnhAtisOnAckClr()
       return
     }
     clncDialogOpen.value = true
@@ -8327,10 +8419,10 @@ function onGroundStateClick(action: string) {
   flex-shrink: 0;
 }
 /* Hover/active only for plain chips — do not wash out green/orange/DCL/CLR highlights */
-.exp-chip:hover:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
+.exp-chip:hover:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.exp-clr-frame):not(.dcl-err) {
   background: #e0e0e0;
 }
-.exp-chip:active:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.dcl-err) {
+.exp-chip:active:not(:disabled):not(.exp-rea):not(.exp-qnh-ok):not(.exp-qnh-stale):not(.exp-sig-remind):not(.exp-sig-done):not(.active):not(.dcl-request):not(.exp-clr-ok):not(.exp-clr-frame):not(.dcl-err) {
   background: #d4d4d4;
 }
 .exp-chip:disabled { opacity: 0.55; cursor: default; }
@@ -8342,8 +8434,14 @@ function onGroundStateClick(action: string) {
 .exp-chip.exp-sig-done { background: #12b33a; color: #fff; border-color: #0a8a2a; }
 .exp-chip.inert { opacity: 0.55; cursor: default; }
 .exp-chip.dcl-request { background: #fdd835; color: #000; }
-/* Clearance green / amber / error — white text on highlight (chip + ▲ arrows already white) */
+/* DCL fill green (drives ▲); voice CLR / late DCL = frame only (no ▲) */
 .exp-chip.exp-clr-ok { background: var(--strip-ok-green); color: #fff; }
+.exp-chip.exp-clr-frame {
+  box-shadow: inset 0 0 0 calc(2px * var(--strip-scale)) #12b33a, var(--strip-key-shadow);
+  border-color: #0a8a2a;
+  color: #000;
+  background: #ebebeb;
+}
 .exp-chip.dcl-err { background: #e53935; color: #fff; }
 .exp-remarks {
   font-size: calc(9px * var(--strip-scale));
@@ -8703,58 +8801,40 @@ function onGroundStateClick(action: string) {
 .strip-left .ctrl-arrow:hover { background: #e0e0e0; }
 .strip-left .ctrl-arrow:active { background: #d4d4d4; }
 .strip-left .ctrl-arrow.mirrored .arrow-glyph { transform: scaleX(1.45) scaleY(-1); }
-/* REA set — green key, white glyph (top ▲) */
-.ctrl-arrow.arrow-rea,
-.strip-left .ctrl-arrow.arrow-rea,
-.strip-expander .expander-arrow.arrow-rea {
+/* Top ▲ aggregate green (REA / SIG done / QNH·ATIS ok / DCL fill) */
+.ctrl-arrow.arrow-green,
+.strip-left .ctrl-arrow.arrow-green,
+.strip-expander .expander-arrow.arrow-green {
   background: #12b33a !important;
   border-color: #0a8a2a;
   color: #fff;
 }
-.ctrl-arrow.arrow-rea .arrow-glyph,
-.strip-left .ctrl-arrow.arrow-rea .arrow-glyph,
-.strip-expander .expander-arrow.arrow-rea .arrow-glyph {
+.ctrl-arrow.arrow-green .arrow-glyph,
+.strip-left .ctrl-arrow.arrow-green .arrow-glyph,
+.strip-expander .expander-arrow.arrow-green .arrow-glyph {
   color: #fff;
 }
-.ctrl-arrow.arrow-rea:hover,
-.strip-left .ctrl-arrow.arrow-rea:hover,
-.strip-expander .expander-arrow.arrow-rea:hover {
+.ctrl-arrow.arrow-green:hover,
+.strip-left .ctrl-arrow.arrow-green:hover,
+.strip-expander .expander-arrow.arrow-green:hover {
   background: #1fc44a !important;
 }
-/* Stale TSAC — amber key, white glyph */
-.ctrl-arrow.arrow-stale,
-.strip-left .ctrl-arrow.arrow-stale,
-.strip-expander .expander-arrow.arrow-stale {
-  background: var(--strip-amber) !important;
-  border-color: #b06a00;
-  color: #fff;
-}
-.ctrl-arrow.arrow-stale .arrow-glyph,
-.strip-left .ctrl-arrow.arrow-stale .arrow-glyph,
-.strip-expander .expander-arrow.arrow-stale .arrow-glyph {
-  color: #fff;
-}
-.ctrl-arrow.arrow-stale:hover,
-.strip-left .ctrl-arrow.arrow-stale:hover,
-.strip-expander .expander-arrow.arrow-stale:hover {
-  background: #f0a020 !important;
-}
-/* Stale QNH/ATIS — red (overrides REA on top ▲) */
-.ctrl-arrow.arrow-qnh-stale,
-.strip-left .ctrl-arrow.arrow-qnh-stale,
-.strip-expander .expander-arrow.arrow-qnh-stale {
+/* Top ▲ aggregate red (QNH/ATIS/SIG remind) — overrides green */
+.ctrl-arrow.arrow-red,
+.strip-left .ctrl-arrow.arrow-red,
+.strip-expander .expander-arrow.arrow-red {
   background: #e53935 !important;
   border-color: #b71c1c;
   color: #fff;
 }
-.ctrl-arrow.arrow-qnh-stale .arrow-glyph,
-.strip-left .ctrl-arrow.arrow-qnh-stale .arrow-glyph,
-.strip-expander .expander-arrow.arrow-qnh-stale .arrow-glyph {
+.ctrl-arrow.arrow-red .arrow-glyph,
+.strip-left .ctrl-arrow.arrow-red .arrow-glyph,
+.strip-expander .expander-arrow.arrow-red .arrow-glyph {
   color: #fff;
 }
-.ctrl-arrow.arrow-qnh-stale:hover,
-.strip-left .ctrl-arrow.arrow-qnh-stale:hover,
-.strip-expander .expander-arrow.arrow-qnh-stale:hover {
+.ctrl-arrow.arrow-red:hover,
+.strip-left .ctrl-arrow.arrow-red:hover,
+.strip-expander .expander-arrow.arrow-red:hover {
   background: #ef5350 !important;
 }
 .strip-time-top { grid-area: timeT; }
@@ -9023,17 +9103,14 @@ button.tobt-setby-pm:hover {
   width: 100%;
   box-sizing: border-box;
 }
-.flight-strip.strip-compact .compact-gutter:hover .compact-gutter-half:not(.arrow-rea):not(.arrow-stale):not(.arrow-qnh-stale) {
+.flight-strip.strip-compact .compact-gutter:hover .compact-gutter-half:not(.arrow-green):not(.arrow-red) {
   background: rgba(0, 0, 0, 0.04);
 }
-/* Same fills as expander ▲/▼ keys */
-.flight-strip.strip-compact .compact-gutter-half.arrow-rea {
+/* Same fills as top expander ▲ */
+.flight-strip.strip-compact .compact-gutter-half.arrow-green {
   background: #12b33a;
 }
-.flight-strip.strip-compact .compact-gutter-half.arrow-stale {
-  background: var(--strip-amber);
-}
-.flight-strip.strip-compact .compact-gutter-half.arrow-qnh-stale {
+.flight-strip.strip-compact .compact-gutter-half.arrow-red {
   background: #e53935;
 }
 /*
