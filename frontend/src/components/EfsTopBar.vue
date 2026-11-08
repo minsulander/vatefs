@@ -35,7 +35,7 @@
         <span
           class="essa-status-btn esgg-roles-readonly"
           :title="esggRolesStatusTitle"
-        ><span v-if="!hideRolesPrefix">Roles: </span>{{ esggRolesLabel }}</span>
+        ><template v-if="rolesOnlyChrome">Roles</template><template v-else><span v-if="!hideRolesPrefix">Roles: </span>{{ esggRolesLabel }}</template></span>
       </div>
 
       <!-- ESSA status indicators (also editable via menu) -->
@@ -58,7 +58,10 @@
           :title="essaRolesStatusTitle"
           @click="openEssaRolesDialog"
         >
-          <span v-if="!hideRolesPrefix" class="essa-roles-prefix">Roles:</span>{{ hideRolesPrefix ? '' : ' ' }}{{ essaRolesLabel }}
+          <template v-if="rolesOnlyChrome">Roles</template>
+          <template v-else>
+            <span v-if="!hideRolesPrefix" class="essa-roles-prefix">Roles:</span>{{ hideRolesPrefix ? '' : ' ' }}{{ essaRolesLabel }}
+          </template>
         </button>
       </div>
 
@@ -222,39 +225,42 @@
       <span v-if="efs.multiAirport && efs.pendingIdleSwap" class="idle-hint ml-2">
         → click a column for {{ efs.pendingIdleSwap }}
       </span>
-      <div v-if="showDclControls && !hideDclVoiceChrome" class="top-status-cluster">
+      <div v-if="showDclControls" class="top-status-cluster">
+        <!-- Voice / OTHER / error: always keep a DCL control; densify label only -->
         <v-btn
-          v-if="!dclModeCompact"
+          v-if="!dclConnected"
           variant="text"
           size="small"
           class="dcl-btn"
           :class="{
-            'text-grey': !dclConnected && efs.dclStatus !== 'error',
-            'text-green': dclConnected,
+            'text-grey': efs.dclStatus !== 'error',
             'text-red': efs.dclStatus === 'error',
           }"
           :title="dclTooltip"
           @click="onDclClick"
         >
-          <template v-if="dclConnected">DCL</template>
-          <template v-else-if="dclAirportTaken">
-            DCL: <span class="dcl-other-label">OTHER</span>
+          <template v-if="dclAirportTaken">
+            <template v-if="dclVoiceCompact">DCL</template>
+            <template v-else>DCL: <span class="dcl-other-label">OTHER</span></template>
           </template>
+          <template v-else-if="dclVoiceCompact">DCL</template>
           <template v-else>DCL: Voice</template>
         </v-btn>
-        <v-menu v-if="dclConnected" location="bottom" offset="4">
+        <!-- Connected: full mode menu, or compact DCL:M / bare DCL -->
+        <v-menu v-else location="bottom" offset="4">
           <template v-slot:activator="{ props }">
             <v-btn
               variant="text"
               size="small"
-              class="dcl-mode-btn"
-              :class="dclModeCompact ? 'text-green' : 'text-grey'"
+              class="dcl-mode-btn text-green"
               v-bind="props"
-              :title="dclModeCompact ? `DCL mode ${efs.dclMode.toUpperCase()} (menu: change / disconnect)` : `DCL mode: ${efs.dclMode.toUpperCase()}`"
+              :title="dclConnectedMenuTitle"
             >
-              <template v-if="dclModeCompact">DCL: {{ dclModeLetter }}</template>
+              <template v-if="dclBareLabel">DCL</template>
+              <template v-else-if="dclModeCompact">DCL: {{ dclModeLetter }}</template>
               <template v-else>
-                {{ efs.dclMode.toUpperCase() }}
+                DCL
+                <span class="dcl-mode-inline">{{ efs.dclMode.toUpperCase() }}</span>
                 <v-icon end size="x-small">mdi-chevron-down</v-icon>
               </template>
             </v-btn>
@@ -272,13 +278,53 @@
               >{{ mode.label }}</button>
             </div>
             <button
-              v-if="dclModeCompact"
               type="button"
               class="efs-popup-item"
               @click="onDclClick"
             >Disconnect DCL</button>
           </div>
         </v-menu>
+        <!-- Pending + handled DCL log (#75) — especially useful on paper/ESGG -->
+        <v-menu
+          v-if="dclLogEntries.length > 0"
+          location="bottom"
+          offset="4"
+          :close-on-content-click="false"
+        >
+          <template v-slot:activator="{ props }">
+            <v-btn
+              variant="text"
+              size="small"
+              class="dcl-log-btn"
+              :class="dclLogPendingCount > 0 ? 'text-amber' : 'text-grey'"
+              v-bind="props"
+              :title="`DCL log: ${dclLogPendingCount} pending, ${dclLogEntries.length} total`"
+            >
+              {{ dclBareLabel || dclVoiceCompact ? dclLogPendingCount || dclLogEntries.length : `DCL×${dclLogPendingCount || dclLogEntries.length}` }}
+            </v-btn>
+          </template>
+          <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+            <div class="efs-popup-header">DCL log</div>
+            <div class="efs-popup-list">
+              <button
+                v-for="entry in dclLogEntries"
+                :key="entry.id"
+                type="button"
+                class="efs-popup-item efs-popup-item--start"
+                :class="{ 'dcl-log-pending': entry.pending }"
+                @click="openDclLogEntry(entry.id)"
+              >
+                <span class="dcl-log-cs">{{ entry.callsign }}</span>
+                <span class="dcl-log-st">{{ entry.status }}</span>
+              </button>
+            </div>
+          </div>
+        </v-menu>
+        <ClearanceDialog
+          v-if="dclLogStrip"
+          v-model="dclLogDialogOpen"
+          :strip="dclLogStrip"
+        />
         <span
           v-if="efs.esggRolesMode"
           class="essa-status-btn esgg-rwy-label"
@@ -885,6 +931,7 @@ import {
 } from "@/workspace"
 import {
   compactEssaRolesLabel,
+  compactEsggRolesLabel,
   type EssaRolesCompactLevel,
 } from "@/workspace/roleLabel"
 import { useInfoStripMenu } from "@/composables/useInfoStrips"
@@ -894,6 +941,8 @@ import {
   type RwyFlagKind,
 } from "@/composables/useRunwayFlagStrips"
 import TrashDialog from "./TrashDialog.vue"
+import ClearanceDialog from "./ClearanceDialog.vue"
+import type { FlightStrip } from "@/types/efs"
 
 const efs = useEfsStore()
 const ws = getWorkspace()
@@ -1104,6 +1153,17 @@ const cdmLocalWarnApplies = computed(
     efs.myAirports.some((a) => a.toUpperCase() === 'ESSA'),
 )
 
+/** Hoppie code/templates WARN only when DCL applies (ESSA xor ESGG). */
+const hoppieConfigWarnApplies = computed(() => {
+  const detail = efs.feeds?.hoppieConfig?.detail ?? ''
+  if (/^N\/A/i.test(detail)) return false
+  const apts = efs.myAirports.map((a) => a.toUpperCase())
+  const hasEssa = apts.includes('ESSA')
+  const hasEsgg = apts.includes('ESGG')
+  // Exclusive-or: same rule as backend getDclCallsign
+  return (hasEssa || hasEsgg) && !(hasEssa && hasEsgg)
+})
+
 const connLevel = computed((): ConnLevel => {
   if (!efs.connected || !efs.pluginConnected) return 'err'
   const f = efs.feeds
@@ -1114,6 +1174,9 @@ const connLevel = computed((): ConnLevel => {
   if (/UDP aging|UDP stale/i.test(pluginDetail)) return 'warn'
   for (const key of CONN_WARN_FEED_KEYS) {
     if (key === 'cdmLocal' && !cdmLocalWarnApplies.value) continue
+    if (key === 'hoppieConfig' && !hoppieConfigWarnApplies.value) continue
+    // Live Hoppie session feed: only warn when DCL airport applies
+    if (key === 'hoppie' && !hoppieConfigWarnApplies.value) continue
     const item = f?.[key]
     if (item && !item.ok) return 'warn'
   }
@@ -1327,11 +1390,11 @@ function sortEssaRolesDisplay(roles: string[]): string[] {
 }
 
 /**
- * Top-bar densify (before chrome-scale squash):
- * 0 — full Roles / DCL Voice|MANUAL / CDM: MASTER
- * 1 — Roles slash-collapse; DCL: M|A|S; hide DCL Voice; CDM → "CDM"
- * 2 — shorter Roles (G-E/N); same DCL/CDM compact
- * 3 — tightest Roles (drop "Roles:" prefix)
+ * Top-bar densify (before chrome-scale squash) — measure-driven, show fullest that fits:
+ * 0 — Roles: CD, GND, TWR (suffixes skipped); DCL: Voice / DCL + mode; full CDM
+ * 1 — same Roles; DCL shortens to DCL / DCL:M|A|S; CDM → "CDM"
+ * 2 — Roles: C, G, T; bare DCL
+ * 3 — clickable "Roles" only; bare DCL
  */
 const chromeDenseLevel = ref<EssaRolesCompactLevel>(0)
 
@@ -1344,7 +1407,10 @@ const essaRolesLabel = computed(() =>
   compactEssaRolesLabel(efs.essaRoles, chromeDenseLevel.value),
 )
 
-const hideRolesPrefix = computed(() => chromeDenseLevel.value >= 3)
+/** Level 3: show only "Roles" (click opens dialog). */
+const rolesOnlyChrome = computed(() => chromeDenseLevel.value >= 3)
+/** Never used to drop "Roles:" before level 3 — kept false so prefix stays with labels. */
+const hideRolesPrefix = computed(() => false)
 
 /** Connected mode letter for compact DCL: M / A / S */
 const dclModeLetter = computed(() => {
@@ -1382,14 +1448,9 @@ const esggRolesFullLabel = computed(() => {
   return roles.length ? roles.join(', ') : '-'
 })
 
-/** Densify ESGG covering: CD→C; drop commas at tightest level */
-const esggRolesLabel = computed(() => {
-  const roles = sortEsggRolesDisplay(efs.esggRoles).map((r) =>
-    chromeDenseLevel.value >= 1 && r === 'CD' ? 'C' : r,
-  )
-  if (!roles.length) return '-'
-  return chromeDenseLevel.value >= 3 ? roles.join(' ') : roles.join(', ')
-})
+const esggRolesLabel = computed(() =>
+  compactEsggRolesLabel(efs.esggRoles, chromeDenseLevel.value),
+)
 
 const esggRolesStatusTitle = computed(
   () =>
@@ -1978,22 +2039,68 @@ const dclAirportTaken = computed(
   () => !dclConnected.value && !!efs.dclAirportStationOnline,
 )
 
+/** Voice/OTHER: shorten status text at densify ≥1 — never hide the button. */
+const dclVoiceCompact = computed(() => chromeDenseLevel.value >= 1)
+
+/** Connected: combine into DCL:M|A|S at densify 1 (still visible). */
 const dclModeCompact = computed(
-  () => chromeDenseLevel.value >= 1 && dclConnected.value,
+  () => chromeDenseLevel.value === 1 && dclConnected.value,
 )
 
-/** Voice (not connected) takes space — hide when densifying; connected/error/OTHER stay */
-const hideDclVoiceChrome = computed(() => {
-  if (chromeDenseLevel.value < 1) return false
-  if (dclConnected.value) return false
-  if (dclAirportTaken.value) return false
-  if (efs.dclStatus === 'error') return false
-  return true
+/** Densify ≥2: bare "DCL" for connected (never hide the control). */
+const dclBareLabel = computed(() => chromeDenseLevel.value >= 2)
+
+const dclConnectedMenuTitle = computed(() => {
+  const mode = efs.dclMode.toUpperCase()
+  if (dclBareLabel.value || dclModeCompact.value) {
+    return `DCL mode ${mode} (menu: change / disconnect)`
+  }
+  return `DCL mode: ${mode}`
 })
 
 const cdmChromeLabel = computed(() =>
   chromeDenseLevel.value >= 1 ? 'CDM' : efs.cdmMasterLabel,
 )
+
+/** Active + handled DCL strips for top-bar log (#75). */
+const dclLogEntries = computed(() => {
+  void efs.stripsVersion
+  const out: { id: string; callsign: string; status: string; pending: boolean }[] = []
+  for (const s of efs.strips.values()) {
+    if (!s.dclStatus && !s.dclMessage) continue
+    const status = s.dclStatus || 'LOG'
+    const pending =
+      status === 'REQUEST' ||
+      status === 'INVALID' ||
+      status === 'UNABLE' ||
+      status === 'REJECTED'
+    out.push({
+      id: s.id,
+      callsign: s.callsign || s.id,
+      status,
+      pending,
+    })
+  }
+  out.sort((a, b) => Number(b.pending) - Number(a.pending) || a.callsign.localeCompare(b.callsign))
+  return out
+})
+
+const dclLogPendingCount = computed(
+  () => dclLogEntries.value.filter((e) => e.pending).length,
+)
+
+const dclLogDialogOpen = ref(false)
+const dclLogStripId = ref<string | null>(null)
+const dclLogStrip = computed((): FlightStrip | null => {
+  void efs.stripsVersion
+  if (!dclLogStripId.value) return null
+  return efs.strips.get(dclLogStripId.value) ?? null
+})
+
+function openDclLogEntry(stripId: string) {
+  dclLogStripId.value = stripId
+  dclLogDialogOpen.value = true
+}
 
 /**
  * DCL chrome for CD/DEL — never in RTC.
@@ -2646,6 +2753,38 @@ span.essa-status-btn.esgg-roles-readonly {
 /* Peer already on Hoppie — green OTHER inside grey "DCL: …" button */
 .efs-top-bar :deep(.dcl-btn .dcl-other-label) {
   color: #4caf50;
+  font-weight: 700;
+}
+
+.efs-top-bar :deep(.dcl-log-btn.v-btn) {
+  font-size: calc(14px * var(--tb)) !important;
+  font-weight: 700;
+  min-width: 0 !important;
+  padding: 0 calc(4px * var(--tb)) !important;
+}
+
+.efs-top-bar :deep(.dcl-log-btn.text-amber) {
+  color: #f9a825 !important;
+}
+
+.dcl-mode-inline {
+  margin-left: 0.35em;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.dcl-log-cs {
+  font-weight: 700;
+  margin-right: 0.5em;
+}
+
+.dcl-log-st {
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
+.efs-popup-item.dcl-log-pending .dcl-log-st {
+  color: #a07000;
   font-weight: 700;
 }
 
