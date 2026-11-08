@@ -63,64 +63,78 @@ export function formatEssaRolesLabel(roles: string[]): string {
 }
 
 /**
- * Top-bar densify levels for ESSA covering roles (shorten -E/-N/-W when tight):
- * 0 — full tokens: GND-E, GND-N, TWR-W
- * 1 — slash suffixes + collapse complete families: GND-E/N, TWR, GND
- * 2 — short family letter: G-E/N, T-W
- * 3 — tightest: GE/N, TW
+ * Top-bar densify levels for ESSA covering roles:
+ * 0 — skip E/N/W suffixes: CD, GND, TWR, APP (any GND→GND, any TWR→TWR)
+ * 1 — same family tokens, comma-separated (mid; tooltip still has full list)
+ * 2 — single letters: C, G, T, A
+ * 3 — empty (UI shows clickable "Roles" only)
  */
 export type EssaRolesCompactLevel = 0 | 1 | 2 | 3
+
+/** Family tokens with suffixes stripped (level 0/1). */
+function familyParts(roles: string[]): string[] {
+  const sorted = sortEssaRoleList(roles)
+  const set = new Set(sorted)
+  const parts: string[] = []
+  if (set.has('CD')) parts.push('CD')
+  if (ALL_GND.some((r) => set.has(r))) parts.push('GND')
+  if (ALL_TWR.some((r) => set.has(r))) parts.push('TWR')
+  if (set.has('APP')) parts.push('APP')
+  for (const r of sorted) {
+    if (r === 'CD' || r === 'APP' || r.startsWith('GND-') || r.startsWith('TWR-')) continue
+    parts.push(r)
+  }
+  return parts
+}
 
 export function compactEssaRolesLabel(
   roles: string[],
   level: EssaRolesCompactLevel = 0,
 ): string {
   const sorted = sortEssaRoleList(roles)
-  if (sorted.length === 0) return '(none)'
+  if (sorted.length === 0) return level >= 3 ? '' : '(none)'
 
-  const set = new Set(sorted)
-  const parts: string[] = []
+  // Level 3: UI shows only the "Roles" control label
+  if (level >= 3) return ''
 
-  if (set.has('CD')) parts.push(level >= 1 ? 'C' : 'CD')
+  const families = familyParts(roles)
+  if (families.length === 0) return '(none)'
 
-  const gndSuffixes = ALL_GND.filter((r) => set.has(r)).map((r) => r.slice(4))
-  if (gndSuffixes.length === ALL_GND.length && level >= 1) {
-    parts.push(level >= 2 ? 'G' : 'GND')
-  } else if (gndSuffixes.length) {
-    if (level === 0) {
-      for (const r of ALL_GND) if (set.has(r)) parts.push(r)
-    } else if (level === 1) {
-      parts.push(`GND-${gndSuffixes.join('/')}`)
-    } else if (level === 2) {
-      parts.push(`G-${gndSuffixes.join('/')}`)
-    } else {
-      parts.push(`G${gndSuffixes.join('/')}`)
-    }
+  if (level >= 2) {
+    return families
+      .map((p) => {
+        if (p === 'CD') return 'C'
+        if (p === 'GND') return 'G'
+        if (p === 'TWR') return 'T'
+        if (p === 'APP') return 'A'
+        return p.charAt(0)
+      })
+      .join(', ')
   }
 
-  const twrSuffixes = ALL_TWR.filter((r) => set.has(r)).map((r) => r.slice(4))
-  if (twrSuffixes.length === ALL_TWR.length && level >= 1) {
-    parts.push(level >= 2 ? 'T' : 'TWR')
-  } else if (twrSuffixes.length) {
-    if (level === 0) {
-      for (const r of ALL_TWR) if (set.has(r)) parts.push(r)
-    } else if (level === 1) {
-      parts.push(`TWR-${twrSuffixes.join('/')}`)
-    } else if (level === 2) {
-      parts.push(`T-${twrSuffixes.join('/')}`)
-    } else {
-      parts.push(`T${twrSuffixes.join('/')}`)
-    }
+  // Level 0–1: CD, GND, TWR (suffixes already skipped)
+  return families.join(', ')
+}
+
+/**
+ * ESGG covering roles densify (CD / GND / TWR only):
+ * 0–1 — CD, GND, TWR
+ * 2 — C, G, T
+ * 3 — empty (UI shows "Roles" only)
+ */
+export function compactEsggRolesLabel(
+  roles: string[],
+  level: EssaRolesCompactLevel = 0,
+): string {
+  const order = ['CD', 'GND', 'TWR'] as const
+  const set = new Set(roles.map((r) => r.toUpperCase()))
+  const parts = order.filter((r) => set.has(r))
+  if (parts.length === 0) return level >= 3 ? '' : '-'
+  if (level >= 3) return ''
+  if (level >= 2) {
+    return parts.map((r) => (r === 'CD' ? 'C' : r.charAt(0))).join(', ')
   }
-
-  if (set.has('APP')) parts.push(level >= 3 ? 'A' : 'APP')
-
-  for (const r of sorted) {
-    if (r === 'CD' || r === 'APP' || r.startsWith('GND-') || r.startsWith('TWR-')) continue
-    parts.push(r)
-  }
-
-  return parts.join(level >= 3 ? ' ' : ', ')
+  return parts.join(', ')
 }
 
 export type EssaRoleCombination = {

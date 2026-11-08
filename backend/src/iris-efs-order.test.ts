@@ -14,6 +14,7 @@ import {
     stripMatchesRemoteKey,
     isEssaStripviewOrderStrip,
     isIrisStripviewPlacement,
+    rolesAllowEssaStripviewPublish,
 } from "./iris-efs-order.js"
 
 let passed = 0
@@ -789,6 +790,22 @@ check("paper CTL and DCL marks are EFS sync fields", () => {
     assert.equal(dismissed.clrReadSuppressed, true)
     assert.equal(assertNoForbiddenSyncKeys(ctl).length, 0)
     assert.equal(assertNoForbiddenSyncKeys(dcl).length, 0)
+})
+
+check("DEL-only / CD roles may publish stripview (#71)", () => {
+    assert.equal(rolesAllowEssaStripviewPublish(["DEL"]), true)
+    assert.equal(rolesAllowEssaStripviewPublish(["CD"]), true)
+    assert.equal(rolesAllowEssaStripviewPublish(["GND"]), true)
+    assert.equal(rolesAllowEssaStripviewPublish(["TWR"]), true)
+    assert.equal(rolesAllowEssaStripviewPublish(["TWR-E", "GND-W"]), true)
+    assert.equal(rolesAllowEssaStripviewPublish(["APP"]), false)
+    assert.equal(rolesAllowEssaStripviewPublish([]), false)
+})
+
+check("empty stripview order still has revision (clears stale IRIS)", () => {
+    const empty = buildEssaIrisOrder([], 7)
+    assert.equal(empty.revision, 7)
+    assert.deepEqual(empty.entries, [])
 })
 
 console.log(`\n${passed} passed`)

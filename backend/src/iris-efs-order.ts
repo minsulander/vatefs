@@ -644,3 +644,23 @@ export function assertNoForbiddenSyncKeys(obj: unknown, path = ""): string[] {
     }
     return errs
 }
+
+/**
+ * Roles that may publish ESSA Strip TV / IRIS order (#71).
+ * DEL/CD alone on AD must push (even empty) so IRIS clears stale TWR/GND traffic.
+ * Accepts myRolesByAirport values (TWR|GND|DEL) and essaRoles layout ids (TWR-E, CD, …).
+ */
+export function rolesAllowEssaStripviewPublish(roles: readonly string[]): boolean {
+    return roles.some((r) => {
+        const u = String(r || "").toUpperCase()
+        return (
+            u === "TWR" ||
+            u === "GND" ||
+            u === "DEL" ||
+            u === "CD" ||
+            u.startsWith("TWR") ||
+            u.startsWith("GND") ||
+            u.startsWith("CD")
+        )
+    })
+}
