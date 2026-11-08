@@ -158,18 +158,17 @@ function worstBarFitRatio(bars: HTMLElement[]): number {
 
 /**
  * If top/bottom bar content overflows the window width:
- * 1) densify ESSA Roles suffixes (-E/-N/-W) when registered
- * 2) then compress --efs-chrome-scale until it fits (floor CHROME_FIT_MIN)
+ * 1) densify top-bar Roles/DCL/CDM when the *top* bar overflows (bottom must not hide DCL)
+ * 2) then compress --efs-chrome-scale until both bars fit (floor CHROME_FIT_MIN)
  * Airport strip may scroll; do not let one huge strip squash chrome below the floor.
  */
 async function fitChromeToWidth(): Promise<void> {
   if (typeof document === 'undefined') return
   const gen = ++chromeFitGen
   const root = document.documentElement
-  const bars = [
-    document.querySelector('.efs-top-bar') as HTMLElement | null,
-    document.querySelector('.efs-bottom-bar') as HTMLElement | null,
-  ].filter((el): el is HTMLElement => !!el)
+  const topBar = document.querySelector('.efs-top-bar') as HTMLElement | null
+  const bottomBar = document.querySelector('.efs-bottom-bar') as HTMLElement | null
+  const bars = [topBar, bottomBar].filter((el): el is HTMLElement => !!el)
   if (bars.length === 0) return
 
   // Viewport not ready yet (first paint / move) — keep base scale, retry next frame
@@ -179,16 +178,17 @@ async function fitChromeToWidth(): Promise<void> {
     return
   }
 
-  // Full wording + base chrome, then densify (Roles / DCL / CDM) before scale squash
+  // Full wording + base chrome, then densify top chrome only when *top* overflows
   root.style.setProperty('--efs-chrome-scale', String(baseChromeScale))
   root.style.setProperty('--efs-chrome-fit', '1')
   updateBarHeights(baseChromeScale)
-  if (topBarChromeDensify) {
+  if (topBarChromeDensify && topBar) {
     await topBarChromeDensify.setLevel(0)
     if (gen !== chromeFitGen) return
     for (let level = 0; level < 3; level++) {
-      const worst = worstBarFitRatio(bars)
-      if (worst >= 0.999) break
+      // Roles/DCL densify follows top-bar need only — bottom overflow uses scale below
+      const topWorst = worstBarFitRatio([topBar])
+      if (topWorst >= 0.999) break
       await topBarChromeDensify.setLevel((level + 1) as 0 | 1 | 2 | 3)
       if (gen !== chromeFitGen) return
     }
