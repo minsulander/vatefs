@@ -86,6 +86,11 @@ export interface FlightStrip {
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
     /**
+     * SAAB top-expander SIG chip: remind (red) / done (green).
+     * Synced to peers (WS + VatIRIS); omitted = off (grey).
+     */
+    sigState?: 'remind' | 'done'
+    /**
      * TopSky WEATHER manual alert (WX_) acknowledged / on for this strip.
      * Survives scratch clear (TopSky often consumes WX_; DEP airborne clears scratch but keeps this).
      */

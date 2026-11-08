@@ -4312,6 +4312,7 @@ function applyRemoteScribble(
               clrReadSuppressed?: boolean
               qnhGiven?: number | null
               atisGiven?: string | null
+              sigState?: 'remind' | 'done' | null
               noteText?: string
               std?: string
               klack?: 'left' | 'right' | null
@@ -4641,6 +4642,15 @@ function applyRemoteScribble(
                             : String(meta.atisGiven).trim().toUpperCase()
                     if (flight.atisGiven !== next) {
                         flight.atisGiven = next
+                        flagsChanged = true
+                    }
+                }
+                if (meta && "sigState" in meta) {
+                    const raw = meta.sigState
+                    const next =
+                        raw === "remind" || raw === "done" ? raw : undefined
+                    if (flight.sigState !== next) {
+                        flight.sigState = next
                         flagsChanged = true
                     }
                 }
@@ -6077,6 +6087,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    void pushStripFlagsToRemote(strip.id)
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
                         flight.handoffOptimisticUntil = Date.now() + 3000
@@ -6100,6 +6111,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 } else if (message.action === "XFER") {
                     const targetCallsign = resolveXferTarget(strip, flight)
                     sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    // Flush QNH/ATIS/SIG (+ other EFS flags) so the receiving peer has them
+                    void pushStripFlagsToRemote(strip.id)
                     // Optimistic: show pending outbound transfer immediately
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
@@ -7343,6 +7356,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 callsign: strip.callsign,
                 targetCallsign: message.targetCallsign
             } satisfies OutboundPluginCommand))
+            // Flush QNH/ATIS/SIG so the receiving peer has top-expander state
+            void pushStripFlagsToRemote(strip.id)
             console.log(`[TRANSFER] Transferred ${strip.callsign} to ${message.targetCallsign}`)
 
             // Optimistic pending outbound transfer
@@ -7430,6 +7445,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             targetCallsign,
                         } satisfies OutboundPluginCommand),
                     )
+                    void pushStripFlagsToRemote(strip.id)
                     if (flight) {
                         flight.handoffTargetController = targetCallsign
                         flight.handoffOptimisticUntil = Date.now() + 5000
@@ -8952,6 +8968,24 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 `[QNH] ${qnhStrip.callsign} given → ${qnh ?? "(clear)"}` +
                     (flight.atisGiven ? ` ATIS ${flight.atisGiven}` : ""),
             )
+            break
+        }
+
+        case "setSigState": {
+            const sigStrip = store.getStrip(message.stripId)
+            if (!sigStrip) break
+            if (!staticConfig.isController) break
+            const flight = flightStore.getFlight(sigStrip.callsign)
+            if (!flight) break
+            const state = message.state
+            if (state !== "off" && state !== "remind" && state !== "done") break
+            flight.sigState = state === "off" ? undefined : state
+            const updated = flightStore.regenerateStrip(sigStrip.callsign)
+            if (updated) {
+                updateAndBroadcastStrip(updated)
+                void pushStripFlagsToRemote(updated.id)
+            }
+            console.log(`[SIG] ${sigStrip.callsign} → ${state}`)
             break
         }
 

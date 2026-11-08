@@ -5932,6 +5932,7 @@ class FlightStore {
             ctoc: cdmEligible ? flight.ctoc : undefined,
             qnhGiven: flight.qnhGiven,
             atisGiven: flight.atisGiven,
+            sigState: flight.sigState,
             weatherGiven: flight.weatherGiven || undefined,
             cdmSts: cdmEligible ? flight.cdmSts : undefined,
             cdmInformed: cdmEligible && flight.cdmInformed ? true : undefined,
@@ -6372,6 +6373,7 @@ class FlightStore {
         flight.syncedDclMark = undefined
         flight.qnhGiven = undefined
         flight.atisGiven = undefined
+        flight.sigState = undefined
         flight.weatherGiven = undefined
         flight.placementStickyKey = undefined
         if (flight.lastSectionRule === "manual") {

@@ -161,6 +161,8 @@ export interface Flight {
     qnhGiven?: number
     /** ATIS letter stamped with QNH (paper FPS col 6) */
     atisGiven?: string
+    /** SAAB top-expander SIG: remind / done (synced); omit = off */
+    sigState?: 'remind' | 'done'
     /**
      * TopSky WEATHER manual alert (MET / WX_) — EFS UI state.
      * Kept when scratch WX_ is cleared (TopSky consume or DEP airborne).

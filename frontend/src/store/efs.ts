@@ -2953,6 +2953,19 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    /** SAAB SIG chip — remind / done / off. Synced like QNH. */
+    function setSigState(stripId: string, state: 'off' | 'remind' | 'done') {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            strips.value.set(stripId, {
+                ...strip,
+                sigState: state === 'off' ? undefined : state,
+            })
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'setSigState', stripId, state })
+    }
+
     /** Sideways offset — paper klack / SAAB cock. Null resets. Synced to peers. */
     function setKlack(stripId: string, klack: 'left' | 'right' | null) {
         const strip = strips.value.get(stripId)
@@ -4030,6 +4043,7 @@ export const useEfsStore = defineStore("efs", () => {
         setCtoc,
         setAtd,
         setQnhGiven,
+        setSigState,
         setKlack,
         setHighlight,
         availableConfigs,

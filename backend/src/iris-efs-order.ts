@@ -71,6 +71,8 @@ export type StripEfsFields = {
     clearanceRead?: boolean
     qnhGiven?: number | null
     atisGiven?: string | null
+    /** SAAB SIG chip; null clears on peers when includeQnhAtisClear */
+    sigState?: 'remind' | 'done' | null
     noteText?: string
     /** Synthetic / special-strip create meta (not ES-native status) */
     aircraftType?: string
@@ -603,9 +605,11 @@ export function buildStripEfsFields(
     if (opts?.includeQnhAtisClear) {
         fields.qnhGiven = strip.qnhGiven ?? null
         fields.atisGiven = strip.atisGiven ?? null
+        fields.sigState = strip.sigState ?? null
     } else {
         if (strip.qnhGiven != null) fields.qnhGiven = strip.qnhGiven
         if (strip.atisGiven) fields.atisGiven = strip.atisGiven
+        if (strip.sigState) fields.sigState = strip.sigState
     }
     return fields
 }

@@ -3866,27 +3866,18 @@ function onExpRea() {
   else if (canSendRea.value) onSendReaClick()
 }
 
-/** SIG reminder chip: grey → red (remind) → green (reminded) → grey. Session-sticky per strip. */
-type SigState = 'off' | 'remind' | 'done'
-const sigStateByStripId = new Map<string, SigState>()
-const sigState = ref<SigState>('off')
-watch(
-  () => props.strip.id,
-  (id) => {
-    sigState.value = sigStateByStripId.get(id) || 'off'
-  },
-  { immediate: true },
-)
+/** SIG reminder chip: grey → red (remind) → green (reminded) → grey. Synced via strip.sigState. */
+const sigState = computed(() => props.strip.sigState || 'off')
 const sigChipTitle = computed(() => {
   if (sigState.value === 'remind') return 'SIG remind - click when reminded'
   if (sigState.value === 'done') return 'SIG reminded - click to clear'
   return 'SIG - click to remind'
 })
 function onExpSig() {
-  const next: SigState =
+  if (!canEditAssignedData.value) return
+  const next =
     sigState.value === 'off' ? 'remind' : sigState.value === 'remind' ? 'done' : 'off'
-  sigState.value = next
-  sigStateByStripId.set(props.strip.id, next)
+  store.setSigState(props.strip.id, next)
 }
 
 /** Airport used for ATIS QNH on this strip */
