@@ -23,7 +23,7 @@ import {
     setWorkspaceOpenSectionIds,
     staticConfig,
 } from "./static-config.js"
-import { determineSectionForFlight } from "./rules-engine.js"
+import { determineActionForFlight, determineSectionForFlight } from "./rules-engine.js"
 import type { Flight } from "./types.js"
 import type { ControllerRole } from "./config-types.js"
 import { isEssaDynamicRunwaySectionId } from "@vatefs/common"
@@ -309,6 +309,28 @@ check("Airborne dep stays DEP RWY when workspace open sections not synced yet", 
             isEssaDynamicRunwaySectionId(section!.sectionId),
     )
     assert.equal(section!.ruleId, "dep_runway_airborne_hold")
+})
+
+check("TWR: XFER on airborne dep held on DEP RWY (no CTR DEP open)", () => {
+    setRoles("ESSA_E_TWR", "TWR", ["TWR-E"], ["TWR"])
+    staticConfig.onlineControllers = new Map()
+    staticConfig.activeRunways = { ESSA: { arr: ["19L"], dep: ["19R"] } }
+    staticConfig.workspaceOpenSectionIds = undefined
+    staticConfig.workspaceOpenSectionsFingerprint = undefined
+    const f = departure({ depRwy: "19R", handoffTargetController: "" })
+    const section = determineSectionForFlight(f, staticConfig)
+    assert.ok(section)
+    assert.equal(section!.ruleId, "dep_runway_airborne_hold")
+    assert.equal(determineActionForFlight(f, section!.sectionId, staticConfig), "XFER")
+    // Legacy id also resolves
+    assert.equal(determineActionForFlight(f, "dep_runway", staticConfig), "XFER")
+})
+
+check("TWR: no XFER on dep_runway after handoff already initiated", () => {
+    setRoles("ESSA_E_TWR", "TWR", ["TWR-E"], ["TWR"])
+    staticConfig.onlineControllers = new Map()
+    const f = departure({ depRwy: "19R", handoffTargetController: "ESSA_E_APP" })
+    assert.notEqual(determineActionForFlight(f, "dep_runway", staticConfig), "XFER")
 })
 
 console.log("essa-arr-taxi-moves: ok")

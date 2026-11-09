@@ -1760,15 +1760,63 @@ function isDefaultMultiInfoHost(defaultId: string | null | undefined): boolean {
 
 type InfoSlot = 'beforeTop' | 'endTop' | 'beforeBottom' | 'endBottom'
 
+/** Section ids currently painted on the board (workspace display or server layout). */
+function paintedSectionIds(): Set<string> {
+  const out = new Set<string>()
+  if (props.workspaceMode) {
+    try {
+      void ws.activeLayout.value
+      for (const bay of ws.buildDisplayBays(store.layout)) {
+        for (const s of bay.sections) out.add(s.id)
+      }
+      return out
+    } catch {
+      /* workspace not ready — fall through to server layout */
+    }
+  }
+  for (const bay of store.layout.bays) {
+    for (const s of bay.sections) out.add(s.id)
+  }
+  return out
+}
+
+/** True when a CTR DEP divider is on the board (ESSA workspace: merged CTR/TMA counts). */
+function boardHasCtrDep(): boolean {
+  if (props.workspaceMode) {
+    try {
+      void ws.activeLayout.value
+      if (ws.openWorkspaceSectionIds().has('ctr_dep')) return true
+    } catch {
+      /* workspace not ready */
+    }
+  }
+  for (const id of paintedSectionIds()) {
+    if (id === 'ctr_dep' || id.endsWith('_ctr_dep')) return true
+  }
+  return false
+}
+
+/** DEP RWY strip default host without CTR DEP: the runway section itself (pinned bottom). */
+function isDepRunwaySectionHost(runwaySectionId: string | null | undefined): boolean {
+  if (!store.essaRolesMode || !runwaySectionId) return false
+  return (
+    props.section.id === runwaySectionId || props.section.id.endsWith(`_${runwaySectionId}`)
+  )
+}
+
 function multiInfoSlot(
   kind: string,
   forceKey: string,
   defaultHostSectionId: string | null,
   defaultHostOverride?: boolean,
+  opts?: {
+    /** Ignore a saved placement whose host section is no longer on the board. */
+    ignoreStalePlacement?: boolean
+  },
 ): { slot: InfoSlot; index: number } | null {
   const key = infoStripInstanceKey(kind, forceKey)
-  const p =
-    getInfoStripPlacement(key) ?? getInfoStripPlacement(kind)
+  let p = getInfoStripPlacement(key) ?? getInfoStripPlacement(kind)
+  if (p && opts?.ignoreStalePlacement && !paintedSectionIds().has(p.sectionId)) p = null
   if (p) {
     if (!placementMatchesThisSection(p)) return null
     if (p.bottom) {
@@ -1822,11 +1870,17 @@ function mapsInSlot(slot: InfoSlot, index?: number): MapInfoVariant[] {
 function depsInSlot(slot: InfoSlot, index?: number): DepInfoVariant[] {
   void activeDeps.value
   void ws.activeLayout.value
+  // CTR DEP on board → unchanged host (divider above DEP RWY). No CTR DEP (default
+  // ESSA layouts) → pin to bottom of the DEP RWY section itself.
+  const noCtrDep = !boardHasCtrDep()
   return activeDeps.value.filter((v) => {
+    const defaultId = essaDepDefaultSectionId(v.runway)
     const loc = multiInfoSlot(
       DEP_INFO_KIND,
       v.configId,
-      essaDepDefaultSectionId(v.runway),
+      defaultId,
+      noCtrDep ? isDepRunwaySectionHost(defaultId) : undefined,
+      { ignoreStalePlacement: true },
     )
     if (!loc || loc.slot !== slot) return false
     if (slot === 'beforeTop' || slot === 'beforeBottom') return loc.index === index

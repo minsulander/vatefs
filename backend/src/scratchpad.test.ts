@@ -7,6 +7,7 @@ import {
     buildCombinedScratch,
     buildFlightScratch,
     cdmScratchToken,
+    leadingCdmScratchKind,
     formatCtotScratchHhmm,
     groundstateFromScratch,
     isProtocolScratch,
@@ -209,15 +210,15 @@ check("buildFlightScratch omits HP when scratch-cleared", () => {
 })
 
 check("formatCtotScratchHhmm", () => {
-    assert.equal(formatCtotScratchHhmm("1345"), "13:45")
-    assert.equal(formatCtotScratchHhmm("845"), "08:45")
-    assert.equal(formatCtotScratchHhmm("13:45"), "13:45")
+    assert.equal(formatCtotScratchHhmm("1345"), "1345")
+    assert.equal(formatCtotScratchHhmm("845"), "0845")
+    assert.equal(formatCtotScratchHhmm("13:45"), "1345")
     assert.equal(formatCtotScratchHhmm(""), undefined)
 })
 
 check("cdmScratchToken prefers CTOT over SLC", () => {
-    assert.equal(cdmScratchToken({ ctot: "1345" }), "13:45")
-    assert.equal(cdmScratchToken({ ctot: "1345", ctotCancelled: true }), "13:45")
+    assert.equal(cdmScratchToken({ ctot: "1345" }), "1345")
+    assert.equal(cdmScratchToken({ ctot: "1345", ctotCancelled: true }), "1345")
     assert.equal(cdmScratchToken({ ctotCancelled: true }), " SLC")
     assert.equal(cdmScratchToken({ cdmSts: "SLC" }), " SLC")
     assert.equal(cdmScratchToken({ cdmSts: "SCL" }), " SLC")
@@ -228,19 +229,32 @@ check("cdmScratchToken prefers CTOT over SLC", () => {
 })
 
 check("build prefixes CTOT/SLC ahead of remarks/HP", () => {
-    assert.equal(buildCombinedScratch("URNAV", "Y2", "13:45"), "13:45 .URNAV /Y2")
-    assert.equal(buildCombinedScratch(undefined, "Y2", "13:45"), "13:45 /Y2")
-    assert.equal(buildCombinedScratch(undefined, undefined, "13:45"), "13:45")
+    assert.equal(buildCombinedScratch("URNAV", "Y2", "1345"), "1345 .URNAV /Y2")
+    assert.equal(buildCombinedScratch(undefined, "Y2", "1345"), "1345 /Y2")
+    assert.equal(buildCombinedScratch(undefined, undefined, "1345"), "1345")
     assert.equal(buildCombinedScratch("URNAV", "Y2", " SLC"), " SLC .URNAV /Y2")
     assert.equal(buildCombinedScratch(undefined, undefined, " SLC"), " SLC")
     assert.equal(buildCombinedScratch(undefined, "Y2", " SLC"), " SLC /Y2")
     assert.equal(
-        buildFlightScratch({ remarks: "URNAV", hp: "Y2", ctot: "1345" }, { cdmToken: "13:45" }),
-        "13:45 .URNAV /Y2",
+        buildFlightScratch({ remarks: "URNAV", hp: "Y2", ctot: "1345" }, { cdmToken: "1345" }),
+        "1345 .URNAV /Y2",
     )
 })
 
+check("CTOT scratch never contains a colon", () => {
+    const token = cdmScratchToken({ ctot: "1935" })
+    assert.equal(token, "1935")
+    assert.ok(!buildCombinedScratch("URNAV", "Y2", token).includes(":"))
+})
+
 check("parse strips leading CTOT/SLC before remarks/HP", () => {
+    assert.deepEqual(parseCombinedScratch("1935"), { remarks: undefined, hp: undefined })
+    assert.deepEqual(parseCombinedScratch("1935 .URNAV /Y2"), {
+        remarks: "URNAV",
+        hp: "Y2",
+    })
+    assert.deepEqual(parseCombinedScratch("1935 /Y2"), { remarks: undefined, hp: "Y2" })
+    // Legacy HH:MM still accepted when reading old scratches
     assert.deepEqual(parseCombinedScratch("13:45"), { remarks: undefined, hp: undefined })
     assert.deepEqual(parseCombinedScratch("13:45 .URNAV /Y2"), {
         remarks: "URNAV",
@@ -257,6 +271,15 @@ check("parse strips leading CTOT/SLC before remarks/HP", () => {
     })
     // Bare SLC (no leading space) is not our written form — leave as non-remarks
     assert.equal(stripLeadingCdmScratchToken("SLC"), "SLC")
+})
+
+check("leadingCdmScratchKind", () => {
+    assert.equal(leadingCdmScratchKind("1935 .URNAV"), "ctot")
+    assert.equal(leadingCdmScratchKind("13:45"), "ctot")
+    assert.equal(leadingCdmScratchKind(" SLC .URNAV"), "slc")
+    assert.equal(leadingCdmScratchKind(".URNAV /Y2"), undefined)
+    assert.equal(leadingCdmScratchKind(""), undefined)
+    assert.equal(leadingCdmScratchKind("19350"), undefined)
 })
 
 console.log(`scratchpad: ${passed} passed`)

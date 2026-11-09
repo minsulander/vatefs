@@ -161,7 +161,8 @@ check("ARR-only header inserts between CTR ARR and TAXI ARR in bay1", () => {
     assert.equal(sectionToBay.get("runway_01R_19L"), "bay1")
     assert.equal(sectionToBay.get("runway_08_26"), "bay2")
     const rwySec = out.bays.find(b => b.id === "bay2")!.sections.find(s => s.id === "runway_08_26")
-    assert.equal(rwySec?.addFromTop, false)
+    // ESSA mirrored boards: newestTop everywhere (since 0.13)
+    assert.equal(rwySec?.addFromTop, true)
 })
 
 check("TWR-only shows INBOUND GND-E, GND-N, GND-W above TAXIWAY DEP", () => {

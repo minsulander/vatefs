@@ -323,6 +323,26 @@ export function resolveEssa0826Owner(): Essa0826Owner | null {
     return (solo as Essa0826Owner | undefined) ?? null
 }
 
+/**
+ * True when ≥2 distinct ESSA TWR logins (TWR-E / TWR-W / TWR-S) are online, counting
+ * this session's own login. Real logins only — a top-down controller covering both
+ * physical TWRs without an ESSA_*_TWR login does not count as split.
+ */
+export function isEssaTwrSplitOnline(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const onlineCallsigns = staticConfig.onlineControllers
+        ? [...staticConfig.onlineControllers.keys()]
+        : []
+    const logins = new Set<string>(parseOnlineEssaLoginIds(onlineCallsigns))
+    const myLogin = staticConfig.myCallsign
+        ? parseEssaLoginId(staticConfig.myCallsign)
+        : undefined
+    if (myLogin) logins.add(myLogin)
+    let n = 0
+    for (const id of ["TWR-E", "TWR-W", "TWR-S"]) if (logins.has(id)) n++
+    return n >= 2
+}
+
 /** AOR columns covered by this TWR login given who is online. */
 function aorColumnsForTwrLogin(login: string, onlineLogins: Iterable<string>): Set<EssaAorColumn> {
     const online = new Set<string>()

@@ -474,7 +474,7 @@ export interface UiSettings {
      */
     showTobtSetByA: boolean
     /**
-     * ESSA mode: prefix CTOT (HH:MM) or " SLC" on EuroScope scratchpad for ESSA DEPs.
+     * ESSA mode: prefix CTOT (HHMM, no colon) or " SLC" on EuroScope scratchpad for ESSA DEPs.
      * Default on.
      */
     ctotInScratchpad: boolean

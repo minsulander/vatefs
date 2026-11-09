@@ -277,6 +277,7 @@ import {
     normalizeEssaRwy,
     parseRflToFeet,
     resolveEssaHeavyPreferredDepRwy,
+    resolveEssaActiveDepRwyCorrection,
     resolveLopAutoDirect,
     sidsMatch,
     withSlowRemark,
@@ -308,6 +309,7 @@ import {
     essaAorLayoutKey,
     getMyEssaCoveredRunways,
     resolveEssa0826Owner,
+    isEssaTwrSplitOnline,
 } from "./essa-next-si.js"
 import {
     loadEssaSidPrefs,
@@ -796,6 +798,7 @@ flightStore.setHandoverAssistantAutoAssumeGetter(
     () => currentUiSettings.handoverAssistantAutoAssume,
 )
 flightStore.setStripPrintModeGetter(() => currentUiSettings.stripPrintMode)
+flightStore.setCdmScratchTokenProvider((flight) => cdmTokenForFlightScratch(flight))
 
 function isAutoParkAvailable(): boolean {
     return staticConfig.myAirports.some((a) => hasStandData(a))
@@ -1188,12 +1191,28 @@ function isEssaCdmDepFlight(flight: Flight): boolean {
     return true
 }
 
-/** Leading CTOT/SLC token when ESSA mode + setting + ESSA CDM DEP. */
+/**
+ * Leading CTOT/SLC token when ESSA mode + setting + ESSA CDM DEP.
+ * - Live CTOT (`HHMM`) is sticky: kept on ES scratch while the flight has a CTOT.
+ * - ` SLC` is removable: once the controller clears it on ES (`slcScratchCleared`) it stays
+ *   gone until SLC ends / a live CTOT returns.
+ * - Once ATD is latched, no CTOT/SLC on scratch (remarks/HP unaffected).
+ */
 function cdmTokenForFlightScratch(flight: Flight): string | undefined {
     if (!isEssaRolesConfig(staticConfig)) return undefined
     if (!currentUiSettings.ctotInScratchpad) return undefined
     if (!isEssaCdmDepFlight(flight)) return undefined
-    return cdmScratchToken(flight)
+    if (flight.atd) return undefined
+    const token = cdmScratchToken(flight)
+    const isSlc = token !== undefined && token.startsWith(" ")
+    if (!isSlc) {
+        // Live CTOT or nothing: reset SLC manual-clear latch for the next SLC episode
+        if (flight.slcScratchCleared) flight.slcScratchCleared = undefined
+        if (flight.slcScratchSeen) flight.slcScratchSeen = undefined
+        return token
+    }
+    if (flight.slcScratchCleared) return undefined
+    return token
 }
 
 /** Persistent EuroScope scratch: optional leading CTOT/SLC + remarks/HP. */
@@ -1821,6 +1840,7 @@ function buildStatusMessage(): StatusMessage {
     const esggMode = isEsggRolesConfig(staticConfig)
     const saabMode = isSaabLayoutsConfig(staticConfig)
     const feeds = buildFeedsStatus()
+    lastEssaSplitFp = essaSplitStatusFp()
     lastStatusFeedsFp = JSON.stringify({
         feeds,
         pluginVersion: reportedPluginVersion,
@@ -1856,6 +1876,7 @@ function buildStatusMessage(): StatusMessage {
         esggRolesManual: esggMode ? !!staticConfig.esggRolesManual : undefined,
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
         essa0826Owner: essaMode ? resolveEssa0826Owner() : undefined,
+        essaTwrSplit: essaMode ? isEssaTwrSplitOnline() : undefined,
         look: staticConfig.look === 'paper' ? 'paper' : 'saab',
         saabLayoutsMode: saabMode,
         saabLayoutId: saabMode ? (staticConfig.saabLayoutId ?? activeSaabLayoutId) : null,
@@ -1977,6 +1998,24 @@ function sendStatus(socket: WebSocket) {
 // Broadcast status to all clients
 function broadcastStatus() {
     broadcast(buildStatusMessage())
+}
+
+/** Last essa0826Owner|essaTwrSplit pair sent in a status message (ESSA only). */
+let lastEssaSplitFp = ""
+
+function essaSplitStatusFp(): string {
+    if (!isEssaRolesConfig(staticConfig)) return ""
+    return `${resolveEssa0826Owner() ?? ""}|${isEssaTwrSplitOnline() ? 1 : 0}`
+}
+
+/**
+ * ESSA: online TWR logins changing (2nd TWR on/off) can flip essaTwrSplit / essa0826Owner
+ * without changing covering roles or AOR layout key — push status when the pair changed.
+ */
+function maybeBroadcastEssaSplitStatus() {
+    if (!isEssaRolesConfig(staticConfig)) return
+    if (essaSplitStatusFp() === lastEssaSplitFp) return
+    broadcastStatus()
 }
 
 /**
@@ -3432,6 +3471,77 @@ function applyEssaHeavyPreferredDepRwyIfNeeded(flight: Flight, logTag: string): 
     return true
 }
 
+/** callsign → active-DEP fingerprint last checked (one correction pass per config; never fights manual picks). */
+const essaActiveDepRwyCheckedFor = new Map<string, string>()
+
+/**
+ * ESSA IFR DEP with ES/FPL depRwy outside the active DEP set (e.g. 01L while DEP 19R):
+ * rewrite via assignDepartureRunway so strips, Stripview and IRIS agree with the RWY config.
+ * Runs once per flight per active-DEP configuration (spawn / config change / DEP PREP).
+ * Returns true when depRwy was changed (caller should regenerate the strip).
+ */
+function applyEssaActiveDepRwyIfNeeded(flight: Flight, logTag: string, force = false): boolean {
+    if ((flight.origin || "").toUpperCase() !== "ESSA") return false
+    if (!isIfrSidEligible(flight.flightRules)) return false
+    if (!flight.depRwy) return false
+    if (flight.airborne || flight.synthetic) return false
+    if (flight.groundstate === "LINEUP" || flight.groundstate === "DEPA") return false
+    if (!isAvailableForEsAssign(flight)) return false
+    const essa = staticConfig.activeRunways?.["ESSA"]
+    if (!essa?.dep?.length) return false
+
+    const key = flight.callsign.toUpperCase()
+    const fingerprint = [...essa.dep].sort().join(",")
+    if (!force && essaActiveDepRwyCheckedFor.get(key) === fingerprint) return false
+    essaActiveDepRwyCheckedFor.set(key, fingerprint)
+
+    // Heavy 01L/19R preference wins (resolved independent of current rwy)
+    const heavyPrefer = resolveEssaHeavyPreferredDepRwy({
+        adep: flight.origin,
+        aircraftType: flight.aircraftType,
+        activeArr: essa.arr,
+        activeDep: essa.dep,
+        currentDepRwy: undefined,
+    })
+    if (heavyPrefer && normalizeEssaRwy(heavyPrefer) === normalizeEssaRwy(flight.depRwy)) {
+        return false
+    }
+
+    const fix = resolveEssaActiveDepRwyCorrection({
+        adep: flight.origin,
+        currentDepRwy: flight.depRwy,
+        activeDep: essa.dep,
+    })
+    if (!fix) return false
+
+    const before = flight.depRwy
+    flight.depRwy = fix
+    flight.sidDisplayOverride = undefined
+    sendUdp(
+        JSON.stringify({
+            type: "assignDepartureRunway",
+            callsign: flight.callsign,
+            runway: fix,
+        } satisfies OutboundPluginCommand),
+    )
+    console.log(
+        `[${logTag}] ESSA DEP RWY ${before} → ${fix} for ${flight.callsign} (active DEP ${essa.dep.join("/")})`,
+    )
+    return true
+}
+
+/** Sweep ESSA departures after active DEP runways change; regenerates changed strips. */
+function sweepEssaActiveDepRwy(logTag: string) {
+    if (!isEssaRolesConfig(staticConfig)) return
+    for (const flight of flightStore.getAllFlights()) {
+        if (!applyEssaActiveDepRwyIfNeeded(flight, logTag)) continue
+        const strip = findStripForCallsign(flight.callsign)
+        if (!strip) continue
+        const updated = flightStore.regenerateStrip(strip.id)
+        if (updated) updateAndBroadcastStrip(updated)
+    }
+}
+
 /**
  * LOP airport-specific auto DCT (ESMT/ESTA MIKNA·BEDOS, ESMK BEDOS, …).
  * Same cleanup as assignDirect set — clears SID/AHD; does not invent VECT.
@@ -3507,6 +3617,7 @@ function applyLopAutoDirectIfNeeded(flight: Flight, logTag: string): boolean {
 function autoAssignCflAndSquawk(flight: Flight, logTag = "DCL AUTO"): { deferredSquawk?: boolean } {
     // ESSA heavy DEP RWY (01L/19R) then airport LOP DCT, then SID force
     applyEssaHeavyPreferredDepRwyIfNeeded(flight, logTag)
+    applyEssaActiveDepRwyIfNeeded(flight, logTag)
     const lopDct = applyLopAutoDirectIfNeeded(flight, logTag)
 
     const slow =
@@ -3641,6 +3752,7 @@ function clearAutoDepPrepSession() {
     pendingAutoDepPrepTimers.clear()
     pendingAutoDepPrepCallsigns.clear()
     autoDepPrepDoneCallsigns.clear()
+    essaActiveDepRwyCheckedFor.clear()
 }
 
 function isTrackedByMeFlight(flight: Flight): boolean {
@@ -3888,6 +4000,11 @@ function flushDeferredAutoDepPrep(callsign: string) {
  * Defers TopSky SSR until ES assigned data is seen so reload cannot re-allocate existing ASSR.
  */
 function maybeAutoPrepNewDeparture(strip: FlightStrip, flight: Flight) {
+    // ESSA: correct depRwy outside active DEP (01L vs DEP 19R) regardless of Auto LOP+SSR mode
+    if (isEssaRolesConfig(staticConfig) && applyEssaActiveDepRwyIfNeeded(flight, "ESSA DEP RWY")) {
+        const regen = flightStore.regenerateStrip(strip.id)
+        if (regen) updateAndBroadcastStrip(regen)
+    }
     if (autoLopSsrMode() !== "instant") return
     if (!isAutoDepPrepEligible(strip, flight)) return
     const key = flight.callsign.toUpperCase()
@@ -6713,8 +6830,13 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
 
                 // RTO: clear ATD so green ATD/CFTO cues drop with LINEUP (CFTO flag is DEPA-only)
                 if (flight && message.action === "RTO" && flight.atd) {
+                    const cdmTokenBeforeRto = cdmTokenForFlightScratch(flight)
                     flight.atd = undefined
                     console.log(`[ATD] ${strip.callsign} cleared on RTO`)
+                    // ATD gone → CTOT/SLC allowed on scratch again
+                    if (cdmTokenBeforeRto !== cdmTokenForFlightScratch(flight)) {
+                        pushFlightScratch(strip.callsign, flight)
+                    }
                 }
 
                 // Optimistic GS for live mode (hold against runway ARR echo after TXI/TXO/…)
@@ -9108,7 +9230,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     break
                 }
             }
+            const cdmTokenBeforeAtd = cdmTokenForFlightScratch(flight)
             flight.atd = atd || undefined
+            if (cdmTokenBeforeAtd !== cdmTokenForFlightScratch(flight)) {
+                pushFlightScratch(atdStrip.callsign, flight)
+            }
             const updated = flightStore.regenerateStrip(atdStrip.callsign)
             if (updated) {
                 updateAndBroadcastStrip(updated)
@@ -10359,6 +10485,7 @@ udpIn.on("message", (msg, rinfo) => {
                     // TWR AOR columns can change without physical ESSA roles changing
                     maybeRefreshEssaRunwayHeaders()
                 }
+                maybeBroadcastEssaSplitStatus()
             } else {
                 // Non-controller update (or logoff path): drop ghost so covering refreshes
                 const changed = removeOnlineController(msg.callsign)
@@ -10366,6 +10493,7 @@ udpIn.on("message", (msg, rinfo) => {
                 if (changed) {
                     reprocessAllStripsForRoleChange(`Controller offline: ${msg.callsign}`)
                 }
+                maybeBroadcastEssaSplitStatus()
             }
             return
         }
@@ -10385,6 +10513,7 @@ udpIn.on("message", (msg, rinfo) => {
             } else if (isEssaRolesConfig(staticConfig)) {
                 maybeRefreshEssaRunwayHeaders()
             }
+            maybeBroadcastEssaSplitStatus()
             return
         }
 
@@ -10573,6 +10702,8 @@ udpIn.on("message", (msg, rinfo) => {
                     broadcastAtisUpdate()
                     // ARR/DEP changed → R16 suggestConfigId may change
                     checkAupR16Change()
+                    // ESSA: fix per-strip depRwy that no longer matches active DEP
+                    sweepEssaActiveDepRwy("ESSA DEP RWY")
                 }
 
                 // Start ATIS polling if not already running

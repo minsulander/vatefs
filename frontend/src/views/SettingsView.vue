@@ -503,8 +503,9 @@
                     @update:model-value="onCtotInScratchpad"
                 />
                 <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                    Prefix CTOT as HH:MM (or spaced SLC when cancelled) on the EuroScope scratchpad for
-                    ESSA departures, ahead of remarks/HP. Default: on.
+                    Prefix CTOT as HHMM (or spaced SLC when cancelled) on the EuroScope scratchpad for
+                    ESSA departures, ahead of remarks/HP. CTOT is re-added if removed while still
+                    active; SLC stays gone once you clear it. Removed after ATD. Default: on.
                 </p>
             </template>
         </v-container>

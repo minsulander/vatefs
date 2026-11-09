@@ -5,6 +5,7 @@ import {
     requiresAccCoordination,
     requiresSsrCoordination,
     resolveEssaHeavyPreferredDepRwy,
+    resolveEssaActiveDepRwyCorrection,
     isEsmsAutoCoordSid,
     isEsmsAutoCoordReplyAltitude,
     normalizeEsmsAutoCoordRwy,
@@ -198,5 +199,22 @@ assert(
     }) === true,
     "legacy 19R TOVRI heuristic",
 )
+
+// ESSA: depRwy not in active DEP → rewrite to active
+{
+    const c = (cur: string | undefined, dep: string[], adep = "ESSA") =>
+        resolveEssaActiveDepRwyCorrection({ adep, currentDepRwy: cur, activeDep: dep })
+    assert(c("01L", ["19R"]) === "19R", "01L → 19R (same pair)")
+    assert(c("19R", ["01L"]) === "01L", "19R → 01L (same pair)")
+    assert(c("01R", ["19R", "19L"]) === "19L", "01R → 19L (same pair)")
+    assert(c("01R", ["19R"]) === "19R", "01R → 19R (same family fallback)")
+    assert(c("19R", ["19R"]) === undefined, "already active")
+    assert(c("19L", ["19L", "19R"]) === undefined, "active parallel")
+    assert(c("08", ["19R"]) === undefined, "crosswind not forced onto parallel family")
+    assert(c("07", ["19R"]) === undefined, "FATO untouched")
+    assert(c("01L", []) === undefined, "no active dep")
+    assert(c("", ["19R"]) === undefined, "no current rwy")
+    assert(c("01L", ["19R"], "ESGG") === undefined, "non-ESSA ignored")
+}
 
 console.log("airport-rules.test.ts: OK")

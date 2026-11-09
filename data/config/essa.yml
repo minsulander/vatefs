@@ -704,6 +704,29 @@ actionRules:
     myRole: [APP]
     priority: 95
 
+  # Airborne deps held on DEP RWY (CTR DEP not open on workspace — see
+  # dep_runway_airborne_hold*): XFER must still be available. YAML `dep_runway` also
+  # matches dynamic runway_* sections via runway-family matching.
+  xfer_dep_runway_twr:
+    action: XFER
+    sectionId: dep_runway
+    direction: departure
+    controller: myself
+    airborne: true
+    handoffInitiated: false
+    myRole: [TWR]
+    priority: 95
+
+  xfer_dep_runway_app:
+    action: XFER
+    sectionId: dep_runway
+    direction: departure
+    controller: myself
+    airborne: true
+    handoffInitiated: false
+    myRole: [APP]
+    priority: 95
+
   # Ground ROF (TWR↔GND): backend uses custom EFS /EFSROF/ (not TopSky).
   # Override common-rules rof_taxi_dep_twr (sectionId: taxi).
   # Separate GND online → ROF on INBOUND GND-*; alone covering GND → TAXI DEP.

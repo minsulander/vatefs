@@ -181,6 +181,10 @@ export interface Flight {
     ctotCancelled?: boolean
     /** Epoch ms: CTOT cleared recently; allow SLC on a later poll to latch cancel */
     ctotClearedAt?: number
+    /** ES scratch has echoed our leading ` SLC` at least once (so a later absence is manual removal). */
+    slcScratchSeen?: boolean
+    /** Controller removed ` SLC` from the ES scratch — do not re-add until live CTOT / SLC resets. */
+    slcScratchCleared?: boolean
     cdmSts?: string               // Network status e.g. 'REA', 'FLS-CDM'/'CDM-FLS', 'FLS-NRA', 'COMPLY', 'AIRB'
     /** vIFF depAirport `informed` / DPI INFORMED/1 — CDM SEND/PM green + hide red P */
     cdmInformed?: boolean

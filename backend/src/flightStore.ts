@@ -86,6 +86,7 @@ import { hasSidInEse, getSidInfo, getSidsForRunway, pickEseSidForRouteExit } fro
 import {
     parseCombinedScratch,
     buildFlightScratch,
+    leadingCdmScratchKind,
     isProtocolScratch,
     isHandoverAssistantScratch,
     shouldClearHandoverScratch,
@@ -986,6 +987,61 @@ class FlightStore {
 
     constructor(config: EfsStaticConfig) {
         this.config = config
+    }
+
+    /**
+     * Host-supplied leading CTOT/SLC scratch token (ESSA + setting gating, ATD-cleared,
+     * SLC manual-clear latch). Default: no CDM token.
+     */
+    private cdmScratchTokenProvider: (flight: Flight) => string | undefined = () => undefined
+
+    /** Throttle sticky-CTOT restores per callsign (ES may refuse the write). */
+    private cdmScratchRestoreAt: Map<string, number> = new Map()
+
+    setCdmScratchTokenProvider(provider: (flight: Flight) => string | undefined): void {
+        this.cdmScratchTokenProvider = provider
+    }
+
+    /** Full EuroScope scratch (leading CTOT/SLC when applicable + remarks/HP). */
+    buildScratchForFlight(flight: Flight): string {
+        return buildFlightScratch(flight, { cdmToken: this.cdmScratchTokenProvider(flight) })
+    }
+
+    /**
+     * Inbound ES scratch vs desired leading CDM token.
+     * - Live CTOT: sticky — if missing/different on ES, return the scratch to restore.
+     * - SLC: removable — once seen on ES then absent, latch `slcScratchCleared`; never restore.
+     */
+    private reconcileInboundCdmScratch(flight: Flight, scratch: string): string | undefined {
+        const desiredToken = this.cdmScratchTokenProvider(flight)
+        const kind = leadingCdmScratchKind(scratch)
+        if (desiredToken === undefined) {
+            if (kind !== 'slc') flight.slcScratchSeen = undefined
+            return undefined
+        }
+        if (desiredToken.startsWith(' ')) {
+            // SLC desired
+            if (kind === 'slc') {
+                flight.slcScratchSeen = true
+            } else if (kind === undefined && flight.slcScratchSeen) {
+                flight.slcScratchCleared = true
+                flight.slcScratchSeen = undefined
+                console.log(`[SCRATCH] ${flight.callsign}: SLC removed manually — not re-adding`)
+            }
+            return undefined
+        }
+        // Live CTOT: sticky
+        const want = this.buildScratchForFlight(flight)
+        if (scratch === want) return undefined
+        if (kind === 'ctot' && scratch.startsWith(desiredToken)) return undefined
+        const now = Date.now()
+        const last = this.cdmScratchRestoreAt.get(flight.callsign) ?? 0
+        if (now - last < 2000) return undefined
+        this.cdmScratchRestoreAt.set(flight.callsign, now)
+        console.log(
+            `[SCRATCH] ${flight.callsign}: sticky CTOT restore "${want}" (ES had "${scratch || '(empty)'}")`,
+        )
+        return want
     }
 
     setAutoParkEnabledGetter(getter: () => boolean): void {
@@ -3938,7 +3994,7 @@ class FlightStore {
             if (skipBulkEmptyScratch) {
                 // keep EFS remarks/HP
             } else if (holdingScratchFields && !isProtocolScratch(scratch)) {
-                const desired = buildFlightScratch(flight)
+                const desired = this.buildScratchForFlight(flight)
                 // Normalize for compare: ES may echo "VECT" while we store ".VECT"
                 if (scratch !== desired) {
                     restoreScratchValue = desired
@@ -3961,6 +4017,11 @@ class FlightStore {
                         flight.hp = nextHp
                         if (nextHp) flight.hpScratchCleared = undefined
                     }
+                }
+                // ESSA CDM: live CTOT is sticky on ES; SLC is manually removable (latched).
+                if (!isProtocolScratch(scratch) && !standFromGrpScratch(scratch)) {
+                    const restoreCdm = this.reconcileInboundCdmScratch(flight, scratch)
+                    if (restoreCdm !== undefined) restoreScratchValue = restoreCdm
                 }
             }
         }
@@ -4059,7 +4120,7 @@ class FlightStore {
         }
         // After HA auto-assume, restore remarks/HP scratch (EFSHO is protocol-only)
         if (result.autoAssumeCallsigns?.includes(callsign) && result.setScratchValue === undefined) {
-            result.setScratchValue = buildFlightScratch(flight)
+            result.setScratchValue = this.buildScratchForFlight(flight)
         }
         this.maybeRestoreEfshoScratch(result, flight)
         return result
@@ -4084,7 +4145,7 @@ class FlightStore {
         const now = Date.now()
         if (flight.efshoClearAt !== undefined && now - flight.efshoClearAt < 1000) return
         flight.efshoClearAt = now
-        result.setScratchValue = buildFlightScratch(flight)
+        result.setScratchValue = this.buildScratchForFlight(flight)
         console.log(`[Handover Assistant] ${flight.callsign}: clear EFSHO from label`)
     }
 
@@ -4232,7 +4293,12 @@ class FlightStore {
             const cfto = gsState === 'DEPA'
             const noGroundState = gsState === ''
             if (cfto || noGroundState) {
+                const cdmTokenBeforeAtd = this.cdmScratchTokenProvider(flight)
                 flight.atd = utcHhmm()
+                // ATD latched: drop CTOT/SLC from ES scratch (remarks/HP stay)
+                if (cdmTokenBeforeAtd !== this.cdmScratchTokenProvider(flight)) {
+                    clearAirborneScratch = this.buildScratchForFlight(flight)
+                }
             }
         }
 
@@ -4272,10 +4338,10 @@ class FlightStore {
             }
             if (flight.hp && !flight.hpScratchCleared) {
                 flight.hpScratchCleared = true
-                clearAirborneScratch = buildFlightScratch(flight)
+                clearAirborneScratch = this.buildScratchForFlight(flight)
             } else if (originMine && flight.weatherGiven) {
                 // DEP airborne: clear TopSky WX_ scratch token but keep MET UI green
-                clearAirborneScratch = buildFlightScratch(flight)
+                clearAirborneScratch = this.buildScratchForFlight(flight)
             }
         } else if (wasAirborne && message.altitude <= airborneThreshold) {
             // Short final is often below field+30 with GS still >> 55 (flare over threshold).

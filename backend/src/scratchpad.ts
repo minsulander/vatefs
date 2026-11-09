@@ -10,7 +10,8 @@
  *   /Y2            — HP only (single alphanumeric token)
  *   .SLOW          — slow flag (leading dot, same as other remarks)
  *   SLOW           — bare TopSky form still accepted when reading
- *   13:45 .URNAV /Y2 — optional leading CTOT (HH:MM) or " SLC" (leading space)
+ *   1345 .URNAV /Y2  — optional leading CTOT (HHMM, no colon — ES rejects ":") or " SLC"
+ *                      (leading space). Legacy "13:45" is still accepted when reading.
  *
  * Protocol scratches (/ROF/…, /LAM/ROF/…, /EFSROF/…, /RJC/…, etc.) must not
  * touch remarks or HP — return null to leave existing fields unchanged.
@@ -23,22 +24,25 @@ export { groundstateFromScratch, isGroundstateToken }
 /** @deprecated use isGroundstateToken */
 export const isSwedishGroundstateScratch = isGroundstateToken
 
-/** Leading CTOT HH:MM, or leading-space SLC/SCL (FLEG-safe). */
-const LEADING_CDM_SCRATCH_RE = /^(?:(\d{2}:\d{2})|(\s+(?:SLC|SCL)))(?:\s+|$)/i
+/**
+ * Leading CTOT `HHMM` (legacy `HH:MM` still parsed), or leading-space SLC/SCL (FLEG-safe).
+ * EuroScope does not allow ":" in the scratchpad — writes always use `HHMM`.
+ */
+const LEADING_CDM_SCRATCH_RE = /^(?:(\d{4}|\d{2}:\d{2})|(\s+(?:SLC|SCL)))(?:\s+|$)/i
 
-/** Format HHmm → HH:MM for scratchpad CTOT. */
+/** Format HHmm → `HHMM` for scratchpad CTOT (no colon; ES truncates labels at ":"). */
 export function formatCtotScratchHhmm(ctot: string | undefined | null): string | undefined {
     if (!ctot) return undefined
     const digits = String(ctot).replace(/\D/g, "")
     if (digits.length < 3) return undefined
     const n = digits.length === 3 ? digits.padStart(4, "0") : digits.slice(0, 4)
     if (n.length < 4) return undefined
-    return `${n.slice(0, 2)}:${n.slice(2, 4)}`
+    return n.slice(0, 4)
 }
 
 /**
  * ESSA CTOT/SLC scratch token (leading).
- * Live CTOT → `HH:MM`; cancel latch / live SLC → ` SLC` (leading space for FLEG).
+ * Live CTOT → `HHMM`; cancel latch / live SLC → ` SLC` (leading space for FLEG).
  */
 export function cdmScratchToken(flight: {
     ctot?: string
@@ -51,6 +55,16 @@ export function cdmScratchToken(flight: {
     const sts = flight.cdmSts?.trim().toUpperCase()
     if (sts === "SLC" || sts === "SCL") return " SLC"
     return undefined
+}
+
+/** Which leading CDM token (if any) the scratch carries: live CTOT or SLC. */
+export function leadingCdmScratchKind(
+    scratch: string | undefined | null,
+): "ctot" | "slc" | undefined {
+    if (!scratch) return undefined
+    const m = scratch.match(LEADING_CDM_SCRATCH_RE)
+    if (!m) return undefined
+    return m[1] ? "ctot" : "slc"
 }
 
 /** Strip a leading CTOT/SLC token written by VatEFS; returns remainder for remarks/HP parse. */
@@ -75,7 +89,7 @@ export function buildCombinedScratch(
 
     const c = cdmToken
     if (c == null || c === "") return base
-    // SLC form already includes a leading space; HH:MM needs a separator before notes.
+    // SLC form already includes a leading space; HHMM needs a separator before notes.
     if (!base) return c
     if (c.startsWith(" ")) return `${c} ${base}`
     return `${c} ${base}`
@@ -206,7 +220,7 @@ export function parseCombinedScratch(scratch: string): {
         return { remarks: undefined, hp: undefined }
     }
 
-    // Strip leading CTOT HH:MM or " SLC"/" SCL" before remarks/HP parse
+    // Strip leading CTOT HHMM (or legacy HH:MM) or " SLC"/" SCL" before remarks/HP parse
     const withoutCdm = stripLeadingCdmScratchToken(scratch)
     if (withoutCdm !== scratch) {
         if (!withoutCdm.trim()) {

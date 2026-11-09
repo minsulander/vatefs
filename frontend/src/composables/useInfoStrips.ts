@@ -1296,14 +1296,7 @@ export function getActiveSvfrVariants(): OpsAirportVariant[] {
     out.push({ id, airport: a, text: 'Speciell VFR', auto })
   }
 
-  if (
-    store.essaRolesMode &&
-    store.myAirports.some((x) => x.toUpperCase() === 'ESSA') &&
-    store.essaRoles.some((r) => r === 'TWR-E' || r === 'TWR-W' || r.startsWith('TWR'))
-  ) {
-    add('ESSA', true)
-  }
-
+  // Catalog / manual only — never auto-added (ESSA TWR included).
   for (const key of getInfoStripForcedKeys(SVFR_INFO_KIND)) {
     if (key === 'manual') add(primaryOpsAirport(), false)
     else add(key, false)
@@ -1379,7 +1372,38 @@ export function useSvfrInfoStrip(airportSource?: MaybeRefOrGetter<string | undef
   }
 }
 
-/** Yellow "Bana 08/26 Tillhör: TWR-E|W" — follows TS AOR owner. */
+/**
+ * 08/26 is "in play": ES active ARR/DEP includes 08 or 26, or a runway_08_26 section
+ * is on the server layout / workspace display. Otherwise Bana 08/26 is catalog/manual only.
+ */
+function isEssa0826Relevant(): boolean {
+  const store = useEfsStore()
+  const is0826 = (r: string) => {
+    const n = r.toUpperCase().replace(/[^0-9LRC]/g, '')
+    return n === '08' || n === '26'
+  }
+  const info = store.atisInfo.find((a) => a.airport.toUpperCase() === 'ESSA')
+  const arr = info?.arrRunways ?? []
+  const dep = info?.depRunways ?? []
+  if (arr.some(is0826) || dep.some(is0826)) return true
+  const isSec = (id: string | undefined) => !!id && id.startsWith('runway_08_26')
+  const layout = store.layout
+  if (layout.bays.some((b) => b.sections.some((s) => isSec(s.id)))) return true
+  if (store.workspaceMode) {
+    try {
+      const ws = getWorkspace()
+      void ws.activeLayout.value
+      for (const bay of ws.buildDisplayBays(layout)) {
+        if (bay.sections.some((s) => isSec(s.id))) return true
+      }
+    } catch {
+      /* workspace not ready */
+    }
+  }
+  return false
+}
+
+/** Yellow "Bana 08/26 Tillhör: TWR-E|W" — follows TS AOR owner; auto only when ≥2 TWRs online and 08/26 is relevant. */
 export function useBana0826InfoStrip() {
   const store = useEfsStore()
 
@@ -1388,6 +1412,9 @@ export function useBana0826InfoStrip() {
     if (!store.myAirports.some((a) => a.toUpperCase() === 'ESSA')) return null
     const owner = store.essa0826Owner
     if (!owner) return null
+    // Auto only with split TWR (≥2 distinct TWR logins); solo / top-down → manual only
+    if (!store.essaTwrSplit) return null
+    if (!isEssa0826Relevant()) return null
     // Physical EFS labels: map TWR-S → show as TWR-E (TS prio after E is S, but UI is E/W)
     const label = owner === 'TWR-S' ? 'TWR-E' : owner
     return {

@@ -319,12 +319,23 @@ export function resolveEsaaPackageDir(
     return found[0]!.dir
 }
 
-function documentsEuroscopeDirs(): string[] {
+/** Documents folders incl. OneDrive-redirected Documents (common on Windows). */
+function documentsRoots(): string[] {
     const home = process.env.HOME || process.env.USERPROFILE || os.homedir() || ""
-    const docs = process.env.USERPROFILE
-        ? path.join(process.env.USERPROFILE, "Documents")
-        : path.join(home, "Documents")
-    return [path.join(docs, "EuroScope"), path.join(docs, "Euroscope")]
+    const profile = process.env.USERPROFILE || home
+    const roots = [path.join(profile, "Documents")]
+    for (const od of [process.env.OneDrive, process.env.OneDriveConsumer, process.env.OneDriveCommercial]) {
+        if (od) roots.push(path.join(od, "Documents"))
+    }
+    return [...new Set(roots)]
+}
+
+function documentsEuroscopeDirs(): string[] {
+    const out: string[] = []
+    for (const docs of documentsRoots()) {
+        out.push(path.join(docs, "EuroScope"), path.join(docs, "Euroscope"))
+    }
+    return out
 }
 
 /**

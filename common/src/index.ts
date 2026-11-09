@@ -184,6 +184,7 @@ export {
     requiresAccCoordination,
     requiresSsrCoordination,
     resolveEssaHeavyPreferredDepRwy,
+    resolveEssaActiveDepRwyCorrection,
     ESMS_AUTO_COORD_INIT_XFL_FT,
     ESMS_AUTO_COORD_REPLY_XFL_FT,
     ESMS_AUTO_COORD_EXITS,
@@ -197,6 +198,7 @@ export {
 export type {
     SsrCoordinationOpts,
     EssaHeavyPreferredDepRwyInput,
+    EssaActiveDepRwyCorrectionInput,
     EssaMdi2MinSidBoxInput,
     EssaAppDepNextSector,
 } from "./airport-rules.js"

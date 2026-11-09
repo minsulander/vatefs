@@ -50,6 +50,60 @@ export function resolveEssaHeavyPreferredDepRwy(
     return prefer
 }
 
+export type EssaActiveDepRwyCorrectionInput = {
+    adep?: string | null
+    /** Current ES/FPL departure runway */
+    currentDepRwy?: string | null
+    /** Active ESSA departure runways from ES rwyconfig */
+    activeDep?: readonly string[] | null
+}
+
+/**
+ * ESSA IFR DEP whose ES/FPL depRwy is not an active departure runway (e.g. 01L while
+ * config is DEP 19R). Returns the active DEP RWY to assign, else undefined (no change).
+ *
+ * Only corrects 01/19 and 08/26 pairs — FATO (07/25) and unknown runways are left alone.
+ * Preference: same physical pair (01L→19R), then same parallel side (01R→19L), then
+ * the first active DEP in the same runway family (01/19 or 08/26).
+ */
+export function resolveEssaActiveDepRwyCorrection(
+    input: EssaActiveDepRwyCorrectionInput,
+): string | undefined {
+    if ((input.adep || "").trim().toUpperCase() !== "ESSA") return undefined
+    const norm = (r: string) => r.toUpperCase().replace(/[^0-9LRC]/g, "")
+    const cur = norm(input.currentDepRwy || "")
+    if (!cur) return undefined
+    const active = (input.activeDep ?? []).map(norm).filter(Boolean)
+    if (active.length === 0) return undefined
+    if (active.includes(cur)) return undefined
+
+    const family = (r: string): "N" | "X" | undefined => {
+        if (r.startsWith("01") || r.startsWith("19")) return "N"
+        if (r === "08" || r === "26") return "X"
+        return undefined
+    }
+    const curFamily = family(cur)
+    if (!curFamily) return undefined
+
+    // Opposite end of the same physical runway
+    const opposite: Record<string, string> = {
+        "01L": "19R",
+        "19R": "01L",
+        "01R": "19L",
+        "19L": "01R",
+        "08": "26",
+        "26": "08",
+    }
+    const opp = opposite[cur]
+    if (opp && active.includes(opp)) return opp
+
+    // Same family, prefer the same parallel side letter (L/R) as current
+    const sameFamily = active.filter((r) => family(r) === curFamily)
+    if (sameFamily.length === 0) return undefined
+    const side = cur.slice(-1)
+    return sameFamily.find((r) => r.endsWith(side)) ?? sameFamily[0]
+}
+
 /**
  * ICAOs where IFR DEPs need Departure Coordination (coo checkmark / strip ann 6 DepC).
  * ESNU is included; exempt TMA exits suppress the requirement (see below).

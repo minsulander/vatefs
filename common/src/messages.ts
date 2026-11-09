@@ -155,6 +155,8 @@ export interface StatusMessage {
      * "Bana 08/26 Tillhör: …" info strip. Null when ESSA roles inactive.
      */
     essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
+    /** ≥2 distinct ESSA TWR logins online (split TWR) — gates Bana 08/26 auto-spawn */
+    essaTwrSplit?: boolean
     /** Strip chrome from active YAML (`look: paper` → paper; default saab) */
     look?: 'saab' | 'paper'
     /** OTHER bay-profile mode (saab.yml + Layout picker; digital SAAB strip look) */
