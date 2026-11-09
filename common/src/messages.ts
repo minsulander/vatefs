@@ -157,6 +157,8 @@ export interface StatusMessage {
     essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
     /** ≥2 distinct ESSA TWR logins online (split TWR) — gates Bana 08/26 auto-spawn */
     essaTwrSplit?: boolean
+    /** ≥2 distinct ESSA GND logins online (split GND) — ZH/ZK HP + assumed-only TAXIWAY */
+    essaGndSplit?: boolean
     /** Strip chrome from active YAML (`look: paper` → paper; default saab) */
     look?: 'saab' | 'paper'
     /** OTHER bay-profile mode (saab.yml + Layout picker; digital SAAB strip look) */

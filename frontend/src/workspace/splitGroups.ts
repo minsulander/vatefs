@@ -363,12 +363,13 @@ function gndFamilyFromSi(si: string | undefined): EssaGndFamily | undefined {
 
 /**
  * Which GND AoR a strip belongs under when inbound_gnd is split.
- * Prefer nextSi when it maps to GE/GN/GW (GND→GND hop still in chain);
- * otherwise ownerSi (tracker). nextSi is often TE/TW when TWR-bound, so
- * ownerSi is the usual source for taxi-out toward tower.
+ * Prefer ownerSi (tracking GND) so peer next-SI traffic lands under
+ * INBOUND GND-N/E/W for the peer who has them — not under our own column
+ * when nextSi is us. Fall back to nextSi when owner is not a GND family
+ * (e.g. TWR-bound display SI).
  */
 function inboundGndFamily(strip: WorkspaceStripFilterFields): EssaGndFamily | undefined {
-  return gndFamilyFromSi(strip.nextSi) ?? gndFamilyFromSi(strip.ownerSi)
+  return gndFamilyFromSi(strip.ownerSi) ?? gndFamilyFromSi(strip.nextSi)
 }
 
 function inboundGndMemberFromFamily(fam: EssaGndFamily): 'E' | 'N' | 'W' {

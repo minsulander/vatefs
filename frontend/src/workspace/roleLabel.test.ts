@@ -22,22 +22,40 @@ function check(name: string, fn: () => void) {
 
 console.log('roleLabel compact tests')
 
-check('level 0 skips all suffixes → family names', () => {
+check('level 0 shows position suffixes when partial (split)', () => {
   assert.equal(
     compactEssaRolesLabel(['GND-W', 'GND-E', 'TWR-E'], 0),
-    'GND, TWR',
+    'GND-E, GND-W, TWR-E',
   )
+  assert.equal(compactEssaRolesLabel(['GND-N'], 0), 'GND-N')
+  assert.equal(compactEssaRolesLabel(['TWR-W'], 0), 'TWR-W')
+})
+
+check('level 0 collapses full families (solo covering all)', () => {
   assert.equal(
     compactEssaRolesLabel(['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W', 'APP'], 0),
     'CD, GND, TWR, APP',
   )
 })
 
-check('level 1 same family tokens', () => {
+check('level 1 collapses suffixes to family tokens', () => {
+  assert.equal(
+    compactEssaRolesLabel(['GND-W', 'GND-E', 'TWR-E'], 1),
+    'GND, TWR',
+  )
   assert.equal(
     compactEssaRolesLabel(['CD', 'GND-E', 'GND-N', 'GND-W', 'TWR-E', 'TWR-W', 'APP'], 1),
     'CD, GND, TWR, APP',
   )
+})
+
+check('level 0→1 shortens when split partial', () => {
+  const roles = ['GND-N', 'TWR-W']
+  const l0 = compactEssaRolesLabel(roles, 0)
+  const l1 = compactEssaRolesLabel(roles, 1)
+  assert.equal(l0, 'GND-N, TWR-W')
+  assert.equal(l1, 'GND, TWR')
+  assert.ok(l0.length > l1.length)
 })
 
 check('level 2 single letters', () => {

@@ -445,6 +445,8 @@ export const useEfsStore = defineStore("efs", () => {
     const essa0826Owner = ref<'TWR-E' | 'TWR-W' | 'TWR-S' | null>(null)
     /** ≥2 distinct ESSA TWR logins online — gates Bana 08/26 auto-spawn */
     const essaTwrSplit = ref(false)
+    /** ≥2 distinct ESSA GND logins online — ZH/ZK HP + split-GND bay rules */
+    const essaGndSplit = ref(false)
 
     // OTHER bay-profile mode (saab.yml + Layout / catalog; digital SAAB look)
     const saabLayoutsMode = ref(false)
@@ -1863,6 +1865,7 @@ export const useEfsStore = defineStore("efs", () => {
         essaCoveredRunways?: string[]
         essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
         essaTwrSplit?: boolean
+        essaGndSplit?: boolean
         look?: StripLook
         saabLayoutsMode?: boolean
         saabLayoutId?: string | null
@@ -1957,6 +1960,7 @@ export const useEfsStore = defineStore("efs", () => {
                 ? message.essa0826Owner
                 : null
         essaTwrSplit.value = !!(message.essaRolesMode && message.essaTwrSplit)
+        essaGndSplit.value = !!(message.essaRolesMode && message.essaGndSplit)
         stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
         if (stripLook.value !== 'paper') {
             pendingPrintFlights.value = []
@@ -4135,6 +4139,7 @@ export const useEfsStore = defineStore("efs", () => {
         essaCoveredRunways,
         essa0826Owner,
         essaTwrSplit,
+        essaGndSplit,
         saabLayoutsMode,
         saabLayoutId,
         saabLayouts,

@@ -1391,8 +1391,9 @@ function sortEssaRolesDisplay(roles: string[]): string[] {
 
 /**
  * Top-bar densify (before chrome-scale squash) — measure-driven, show fullest that fits:
- * 0 — Roles: CD, GND, TWR (suffixes skipped); DCL: Voice / DCL + mode; full CDM
- * 1 — same Roles; DCL shortens to DCL / DCL:M|A|S; CDM → "CDM"
+ * 0 — Roles: suffixes when split/partial (GND-N, TWR-W); full families → GND/TWR;
+ *     DCL: Voice / DCL + mode; full CDM
+ * 1 — Roles: CD, GND, TWR (suffixes collapsed); DCL shortens; CDM → "CDM"
  * 2 — Roles: C, G, T; bare DCL
  * 3 — clickable "Roles" only; bare DCL
  */

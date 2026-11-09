@@ -30,12 +30,21 @@ function roleFamilies(roles: string[]): Set<EssaFamily> {
 }
 
 /** Whether a section belongs in the built-in default for these roles. */
-export function sectionVisibleForRoles(sectionId: string, roles: string[]): boolean {
+export function sectionVisibleForRoles(
+  sectionId: string,
+  roles: string[],
+  opts?: { gndSplit?: boolean },
+): boolean {
   if (sectionId === 'req_push' || sectionId.endsWith('_req_push')) return false
   // SYSTEM INBOUND is workspace-injected only (never a role builtin).
   if (sectionId === 'system_inbound') return false
   const families = roleFamilies(roles)
-  if (sectionId === 'inbound_gnd') return families.has('TWR') && !families.has('GND') && !families.has('APP')
+  if (sectionId === 'inbound_gnd') {
+    if (families.has('APP')) return false
+    if (families.has('TWR') && !families.has('GND')) return true
+    // Split GND: peer next-SI column on GND boards
+    return families.has('GND') && !!opts?.gndSplit
+  }
   if (isEssaDynamicRunwaySectionId(sectionId)) return families.has('TWR')
   if (sectionId === 'cleared_tsat' || sectionId === 'cleared_eobt') {
     return families.has('CD') && !families.has('GND') && !families.has('TWR') && !families.has('APP')
@@ -232,11 +241,13 @@ function essaDefaultColumnPlan(
   families: Set<EssaFamily>,
   runways: { arr: Section[]; dep: Section[] },
   serverLayout: EfsLayout,
+  opts?: { gndSplit?: boolean },
 ): { columns: SecDraft[][]; columnCount: number } {
   const hasCd = families.has('CD')
   const hasGnd = families.has('GND')
   const hasTwr = families.has('TWR')
   const hasApp = families.has('APP')
+  const gndSplit = !!opts?.gndSplit
 
   const arrRwys = withoutFato(runways.arr)
   const depRwys = withoutFato(runways.dep)
@@ -314,6 +325,7 @@ function essaDefaultColumnPlan(
   }
 
   // GND alone: TSAT/EOBT | PUSH+TAXI DEP | INBOUND TWR+TAXI ARR | empty (bottom 50%)
+  // Split GND: INBOUND GND at top of rightmost bay (peer next-SI taxi)
   if (!hasCd && hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
@@ -321,12 +333,13 @@ function essaDefaultColumnPlan(
         [tsatEobtDraft()],
         [pushStart, taxiDep],
         [inboundTwrMergedDraft(serverLayout), taxiArr],
-        [{ sectionId: null, yRatio: 0.5 }],
+        gndSplit ? [inboundGnd] : [{ sectionId: null, yRatio: 0.5 }],
       ],
     }
   }
 
   // CD + GND (no TWR): CD | TSAT/EOBT | PUSH+TAXI DEP | INBOUND TWR+TAXI ARR
+  // Split GND: INBOUND GND at top of rightmost bay
   if (hasCd && hasGnd && !hasTwr && !hasApp) {
     return {
       columnCount: 4,
@@ -334,7 +347,9 @@ function essaDefaultColumnPlan(
         [cdPendingDraft()],
         [tsatEobtDraft()],
         [pushStart, taxiDep],
-        [inboundTwrMergedDraft(serverLayout), taxiArr],
+        gndSplit
+          ? [inboundGnd, inboundTwrMergedDraft(serverLayout), taxiArr]
+          : [inboundTwrMergedDraft(serverLayout), taxiArr],
       ],
     }
   }
@@ -354,8 +369,16 @@ function essaDefaultColumnPlan(
 
   // GND + TWR (+ optional APP): TSAT+PUSH | TAXI DEP+DEP RWY |
   // CTR ARR (top) + ARR RWY (mid-bay) + TAXI ARR (bottom 25%) | INBOUND+FATO (bottom 25%)
+  // Split GND: INBOUND GND at top of rightmost bay
   if (!hasCd && hasGnd && hasTwr) {
     const fatoBottomQuarter = fatoDraft(runways, 0.75)
+    const rightCol = gndSplit
+      ? fatoBottomQuarter
+        ? [inboundGnd, inboundRight, fatoBottomQuarter]
+        : [inboundGnd, inboundRight]
+      : fatoBottomQuarter
+        ? [inboundRight, fatoBottomQuarter]
+        : [inboundRight]
     return {
       columnCount: 4,
       columns: [
@@ -370,20 +393,28 @@ function essaDefaultColumnPlan(
           })),
           { ...taxiArr, yRatio: 0.75 },
         ],
-        fatoBottomQuarter ? [inboundRight, fatoBottomQuarter] : [inboundRight],
+        rightCol,
       ],
     }
   }
 
   // CD + GND + TWR (+ optional APP)
+  // Split GND: INBOUND GND at top of rightmost bay
   if (hasCd && hasGnd && hasTwr) {
+    const rightCol = gndSplit
+      ? fatoBottomThird
+        ? [inboundGnd, inboundRight, fatoBottomThird]
+        : [inboundGnd, inboundRight]
+      : fatoBottomThird
+        ? [inboundRight, fatoBottomThird]
+        : [inboundRight]
     return {
       columnCount: 4,
       columns: [
         [cdPendingDraft(), tsatEobtDraft()],
         [pushStart, taxiDep, ...runwayDrafts(depRwys, true)],
         [arrHeader, ...runwayDrafts(arrRwys, true), taxiArr],
-        fatoBottomThird ? [inboundRight, fatoBottomThird] : [inboundRight],
+        rightCol,
       ],
     }
   }
@@ -402,19 +433,20 @@ function essaDefaultColumnPlan(
   }
 
   // APP + GND (no TWR): like GND with INBOUND ACC on the right
+  // Split GND: INBOUND GND at top of rightmost bay
   if (hasApp && hasGnd && !hasTwr) {
     const cols: SecDraft[][] = hasCd
       ? [
           [cdPendingDraft()],
           [tsatEobtDraft()],
           [pushStart, taxiDep],
-          [inboundAcc, taxiArr],
+          gndSplit ? [inboundGnd, inboundAcc, taxiArr] : [inboundAcc, taxiArr],
         ]
       : [
           [tsatEobtDraft()],
           [pushStart, taxiDep],
           [inboundAcc, taxiArr],
-          [{ sectionId: null, yRatio: 0.5 }],
+          gndSplit ? [inboundGnd] : [{ sectionId: null, yRatio: 0.5 }],
         ]
     return { columnCount: 4, columns: cols }
   }
@@ -869,14 +901,16 @@ function collapseSaabDepHeaders(sections: WorkspaceSection[]): WorkspaceSection[
 export function buildDefaultWorkspaceLayout(
   serverLayout: EfsLayout,
   roles: string[],
-  opts?: { defaultSortFlow?: SortFlow },
+  opts?: { defaultSortFlow?: SortFlow; gndSplit?: boolean },
 ): WorkspaceLayout {
   const defaultFlow = opts?.defaultSortFlow ?? 'newestTop'
   const families = roleFamilies(roles)
   const runways = families.has('TWR')
     ? classifyRunwaySections(serverLayout)
     : { arr: [], dep: [] }
-  const plan = essaDefaultColumnPlan(families, runways, serverLayout)
+  const plan = essaDefaultColumnPlan(families, runways, serverLayout, {
+    gndSplit: opts?.gndSplit,
+  })
 
   const sections: WorkspaceSection[] = []
   plan.columns.forEach((colDrafts, colIdx) => {

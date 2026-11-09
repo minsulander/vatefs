@@ -367,14 +367,19 @@ export function resolveInboundGndTitle(
 }
 
 /**
- * Show INBOUND GND-E, GND-N, GND-W above TAXIWAY DEP whenever the picker
- * is TWR-only. Hidden when GND is also selected (those strips sit in TAXI DEP).
+ * Show INBOUND GND-E, GND-N, GND-W:
+ * - TWR-only: always (peer taxi-out → TWR).
+ * - GND selected + ≥1 other physical GND online (split): peer next-SI taxi
+ *   toward us. Solo GND / combined without a peer keep strips on TAXIWAY only.
  */
 export function shouldShowInboundGnd(
     roles: EssaPositionRole[],
-    _activeGndPeers?: EssaPositionRole[]
+    activeGndPeers?: EssaPositionRole[]
 ): boolean {
-    return isEssaTwrOnly(roles)
+    if (isEssaTwrOnly(roles)) return true
+    const families = familiesFromRoles(roles)
+    if (!families.has("GND")) return false
+    return (activeGndPeers?.length ?? 0) >= 1
 }
 
 /**

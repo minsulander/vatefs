@@ -304,6 +304,7 @@ export function useWorkspace() {
         activeLayout.value = sanitizeWorkspaceLayout({
           ...buildDefaultWorkspaceLayout(serverLayout, roles, {
             defaultSortFlow: defaultFlow,
+            gndSplit: store.essaGndSplit,
           }),
           sourceLabel: 'DEFAULT',
           sourceSavedId: undefined,
@@ -486,8 +487,10 @@ export function useWorkspace() {
       })
       syncRunwaySectionsFromServer(serverLayout)
     } else {
+      const store = useEfsStore()
       activeLayout.value = buildDefaultWorkspaceLayout(serverLayout, roles, {
         defaultSortFlow: getDefaultSortFlow(),
+        gndSplit: store.essaGndSplit,
       })
     }
     closedSectionIds.value = new Set()
@@ -560,8 +563,10 @@ export function useWorkspace() {
     stampRoles?: string[],
   ) {
     const stamp = stampRoles ?? structureRoles
+    const store = useEfsStore()
     const built = buildDefaultWorkspaceLayout(serverLayout, structureRoles, {
       defaultSortFlow: getDefaultSortFlow(),
+      gndSplit: store.essaGndSplit,
     })
     // Prevent live TWR runway sync from re-adding headers the profile omitted
     const kept = new Set(

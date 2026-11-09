@@ -47,6 +47,7 @@ import {
     flightCoverageAirport,
     isAreaCtrLogin,
 } from "./airport-coverage.js"
+import { amIEssaNextGndHop, isEssaGndSplitOnline } from "./essa-next-si.js"
 
 type PrioritizedRule = { priority?: number }
 type CommonRuleConditions = {
@@ -76,6 +77,10 @@ type CommonRuleConditions = {
      * E.g. ownerRole: [GND] when GND has assumed.
      */
     ownerRole?: ControllerRole[]
+    /** ESSA: ≥2 distinct ESSA_*_GND logins online (including self) */
+    essaGndSplit?: boolean
+    /** ESSA: this login is the next online GND hop after the tracking controller */
+    nextGndHopMyself?: boolean
 }
 
 /** CA / VA / OS / CAT2 / CAT3 — EuroScope cfl 1|2 or TopSky approachType. */
@@ -556,6 +561,24 @@ function evaluateCommonConditions(
         if (!flight.controller) return false
         const ownerRole = parseControllerRole(flight.controller, config.myAirports)
         if (!rule.ownerRole.includes(ownerRole)) return false
+    }
+
+    // ESSA GND split (≥2 ESSA_*_GND including self). Outside essaRoles → not split.
+    if (rule.essaGndSplit !== undefined) {
+        const split = isEssaRolesConfig(config) && isEssaGndSplitOnline()
+        if (split !== rule.essaGndSplit) return false
+    }
+
+    // ESSA: am I the next GND hop after the current tracking controller?
+    if (rule.nextGndHopMyself !== undefined) {
+        const originOurs =
+            flight.origin !== undefined && config.myAirports.includes(flight.origin)
+        const destOurs =
+            flight.destination !== undefined && config.myAirports.includes(flight.destination)
+        const stripType: 'departure' | 'arrival' | 'local' =
+            originOurs && destOurs ? 'local' : originOurs ? 'departure' : 'arrival'
+        const next = isEssaRolesConfig(config) && amIEssaNextGndHop(flight, stripType)
+        if (next !== rule.nextGndHopMyself) return false
     }
 
     return true

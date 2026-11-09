@@ -310,6 +310,7 @@ import {
     getMyEssaCoveredRunways,
     resolveEssa0826Owner,
     isEssaTwrSplitOnline,
+    isEssaGndSplitOnline,
 } from "./essa-next-si.js"
 import {
     loadEssaSidPrefs,
@@ -1877,6 +1878,7 @@ function buildStatusMessage(): StatusMessage {
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
         essa0826Owner: essaMode ? resolveEssa0826Owner() : undefined,
         essaTwrSplit: essaMode ? isEssaTwrSplitOnline() : undefined,
+        essaGndSplit: essaMode ? isEssaGndSplitOnline() : undefined,
         look: staticConfig.look === 'paper' ? 'paper' : 'saab',
         saabLayoutsMode: saabMode,
         saabLayoutId: saabMode ? (staticConfig.saabLayoutId ?? activeSaabLayoutId) : null,
@@ -2000,22 +2002,24 @@ function broadcastStatus() {
     broadcast(buildStatusMessage())
 }
 
-/** Last essa0826Owner|essaTwrSplit pair sent in a status message (ESSA only). */
+/** Last essa0826Owner|essaTwrSplit|essaGndSplit fingerprint sent in status (ESSA only). */
 let lastEssaSplitFp = ""
 
 function essaSplitStatusFp(): string {
     if (!isEssaRolesConfig(staticConfig)) return ""
-    return `${resolveEssa0826Owner() ?? ""}|${isEssaTwrSplitOnline() ? 1 : 0}`
+    return `${resolveEssa0826Owner() ?? ""}|${isEssaTwrSplitOnline() ? 1 : 0}|${isEssaGndSplitOnline() ? 1 : 0}`
 }
 
 /**
- * ESSA: online TWR logins changing (2nd TWR on/off) can flip essaTwrSplit / essa0826Owner
- * without changing covering roles or AOR layout key — push status when the pair changed.
+ * ESSA: online TWR/GND logins changing (2nd TWR/GND on/off) can flip split flags /
+ * essa0826Owner without changing covering roles or AOR layout key — push status.
+ * Also rebroadcast layout so INBOUND GND appears/hides on split GND boards.
  */
 function maybeBroadcastEssaSplitStatus() {
     if (!isEssaRolesConfig(staticConfig)) return
     if (essaSplitStatusFp() === lastEssaSplitFp) return
     broadcastStatus()
+    broadcastLayout()
 }
 
 /**

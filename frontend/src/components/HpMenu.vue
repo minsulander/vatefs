@@ -55,7 +55,9 @@ const store = useEfsStore()
 let ignoreCloseUntil = 0
 
 const intersections = computed(() => [
-  ...essaHpPreferencesForStrip(props.strip, store.controllers),
+  ...essaHpPreferencesForStrip(props.strip, store.controllers, {
+    gndSplit: store.essaGndSplit,
+  }),
 ])
 const currentHp = computed(() => (props.strip.hp || '').trim().toUpperCase())
 

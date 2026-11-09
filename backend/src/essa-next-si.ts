@@ -343,6 +343,26 @@ export function isEssaTwrSplitOnline(): boolean {
     return n >= 2
 }
 
+/**
+ * True when ≥2 distinct ESSA GND logins (GND-E / GND-N / GND-W) are online, counting
+ * this session's own login. Top-down covering all GND without an ESSA_*_GND login
+ * does not count as split.
+ */
+export function isEssaGndSplitOnline(): boolean {
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const onlineCallsigns = staticConfig.onlineControllers
+        ? [...staticConfig.onlineControllers.keys()]
+        : []
+    const logins = new Set<string>(parseOnlineEssaLoginIds(onlineCallsigns))
+    const myLogin = staticConfig.myCallsign
+        ? parseEssaLoginId(staticConfig.myCallsign)
+        : undefined
+    if (myLogin) logins.add(myLogin)
+    let n = 0
+    for (const id of ["GND-E", "GND-N", "GND-W"]) if (logins.has(id)) n++
+    return n >= 2
+}
+
 /** AOR columns covered by this TWR login given who is online. */
 function aorColumnsForTwrLogin(login: string, onlineLogins: Iterable<string>): Set<EssaAorColumn> {
     const online = new Set<string>()
@@ -686,6 +706,13 @@ function depHopsFromParking(
     if (parking === "GN") {
         if (r === "19R" || r === "08" || r === "26") {
             return [{ kind: "twr", family: twrFamilyForRunway(r, pt) }]
+        }
+        if (r === "01L") {
+            // North apron → 01L via west (same pattern as GE→01L via GW)
+            return [
+                { kind: "gnd", family: "GW" },
+                { kind: "twr", family: twrFamilyForRunway(r, pt) },
+            ]
         }
         if (r === "19L") {
             // Straight TWR unless CCW toward GNDW rather than GNDE TWY Y
@@ -1531,6 +1558,17 @@ export function isEssaStripVisibleForRoles(
         return true
     }
 
+    // Split GND: peer taxi where we are next SI sits in INBOUND GND-* before
+    // transfer. resolveEssaNextSi skips myself in firstOnlineInChain, so the
+    // relevantRoles filter would otherwise hide the strip (next looks like TWR).
+    if (
+        strip.sectionId === "inbound_gnd" &&
+        selectedRoles.some((r) => ALL_GND_POSITIONS.includes(r)) &&
+        isEssaGndSplitOnline()
+    ) {
+        return true
+    }
+
     // TWR: arrival INBOUND APP / CTR ARR / RWY is independent of GND next-SI roles,
     // but when split TWR only show ARR RWYs covered by our physical role(s).
     if (selectedRoles.some((r) => ALL_TWR_POSITIONS.includes(r))) {
@@ -1567,6 +1605,67 @@ export function isEssaStripVisibleForRoles(
     }
 
     return selectedRoles.some((r) => relevant.has(r))
+}
+
+/**
+ * True when this login is the next online GND hop for the flight's taxi sequence
+ * (peer traffic toward us). Skips the tracking controller's GND family / parking,
+ * then checks whether we are first online on the next GND hop — not TWR.
+ */
+export function amIEssaNextGndHop(
+    flight: Flight,
+    stripType: FlightStrip["stripType"] | undefined,
+): boolean {
+    // Hop tables + OWNER chains work without full ESE polygons; geo parking is best-effort.
+    if (!isEssaRolesConfig(staticConfig)) return false
+    const myCs = staticConfig.myCallsign
+    if (!myCs) return false
+
+    const standPt = isEseAirspaceLoaded() ? resolveStandPoint(flight) : undefined
+    const aircraftPt = isEseAirspaceLoaded() ? resolveAircraftPoint(flight) : undefined
+    const pt = standPt ?? aircraftPt
+    const parking = isEseAirspaceLoaded() ? parkingGndFamily(flight) : undefined
+    const depRwy = normalizeRwy(flight.depRwy)
+    const arrRwy = normalizeRwy(flight.arrRwy)
+
+    // Prefer tracking GND family as parking when geo stand is unknown (split peer view)
+    const ownerLogin = flight.controller ? parseEssaLoginId(flight.controller) : undefined
+    let ownerFam: EssaGndFamily | undefined
+    if (ownerLogin === "GND-E") ownerFam = "GE"
+    else if (ownerLogin === "GND-N") ownerFam = "GN"
+    else if (ownerLogin === "GND-W") ownerFam = "GW"
+    if (!ownerFam) ownerFam = parking
+
+    let hops: EssaHop[] = []
+    if (
+        (stripType === "departure" || stripType === "local") &&
+        !flight.airborne &&
+        !["ARR", "TXIN"].includes(flight.groundstate ?? "")
+    ) {
+        const park = parking ?? ownerFam ?? "GW"
+        hops = depHopsFromParking(park, depRwy || "01R", flight.callsign, pt)
+        hops = applyConfig6Dep(hops)
+    } else if (stripType === "arrival" || stripType === "local") {
+        const park = parking ?? ownerFam ?? "GN"
+        const landed = arrRwy || depRwy || "01R"
+        hops = arrHopsFromLanding(landed, park, flight.callsign, aircraftPt ?? standPt)
+        hops = applyConfig6Arr(hops, flight.callsign, aircraftPt ?? standPt)
+    } else {
+        return false
+    }
+
+    // Skip the owner's / parking GND so the next hop is who they would XFER to
+    if (ownerFam) {
+        hops = hops.filter((h) => !(h.kind === "gnd" && h.family === ownerFam))
+    }
+
+    for (const hop of hops) {
+        if (hop.kind === "app") continue
+        if (hop.kind === "twr") return false
+        // First remaining GND hop — are we first online for that family?
+        return isNextOnlineForGndFamily(hop.family, myCs)
+    }
+    return false
 }
 
 /** Convenience for server resolveXferTarget */

@@ -51,10 +51,11 @@ function arrivalFlight(callsign: string, gs: Flight["groundstate"]): Flight {
 
 function seedTaxiArrStrip(callsign: string, position: number, gs: Flight["groundstate"] = "ARR"): FlightStrip {
     const flight = arrivalFlight(callsign, gs)
+    const bayId = staticConfig.sectionToBay.get("taxi_arr") || "bay5"
     // Test harness: seed private flight map
     ;(flightStore as unknown as { flights: Map<string, Flight> }).flights.set(callsign, flight)
     flightStore.setStripAssignment(callsign, {
-        bayId: "bay1",
+        bayId,
         sectionId: "taxi_arr",
         position,
         bottom: false,
@@ -72,17 +73,16 @@ setMyCallsign("ESSA_W_GND")
 setMyRole("GND")
 setEssaRoles(["GND-W"], true)
 
-check("TXIN goes to taxi_arr; ARR / empty stay inbound until TAXI IN", () => {
+check("GND-only: assumed ARR/TXIN → taxi_arr (separate GND)", () => {
     assert.deepEqual(staticConfig.myAirports, ["ESSA"])
     assert.ok(
         staticConfig.sectionRules.some((r) => r.id === "taxi_arr"),
         "taxi_arr rule present"
     )
-    const txin = determineSectionForFlight(arrivalFlight("TST1", "TXIN"), staticConfig)
-    assert.equal(txin?.sectionId, "taxi_arr", `TXIN rule=${txin?.ruleId}`)
-    for (const gs of ["ARR", ""] as const) {
+    // GND-only (not covering TWR): assumed traffic stays on TAXIWAY ARR even ARR/empty
+    for (const gs of ["TXIN", "ARR", ""] as const) {
         const section = determineSectionForFlight(arrivalFlight("TST1", gs), staticConfig)
-        assert.equal(section?.sectionId, "inbound", `gs=${gs} rule=${section?.ruleId}`)
+        assert.equal(section?.sectionId, "taxi_arr", `gs=${gs} rule=${section?.ruleId}`)
     }
 })
 
@@ -98,7 +98,7 @@ check("same-section TXIN keep store position when flightStore assignment is stal
 
         // Stale flightStore: BBB wrongly at 0 (desync after reorder / shift)
         flightStore.setStripAssignment("BBB", {
-            bayId: "bay1",
+            bayId: staticConfig.sectionToBay.get("taxi_arr") || "bay5",
             sectionId: "taxi_arr",
             position: 0,
             bottom: false,
@@ -136,12 +136,13 @@ function depFlight(callsign: string, controller: string): Flight {
     }
 }
 
-check("TAXIWAY DEP appends the last cleared taxi-out at the bottom", () => {
+check("TAXIWAY DEP addFromTop: last cleared taxi-out lands on top", () => {
     loadAirports(path.resolve(__dirname, "../../data/airports.csv"))
     setMyCallsign("ESSA_W_GND")
     setMyRole("GND")
     setEssaRoles(["GND-E", "GND-N", "GND-W"], true)
     flightStore.clear()
+    store.loadMockData(false)
 
     const first = depFlight("TXO1", "ESSA_W_GND")
     const second = depFlight("TXO2", "ESSA_W_GND")
@@ -152,9 +153,9 @@ check("TAXIWAY DEP appends the last cleared taxi-out at the bottom", () => {
     const b = flightStore.reevaluateStrip("TXO2")
     assert.equal(a.strip?.sectionId, "taxi_dep", a.strip?.sectionId)
     assert.equal(b.strip?.sectionId, "taxi_dep", b.strip?.sectionId)
-    assert.equal(flightStore.getStripAssignment("TXO1")?.position, 0, "first cleared stays on top")
-    const secondPos = flightStore.getStripAssignment("TXO2")?.position
-    assert.ok(secondPos != null && secondPos > 0, `last cleared at bottom, pos=${secondPos}`)
+    // addFromTop: true → newest at 0, earlier strip shifts down
+    assert.equal(flightStore.getStripAssignment("TXO2")?.position, 0, "last cleared on top")
+    assert.equal(flightStore.getStripAssignment("TXO1")?.position, 1, "first cleared shifts down")
 })
 
 check("TWR-only: other-owned taxi-out goes to INBOUND GND", () => {

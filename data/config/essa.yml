@@ -51,12 +51,13 @@ layout:
           addFromTop: true
           visibleFor: [GND, TWR]
         # TWR-only: other-owned taxi-out (mirror INBOUND APP).
+        # Also shown on GND boards when GND is split (peer next-SI).
         # Header resolves to INBOUND GND-E, GND-N, GND-W.
-        # Hidden when GND is also selected. Assumed / inbound-transfer → TAXI DEP.
+        # Assumed / inbound-transfer → TAXI DEP.
         inbound_gnd:
           title: INBOUND GND
           addFromTop: true
-          visibleFor: [TWR]
+          visibleFor: [TWR, GND]
         # Declared for sectionRules / strip assignment. Workspace built-in
         # defaults omit this header — add via catalog when needed.
         req_push:
@@ -125,12 +126,139 @@ sectionRules:
     vchRequests: [P, S]
     priority: 88
 
+  # === Split GND: pre-taxi ownership (PUSH / TSAT) ===
+  # Solo: ownership-blind push/cleared (common-rules). Split: myself/handoff only —
+  # peer PUSH must not appear on my PUSH/START (BLX431 / Tim) before TAXI.
+  push_start:
+    sectionId: push_start
+    direction: departure
+    airborne: false
+    groundstates: [STUP, PUSH]
+    essaGndSplit: false
+    priority: 60
+
+  push_start_local:
+    sectionId: push_start
+    direction: local
+    airborne: false
+    groundstates: [STUP, PUSH]
+    essaGndSplit: false
+    priority: 60
+
+  push_start_assumed_gnd_split:
+    sectionId: push_start
+    direction: departure
+    airborne: false
+    groundstates: [STUP, PUSH]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  push_start_assumed_local_gnd_split:
+    sectionId: push_start
+    direction: local
+    airborne: false
+    groundstates: [STUP, PUSH]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  push_start_handoff_gnd_split:
+    sectionId: push_start
+    direction: departure
+    airborne: false
+    groundstates: [STUP, PUSH]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  push_start_handoff_local_gnd_split:
+    sectionId: push_start
+    direction: local
+    airborne: false
+    groundstates: [STUP, PUSH]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  cleared:
+    sectionId: cleared
+    direction: departure
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    essaGndSplit: false
+    priority: 50
+
+  cleared_local:
+    sectionId: cleared
+    direction: local
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    essaGndSplit: false
+    priority: 50
+
+  cleared_assumed_gnd_split:
+    sectionId: cleared
+    direction: departure
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 75
+
+  cleared_assumed_local_gnd_split:
+    sectionId: cleared
+    direction: local
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 75
+
+  cleared_handoff_gnd_split:
+    sectionId: cleared
+    direction: departure
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 75
+
+  cleared_handoff_local_gnd_split:
+    sectionId: cleared
+    direction: local
+    airborne: false
+    clearance: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 75
+
   # Override common-rules taxi → split taxi_dep / taxi_arr
+  # Solo GND: ownership-blind. When GND is split, only myself/handoff (below).
   taxi_dep:
     sectionId: taxi_dep
     direction: departure
     airborne: false
     groundstates: [TAXI]
+    essaGndSplit: false
     priority: 30
 
   taxi_dep_local:
@@ -138,7 +266,51 @@ sectionRules:
     direction: local
     airborne: false
     groundstates: [TAXI]
+    essaGndSplit: false
     priority: 30
+
+  # Split GND: assumed / inbound-transfer only on TAXIWAY DEP
+  taxi_dep_assumed_gnd_split:
+    sectionId: taxi_dep
+    direction: departure
+    airborne: false
+    groundstates: [TAXI]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_dep_assumed_local_gnd_split:
+    sectionId: taxi_dep
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_dep_handoff_gnd_split:
+    sectionId: taxi_dep
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_dep_handoff_local_gnd_split:
+    sectionId: taxi_dep
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
 
   # RTO / rejected takeoff → TAXI IN: departure with TXIN goes to TAXIWAY ARR (gate)
   taxi_arr_dep_txin:
@@ -146,6 +318,7 @@ sectionRules:
     direction: departure
     airborne: false
     groundstates: [TXIN]
+    essaGndSplit: false
     priority: 92
 
   # ESSA: CA/VA/CAT/OS → CTR ARR (skips TMA). Outer bay is unassumed-only;
@@ -271,12 +444,52 @@ sectionRules:
     notEssaFamilies: [GND]
     priority: 70
 
+  # Split GND: peer taxi/TXIN where we are next SI → INBOUND GND (not TAXIWAY).
+  # Priority above taxi_arr_vacated_* (108) so peers do not land on TAXIWAY.
+  inbound_gnd_peer_taxi_dep_gnd_split:
+    sectionId: inbound_gnd
+    direction: departure
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    ownerRole: [GND]
+    nextGndHopMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 120
+
+  inbound_gnd_peer_taxi_local_gnd_split:
+    sectionId: inbound_gnd
+    direction: local
+    airborne: false
+    groundstates: [TAXI]
+    controller: not_myself
+    ownerRole: [GND]
+    nextGndHopMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 120
+
+  inbound_gnd_peer_taxi_arr_gnd_split:
+    sectionId: inbound_gnd
+    direction: arrival
+    airborne: false
+    groundstates: [TAXI, TXIN]
+    controller: not_myself
+    ownerRole: [GND]
+    nextGndHopMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 120
+
   # TAXIWAY ARR fallback after TAXI IN (TXIN) — not on mere vacate / ARR.
+  # Solo only; split uses assumed/handoff rules below.
   taxi_arr_local:
     sectionId: taxi_arr
     direction: local
     airborne: false
     groundstates: [TXIN]
+    essaGndSplit: false
     priority: 35
 
   taxi_arr:
@@ -284,7 +497,51 @@ sectionRules:
     direction: arrival
     airborne: false
     groundstates: [TXIN]
+    essaGndSplit: false
     priority: 30
+
+  # Split GND: TXIN on TAXIWAY ARR only when assumed / handoff-to-me
+  taxi_arr_assumed_txin_gnd_split:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    groundstates: [TXIN]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_arr_assumed_local_txin_gnd_split:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    groundstates: [TXIN]
+    controller: myself
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_arr_handoff_txin_gnd_split:
+    sectionId: taxi_arr
+    direction: arrival
+    airborne: false
+    groundstates: [TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
+
+  taxi_arr_handoff_local_txin_gnd_split:
+    sectionId: taxi_arr
+    direction: local
+    airborne: false
+    groundstates: [TXIN]
+    controller: not_myself
+    handoffToMyself: true
+    myRole: [GND]
+    essaGndSplit: true
+    priority: 85
 
   # EoR / DEP RWY: only after TXIN (no auto hop on vacate alone)
   taxi_arr_vacated_dep_rwy:
@@ -802,6 +1059,61 @@ deleteRules:
     essaFamilies: [GND]
     notEssaFamilies: [TWR]
     priority: 95
+
+  # Split GND: peer GND assume → hide from my INBOUND TWR / TAXIWAY
+  # (unless I am next SI — those stay on INBOUND GND via section rules).
+  delete_arr_peer_gnd_assumed_split:
+    direction: arrival
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [GND]
+    essaGndSplit: true
+    nextGndHopMyself: false
+    priority: 100
+
+  delete_dep_peer_gnd_assumed_split:
+    direction: departure
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [GND]
+    essaGndSplit: true
+    nextGndHopMyself: false
+    priority: 100
+
+  delete_local_peer_gnd_assumed_split:
+    direction: local
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [GND]
+    essaGndSplit: true
+    nextGndHopMyself: false
+    priority: 100
+
+  # Split GND: hide peer-owned deps until TAXI (even when we are next SI).
+  # Without this, nextGndHopMyself=true during PUSH keeps BLX431 on PUSH/START
+  # for GND-W before Max sets TAXI → INBOUND GND.
+  delete_dep_peer_gnd_pre_taxi_split:
+    direction: departure
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [GND]
+    essaGndSplit: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE, STUP, PUSH]
+    priority: 110
+
+  delete_local_peer_gnd_pre_taxi_split:
+    direction: local
+    airborne: false
+    controller: not_myself
+    ownerRole: [GND]
+    myRole: [GND]
+    essaGndSplit: true
+    groundstates: ['', NSTS, ONFREQ, DE-ICE, STUP, PUSH]
+    priority: 110
 
 moveRules:
   # TSAT → PUSH: write GS even for TWR top-down (common-rules was GND-only —

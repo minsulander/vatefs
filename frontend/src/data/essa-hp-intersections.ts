@@ -76,9 +76,13 @@ export function essaHpIntersectionsForRunway(
 export function essaHpPreferencesForStrip(
   strip: { runway?: string | null; stripType?: string },
   controllers: ReadonlyArray<{ callsign: string }>,
+  opts?: { gndSplit?: boolean },
 ): readonly string[] {
+  // Prefer server essaGndSplit (counts self); controllers list excludes myself.
+  const gndSplit =
+    opts?.gndSplit !== undefined ? opts.gndSplit : isEssaGndSplit(controllers)
   return essaHpIntersectionsForRunway(strip.runway, {
-    gndSplit: isEssaGndSplit(controllers),
+    gndSplit,
     forArrival: strip.stripType === 'arrival',
   })
 }

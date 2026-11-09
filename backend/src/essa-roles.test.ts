@@ -191,7 +191,7 @@ check("TWR-only shows INBOUND GND-E, GND-N, GND-W above TAXIWAY DEP", () => {
     assert.equal(out.bays[0]!.sections[1]!.title, "TAXIWAY DEP")
 })
 
-check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
+check("TWR+GND hides INBOUND GND when no peer GND (solo combined)", () => {
     const layout: EfsLayout = {
         bays: [
             {
@@ -204,19 +204,49 @@ check("TWR+GND hides INBOUND GND (taxi-out stays in TAXI DEP)", () => {
         ],
     }
     const visibleFor = new Map<string, EssaFamily[]>([
-        ["inbound_gnd", ["TWR"]],
+        ["inbound_gnd", ["TWR", "GND"]],
         ["taxi_dep", ["GND", "TWR"]],
     ])
+    // No peer GND online → not split; taxi-out stays in TAXI DEP
     const out = filterEssaLayout(
         layout,
         ["TWR-E", "GND-E"],
         visibleFor,
         ["TWR-E"],
-        ["GND-E"]
+        []
     )
     assert.deepEqual(
         out.bays[0]!.sections.map((s) => s.id),
         ["taxi_dep"]
+    )
+})
+
+check("GND-only with peer GND shows INBOUND GND (split)", () => {
+    const layout: EfsLayout = {
+        bays: [
+            {
+                id: "bay3",
+                sections: [
+                    { id: "inbound_gnd", title: "INBOUND GND" },
+                    { id: "taxi_dep", title: "TAXIWAY DEP" },
+                ],
+            },
+        ],
+    }
+    const visibleFor = new Map<string, EssaFamily[]>([
+        ["inbound_gnd", ["TWR", "GND"]],
+        ["taxi_dep", ["GND", "TWR"]],
+    ])
+    const out = filterEssaLayout(
+        layout,
+        ["GND-N"],
+        visibleFor,
+        [],
+        ["GND-W"]
+    )
+    assert.deepEqual(
+        out.bays[0]!.sections.map((s) => s.id),
+        ["inbound_gnd", "taxi_dep"]
     )
 })
 

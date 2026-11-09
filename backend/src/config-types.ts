@@ -224,6 +224,24 @@ export interface SectionRule {
      * departure from us), or STAR/arrRwy while not originating at our airport.
      */
     arrivalLike?: boolean
+
+    /**
+     * Tracking controller's role (from callsign) must be one of these.
+     * E.g. ownerRole: [GND] for peer-assumed taxi on split GND boards.
+     */
+    ownerRole?: ControllerRole[]
+
+    /**
+     * ESSA: ≥2 distinct ESSA_*_GND logins online (including self).
+     * Gates split-GND section/delete rules (assumed-only TAXIWAY, INBOUND GND-x).
+     */
+    essaGndSplit?: boolean
+
+    /**
+     * ESSA: this login is the next online GND hop after the tracking controller
+     * (peer taxi toward us). Used for INBOUND GND on split GND boards.
+     */
+    nextGndHopMyself?: boolean
 }
 
 /**
@@ -424,6 +442,16 @@ export interface DeleteRule {
      * Same semantics as section/action rules (evaluateOnRunwayCondition).
      */
     onRunway?: boolean
+
+    /**
+     * ESSA: ≥2 distinct ESSA_*_GND logins online (including self).
+     */
+    essaGndSplit?: boolean
+
+    /**
+     * ESSA: this login is the next online GND hop after the tracking controller.
+     */
+    nextGndHopMyself?: boolean
 }
 
 /**

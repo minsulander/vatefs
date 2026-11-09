@@ -10,7 +10,13 @@ import {
 } from "./ese-airspace.js"
 import { __setAfvFrequenciesForTest } from "./afv-transceivers.js"
 import { staticConfig } from "./static-config.js"
-import { __test, isEssaStripVisibleForRoles, setForceIdealAppDepFrequency } from "./essa-next-si.js"
+import {
+    __test,
+    isEssaStripVisibleForRoles,
+    isEssaGndSplitOnline,
+    isEssaTwrSplitOnline,
+    setForceIdealAppDepFrequency,
+} from "./essa-next-si.js"
 import type { FlightStrip } from "@vatefs/common"
 import type { Flight } from "./types.js"
 
@@ -149,6 +155,14 @@ check("DEP from GN to 01R → GE then TWR (default)", () => {
     assert.deepEqual(
         hops.map((h) => (h.kind === "gnd" ? h.family : h.kind === "twr" ? h.family : "app")),
         ["GE", "TE"]
+    )
+})
+
+check("DEP from GN to 01L → GW then TWR (SAS489-class)", () => {
+    const hops = depHopsFromParking("GN", "01L", "SAS489", undefined)
+    assert.deepEqual(
+        hops.map((h) => (h.kind === "gnd" ? h.family : h.kind === "twr" ? h.family : "app")),
+        ["GW", "TW"]
     )
 })
 
@@ -417,6 +431,7 @@ check("TWR-only keeps taxi-out in INBOUND GND visible", () => {
             }),
             true
         )
+        // Solo GND (not split): inbound_gnd still gated by next-SI roles
         assert.equal(
             isEssaStripVisibleForRoles(flight, strip, ["GND-W"], {
                 hopChain: [],
@@ -426,6 +441,93 @@ check("TWR-only keeps taxi-out in INBOUND GND visible", () => {
         )
     } finally {
         staticConfig.layoutMode = prevMode
+    }
+})
+
+check("split GND keeps peer next-SI taxi visible on INBOUND GND (SAS1489)", () => {
+    const prevMode = staticConfig.layoutMode
+    const prevCs = staticConfig.myCallsign
+    const prevOnline = staticConfig.onlineControllers
+    try {
+        staticConfig.layoutMode = "essaRoles"
+        staticConfig.myCallsign = "ESSA_W_GND"
+        // Peer N online → split; next-SI resolution skips self so relevantRoles look like TWR
+        staticConfig.onlineControllers = new Map([
+            ["ESSA_N_GND", { callsign: "ESSA_N_GND", frequency: 121.9, role: "GND" }],
+        ])
+        const strip = {
+            id: "SAS1489",
+            callsign: "SAS1489",
+            stripType: "departure",
+            sectionId: "inbound_gnd",
+            bayId: "bay3",
+            position: 0,
+        } as FlightStrip
+        const flight = {
+            callsign: "SAS1489",
+            groundstate: "TAXI",
+            depRwy: "01L",
+            controller: "ESSA_N_GND",
+        } as Flight
+        assert.equal(isEssaGndSplitOnline(), true)
+        assert.equal(
+            isEssaStripVisibleForRoles(flight, strip, ["GND-W"], {
+                hopChain: [],
+                // After skipping self, next SI looks like TWR — must still show
+                relevantRoles: ["TWR-W"],
+            }),
+            true,
+        )
+    } finally {
+        staticConfig.layoutMode = prevMode
+        staticConfig.myCallsign = prevCs
+        staticConfig.onlineControllers = prevOnline
+    }
+})
+
+check("isEssaGndSplitOnline counts self + peers (ZH/ZK gate)", () => {
+    const prevMode = staticConfig.layoutMode
+    const prevCs = staticConfig.myCallsign
+    const prevOnline = staticConfig.onlineControllers
+    try {
+        staticConfig.layoutMode = "essaRoles"
+        staticConfig.myCallsign = "ESSA_N_GND"
+        // Controllers list excludes myself — only peer W online
+        staticConfig.onlineControllers = new Map([
+            ["ESSA_W_GND", { callsign: "ESSA_W_GND", frequency: 121.7, role: "GND" }],
+        ])
+        assert.equal(isEssaGndSplitOnline(), true)
+        // Solo: no peers
+        staticConfig.onlineControllers = new Map()
+        assert.equal(isEssaGndSplitOnline(), false)
+        // Self alone in online (shouldn't happen) still solo
+        staticConfig.onlineControllers = new Map([
+            ["ESSA_N_GND", { callsign: "ESSA_N_GND", frequency: 121.9, role: "GND" }],
+        ])
+        assert.equal(isEssaGndSplitOnline(), false)
+    } finally {
+        staticConfig.layoutMode = prevMode
+        staticConfig.myCallsign = prevCs
+        staticConfig.onlineControllers = prevOnline
+    }
+})
+
+check("isEssaTwrSplitOnline still independent of GND split", () => {
+    const prevMode = staticConfig.layoutMode
+    const prevCs = staticConfig.myCallsign
+    const prevOnline = staticConfig.onlineControllers
+    try {
+        staticConfig.layoutMode = "essaRoles"
+        staticConfig.myCallsign = "ESSA_N_GND"
+        staticConfig.onlineControllers = new Map([
+            ["ESSA_W_GND", { callsign: "ESSA_W_GND", frequency: 121.7, role: "GND" }],
+        ])
+        assert.equal(isEssaGndSplitOnline(), true)
+        assert.equal(isEssaTwrSplitOnline(), false)
+    } finally {
+        staticConfig.layoutMode = prevMode
+        staticConfig.myCallsign = prevCs
+        staticConfig.onlineControllers = prevOnline
     }
 })
 

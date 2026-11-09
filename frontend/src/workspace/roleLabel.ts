@@ -64,14 +64,15 @@ export function formatEssaRolesLabel(roles: string[]): string {
 
 /**
  * Top-bar densify levels for ESSA covering roles:
- * 0 — skip E/N/W suffixes: CD, GND, TWR, APP (any GND→GND, any TWR→TWR)
- * 1 — same family tokens, comma-separated (mid; tooltip still has full list)
+ * 0 — roomiest: position suffixes when partial (split GND/TWR), else family
+ *     e.g. GND-N, TWR-W · full families still "GND" / "TWR"
+ * 1 — family tokens only: CD, GND, TWR, APP (any GND→GND, any TWR→TWR)
  * 2 — single letters: C, G, T, A
  * 3 — empty (UI shows clickable "Roles" only)
  */
 export type EssaRolesCompactLevel = 0 | 1 | 2 | 3
 
-/** Family tokens with suffixes stripped (level 0/1). */
+/** Family tokens with suffixes stripped (level 1+). */
 function familyParts(roles: string[]): string[] {
   const sorted = sortEssaRoleList(roles)
   const set = new Set(sorted)
@@ -97,6 +98,11 @@ export function compactEssaRolesLabel(
   // Level 3: UI shows only the "Roles" control label
   if (level >= 3) return ''
 
+  // Level 0: show E/N/W when covering a split subset (formatEssaRolesLabel)
+  if (level === 0) {
+    return formatEssaRolesLabel(roles)
+  }
+
   const families = familyParts(roles)
   if (families.length === 0) return '(none)'
 
@@ -112,7 +118,7 @@ export function compactEssaRolesLabel(
       .join(', ')
   }
 
-  // Level 0–1: CD, GND, TWR (suffixes already skipped)
+  // Level 1: CD, GND, TWR (suffixes collapsed)
   return families.join(', ')
 }
 
