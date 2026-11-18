@@ -57,13 +57,15 @@ sectionRules:
     groundstates: [LINEUP, DEPA]
     priority: 90
 
+  # Beat tma/app airborne local (101/100) so TGL/CTL stays on RWY.
+  # Include stale dep GS (DEPA/LINEUP/…) — inbound often keeps GS from previous aerodrome.
   runway_cleared_to_land:
     sectionId: rwy
     direction: either
     clearedToLand: true
     airborne: true
-    groundstates: ['', NSTS, ARR]
-    priority: 95
+    groundstates: ['', NSTS, ARR, DEPA, LINEUP, TAXI, PUSH, STUP, ONFREQ, DE-ICE]
+    priority: 106
 
   # === ARR (unassumed inbounds only, ETN ≤ 15) ===
   arr_inbound_not_myself:
@@ -84,6 +86,15 @@ sectionRules:
     groundstates: ['', NSTS, ARR]
     priority: 80
 
+  # Stale departure GS from previous aerodrome — still place assumed airborne arrivals
+  arr_assumed_stale_gs:
+    sectionId: app
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: [PUSH, STUP, TAXI, LINEUP, DEPA, DE-ICE, ONFREQ]
+    priority: 79
+
   arr_low_altitude:
     sectionId: arr
     myRole: []
@@ -100,13 +111,14 @@ sectionRules:
 
   # === CTR (arrivals + airborne dep / local / missed) ===
   # CA/VA/CAT/OS → CTR even outside the zone (skips TMA when split).
+  # Priority above tma_arr_assumed (92) so approach clearance wins over TMA.
   app_arr_approach_clearance:
     sectionId: app
     direction: arrival
     airborne: true
-    groundstates: ['', NSTS, ARR]
+    groundstates: ['', NSTS, ARR, PUSH, STUP, TAXI, LINEUP, DEPA, DE-ICE, ONFREQ]
     approachClearance: true
-    priority: 91
+    priority: 93
 
   # Disabled: inside-CTR alone must not pull unassumed off ARR
   app_arr_within_ctr:
@@ -131,6 +143,16 @@ sectionRules:
     withinCtr: false
     coversTma: true
     priority: 92
+
+  tma_arr_assumed_stale_gs:
+    sectionId: tma
+    direction: arrival
+    controller: myself
+    airborne: true
+    groundstates: [PUSH, STUP, TAXI, LINEUP, DEPA, DE-ICE, ONFREQ]
+    withinCtr: false
+    coversTma: true
+    priority: 91
 
   # Airborne deps inside CTR stay on CTR (app); leave CTR → TMA when covering TMA
   app_airborne_dep:
@@ -439,7 +461,16 @@ actionRules:
   ctl_arr_ctr:
     action: CTL
     sectionId: app
-    direction: arrival
+    direction: either
+    controller: myself
+    clearedToLand: false
+    myRole: [TWR]
+    priority: 90
+
+  ctl_tma:
+    action: CTL
+    sectionId: tma
+    direction: either
     controller: myself
     clearedToLand: false
     myRole: [TWR]
@@ -512,10 +543,10 @@ actionRules:
     notMyRole: [APP, CTR]
     priority: 102
 
-  # Priority above LU/CTO so stale TAXI/LINEUP after takeoff without CFTO still shows XFER
+  # Priority above LU/CTO so stale TAXI/LINEUP after takeoff without CFTO still shows XFER.
+  # No sectionId — airborne deps often leave CTR for TMA (or dep fallback) after takeoff.
   xfer_app_dep:
     action: XFER
-    sectionId: app
     direction: departure
     controller: myself
     airborne: true
@@ -598,7 +629,7 @@ deleteRules:
     priority: 10
 
 moveRules:
-  # ARR/CTR <-> RWY (CTL)
+  # ARR/CTR/TMA <-> RWY (CTL)
   move_arr_to_rwy_ctl:
     fromSectionId: arr
     toSectionId: rwy
@@ -611,7 +642,16 @@ moveRules:
   move_ctr_arr_to_rwy_ctl:
     fromSectionId: app
     toSectionId: rwy
-    direction: arrival
+    direction: either
+    myRole: [TWR, APP, CTR]
+    command:
+      type: setClearedToLand
+      value: true
+
+  move_tma_to_rwy_ctl:
+    fromSectionId: tma
+    toSectionId: rwy
+    direction: either
     myRole: [TWR, APP, CTR]
     command:
       type: setClearedToLand
@@ -632,9 +672,18 @@ moveRules:
       type: setClearedToLand
       value: false
 
-  # CTR (dep airborne)
+  move_rwy_to_tma_clear_ctl:
+    fromSectionId: rwy
+    toSectionId: tma
+    direction: arrival
+    command:
+      type: setClearedToLand
+      value: false
+
+  # CTR (dep airborne only — arrivals must not get DEPA from a drag to CTR)
   move_to_app_set_depa:
     toSectionId: app
+    direction: departure
     command:
       type: setGroundstate
       value: DEPA
@@ -658,14 +707,17 @@ moveRules:
       type: setGroundstate
       value: TAXI
 
+  # TXIN + clear CTL so twy_taxi_arr (clearedToLand:false) matches immediately
   move_rwy_to_twy_arr:
     fromSectionId: rwy
     toSectionId: twy
     direction: either
     myRole: [GND, TWR, APP, CTR]
-    command:
-      type: setGroundstate
-      value: TXIN
+    commands:
+      - type: setGroundstate
+        value: TXIN
+      - type: setClearedToLand
+        value: false
 
   # DEP <-> TWY (push stays in DEP; drag to TWY = taxi out)
   move_dep_to_twy_taxi:

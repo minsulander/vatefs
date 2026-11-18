@@ -518,7 +518,9 @@ export function updateOnlineController(
     const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     const prevEsggLayout = esggRolesKey(staticConfig.esggLayoutRoles)
     const prev = staticConfig.onlineControllers.get(upper)
-    const positionChanged = !!(positionId && positionId !== prev?.positionId)
+    // Update SI when present, but never treat SI-only churn as a roles change.
+    // EuroScope often re-sends controllers with fluctuating position IDs; that used to
+    // trigger full reprocessAllFlights + client refresh storms (RTC Sweden Live).
     staticConfig.onlineControllers.set(upper, {
         role,
         frequency,
@@ -529,7 +531,6 @@ export function updateOnlineController(
 
     return (
         rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
-        positionChanged ||
         essaRolesKey(staticConfig.essaRoles) !== prevEssa ||
         esggRolesKey(staticConfig.esggRoles) !== prevEsgg ||
         esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout

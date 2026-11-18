@@ -225,6 +225,36 @@ export function beginNewDepartureCycleAfterPark(flight: Flight): void {
     }
 }
 
+/** Departure-side groundstates that often linger after departure from another field. */
+const STALE_DEPARTURE_GROUNDSTATES = new Set([
+    "PUSH",
+    "STUP",
+    "TAXI",
+    "LINEUP",
+    "DEPA",
+    "DE-ICE",
+    "ONFREQ",
+])
+
+/**
+ * Clear leftover departure GS on an airborne pure arrival (dest ours, origin not).
+ * Without this, RTC section rules that require '',NSTS,ARR fail → no_section soft-delete
+ * as soon as the strip is assumed (Sweden Live: BVX598 / SZS1042 / SAS39K).
+ */
+export function clearStaleDepartureGroundstateForInbound(
+    flight: Pick<Flight, "origin" | "destination" | "groundstate" | "airborne">,
+    myAirports: readonly string[],
+): boolean {
+    if (!flight.airborne) return false
+    const ours = (icao: string | undefined) =>
+        !!icao && myAirports.some((a) => a.toUpperCase() === icao.toUpperCase())
+    if (!ours(flight.destination) || ours(flight.origin)) return false
+    const gs = (flight.groundstate || "").toUpperCase()
+    if (!STALE_DEPARTURE_GROUNDSTATES.has(gs)) return false
+    ;(flight as Flight).groundstate = ""
+    return true
+}
+
 /**
  * High-speed vacate (GS still above the airborne cutoff) after the aircraft has
  * been on the runway. Short final is also off the polygon and already groundstate
@@ -248,8 +278,12 @@ export function hasVacatedRunwayAfterLanding(opts: {
 }
 
 /**
- * True when FPL flipped arrival → outbound dep/local at our airport (same-CS turnaround).
+ * True when FPL flipped inbound → outbound dep/local at our airport (same-CS turnaround).
  * Airport-agnostic — uses myAirports, not ESSA-only.
+ *
+ * RTC tracks many Swedish airports as "ours", so domestic legs are often `local`
+ * (both ends ours). Treat inbound-to-ours → new FPL with that dest as origin as
+ * turnaround too, otherwise ATD/ATA/GS from the previous leg block ASSUME/CLR.
  */
 export function isArrivalToOutboundTurnaroundFpl(
     prev: Pick<Flight, "origin" | "destination">,
@@ -258,9 +292,15 @@ export function isArrivalToOutboundTurnaroundFpl(
 ): boolean {
     const ours = (icao: string | undefined) =>
         !!icao && myAirports.some((a) => a.toUpperCase() === icao.toUpperCase())
-    const wasArrival = ours(prev.destination) && !ours(prev.origin)
-    const nowOutbound = ours(next.origin) // departure or local
-    return wasArrival && nowOutbound
+    const prevOrigin = (prev.origin || "").toUpperCase()
+    const prevDest = (prev.destination || "").toUpperCase()
+    const nextOrigin = (next.origin || "").toUpperCase()
+    const nextDest = (next.destination || "").toUpperCase()
+    if (!prevDest || !nextOrigin || !ours(prevDest) || !ours(nextOrigin)) return false
+    const fplMoved = prevOrigin !== nextOrigin || prevDest !== nextDest
+    if (!fplMoved) return false
+    // Classic arrival→dep, or local/inbound that now departs from the airport just landed at
+    return nextOrigin === prevDest
 }
 
 /** Outbound dep/local at our airport still carrying arrival/park groundstate leftovers. */
@@ -935,6 +975,25 @@ class FlightStore {
     private landingRunwayTouched: Set<string> = new Set()
 
     /**
+     * Radar targets without a correlated flight plan — used only for stand occupancy
+     * (Sweden Live: stand assign missed aircraft that had no FPL yet).
+     * Not eligible for strips.
+     */
+    private radarOnlyTargets: Map<
+        string,
+        {
+            callsign: string
+            latitude: number
+            longitude: number
+            heading?: number
+            altitude: number
+            groundSpeed?: number
+            lastUpdate: number
+        }
+    > = new Map()
+    private static readonly RADAR_ONLY_TTL_MS = 30_000
+
+    /**
      * Callsigns that need one EuroScope airway expansion. Filled when a strip
      * is spawned, or when the filed route changes on a strip that already exists.
      */
@@ -1348,7 +1407,7 @@ class FlightStore {
             flight.groundstateBeforeReady = undefined
         }
         flight.groundstate = next
-        if (normalized === 'PARK') flight.airborne = false
+        if (normalized === 'PARK' || normalized === 'TXIN') flight.airborne = false
         if (!normalized) {
             flight.groundstateClearedUntil = Date.now() + 3000
             flight.groundstateHoldUntil = undefined
@@ -1919,6 +1978,13 @@ class FlightStore {
             const scoped = withAirportScope(this.config, airport)
             const stripId = stripIdForAirport(callsign, airport)
             const hadAssignment = this.stripAssignments.has(stripId)
+
+            // Per-column scope: origin at another ES field is foreign → clear leftover PUSH/DEPA
+            if (clearStaleDepartureGroundstateForInbound(flight, scoped.myAirports)) {
+                console.log(
+                    `[GS] ${callsign}@${airport}: cleared stale departure groundstate on inbound`,
+                )
+            }
 
             if (!this.isEligibleForStrip(flight, scoped) && !hadAssignment) {
                 continue
@@ -2748,7 +2814,70 @@ class FlightStore {
                 assigned: !!(f.stand && destination === apt && origin !== apt),
             })
         }
+        // Merge radar-only targets (no FPL) so stand polygons still show occupied
+        for (const info of this.getRadarOnlyOccupiers(apt)) {
+            if (traffic.some((t) => t.callsign.toUpperCase() === info.callsign.toUpperCase())) continue
+            traffic.push(info)
+        }
         return traffic
+    }
+
+    /**
+     * Remember a radar target that has no flight plan yet (stand occupancy only).
+     */
+    private trackRadarOnlyTarget(message: RadarTargetPositionUpdateMessage): void {
+        if (message.latitude === undefined || message.longitude === undefined) return
+        if (!Number.isFinite(message.altitude)) return
+        // Ignore clearly airborne targets — stands care about ground traffic
+        if (message.altitude > 2500) {
+            this.radarOnlyTargets.delete(message.callsign.toUpperCase())
+            return
+        }
+        if (message.groundSpeed !== undefined && message.groundSpeed > 80) {
+            this.radarOnlyTargets.delete(message.callsign.toUpperCase())
+            return
+        }
+        const menuAirports = standMenuAirports()
+        if (!menuAirports.length) return
+        if (!isWithinRangeOfAnyAirport(message.latitude, message.longitude, menuAirports, 5)) {
+            this.radarOnlyTargets.delete(message.callsign.toUpperCase())
+            return
+        }
+        const key = message.callsign.toUpperCase()
+        this.radarOnlyTargets.set(key, {
+            callsign: message.callsign,
+            latitude: message.latitude,
+            longitude: message.longitude,
+            heading: message.heading,
+            altitude: message.altitude,
+            groundSpeed: message.groundSpeed,
+            lastUpdate: Date.now(),
+        })
+    }
+
+    /** Radar-only (no FPL) targets near a stand-menu airport for occupancy. */
+    getRadarOnlyOccupiers(airport?: string): OccupierInfo[] {
+        const now = Date.now()
+        const apt = airport?.toUpperCase()
+        const out: OccupierInfo[] = []
+        for (const [key, t] of this.radarOnlyTargets) {
+            if (now - t.lastUpdate > FlightStore.RADAR_ONLY_TTL_MS) {
+                this.radarOnlyTargets.delete(key)
+                continue
+            }
+            if (apt && !isWithinRangeOfAnyAirport(t.latitude, t.longitude, [apt], 5)) continue
+            out.push({
+                callsign: t.callsign,
+                latitude: t.latitude,
+                longitude: t.longitude,
+                heading: t.heading,
+                airborne: false,
+                departure: false,
+                dims: resolveAircraftDims(undefined, undefined, t.callsign),
+                assigned: false,
+            })
+        }
+        return out
     }
 
     /** @deprecated Use buildOccupierTraffic("ESSA") */
@@ -3531,7 +3660,7 @@ class FlightStore {
             return result
         }
         // No ARR strip on bay (already parked / trash / never printed): still clear
-        // leftover PARK/ARR/TXIN so pending_dep / fallback_departure can place a DEP.
+        // leftover PARK/ARR/TXIN/ATD so pending_dep / fallback_departure can place a DEP.
         if (
             !hadActiveStrip &&
             !flight.manuallyDeleted &&
@@ -3540,7 +3669,13 @@ class FlightStore {
         ) {
             beginNewDepartureCycleAfterPark(flight)
             console.log(
-                `Flight ${callsign} turnaround FPL — cleared arrival GS leftovers for new DEP cycle`,
+                `Flight ${callsign} turnaround FPL — cleared arrival GS/ATD leftovers for new DEP cycle`,
+            )
+        }
+
+        if (clearStaleDepartureGroundstateForInbound(flight, this.config.myAirports)) {
+            console.log(
+                `[GS] ${callsign}: cleared stale departure groundstate on FPL inbound`,
             )
         }
 
@@ -4229,9 +4364,11 @@ class FlightStore {
         const flight = this.flights.get(callsign)
 
         if (!flight) {
-            // Flight not tracked yet, ignore radar update
+            // No FPL yet — keep a short-lived radar-only target for stand occupancy
+            this.trackRadarOnlyTarget(message)
             return {}
         }
+        this.radarOnlyTargets.delete(callsign.toUpperCase())
 
         // Update radar data (ownership intentionally ignored — polled via ownershipUpdate)
         flight.currentAltitude = message.altitude
@@ -4367,8 +4504,17 @@ class FlightStore {
                 flight.airborne = false
                 if (!flight.ata && destMine && !flight.missedApproach) {
                     flight.ata = utcHhmm()
+                    // Previous leg's T/O time must not stick into the next dep cycle
+                    flight.atd = undefined
                 }
             }
+        }
+
+        // Airborne pure arrivals often keep PUSH/DEPA from the previous aerodrome.
+        if (clearStaleDepartureGroundstateForInbound(flight, this.config.myAirports)) {
+            console.log(
+                `[GS] ${callsign}: cleared stale departure groundstate on inbound (was leftover from previous field)`,
+            )
         }
 
         // Go-around / next approach: drop the pavement latch once back above the
@@ -6203,6 +6349,7 @@ class FlightStore {
         this.stripAssignments.clear()
         this.positionCounters.clear()
         this.printedCallsigns.clear()
+        this.radarOnlyTargets.clear()
         this.appTransferPinSession.clear()
         this.appTransferDragReleased.clear()
         this.gndTaxiPinSession.clear()

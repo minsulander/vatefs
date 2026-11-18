@@ -1472,8 +1472,13 @@
               'clr-pending-hl': unclearedFieldHighlight && !!displayCfl,
               editable: canEditAssignedData,
               'arr-cfl-ghost': isArrLayout && !displayCfl,
+              // ESSA DEP: CFL|AHD are adjacent — centre CFL across both when empty.
+              // RTC/OTHER puts SID between CFL and AHD, so the same span merges CFL+SID.
               'cfl-no-xfl-center':
-                !isArrLayout && !displayXfl && !props.strip.assignedHeading,
+                !isArrLayout &&
+                !useSaabSharedLayout &&
+                !displayXfl &&
+                !props.strip.assignedHeading,
             }"
             title="Cleared flight level"
             @click.stop="onCflClick"

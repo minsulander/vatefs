@@ -236,6 +236,7 @@ import {
     isMultiAirportConfig,
     normalizeColumnAirports,
     isAnonymousSpecialStripId,
+    logicalSectionId,
 } from "./multi-airport.js"
 import { loadStands, hasStandData, airportsWithStands } from "./stand-data.js"
 import {
@@ -4371,14 +4372,27 @@ function handleCpdlcResponse(from: string, packet: string) {
 
 // Regenerate all strips with full section re-evaluation (e.g., when online controller roles change).
 // regenerateStrip() only updates actions in place — use reprocessAllFlights so sections move too.
+// Debounced: ESSB DEL/GND connect/disconnect flaps and controller bursts used to storm
+// full client refreshes (~1/s on RTC during Sweden Live).
+let roleChangeReprocessTimer: ReturnType<typeof setTimeout> | null = null
+let pendingRoleChangeReason: string | null = null
+const ROLE_CHANGE_REPROCESS_DEBOUNCE_MS = 750
+
 function reprocessAllStripsForRoleChange(reason: string) {
-    store.reprocessAllFlights()
-    // ESSA / ESGG auto roles may have changed — push status + remapped layout before refresh
-    if (isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)) {
-        broadcastStatus()
-        broadcastLayout()
-    }
-    broadcastRefresh(reason)
+    pendingRoleChangeReason = reason
+    if (roleChangeReprocessTimer) clearTimeout(roleChangeReprocessTimer)
+    roleChangeReprocessTimer = setTimeout(() => {
+        roleChangeReprocessTimer = null
+        const why = pendingRoleChangeReason ?? "Online controllers changed"
+        pendingRoleChangeReason = null
+        store.reprocessAllFlights()
+        // ESSA / ESGG auto roles may have changed — push status + remapped layout before refresh
+        if (isEssaRolesConfig(staticConfig) || isEsggRolesConfig(staticConfig)) {
+            broadcastStatus()
+            broadcastLayout()
+        }
+        broadcastRefresh(why)
+    }, ROLE_CHANGE_REPROCESS_DEBOUNCE_MS)
 }
 
 // Send layout to a client
@@ -4402,34 +4416,8 @@ function broadcastLayout() {
 
 /** Occupancy traffic for stand menu / Auto at one destination airport. */
 function buildStandMenuTraffic(airport: string): OccupierInfo[] {
-    const apt = airport.toUpperCase()
-    const traffic: OccupierInfo[] = []
-    for (const f of flightStore.getAllFlights()) {
-        if (!f.callsign) continue
-        const origin = (f.origin || "").toUpperCase()
-        const destination = (f.destination || "").toUpperCase()
-        traffic.push({
-            callsign: f.callsign,
-            stand: f.stand,
-            latitude: f.latitude,
-            longitude: f.longitude,
-            heading: f.heading,
-            groundstate: f.groundstate,
-            airborne: !!f.airborne,
-            departure: origin === apt,
-            tsat: f.tsat,
-            tobt: f.tobt,
-            eobt: f.eobt,
-            dims: resolveAircraftDims(
-                f.aircraftType,
-                f.wakeTurbulence,
-                f.callsign,
-                f.fplRemarks,
-            ),
-            assigned: !!(f.stand && destination === apt && origin !== apt),
-        })
-    }
-    return traffic
+    // Prefer flightStore helper so radar-only (no FPL) targets are included
+    return flightStore.buildOccupierTraffic(airport)
 }
 
 /**
@@ -5881,8 +5869,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         // Soft G/A to UTFLYGNING keeps CTL if it was already set.
                         // Paper: PÅ BANAN → PÅ TAXI keeps CTL + ATA (vacate after landing).
                         // Ignore filtered-out unset-CTL commands from common-rules.
+                        // RTC uses bayN_rwy (logical "rwy") — includes('runway') alone missed those.
                         const keepCtlVacateToTaxi =
                             staticConfig.look === "paper" && inTaxi
+                        const fromLogical = logicalSectionId(fromSectionId)
+                        const toLogical = logicalSectionId(message.targetSectionId)
+                        const leavingRunway =
+                            fromSectionId.includes("runway") ||
+                            fromLogical === "rwy"
+                        const enteringRunway =
+                            message.targetSectionId.includes("runway") ||
+                            toLogical === "rwy"
                         const clearedToLandHandledByRule = moveAction?.commands.some(
                             (c) =>
                                 c.type === "setClearedToLand" &&
@@ -5893,8 +5890,8 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                             !clearedToLandHandledByRule &&
                             !softGoAroundArr &&
                             !keepCtlVacateToTaxi &&
-                            fromSectionId.includes('runway') &&
-                            !message.targetSectionId.includes('runway') &&
+                            leavingRunway &&
+                            !enteringRunway &&
                             flight.clearedToLand
                         ) {
                             console.log(`[MOVE] Clearing clearedToLand for ${result.strip.callsign} (left runway section)`)
@@ -6866,6 +6863,21 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     if (message.action === "CTL_GS" && !flight.clearedToLandHoldUntil) {
                         flightStore.applyControllerClearedToLand(strip.callsign)
                         assumePendingAppInboundOnCtl(strip, flight)
+                    }
+                    // TXI / PARK: aircraft is on the ground — clear CTL so twy_taxi_arr can match
+                    // immediately (RTC rules require clearedToLand:false). Also force airborne=false
+                    // so next-action (TAXI→TERM/PARK) does not wait for the next radar tick.
+                    if (message.action === "TXI" || message.action === "PARK") {
+                        flight.airborne = false
+                        if (flight.clearedToLand) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "unsetClearedToLand",
+                                    callsign: strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flightStore.clearControllerClearedToLand(strip.callsign)
+                        }
                     }
                     reevaluateAndBroadcast(strip.callsign)
                 }

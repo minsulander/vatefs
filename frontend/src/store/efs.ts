@@ -108,10 +108,31 @@ export const useEfsStore = defineStore("efs", () => {
     /** Bumps on every strip add/update/delete so list computeds (e.g. time-sort) always re-run */
     const stripsVersion = ref(0)
     /** Sections where the user manually reordered; time-sort resumes when E/TOBT or TSAT changes */
-    const manualOrderSections = ref<Set<string>>(new Set())
+    const MANUAL_ORDER_STORAGE_KEY = 'efs/manualOrderSections'
+    const manualOrderSections = ref<Set<string>>(loadPersistedManualOrderSections())
     /** Explicit TOBT/TSAT/VCH vs MAN mode for CD ALL / TSAT / REQ PUSH */
     type SectionSortMode = 'time' | 'man' | 'vch'
     const sectionSortModes = ref<Map<string, SectionSortMode>>(new Map())
+
+    function loadPersistedManualOrderSections(): Set<string> {
+        try {
+            const raw = sessionStorage.getItem(MANUAL_ORDER_STORAGE_KEY)
+            if (!raw) return new Set()
+            const parsed = JSON.parse(raw)
+            if (!Array.isArray(parsed)) return new Set()
+            return new Set(parsed.filter((k): k is string => typeof k === 'string'))
+        } catch {
+            return new Set()
+        }
+    }
+
+    function persistManualOrderSections(set: Set<string>) {
+        try {
+            sessionStorage.setItem(MANUAL_ORDER_STORAGE_KEY, JSON.stringify([...set]))
+        } catch {
+            /* ignore */
+        }
+    }
     const gaps = ref<Map<string, Gap>>(new Map())  // key: bayId:sectionId:index
     /** Soft-deleted strips for trash recovery (also mirrored to localStorage for WS reconnect). */
     const DELETED_STRIPS_STORAGE_KEY = 'efs/deletedStrips'
@@ -371,6 +392,7 @@ export const useEfsStore = defineStore("efs", () => {
         const next = new Set(manualOrderSections.value)
         next.add(sectionOrderKey(bayId, sectionId))
         manualOrderSections.value = next
+        persistManualOrderSections(next)
     }
 
     function clearManualOrder(bayId: string, sectionId: string) {
@@ -383,6 +405,7 @@ export const useEfsStore = defineStore("efs", () => {
         const next = new Set(manualOrderSections.value)
         next.delete(key)
         manualOrderSections.value = next
+        persistManualOrderSections(next)
     }
 
     function hasManualOrder(bayId: string, sectionId: string): boolean {
@@ -1813,12 +1836,13 @@ export const useEfsStore = defineStore("efs", () => {
         console.log("Refreshing all data from server")
         suppressStripPrintSounds(2500)
         pendingLayoutHeights.value = snapshotSectionHeights()
-        // Clear local state
+        // Clear local strip/gap state — keep manual sort flags (sessionStorage) so
+        // server-driven refreshes (RTC online-controller churn) do not wipe order.
         closeStripZoom()
         layout.value = { bays: [] }
         strips.value.clear()
         stripsVersion.value++
-        manualOrderSections.value = new Set()
+        manualOrderSections.value = loadPersistedManualOrderSections()
         sectionSortModes.value = new Map()
         gaps.value.clear()
 

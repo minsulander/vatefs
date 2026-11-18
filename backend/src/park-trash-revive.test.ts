@@ -6,6 +6,7 @@ import assert from "node:assert/strict"
 import type { Flight } from "./types.js"
 import {
     beginNewDepartureCycleAfterPark,
+    clearStaleDepartureGroundstateForInbound,
     flightPlanFingerprint,
     isArrivalToOutboundTurnaroundFpl,
     isParkTrashDeleteRule,
@@ -198,6 +199,53 @@ check("turnaround FPL: not when still arrival", () => {
         ),
         false,
     )
+})
+
+check("turnaround FPL: RTC local→dep when both ends were ours", () => {
+    assert.equal(
+        isArrivalToOutboundTurnaroundFpl(
+            { origin: "ESGG", destination: "ESNS" },
+            { origin: "ESNS", destination: "ENGM" },
+            ["ESGG", "ESNS", "ESSA", "ESSB"],
+        ),
+        true,
+    )
+})
+
+check("turnaround FPL: not when origin is not the previous destination", () => {
+    assert.equal(
+        isArrivalToOutboundTurnaroundFpl(
+            { origin: "ESGG", destination: "ESNS" },
+            { origin: "ESGG", destination: "ENGM" },
+            ["ESGG", "ESNS"],
+        ),
+        false,
+    )
+})
+
+check("stale dep GS cleared on airborne pure arrival (RTC column scope)", () => {
+    const flight: Flight = {
+        callsign: "BVX598",
+        origin: "ESSA",
+        destination: "ESNS",
+        airborne: true,
+        groundstate: "PUSH",
+    }
+    // Per-column scope is only the strip airport — origin at another ES field is foreign
+    assert.equal(clearStaleDepartureGroundstateForInbound(flight, ["ESNS"]), true)
+    assert.equal(flight.groundstate, "")
+})
+
+check("stale dep GS kept for local (both ends ours)", () => {
+    const flight: Flight = {
+        callsign: "SEGVE",
+        origin: "ESNS",
+        destination: "ESNS",
+        airborne: true,
+        groundstate: "DEPA",
+    }
+    assert.equal(clearStaleDepartureGroundstateForInbound(flight, ["ESNS"]), false)
+    assert.equal(flight.groundstate, "DEPA")
 })
 
 check("revive works for any myAirport (ESMS)", () => {

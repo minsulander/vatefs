@@ -1138,8 +1138,22 @@ class EfsStore {
      * Re-process all flights with current rules (used after config switch).
      * Clears strips/gaps and re-evaluates all flights, keeping flight data intact.
      * Trash is preserved (pruned only) so reconnect/config switch does not wipe recovery.
+     * Note / vehicle / other non-flight special strips are restored after reprocess
+     * (they have no Flight and would otherwise vanish on every roles refresh).
      */
     reprocessAllFlights() {
+        const preservedSpecials: FlightStrip[] = []
+        for (const strip of this.strips.values()) {
+            if (
+                strip.stripType === "note" ||
+                strip.stripType === "vehicle" ||
+                strip.id.startsWith("note:") ||
+                strip.id.startsWith("NOTE:")
+            ) {
+                preservedSpecials.push({ ...strip })
+            }
+        }
+
         this.strips.clear()
         pruneTrashMap(this.deletedStrips)
         this.gaps.clear()
@@ -1157,7 +1171,20 @@ class EfsStore {
             }
         }
 
-        console.log(`Reprocessed all flights: ${this.strips.size} strips placed`)
+        // Re-insert special strips if their bay/section still exists in the new layout
+        for (const strip of preservedSpecials) {
+            const bay = this.layout.bays.find((b) => b.id === strip.bayId)
+            const sectionOk = !!bay?.sections.some((s) => s.id === strip.sectionId)
+            if (!sectionOk) continue
+            this.strips.set(strip.id, strip)
+        }
+
+        console.log(
+            `Reprocessed all flights: ${this.strips.size} strips placed` +
+                (preservedSpecials.length
+                    ? ` (${preservedSpecials.filter((s) => this.strips.has(s.id)).length}/${preservedSpecials.length} specials kept)`
+                    : ""),
+        )
     }
 
     /**

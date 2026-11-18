@@ -113,6 +113,22 @@ check("TWR with GND online covers TWR only", () => {
     assert.deepEqual(roles, ["TWR"])
 })
 
+check("positionId-only update does not report roles changed", () => {
+    clearOnlineControllers()
+    staticConfig.look = "paper"
+    setMyAirports(["ESGG"])
+    setMyCallsign("ESGG_TWR")
+    setMyRole("TWR")
+
+    // First sighting of DEL changes covering roles
+    assert.equal(updateOnlineController("ESGG_DEL", 121.9, ["ESGG"], "CD"), true)
+    // Same controller, only SI string changes — must not trigger reprocess/refresh storm
+    assert.equal(updateOnlineController("ESGG_DEL", 121.9, ["ESGG"], "CD2"), false)
+
+    clearOnlineControllers()
+    staticConfig.look = undefined
+})
+
 check("unprimed 199.998 removes ghost DEL so CD covering returns", () => {
     clearOnlineControllers()
     staticConfig.look = "paper"
