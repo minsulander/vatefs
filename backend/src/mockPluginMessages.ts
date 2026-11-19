@@ -85,7 +85,8 @@ function grpStandMenuArrivalMessages(): PluginMessage[] {
             fpUpdate(callsign, origin, apt.icao, idx % 3 === 0 ? "B738" : "A320", {
                 flightRules: "I",
                 rfl: 25000 + (idx % 5) * 1000,
-                arrRwy: "01",
+                arrRwy: apt.icao === "ESPA" ? "14" : "01",
+                sectorEntryMin: 8 + (idx % 12),
             }),
             // Owned by mock myself so STD/stand menu is editable immediately
             ctrUpdate(callsign, {
@@ -522,6 +523,100 @@ export const mockPluginMessages: PluginMessage[] = [
     }),
     radarUpdate("COOENQ1", ESNQ_ELEV, ESNQ_LAT + 0.008, ESNQ_LON + 0.008),
 
+    // === ESPA (Luleå) — a few departures and arrivals on runway 14 ===
+    fpUpdate("SAS41L", "ESPA", "ESSA", "B738", {
+        flightRules: "I",
+        rfl: 35000,
+        depRwy: "14",
+        sid: "RESNA1A",
+        route: "RESNA N623 NOSLI",
+        eobt: "1015",
+    }),
+    ctrUpdate("SAS41L", {
+        squawk: "4611",
+        groundstate: "",
+        clearance: false,
+        stand: "4",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("SAS41L", 65, 65.547, 22.126),
+
+    fpUpdate("NAX32P", "ESPA", "ENGM", "B738", {
+        flightRules: "I",
+        rfl: 37000,
+        depRwy: "14",
+        route: "TOPLA M607 GENLU",
+        eobt: "1035",
+    }),
+    ctrUpdate("NAX32P", {
+        squawk: "4612",
+        groundstate: "STUP",
+        clearance: true,
+        stand: "6",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("NAX32P", 65, 65.541, 22.118),
+
+    fpUpdate("FIN8LL", "ESPA", "EFRO", "AT76", {
+        flightRules: "I",
+        rfl: 18000,
+        depRwy: "14",
+        route: "ROVAN DCT",
+        eobt: "1105",
+    }),
+    ctrUpdate("FIN8LL", {
+        squawk: "4613",
+        groundstate: "TAXI",
+        clearance: true,
+        stand: "2",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("FIN8LL", 65, 65.55, 22.11),
+
+    fpUpdate("SAS42L", "ESSA", "ESPA", "B738", {
+        flightRules: "I",
+        rfl: 35000,
+        arrRwy: "14",
+        star: "RESNA2B",
+        route: "NOSLI N623 RESNA",
+        sectorEntryMin: 18,
+    }),
+    ctrUpdate("SAS42L", {
+        squawk: "4621",
+        groundstate: "ARR",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("SAS42L", 4500, 65.62, 22.05, { groundSpeed: 240, controller: "ESPA_TWR" }),
+
+    fpUpdate("NAX91P", "ENGM", "ESPA", "B38M", {
+        flightRules: "I",
+        rfl: 36000,
+        arrRwy: "14",
+        route: "GENLU M607 TOPLA",
+        sectorEntryMin: 34,
+    }),
+    ctrUpdate("NAX91P", {
+        squawk: "4622",
+        groundstate: "",
+        controller: "ESOS_CTR",
+    }),
+    radarUpdate("NAX91P", 8000, 65.7, 21.95, { groundSpeed: 280 }),
+
+    fpUpdate("BRA214", "ESGG", "ESPA", "AT76", {
+        flightRules: "I",
+        rfl: 22000,
+        arrRwy: "14",
+        route: "MOXAM N623 RESNA",
+        sectorEntryMin: 6,
+    }),
+    ctrUpdate("BRA214", {
+        squawk: "4623",
+        groundstate: "TXIN",
+        stand: "8",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("BRA214", 65, 65.538, 22.13, { groundSpeed: 20, controller: "ESPA_TWR" }),
+
     // === GRP stand-menu arrivals (one+ per airport with GRP stands) ===
     ...grpStandMenuArrivalMessages(),
 ]
@@ -565,6 +660,10 @@ function mockRwyConfigForAirports(
     out.ESMS = {
         "17": { arr: true, dep: true },
         "35": { arr: false, dep: false },
+    }
+    out.ESPA = {
+        "14": { arr: true, dep: true },
+        "32": { arr: false, dep: false },
     }
     return out
 }

@@ -545,6 +545,27 @@ function normalizeCruiseTas(raw: string | undefined): string | undefined {
  * Skips DCT, airport/runway tokens (e.g. ESGJ/01), and initial speed/level groups
  * (e.g. N0450F100); returns the next fix (RESNA).
  */
+/** M when item 18 marks the flight military or state. S/N/G/X are not in EuroScope. */
+function flightCategoryFromRemarks(remarks: string | undefined): string | undefined {
+    if (!remarks) return undefined
+    if (/\bSTS\/(?:MIL|STATE)\b/i.test(remarks) || /\bRMK\/MIL\b/i.test(remarks)) return "M"
+    return undefined
+}
+
+/**
+ * OAT when RMK/OAT, or the letters OAT appear anywhere inside an RMK/ field.
+ * The field runs until the next item-18 token.
+ */
+function fplRemarksHaveOat(remarks: string | undefined): boolean {
+    if (!remarks) return false
+    const re = /\bRMK\/([\s\S]*?)(?=\s+[A-Z]{1,5}\/|$)/gi
+    let match: RegExpExecArray | null
+    while ((match = re.exec(remarks))) {
+        if (match[1].toUpperCase().includes("OAT")) return true
+    }
+    return false
+}
+
 function firstSignificantRouteFix(route: string): string | undefined {
     for (const raw of route.split(/\s+/)) {
         if (!raw) continue
@@ -2064,7 +2085,9 @@ class FlightStore {
                     currentAssignment,
                     targetSection.sectionId,
                 )
+            const holdPaperBoard = !!currentAssignment && this.isManualPaperBoard()
             const holdSection =
+                holdPaperBoard ||
                 holdRwySequence ||
                 holdLandedArrOnRunway ||
                 holdUtflygning ||
@@ -2476,6 +2499,13 @@ class FlightStore {
             }
         }
 
+        // Paper board: a new or printed strip drops into pending dep / pending arr.
+        // Later updates do not move it (isManualPaperBoard hold).
+        if (!currentAssignment && this.isManualPaperBoard()) {
+            const pending = this.paperPendingSection(flight)
+            if (pending) targetSection = pending
+        }
+
         // Manual paper print: do not place a new strip until explicitly printed
         if (!currentAssignment && this.shouldGateNewStrip(callsign)) {
             return { flight }
@@ -2533,6 +2563,7 @@ class FlightStore {
         }
         // CD ALL → TSAT → PUSH → TAXI: CLR / GS always win over sticky drag/sync.
         if (
+            !this.isManualPaperBoard() &&
             holdManualSynced &&
             currentAssignment &&
             this.isDepBayFlowStickyInvalid(flight, currentAssignment.sectionId)
@@ -2543,7 +2574,9 @@ class FlightStore {
             flight.placementStickyKey = undefined
             holdManualSynced = false
         }
+        const holdPaperBoard = !!currentAssignment && this.isManualPaperBoard()
         const holdSection =
+            holdPaperBoard ||
             holdRwySequence ||
             holdLandedArrOnRunway ||
             holdUtflygning ||
@@ -4570,6 +4603,33 @@ class FlightStore {
     }
 
     /**
+     * Paper flight-progress board (ESGG `paper` and `std`): once a strip is on
+     * the board it stays in that bay until the controller drags it.
+     */
+    private isManualPaperBoard(): boolean {
+        return this.config.look === "paper" || this.config.look === "std"
+    }
+
+    /**
+     * Where a printed paper strip first appears.
+     * Departure and local → pending_dep.
+     * Arrival and cross → pending_arr, or ESGG inbound when that bay is the arrival pile.
+     */
+    private paperPendingSection(
+        flight: Flight,
+    ): { bayId: string; sectionId: string; ruleId: string } | undefined {
+        const type = this.determineStripType(flight)
+        const arrivalSide = type === "arrival" || type === "cross"
+        const preferred = arrivalSide ? "pending_arr" : "pending_dep"
+        const fallback = arrivalSide ? "inbound" : "pending_dep"
+        for (const sectionId of [preferred, fallback]) {
+            const bayId = this.config.sectionToBay.get(sectionId)
+            if (bayId) return { bayId, sectionId, ruleId: "paper_pending" }
+        }
+        return undefined
+    }
+
+    /**
      * Keep a strip in the bay above PÅ BANAN while still taxiing (TXO/TXIN).
      * Rules would otherwise snap it back to PÅ TAXI / PÅ BANAN on every update.
      * - Solo TWR (no GND): any taxiing strip placed here
@@ -4889,7 +4949,7 @@ class FlightStore {
         currentBottom: boolean,
     ): { position: number; bottom: boolean; bumped: boolean } {
         // Paper look is ESGG-only today — do not change ESSA / other configs
-        if (this.config.look !== 'paper') {
+        if (this.isManualPaperBoard() || this.config.look !== 'paper') {
             this.clearAppTransferPinned(callsign)
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }
@@ -5073,7 +5133,7 @@ class FlightStore {
         currentPosition: number,
         currentBottom: boolean,
     ): { position: number; bottom: boolean; bumped: boolean } {
-        if (this.config.look !== 'paper') {
+        if (this.isManualPaperBoard() || this.config.look !== 'paper') {
             this.clearUtflygningPinned(callsign)
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }
@@ -5149,7 +5209,7 @@ class FlightStore {
         currentPosition: number,
         currentBottom: boolean,
     ): { position: number; bottom: boolean; bumped: boolean } {
-        if (this.config.look !== 'paper') {
+        if (this.isManualPaperBoard() || this.config.look !== 'paper') {
             this.clearGndTaxiPinned(callsign)
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }
@@ -5297,7 +5357,7 @@ class FlightStore {
         currentPosition: number,
         currentBottom: boolean,
     ): { position: number; bottom: boolean; bumped: boolean } {
-        if (this.config.look !== 'paper') {
+        if (this.isManualPaperBoard() || this.config.look !== 'paper') {
             this.clearAbovePushPinned(callsign)
             return { position: currentPosition, bottom: currentBottom, bumped: false }
         }
@@ -6171,6 +6231,11 @@ class FlightStore {
                 ? undefined
                 : flight.paperClrReadSuppressed || undefined,
             dclDismissed: paperFresh ? undefined : flight.dclDismissed || undefined,
+            stdMark1: flight.stdMark1,
+            stdMark2: flight.stdMark2,
+            stdMark3: flight.stdMark3,
+            flightCategory: flightCategoryFromRemarks(flight.fplRemarks),
+            oat: fplRemarksHaveOat(flight.fplRemarks) || undefined,
             syncedDclMark: paperFresh ? undefined : flight.syncedDclMark || undefined,
             // CDM times only on ESSA IFR departures (not VFR / local)
             tobt: cdmEligible ? flight.tobt : undefined,
@@ -6682,8 +6747,24 @@ class FlightStore {
             // Manual paper: skip unprinted flights on bulk reprocess
             if (this.shouldGateNewStrip(flight.callsign)) continue
 
-            // Determine section for flight
-            const targetSection = determineSectionForFlight(flight, this.config)
+            // Paper board: keep a strip where the controller left it.
+            const existing = this.stripAssignments.get(flight.callsign)
+            if (existing && this.isManualPaperBoard()) {
+                const strip = this.createStrip(
+                    flight,
+                    existing.bayId,
+                    existing.sectionId,
+                    existing.position,
+                    existing.bottom,
+                )
+                results.push({ strip, softDeleted: false })
+                continue
+            }
+
+            // Determine section for flight. A new paper strip prints into pending dep/arr.
+            const targetSection =
+                (this.isManualPaperBoard() ? this.paperPendingSection(flight) : undefined) ??
+                determineSectionForFlight(flight, this.config)
             if (!targetSection) {
                 flight.noSectionFound = true
                 flight.deleted = true
@@ -6741,9 +6822,16 @@ class FlightStore {
             return { flight }
         }
 
-        // Determine section based on rules
-        const targetSection = determineSectionForFlight(flight, this.config)
+        // Determine section based on rules. Paper boards do not auto-move.
+        let targetSection = determineSectionForFlight(flight, this.config)
         const currentAssignment = this.stripAssignments.get(callsign)
+        // A flag update must not print a strip for a flight that is out of range.
+        if (!currentAssignment && !this.isEligibleForStrip(flight)) {
+            return { flight }
+        }
+        if (!currentAssignment && this.isManualPaperBoard()) {
+            targetSection = this.paperPendingSection(flight) ?? targetSection
+        }
 
         if (!targetSection) {
             if (!currentAssignment) {
@@ -6759,16 +6847,21 @@ class FlightStore {
             return { flight, strip }
         }
 
-        const sectionChanged = currentAssignment &&
+        const held = !!currentAssignment && this.isManualPaperBoard()
+        const sectionChanged = !!targetSection && currentAssignment &&
+            !held &&
             (currentAssignment.bayId !== targetSection.bayId ||
              currentAssignment.sectionId !== targetSection.sectionId)
+        const placed = held && currentAssignment
+            ? currentAssignment
+            : targetSection
 
         let position: number
         let bottom: boolean
         let previousSection: { bayId: string; sectionId: string } | undefined
 
         // Store the rule that matched
-        const ruleSource = targetSection.ruleId ?? 'default'
+        const ruleSource = targetSection?.ruleId ?? 'default'
 
         if (!currentAssignment) {
             position = this.getNewStripPosition(targetSection.bayId, targetSection.sectionId, flight)
@@ -6802,7 +6895,7 @@ class FlightStore {
             bottom = currentAssignment.bottom
         }
 
-        const strip = this.createStrip(flight, targetSection.bayId, targetSection.sectionId, position, bottom)
+        const strip = this.createStrip(flight, placed.bayId, placed.sectionId, position, bottom)
         const shiftedCallsigns = this.getLastShiftedCallsigns()
 
         return {
@@ -6922,7 +7015,8 @@ class FlightStore {
             sectionId = targetSectionId
             pos = position ?? this.getNewStripPosition(bayId, sectionId, flight)
         } else {
-            const targetSection = determineSectionForFlight(flight, this.config)
+            const pending = this.isManualPaperBoard() ? this.paperPendingSection(flight) : undefined
+            const targetSection = pending ?? determineSectionForFlight(flight, this.config)
             if (!targetSection) {
                 // Use default section or first section
                 const defaultSection = this.config.defaultSection

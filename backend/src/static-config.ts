@@ -174,7 +174,7 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.deleteRules = config.deleteRules
     staticConfig.moveRules = config.moveRules
     staticConfig.layoutMode = config.layoutMode
-    staticConfig.look = config.look === 'paper' ? 'paper' : 'saab'
+    staticConfig.look = config.look === 'paper' || config.look === 'std' ? config.look : 'saab'
     staticConfig.sectionVisibleFor = config.sectionVisibleFor
     staticConfig.bayTemplate = config.bayTemplate
     staticConfig.columnCount = config.columnCount

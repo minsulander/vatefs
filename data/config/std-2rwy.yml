@@ -1,0 +1,61 @@
+# Standard paper board with a second runway bay.
+# Same ground and TMA bays as STD; the extra bay is only the other runway.
+
+name: STD 2 RWY
+look: std
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 20
+
+include:
+  - std-rules.yml
+
+layout:
+  bays:
+    bay1:
+      sections:
+        pending_dep:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        clearance:
+          title: CLEARANCE
+          addFromTop: true
+        taxi:
+          title: TAXI
+          addFromTop: false
+    bay2:
+      sections:
+        sequence:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway:
+          title: <rwy1>
+          addFromTop: false
+    bay3:
+      sections:
+        sequence_b:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway_b:
+          title: <rwy2>
+          addFromTop: false
+    bay4:
+      sections:
+        pending_arr:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        tma_ctr:
+          title: TMA CTR
+          addFromTop: true
+
+moveRules:
+  to_runway_b:
+    toSectionId: runway_b
+    command:
+      type: setGroundstate
+      value: LINEUP
+    priority: 50

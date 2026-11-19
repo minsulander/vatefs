@@ -21,7 +21,7 @@
       </div>
 
       <div
-        v-if="!store.isPaperLook"
+        v-if="!store.isPaperLook && !store.isStdLook"
         class="bay-bg-slider"
         title="Strip bay background · double-click to reset"
         @pointerdown.stop

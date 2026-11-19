@@ -66,7 +66,7 @@
       :class="[
         { 'no-resize': isFirstSection },
         essaHeaderClass,
-        { 'section-header--paper': store.isPaperLook },
+        { 'section-header--paper': store.isPaperLook || store.isStdLook },
         { 'section-header--rtc': store.multiAirport && !store.isPaperLook },
         { 'section-header--rtc-rwy': !!rtcHeaderRwy },
         { 'header-drop-active': headerDropActive && !isDtransDivider },
@@ -78,7 +78,7 @@
       :title="
         workspaceMode || store.multiAirport
           ? 'Drag header to reposition in bay or move to another bay'
-          : store.isPaperLook && !isFirstSection
+          : (store.isPaperLook || store.isStdLook) && !isFirstSection
             ? 'Drag to adjust height · double-click to reset'
             : undefined
       "
@@ -113,7 +113,7 @@
           </button>
         </div>
       </template>
-      <template v-else-if="!store.isPaperLook">
+      <template v-else-if="!store.isPaperLook && !store.isStdLook">
         <div class="section-header-left">
           <button
             v-if="(workspaceMode || store.multiAirport) && !isEmptyWorkspaceHeader"
@@ -211,14 +211,17 @@
       </template>
       <template v-if="store.isPaperLook && showUtflygningFreqs">
         <div class="pg-hdr-freq pg-hdr-freq-left">
-          <span class="pg-hdr-freq-si">TW</span>
+          <span class="pg-hdr-freq-si">APP-W</span>
           <span class="pg-hdr-freq-mhz">124,205</span>
         </div>
         <span class="section-title" :class="{ 'section-title--paper-lg': paperLargeTitle }">{{ section.title }}</span>
         <div class="pg-hdr-freq pg-hdr-freq-right">
-          <span class="pg-hdr-freq-si">TE</span>
+          <span class="pg-hdr-freq-si">APP-E</span>
           <span class="pg-hdr-freq-mhz">124,680</span>
         </div>
+      </template>
+      <template v-else-if="store.isStdLook && isRunwaySectionId(section.id)">
+        <span class="section-title section-title--paper-lg section-title--paper-center">{{ section.title }}</span>
       </template>
       <template v-else-if="store.isPaperLook && showPabananRwy">
         <span class="section-title section-title--paper-lg section-title--paper-center">{{ section.title }}</span>
@@ -234,11 +237,11 @@
         >{{ paperRwyId }}</button>
       </template>
       <span
-        v-else-if="!isDtransDivider"
+        v-else-if="!isDtransDivider && section.title"
         class="section-title"
         :class="{ 'section-title--paper-lg': store.isPaperLook && paperLargeTitle }"
       >{{ section.title }}</span>
-      <template v-if="!store.isPaperLook && !isDtransDivider">
+      <template v-if="!store.isPaperLook && !store.isStdLook && !isDtransDivider">
         <div class="section-header-right">
           <span
             v-if="rtcHeaderRwy"
@@ -1156,12 +1159,12 @@ function isWorkspaceSectionDrag(e: DragEvent): boolean {
 
 function onHeaderMouseDown(e: MouseEvent) {
   if (props.workspaceMode || store.multiAirport) return // pointerdown handles divider drag
-  if (store.isPaperLook) onResizeStart(e)
+  if (store.isPaperLook || store.isStdLook) onResizeStart(e)
 }
 
 function onHeaderTouchStart(e: TouchEvent) {
   if (props.workspaceMode || store.multiAirport) return
-  if (store.isPaperLook) onResizeStart(e)
+  if (store.isPaperLook || store.isStdLook) onResizeStart(e)
 }
 
 function onHeaderDblClick(e: MouseEvent) {
@@ -1171,7 +1174,7 @@ function onHeaderDblClick(e: MouseEvent) {
     e.stopPropagation()
     return
   }
-  if (store.isPaperLook) onResizeReset(e)
+  if (store.isPaperLook || store.isStdLook) onResizeReset(e)
 }
 
 /** Unified header drag: same gesture repositions Y in-bay or moves across bays. */
@@ -1414,7 +1417,7 @@ function tryWorkspaceSectionBodyDrop(e: DragEvent): boolean {
   return true
 }
 
-/** Paper ESGG UTFLYGNING header: TW/TE APP frequencies flanking the title */
+/** Paper ESGG UTFLYGNING header: APP-W/APP-E frequencies flanking the title */
 const showUtflygningFreqs = computed(
   () => store.isPaperLook && isCtrDepSectionId(props.section.id),
 )

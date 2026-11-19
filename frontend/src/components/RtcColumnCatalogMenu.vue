@@ -17,6 +17,21 @@
       @click.stop
     >
       <div class="efs-popup-list">
+        <template v-if="canChooseStrip">
+          <div class="efs-popup-section">Strip</div>
+          <button
+            type="button"
+            class="efs-popup-item"
+            :class="{ selected: stripChoice === 'saab' }"
+            @click.stop="onStripChoice('saab')"
+          >SAAB</button>
+          <button
+            type="button"
+            class="efs-popup-item"
+            :class="{ selected: stripChoice === 'paper' }"
+            @click.stop="onStripChoice('paper')"
+          >Paper</button>
+        </template>
         <button type="button" class="efs-popup-item" @click="onResetLayout">
           Reset layout
         </button>
@@ -149,6 +164,12 @@ import {
   rtcExtrasVersion,
 } from '@/composables/rtcColumnExtras'
 import { useEfsStore } from '@/store/efs'
+import {
+  rtcStripChoice,
+  rtcStripChoiceAvailable,
+  setRtcStripChoice,
+  type RtcStripChoice,
+} from '@/composables/rtcStripLook'
 
 const props = defineProps<{
   bay: Bay
@@ -160,6 +181,8 @@ const open = ref(false)
 const sectionsOpen = ref(true)
 const folderOpen = reactive<Record<string, boolean>>({})
 const isEssaColumn = computed(() => (props.airport || '').toUpperCase() === 'ESSA')
+const canChooseStrip = computed(() => rtcStripChoiceAvailable(props.airport))
+const stripChoice = computed(() => rtcStripChoice(props.airport))
 const infoMenu = useInfoStripMenu({
   forceEssaCatalog: () => isEssaColumn.value,
   airport: () => props.airport,
@@ -225,6 +248,10 @@ function onAddEmpty() {
 function onAddSection(logical: string) {
   ensureRtcLogicalSection(props.bay.id, logical)
   open.value = false
+}
+
+function onStripChoice(choice: RtcStripChoice) {
+  setRtcStripChoice(props.airport, choice)
 }
 
 function onResetLayout() {

@@ -160,6 +160,7 @@ import {
   undoStripScribble,
   useStripScribbles,
 } from '@/composables/useStripScribbles'
+import { rtcColumnStripKind } from '@/composables/rtcStripLook'
 import { useEfsStore } from '@/store/efs'
 import FlightStrip from './FlightStrip.vue'
 
@@ -204,10 +205,24 @@ const zoomScalePercent = useZoomStripScalePercent()
 const sliderPercent = ref(zoomScalePercent.value)
 const scribbleMode = useStripScribbleMode()
 const stripId = computed(() => props.strip.id)
+/** Paper face (ESGG, generic, or an RTC paper column) vs SAAB face. */
+const scribbleCanvas = computed<'saab' | 'paper'>(() => {
+  if (store.isPaperLook || store.isStdLook) return 'paper'
+  if (!store.multiAirport) return 'saab'
+  const bayId = props.bayId || props.strip.bayId || ''
+  const bayIndex = /^bay(\d+)$/.exec(bayId)
+  const fromColumn = bayIndex
+    ? store.columnAirports[Number(bayIndex[1]) - 1]
+    : undefined
+  const column = (fromColumn || props.strip.airport || '').toUpperCase()
+  const kind = rtcColumnStripKind(column)
+  return kind === 'saab' ? 'saab' : 'paper'
+})
 /** Notes always draw in zoom (no pen toggle). Vehicles match aircraft (pen toggle). */
 const isNote = computed(() => props.strip.stripType === 'note')
-const isPaperLook = computed(() => store.isPaperLook)
-const { hasScribbles } = useStripScribbles(stripId)
+/** Blue/red pen on the paper face. SAAB face stays black. */
+const isPaperLook = computed(() => scribbleCanvas.value === 'paper')
+const { hasScribbles } = useStripScribbles(stripId, scribbleCanvas)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripId)
 
 const penMode = ref(false)
@@ -544,6 +559,7 @@ const ZOOM_INTERACTIVE_CLICK_SELECTOR = [
   '.pg-xfer-diag-hit',
   '.pg-goa-zone',
   '.pg-cs',
+  '.std-cs',
   '.pg-sid',
   '.pg-time-eobt',
   '.strip-cock-hit',
@@ -633,9 +649,10 @@ function onEscapePenOff() {
 
 function undoStroke() {
   const id = props.strip.id
-  const strokes = getStripScribbles(id)
+  const canvas = scribbleCanvas.value
+  const strokes = getStripScribbles(id, canvas)
   const last = strokes[strokes.length - 1]
-  undoStripScribble(id)
+  undoStripScribble(id, canvas)
   // Diagonal / that triggered UTFLYGNING→APP XFER: undo cancels the pending outbound (re-assume)
   if (
     last?.tag === 'xfer-app' &&
@@ -651,7 +668,7 @@ function undoStroke() {
 
 function clearStrokes() {
   activeStroke.value = null
-  clearStripScribbles(props.strip.id)
+  clearStripScribbles(props.strip.id, scribbleCanvas.value)
 }
 
 /**
@@ -730,7 +747,7 @@ function close() {
   resetDrawPointerState()
   flushHotspotFlagsFromScribbles()
   // Local WS fanout + remote VatEFS sync (zoom-close cadence)
-  store.syncStripScribbles(props.strip.id, true)
+  store.syncStripScribbles(props.strip.id, true, scribbleCanvas.value)
   emit('update:modelValue', false)
 }
 
@@ -819,11 +836,15 @@ function hotspotScribbleRect(el: Element | null): ScribbleRect | null {
   }
 }
 
+function pushInk(points: string, tag?: PaperScribbleTag) {
+  pushStripScribble(props.strip.id, points, drawInk.value, tag, scribbleCanvas.value)
+}
+
 /** Tag stroke if mostly in a paper hotspot (flags applied on zoom close). */
 function commitStrokeMaybeClr(points: string) {
   const root = stageEl.value
   if (!root) {
-    pushStripScribble(props.strip.id, points, drawInk.value)
+    pushInk(points)
     return
   }
 
@@ -832,7 +853,7 @@ function commitStrokeMaybeClr(points: string) {
   const live = store.strips.get(props.strip.id) ?? props.strip
   const pendingIn = store.isPaperLook && live.transferPending === 'in'
   if (pendingIn && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
-    pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-refuse')
+    pushInk(points, 'xfer-refuse')
     return
   }
   const utflygningOrRunwayOrGoa =
@@ -845,7 +866,7 @@ function commitStrokeMaybeClr(points: string) {
       live.sectionId === 'runway' ||
       live.sectionId.includes('runway'))
   if (utflygningOrRunwayOrGoa && leftRect && strokeMatchesRisingDiagonal(points, leftRect)) {
-    pushStripScribble(props.strip.id, points, drawInk.value, 'xfer-app')
+    pushInk(points, 'xfer-app')
     return
   }
 
@@ -856,14 +877,14 @@ function commitStrokeMaybeClr(points: string) {
     )
     const goaRect = hotspotScribbleRect(root.querySelector('[data-paper-flag="goa"]'))
     if (ctlRect && strokeMatchesClrBox(points, ctlRect)) {
-      pushStripScribble(props.strip.id, points, drawInk.value, 'ctl')
+      pushInk(points, 'ctl')
       return
     }
     if (goaRect && strokeMatchesClrBox(points, goaRect)) {
-      pushStripScribble(props.strip.id, points, drawInk.value, 'goa')
+      pushInk(points, 'goa')
       return
     }
-    pushStripScribble(props.strip.id, points, drawInk.value)
+    pushInk(points)
     return
   }
 
@@ -882,7 +903,7 @@ function commitStrokeMaybeClr(points: string) {
   else if (ctoRect && strokeMatchesClrBox(points, ctoRect)) tag = 'cto'
   else if (atdRect && strokeMatchesClrBox(points, atdRect)) tag = 'atd'
 
-  pushStripScribble(props.strip.id, points, drawInk.value, tag)
+  pushInk(points, tag)
 }
 
 function onDrawPointerUp(event: PointerEvent) {

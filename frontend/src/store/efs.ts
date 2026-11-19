@@ -51,8 +51,10 @@ import {
 import {
     clearStripScribbles,
     pushRisingDiagonalLeftCol,
+    replaceScribbleCanvases,
     setStripScribbles,
     getStripScribbles,
+    type ScribbleCanvas,
     type ScribbleStroke,
 } from "@/composables/useStripScribbles"
 import type { ScribbleStrokePayload, SharedWorkspaceStore } from "@vatefs/common"
@@ -937,6 +939,7 @@ export const useEfsStore = defineStore("efs", () => {
     const cidDialogReason = ref<'missing' | 'command' | undefined>()
 
     const isPaperLook = computed(() => stripLook.value === 'paper')
+    const isStdLook = computed(() => stripLook.value === 'std')
 
     /** Skip print sounds during bulk sync (connect / refresh / config switch). */
     let suppressPrintSoundUntil = 0
@@ -1205,8 +1208,12 @@ export const useEfsStore = defineStore("efs", () => {
         }
     }
 
-    function applyScribbleUpdate(stripId: string, strokes: ScribbleStrokePayload[]) {
-        const local: ScribbleStroke[] = strokes.map((s) => {
+    function applyScribbleUpdate(
+        stripId: string,
+        strokes: Array<ScribbleStrokePayload & { canvas?: ScribbleCanvas }>,
+        canvas?: ScribbleCanvas,
+    ) {
+        const local = strokes.map((s) => {
             const color =
                 s.color === 'red' || s.color === 'black' || s.color === 'blue' ? s.color : 'blue'
             const tag =
@@ -1220,15 +1227,26 @@ export const useEfsStore = defineStore("efs", () => {
                 s.tag === 'xfer-app'
                     ? s.tag
                     : undefined
-            return tag ? { points: s.points, color, tag } : { points: s.points, color }
+            const face = s.canvas === 'paper' || s.canvas === 'saab' ? s.canvas : undefined
+            return tag
+                ? { points: s.points, color, tag, ...(face ? { canvas: face } : {}) }
+                : { points: s.points, color, ...(face ? { canvas: face } : {}) }
         })
-        setStripScribbles(stripId, local)
+        if (canvas === 'saab' || canvas === 'paper') {
+            setStripScribbles(stripId, local, canvas)
+            return
+        }
+        replaceScribbleCanvases(stripId, local)
     }
 
-    /** Persist local strokes to backend (+ fanout); optionally push to remote sync. */
-    function syncStripScribbles(stripId: string, pushRemote = true) {
-        const strokes = getStripScribbles(stripId)
-        sendMessage({ type: 'scribbleSet', stripId, strokes })
+    /** Persist one face to the backend (+ fanout). Remote sync still sends both faces. */
+    function syncStripScribbles(
+        stripId: string,
+        pushRemote = true,
+        canvas: ScribbleCanvas = 'saab',
+    ) {
+        const strokes = getStripScribbles(stripId, canvas)
+        sendMessage({ type: 'scribbleSet', stripId, canvas, strokes })
         if (pushRemote && syncEnabled.value) {
             sendMessage({ type: 'scribbleSyncPush', stripId })
         }
@@ -1480,7 +1498,13 @@ export const useEfsStore = defineStore("efs", () => {
                         pendingPrintFlights.value = message.flights
                         break
                     case 'scribbleUpdate':
-                        applyScribbleUpdate(message.stripId, message.strokes)
+                        applyScribbleUpdate(
+                            message.stripId,
+                            message.strokes,
+                            message.canvas === 'saab' || message.canvas === 'paper'
+                                ? message.canvas
+                                : undefined,
+                        )
                         break
                     case 'openCidDialog':
                         openCidDialog(message.suggestedCid, message.reason)
@@ -1655,7 +1679,7 @@ export const useEfsStore = defineStore("efs", () => {
 
         // Paper G/A APP-assume reprint: wipe freehand ink (SAAB keeps scribbles)
         if (cleanReprint && isPaperLook.value) {
-            clearStripScribbles(strip.id)
+            clearStripScribbles(strip.id, 'paper')
         }
 
         const prev = strips.value.get(strip.id)
@@ -1985,7 +2009,8 @@ export const useEfsStore = defineStore("efs", () => {
                 : null
         essaTwrSplit.value = !!(message.essaRolesMode && message.essaTwrSplit)
         essaGndSplit.value = !!(message.essaRolesMode && message.essaGndSplit)
-        stripLook.value = message.look === 'paper' ? 'paper' : 'saab'
+        stripLook.value =
+            message.look === 'paper' || message.look === 'std' ? message.look : 'saab'
         if (stripLook.value !== 'paper') {
             pendingPrintFlights.value = []
         }
@@ -3881,6 +3906,20 @@ export const useEfsStore = defineStore("efs", () => {
         })
     }
 
+    function updateStdMark(stripId: string, index: 1 | 2 | 3, text: string) {
+        const strip = strips.value.get(stripId)
+        if (strip) {
+            const next = { ...strip }
+            const value = text.trim() || undefined
+            if (index === 1) next.stdMark1 = value
+            else if (index === 2) next.stdMark2 = value
+            else next.stdMark3 = value
+            strips.value.set(stripId, next)
+            stripsVersion.value++
+        }
+        sendMessage({ type: 'updateStdMark', stripId, index, text })
+    }
+
     function updateVehicleStrip(stripId: string, field: 'callsign' | 'hp' | 'std', text: string) {
         const strip = strips.value.get(stripId)
         if (strip && strip.stripType === 'vehicle') {
@@ -4380,6 +4419,8 @@ export const useEfsStore = defineStore("efs", () => {
         syncStripScribbles,
         stripLook,
         isPaperLook,
+        isStdLook,
+        updateStdMark,
         pendingPrintFlights,
         listPendingPrint,
         printStrip,

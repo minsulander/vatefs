@@ -18,6 +18,11 @@ const routes = [
         component: () => import("@/views/SettingsView.vue"),
     },
     {
+        path: "/examples",
+        name: "examples",
+        component: () => import("@/views/ExamplesView.vue"),
+    },
+    {
         path: "/:pathMatch(.*)*",
         name: "notfound",
         component: () => import("@/views/HomeView.vue"),
@@ -56,6 +61,7 @@ router.beforeEach((to, from, next) => {
 })
 
 router.afterEach((to, from) => {
+    if (to.name === "examples") return
     if (to.name && typeof(to.name) === "string") localStorage.setItem("efs/route", to.name)
 })
 export default router

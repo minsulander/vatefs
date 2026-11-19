@@ -1,0 +1,68 @@
+# Standard paper board. A printed strip lands in pending departure or
+# pending arrival and stays there until the controller drags it.
+
+sectionRules:
+  pending_dep_print:
+    sectionId: pending_dep
+    direction: departure
+    priority: 40
+
+  pending_local_print:
+    sectionId: pending_dep
+    direction: local
+    priority: 40
+
+  pending_arr_print:
+    sectionId: pending_arr
+    direction: arrival
+    priority: 40
+
+  pending_cross_print:
+    sectionId: pending_arr
+    direction: cross
+    priority: 40
+
+deleteRules:
+  delete_dep_high_transferred:
+    direction: departure
+    controller: not_myself
+    minAltitudeAboveField: 2500
+    priority: 100
+
+  delete_parked:
+    direction: arrival
+    groundstates: [PARK]
+    priority: 100
+
+  delete_parked_local:
+    direction: local
+    groundstates: [PARK]
+    priority: 100
+
+  delete_beyond_range:
+    beyondRange: true
+    priority: 10
+
+moveRules:
+  # Dragging the strip is the paper action. It updates EuroScope and does not
+  # snap the strip onward when the flight state changes.
+  to_taxi:
+    toSectionId: taxi
+    command:
+      type: setGroundstate
+      value: TAXI
+    priority: 40
+
+  to_runway:
+    toSectionId: runway
+    command:
+      type: setGroundstate
+      value: LINEUP
+    priority: 50
+
+  to_clearance:
+    toSectionId: clearance
+    command:
+      type: setClearance
+      value: true
+    priority: 30

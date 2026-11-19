@@ -52,6 +52,8 @@ import {
  * Supported variables:
  *   <arwy>  - active arrival runway(s), e.g. "26" or "01L/01R"
  *   <drwy>  - active departure runway(s), e.g. "19R" or "08/19R"
+ *   <rwy1>  - first active runway designator
+ *   <rwy2>  - second active runway designator (falls back to the first)
  */
 function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): EfsLayout {
     // Check if any title contains a template variable (fast path)
@@ -75,6 +77,12 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
 
     const arrRwyStr = allArrRunways.join('/') || '??'
     const depRwyStr = allDepRunways.join('/') || '??'
+    const runwayOrder: string[] = []
+    for (const rwy of [...allDepRunways, ...allArrRunways]) {
+        if (rwy && !runwayOrder.includes(rwy)) runwayOrder.push(rwy)
+    }
+    const rwy1 = runwayOrder[0] || '??'
+    const rwy2 = runwayOrder[1] || rwy1
 
     return {
         bays: layout.bays.map(bay => ({
@@ -84,6 +92,8 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
                 title: section.title
                     .replace('<arwy>', arrRwyStr)
                     .replace('<drwy>', depRwyStr)
+                    .replace('<rwy1>', rwy1)
+                    .replace('<rwy2>', rwy2)
             }))
         }))
     }
@@ -144,6 +154,11 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "dclClearance",
     "noteText",
     "paperInfoKind",
+    "stdMark1",
+    "stdMark2",
+    "stdMark3",
+    "flightCategory",
+    "oat",
     "hasMatchingFlight",
     "groundstate",
     // CDM / vIFF — must be compared or TOBT/TSAT/REA-only updates are dropped
@@ -1445,6 +1460,21 @@ class EfsStore {
         const strip = this.strips.get(stripId)
         if (!strip || strip.stripType !== 'note') return undefined
         strip.noteText = text
+        return strip
+    }
+
+    /**
+     * Standard paper mark (column 4, 5, or 6 top). Persists on the flight so
+     * the next strip rebuild keeps it.
+     */
+    updateStdMark(stripId: string, index: 1 | 2 | 3, text: string): FlightStrip | undefined {
+        const strip = this.strips.get(stripId)
+        if (!strip || strip.stripType === 'note' || strip.stripType === 'vehicle') return undefined
+        const value = text.trim() || undefined
+        const key = index === 1 ? 'stdMark1' : index === 2 ? 'stdMark2' : 'stdMark3'
+        const flight = flightStore.getFlight(strip.callsign)
+        if (flight) flight[key] = value
+        strip[key] = value
         return strip
     }
 

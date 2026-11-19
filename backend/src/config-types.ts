@@ -619,7 +619,7 @@ export interface EfsStaticConfig {
     saabLayouts?: Array<{ id: string; name: string; bayCount: number }>
 
     /** Strip chrome: saab (default) or paper (ESGG FPS). Controls print sound / manual print. */
-    look?: 'saab' | 'paper'
+    look?: 'saab' | 'paper' | 'std'
 
     /**
      * Per-section visibility families for essaRoles mode (sectionId → CD/GND/TWR).

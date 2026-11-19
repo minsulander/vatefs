@@ -4,7 +4,7 @@
     class="efs-bay"
     :class="{
       'efs-bay--empty': store.multiAirport && isEmpty,
-      'efs-bay--paper': store.isPaperLook,
+      'efs-bay--paper': store.isPaperLook || store.isStdLook,
       'efs-bay--workspace': workspaceMode,
       'efs-bay--ws-section-drag': workspaceMode && !!ws.draggingSectionId.value,
     }"
@@ -14,7 +14,7 @@
     @drop="onWorkspaceBayDrop"
   >
     <!-- ESGG paper board: dark edge panels + one pipe each side (same layer, under strips) -->
-    <template v-if="store.isPaperLook">
+    <template v-if="store.isPaperLook || store.isStdLook">
       <div class="bay-edge bay-edge--left" aria-hidden="true" />
       <div class="bay-edge bay-edge--right" aria-hidden="true" />
       <div class="bay-rail bay-rail--left" aria-hidden="true">

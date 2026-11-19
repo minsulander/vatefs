@@ -2,7 +2,7 @@
   <div
     ref="containerEl"
     class="efs-bay-container"
-    :class="{ 'efs-bay-container--paper': store.isPaperLook }"
+    :class="{ 'efs-bay-container--paper': store.isPaperLook || store.isStdLook }"
     @click="onContainerClick"
   >
     <EfsTopBar />
@@ -16,7 +16,7 @@
         :class="{
           'bay-row--multi': store.multiAirport,
           'bay-row--choosing': store.pendingIdleSwap != null,
-          'bay-row--paper': store.isPaperLook,
+          'bay-row--paper': store.isPaperLook || store.isStdLook,
           'bay-row--workspace': store.workspaceMode && !!ws.activeLayout.value,
           'bay-row--table-scroll': tableScroll,
         }"
@@ -31,7 +31,7 @@
             'bay-column--empty': store.multiAirport && !store.columnAirports[index],
             'bay-column--swap-target': store.pendingIdleSwap != null,
             'bay-column--flash': store.flashingColumnIndex === index,
-            'bay-column--paper': store.isPaperLook,
+            'bay-column--paper': store.isPaperLook || store.isStdLook,
             'bay-column--workspace': store.workspaceMode && !!ws.activeLayout.value,
             'bay-column--table-fixed': tableScroll,
             'bay-column--klack-raised': bayHasKlack(bay.id, index),
@@ -135,7 +135,7 @@ const BAY_GUTTER_AT_SCALE_1_PX = 8
 /** SAAB inter-bay gutter tracks strip scale (column width / 400). */
 function updateBayGutterScale() {
   const root = containerEl.value
-  if (!root || store.isPaperLook) return
+  if (!root || store.isPaperLook || store.isStdLook) return
   const col = root.querySelector('.bay-column') as HTMLElement | null
   const w = col?.clientWidth ?? 0
   if (w <= 0) return
@@ -302,7 +302,7 @@ watch(
 )
 
 watch(
-  () => store.isPaperLook,
+  () => store.isPaperLook || store.isStdLook,
   () => requestAnimationFrame(updateBayGutterScale),
 )
 

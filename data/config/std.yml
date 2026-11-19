@@ -1,0 +1,45 @@
+# Standard paper flight-progress board (not Landvetter).
+# One runway: departures left, runway in the middle, arrivals / TMA right.
+# Printed strips land in pending departure or pending arrival and stay until dragged.
+
+name: STD
+look: std
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 20
+
+include:
+  - std-rules.yml
+
+layout:
+  bays:
+    bay1:
+      sections:
+        pending_dep:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        clearance:
+          title: CLEARANCE
+          addFromTop: true
+        taxi:
+          title: TAXI
+          addFromTop: false
+    bay2:
+      sections:
+        sequence:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway:
+          title: <drwy>
+          addFromTop: false
+    bay3:
+      sections:
+        pending_arr:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        tma_ctr:
+          title: TMA CTR
+          addFromTop: true

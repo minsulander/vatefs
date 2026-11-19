@@ -200,6 +200,19 @@ export interface FlightStrip {
     paperClrReadSuppressed?: boolean
     /** Paper: DCL word dismissed and must not return on the next read click. */
     dclDismissed?: boolean
+    /**
+     * Standard paper strip. Column 4 top is CLR Coordinated.
+     * On departures and local flights that check is Departure Coordination (`coo`).
+     * Other strip types keep a local "✓" in stdMark1.
+     * Column 5 top is CLR Read and follows clearance / clearanceReadback.
+     */
+    stdMark1?: string
+    stdMark2?: string
+    stdMark3?: string
+    /** ICAO type-of-flight letter when known (S/N/G/M/X). Blank when the FPL has none. */
+    flightCategory?: string
+    /** Item 18 RMK/ contains OAT — star in the standard strip's right-hand bottom cell. */
+    oat?: boolean
     /** Peer sync: show DCL in the paper CLR-read box when this client has no Hoppie status. */
     syncedDclMark?: boolean
 
@@ -342,8 +355,8 @@ export type StripPrintSound = 'off' | 'short' | 'long'
 /** Paper-look strip print mode (ignored unless config look is paper). */
 export type StripPrintMode = 'auto' | 'manual'
 
-/** Visual strip chrome selected by YAML config. */
-export type StripLook = 'saab' | 'paper'
+/** Visual strip chrome selected by YAML config. `std` is the non-Landvetter paper strip. */
+export type StripLook = 'saab' | 'paper' | 'std'
 
 /** Paper FPS info / blank strip templates (printed via printer dialog). */
 export type PaperInfoKind =
@@ -535,11 +548,16 @@ export interface UiSettings {
     standMenuLayout: StandMenuLayout
 }
 
+/** SAAB and paper strips keep separate ink for the same flight. */
+export type ScribbleCanvas = 'saab' | 'paper'
+
 /** Stroke payload for local + remote scribble sync */
 export interface ScribbleStrokePayload {
     points: string
     color: 'blue' | 'red' | 'black'
     tag?: string
+    /** Which strip face this stroke belongs to. Omitted on older payloads. */
+    canvas?: ScribbleCanvas
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {

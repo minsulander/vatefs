@@ -38,7 +38,7 @@ export function useSectionResize() {
     const maxH = pairTotal - MIN_HEIGHT
     let h = Math.max(MIN_HEIGHT, Math.min(maxH, height))
     // ESGG paper: free drag — no equal-split / strip-grid snap on bay headers
-    if (store.isPaperLook) return Math.round(h)
+    if (store.isPaperLook || store.isStdLook) return Math.round(h)
     // Snap to equal split
     const half = pairTotal / 2
     if (Math.abs(h - half) <= SNAP_THRESHOLD_PX) return Math.round(half)

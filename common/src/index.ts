@@ -28,6 +28,7 @@ export type {
     PaperInfoKind,
     AirportAtisInfo,
     ScribbleStrokePayload,
+    ScribbleCanvas,
     WorkspaceSortFlow,
     SharedSavedWorkspaceLayout,
     SharedWorkspaceStore,

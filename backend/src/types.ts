@@ -109,6 +109,10 @@ export interface Flight {
     clearanceRead?: boolean
     /** Paper FPS col 5: CLR correct — toggles EuroScope CLR flag */
     clearanceReadback?: boolean
+    /** Standard paper strip marks (columns 4–6 top). "✓" or free text. */
+    stdMark1?: string
+    stdMark2?: string
+    stdMark3?: string
     /**
      * Next createStrip is a fresh paper reprint — do not derive CLR read/correct
      * from EuroScope clearance (strip starts clean; CAD may set them again later).

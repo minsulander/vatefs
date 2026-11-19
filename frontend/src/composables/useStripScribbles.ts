@@ -15,7 +15,7 @@ export const SCRIBBLE_BOT_Y1 = 1000
 /** Same design width as FlightStrip --strip-scale (400px → scale 1). */
 export const SCRIBBLE_STRIP_REF_WIDTH_PX = 400
 /** Screen-px stroke at strip-scale 1; scales with bay/zoom strip width. */
-export const SCRIBBLE_STROKE_AT_REF_PX = 1.5
+export const SCRIBBLE_STROKE_AT_REF_PX = 1.2
 
 export type ScribbleBand = 'top' | 'body' | 'bottom'
 
@@ -49,6 +49,8 @@ export type PaperScribbleTag =
   | 'xfer-app'
 /** @deprecated alias — prefer PaperScribbleTag */
 export type ClrScribbleTag = Extract<PaperScribbleTag, 'clr-read' | 'clr-correct'>
+
+export type ScribbleCanvas = 'saab' | 'paper'
 
 export interface ScribbleStroke {
   points: string
@@ -159,17 +161,49 @@ export function measureScribbleBands(root: HTMLElement): ScribbleBandScreen[] {
     add('.paper-grid', 'body')
     add('.paper-flight', 'body')
   }
-  // Note / vehicle strips have no .strip-grid — scribble fills the body area
+  // Note / vehicle / generic paper strips have no SAAB or ESGG grid
   if (!bands.some((b) => b.band === 'body')) {
     add('.note-content', 'body')
     add('.vehicle-body', 'body')
     add('.paper-info-body', 'body')
+    add('.std-strip', 'body')
   }
   add('.strip-expander-bottom', 'bottom')
   return bands
 }
 
 const strokesById = reactive<Record<string, Array<string | ScribbleStroke>>>({})
+
+function canvasKey(stripId: string, canvas: ScribbleCanvas): string {
+  return `${stripId}::${canvas}`
+}
+
+/** Older ink has no canvas. Blue/red and hotspot tags belong on paper. */
+export function scribbleCanvasOfStroke(stroke: {
+  canvas?: string
+  tag?: string
+  color?: string
+}): ScribbleCanvas {
+  if (stroke.canvas === 'paper' || stroke.canvas === 'saab') return stroke.canvas
+  if (stroke.tag) return 'paper'
+  if (stroke.color === 'red' || stroke.color === 'blue') return 'paper'
+  return 'saab'
+}
+
+function migrateLegacyScribbles(stripId: string) {
+  const legacy = strokesById[stripId]
+  if (!legacy) return
+  const saab: ScribbleStroke[] = []
+  const paper: ScribbleStroke[] = []
+  for (const raw of legacy) {
+    const stroke = coerceStroke(raw)
+    if (!stroke) continue
+    ;(scribbleCanvasOfStroke(stroke) === 'paper' ? paper : saab).push(stroke)
+  }
+  delete strokesById[stripId]
+  if (saab.length) strokesById[canvasKey(stripId, 'saab')] = saab
+  if (paper.length) strokesById[canvasKey(stripId, 'paper')] = paper
+}
 
 function coerceTag(raw: unknown): PaperScribbleTag | undefined {
   return raw === 'clr-read' ||
@@ -437,19 +471,48 @@ export function hasShapeMatchedPaperScribble(
   stripId: string,
   tag: PaperScribbleTag,
 ): boolean {
-  return getStripScribbles(stripId).some(
+  return getStripScribbles(stripId, 'paper').some(
     (s) => s.tag === tag && strokeRoughlyMatchesPaperMark(tag, s.points),
   )
 }
 
-export function getStripScribbles(stripId: string): ScribbleStroke[] {
-  const raw = strokesById[stripId] ?? []
+export function getStripScribbles(
+  stripId: string,
+  canvas: ScribbleCanvas = 'saab',
+): ScribbleStroke[] {
+  migrateLegacyScribbles(stripId)
+  const raw = strokesById[canvasKey(stripId, canvas)] ?? []
   return raw.map(coerceStroke).filter((s): s is ScribbleStroke => !!s)
 }
 
-export function setStripScribbles(stripId: string, strokes: ScribbleStroke[]) {
-  if (strokes.length === 0) delete strokesById[stripId]
-  else strokesById[stripId] = strokes.map(serializeStroke)
+export function setStripScribbles(
+  stripId: string,
+  strokes: ScribbleStroke[],
+  canvas: ScribbleCanvas = 'saab',
+) {
+  migrateLegacyScribbles(stripId)
+  const key = canvasKey(stripId, canvas)
+  if (strokes.length === 0) delete strokesById[key]
+  else strokesById[key] = strokes.map(serializeStroke)
+}
+
+/** Replace both faces. Strokes without a canvas are split by colour and tag. */
+export function replaceScribbleCanvases(
+  stripId: string,
+  strokes: Array<ScribbleStroke & { canvas?: string }>,
+) {
+  migrateLegacyScribbles(stripId)
+  const saab: ScribbleStroke[] = []
+  const paper: ScribbleStroke[] = []
+  for (const stroke of strokes) {
+    const face = scribbleCanvasOfStroke(stroke)
+    const next: ScribbleStroke = stroke.tag
+      ? { points: stroke.points, color: stroke.color, tag: stroke.tag }
+      : { points: stroke.points, color: stroke.color }
+    ;(face === 'paper' ? paper : saab).push(next)
+  }
+  setStripScribbles(stripId, saab, 'saab')
+  setStripScribbles(stripId, paper, 'paper')
 }
 
 export function pushStripScribble(
@@ -457,25 +520,34 @@ export function pushStripScribble(
   points: string,
   color: ScribbleInk = 'blue',
   tag?: PaperScribbleTag,
+  canvas: ScribbleCanvas = 'saab',
 ) {
-  const prev = getStripScribbles(stripId)
+  const prev = getStripScribbles(stripId, canvas)
   const stroke: ScribbleStroke = tag ? { points, color, tag } : { points, color }
-  strokesById[stripId] = [...prev, stroke]
+  strokesById[canvasKey(stripId, canvas)] = [...prev, stroke]
 }
 
-export function undoStripScribble(stripId: string) {
-  const prev = getStripScribbles(stripId)
+export function undoStripScribble(stripId: string, canvas: ScribbleCanvas = 'saab') {
+  const prev = getStripScribbles(stripId, canvas)
+  const key = canvasKey(stripId, canvas)
   if (!prev.length) return
-  if (prev.length === 1) delete strokesById[stripId]
-  else strokesById[stripId] = prev.slice(0, -1).map(serializeStroke)
+  if (prev.length === 1) delete strokesById[key]
+  else strokesById[key] = prev.slice(0, -1).map(serializeStroke)
 }
 
-export function clearStripScribbles(stripId: string) {
+export function clearStripScribbles(stripId: string, canvas?: ScribbleCanvas) {
+  migrateLegacyScribbles(stripId)
+  if (canvas) {
+    delete strokesById[canvasKey(stripId, canvas)]
+    return
+  }
+  delete strokesById[canvasKey(stripId, 'saab')]
+  delete strokesById[canvasKey(stripId, 'paper')]
   delete strokesById[stripId]
 }
 
 export function hasClrScribble(stripId: string, tag: PaperScribbleTag): boolean {
-  return getStripScribbles(stripId).some((s) => s.tag === tag)
+  return getStripScribbles(stripId, 'paper').some((s) => s.tag === tag)
 }
 
 export function getClrScribbleTags(stripId: string): {
@@ -494,7 +566,7 @@ export function getClrScribbleTags(stripId: string): {
   let goa = false
   let xferRefuse = false
   let xferApp = false
-  for (const s of getStripScribbles(stripId)) {
+  for (const s of getStripScribbles(stripId, 'paper')) {
     if (s.tag === 'clr-read') read = true
     if (s.tag === 'clr-correct') correct = true
     if (s.tag === 'cto') cto = true
@@ -518,16 +590,16 @@ export function pushRisingDiagonalLeftCol(
 ) {
   if (hasClrScribble(stripId, tag)) return
   // Wider across col 1 (~0–205); keep vertical padding from body edges
-  pushStripScribble(stripId, '22,772 198,228', color, tag)
+  pushStripScribble(stripId, '22,772 198,228', color, tag, 'paper')
 }
 
 export function countTaggedScribbles(stripId: string, tag: PaperScribbleTag): number {
-  return getStripScribbles(stripId).filter((s) => s.tag === tag).length
+  return getStripScribbles(stripId, 'paper').filter((s) => s.tag === tag).length
 }
 
 export function removeClrScribbles(stripId: string, tag: PaperScribbleTag) {
-  const next = getStripScribbles(stripId).filter((s) => s.tag !== tag)
-  setStripScribbles(stripId, next)
+  const next = getStripScribbles(stripId, 'paper').filter((s) => s.tag !== tag)
+  setStripScribbles(stripId, next, 'paper')
 }
 
 /**
@@ -561,17 +633,20 @@ export function removeScribblesOverlappingRect(
   r: ScribbleRect,
   minFraction = 0.25,
 ): number {
-  const prev = getStripScribbles(stripId)
+  const prev = getStripScribbles(stripId, 'saab')
   if (!prev.length) return 0
   const next = prev.filter((s) => !strokeMatchesClrBox(s.points, r, minFraction))
   const removed = prev.length - next.length
-  if (removed > 0) setStripScribbles(stripId, next)
+  if (removed > 0) setStripScribbles(stripId, next, 'saab')
   return removed
 }
 
-/** Reactive strokes for a strip (bay + zoom share this). */
-export function useStripScribbles(stripId: Ref<string> | string) {
-  const strokes = computed(() => getStripScribbles(unref(stripId)))
+/** Reactive strokes for one face of a strip (bay + zoom share this). */
+export function useStripScribbles(
+  stripId: Ref<string> | string,
+  canvas: Ref<ScribbleCanvas> | ScribbleCanvas = 'saab',
+) {
+  const strokes = computed(() => getStripScribbles(unref(stripId), unref(canvas)))
   const hasScribbles = computed(() => strokes.value.length > 0)
   const hasClrReadScribble = computed(() =>
     strokes.value.some((s) => s.tag === 'clr-read'),

@@ -1,0 +1,15 @@
+@font-face {
+  font-family: "Avrile Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/AvrileSans-Regular.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Avrile Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../assets/fonts/AvrileSans-SemiBold.woff") format("woff");
+}

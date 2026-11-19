@@ -78,7 +78,7 @@ interface YamlConfig {
     arrivalEtaMinutes?: number
     groundRange?: number
     layoutMode?: 'standard' | 'multiAirport' | 'essaRoles' | 'saabLayouts'
-    look?: 'saab' | 'paper'
+    look?: 'saab' | 'paper' | 'std'
     columnCount?: number
     bayTemplate?: BayTemplate
     defaultLayout?: string
@@ -418,7 +418,7 @@ export function loadConfig(configPath: string, options?: LoadConfigOptions): Efs
         deleteRules,
         moveRules,
         layoutMode,
-        look: yamlConfig.look === 'paper' ? 'paper' : 'saab',
+        look: yamlConfig.look === 'paper' || yamlConfig.look === 'std' ? yamlConfig.look : 'saab',
         sectionVisibleFor,
         bayTemplate,
         columnCount,

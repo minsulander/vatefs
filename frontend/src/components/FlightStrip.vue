@@ -264,8 +264,8 @@
     ref="stripHostEl"
     class="strip-host"
     :class="{
-      'strip-host--paper': paperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
-      'strip-host--cocked': !paperLook && (!!strip.klack || klackPulling),
+      'strip-host--paper': (paperLook || stdLook) && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'strip-host--cocked': !paperLook && !stdLook && (!!strip.klack || klackPulling),
       'strip-host--saab-cock': showSaabCockEdges,
       'strip-host--klack-instant': klackInstant,
     }"
@@ -318,7 +318,8 @@
       'strip-note-layout': isNote && !isPaperEmptyFlightHolder,
       'strip-vehicle-layout': isVehicle,
       'look-essa': isVehicle && store.essaRolesMode,
-      'look-paper': paperLook && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'look-paper': (paperLook || stdLook) && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
+      'look-std': stdLook,
       'paper-info-holder': paperLook && isPaperInfoHolder,
       'paper-empty-frame': paperLook && paperInfoKind === 'empty_frame',
       'paper-empty-arr': paperLook && paperInfoKind === 'empty_arr',
@@ -537,6 +538,43 @@
         >
           <span class="action-text">TERM</span>
         </button>
+      </div>
+    </template>
+
+    <template v-else-if="stdLook">
+      <div class="std-zoom-body">
+        <svg
+          v-if="showStripScribbles"
+          class="strip-scribble-layer"
+          :viewBox="scribbleBandViewBox('body')"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            v-for="(stroke, i) in stripScribbles"
+            :key="'s' + i"
+            class="strip-scribble-stroke"
+            :points="stroke.points"
+            :stroke="scribbleStrokeHex(stroke.color)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+          <polyline
+            v-if="activeScribbleStroke"
+            class="strip-scribble-stroke"
+            :points="activeScribbleStroke"
+            :stroke="scribbleStrokeHex(activeScribbleColor)"
+            fill="none"
+            vector-effect="non-scaling-stroke"
+            :stroke-width="bayScribbleStrokeWidth"
+          />
+        </svg>
+        <StdPaperStrip
+          :strip="strip"
+          @callsign-click="onCallsignClick"
+          @callsign-context="onContextMenu"
+          @callsign-touch="onCallsignTouch"
+        />
       </div>
     </template>
 
@@ -1701,6 +1739,7 @@ import {
 import { getTouchDragInstance } from '@/composables/useTouchDrag'
 import { tryApplyDtransStripDrop } from '@/workspace/dtransDrop'
 import { paperKlackPullBayIds } from '@/composables/paperKlack'
+import { rtcColumnStripKind } from '@/composables/rtcStripLook'
 import { insertIndexAtClientY } from '@/composables/dropPlacement'
 import {
   SCRIBBLE_INK_HEX,
@@ -1724,6 +1763,7 @@ import { adoptManualStripFitBaseline } from '@/composables/useAutoFitStripSize'
 import { useStripSizeMode } from '@/composables/useStripSizeMode'
 import { useZoomStripScalePercent } from '@/composables/useStripZoomScale'
 import ClearanceDialog from './ClearanceDialog.vue'
+import StdPaperStrip from './StdPaperStrip.vue'
 import DepCoordDialog from './DepCoordDialog.vue'
 import AtdDialog from './AtdDialog.vue'
 import CoordProposalDialog from './CoordProposalDialog.vue'
@@ -1749,6 +1789,8 @@ const props = withDefaults(
     activeScribbleStroke?: string | null
     /** Ink colour for the live zoom stroke */
     activeScribbleColor?: ScribbleInk
+    /** Example page only: draw this strip in one paper look regardless of the loaded config. */
+    forceLook?: 'paper' | 'std'
   }>(),
   { isLargeView: false, activeScribbleStroke: null, activeScribbleColor: 'blue' },
 )
@@ -1758,21 +1800,38 @@ const emit = defineEmits<{
 }>()
 
 const store = useEfsStore()
-/**
- * Paper chrome: global paper look, or ESGG airport strip inside RTC (#45) —
- * strip type follows airport, not only the active config look.
- */
+/** RTC column this strip is drawn in (bay1 = first column). */
+const rtcColumnIcao = computed(() => {
+  if (!store.multiAirport) return ''
+  const bayId = props.bayId || props.strip.bayId || ''
+  const bayIndex = /^bay(\d+)$/.exec(bayId)
+  const fromColumn = bayIndex
+    ? store.columnAirports[Number(bayIndex[1]) - 1]
+    : undefined
+  return (fromColumn || props.strip.airport || '').toUpperCase()
+})
+/** ESGG paper chrome: ESGG layout, or an ESGG column set to paper in RTC. */
 const paperLook = computed(() => {
+  if (props.forceLook === 'paper') return true
+  if (props.forceLook === 'std') return false
   if (store.isPaperLook) return true
-  if (!store.multiAirport) return false
-  const adep = (props.strip.adep || '').toUpperCase()
-  const ades = (props.strip.ades || '').toUpperCase()
-  return adep === 'ESGG' || ades === 'ESGG'
+  return rtcColumnStripKind(rtcColumnIcao.value) === 'paper'
+})
+/** Generic paper strip: STD session, or a non-ESGG RTC column set to paper. */
+const stdLook = computed(() => {
+  if (props.forceLook === 'std') return !isNote.value && !isVehicle.value
+  if (props.forceLook === 'paper') return false
+  if (isNote.value || isVehicle.value) return false
+  if (store.isStdLook) return true
+  return rtcColumnStripKind(rtcColumnIcao.value) === 'std'
 })
 const zoomStripScalePercent = useZoomStripScalePercent()
 const stripElement = ref<HTMLElement | null>(null)
 const isDragging = ref(false)
 const stripIdRef = computed(() => props.strip.id)
+const scribbleCanvas = computed(() =>
+  paperLook.value || stdLook.value ? 'paper' : 'saab',
+)
 const {
   strokes: stripScribbles,
   hasClrReadScribble,
@@ -1781,7 +1840,7 @@ const {
   hasCtlScribble,
   hasGoaScribble,
   atdScribbleCount,
-} = useStripScribbles(stripIdRef)
+} = useStripScribbles(stripIdRef, scribbleCanvas)
 const { topExpanded, bottomExpanded } = useStripExpanders(stripIdRef)
 const { isCompact } = useStripSizeMode(stripIdRef)
 // IFR DEP spawn: both expanders open (once per strip id) — skipped in CD/TSAT/PUSH
@@ -1795,7 +1854,7 @@ applySpawnExpanderDefaults(props.strip.id, {
 
 /** SAAB flight strips that support half-height compact mode. */
 const canCompactStrip = computed(() => {
-  if (paperLook.value) return false
+  if (paperLook.value || stdLook.value) return false
   const t = props.strip.stripType
   return t === 'departure' || t === 'arrival' || t === 'local' || t === 'vfr'
 })
@@ -1816,9 +1875,9 @@ const showStripScribbles = computed(
     (stripScribbles.value.length > 0 || !!props.activeScribbleStroke),
 )
 
-/** SAAB look always draws black; paper uses per-stroke blue/red. */
+/** SAAB look always draws black; paper and generic paper use per-stroke blue/red. */
 function scribbleStrokeHex(color: ScribbleInk | undefined): string {
-  if (!paperLook.value) return SCRIBBLE_INK_HEX.black
+  if (!paperLook.value && !stdLook.value) return SCRIBBLE_INK_HEX.black
   return SCRIBBLE_INK_HEX[color ?? 'blue']
 }
 
@@ -2107,6 +2166,7 @@ function onKlackMenu(klack: 'left' | 'right' | null) {
 const showSaabCockEdges = computed(
   () =>
     !paperLook.value &&
+    !stdLook.value &&
     !props.isLargeView &&
     props.strip.stripType !== 'note' &&
     props.strip.stripType !== 'vehicle',
@@ -2137,7 +2197,7 @@ const usesCombinedStripPointer = computed(
   () =>
     !props.isLargeView &&
     canDragStrip.value &&
-    (paperLook.value || showSaabCockEdges.value),
+    (paperLook.value || stdLook.value || showSaabCockEdges.value),
 )
 const KLACK_BASE_PX = 28
 const PAPER_ARM_PX = 8
@@ -4233,7 +4293,7 @@ function clearScribblesInCell(sel: string): boolean {
   if (!rect) return false
   const n = removeScribblesOverlappingRect(props.strip.id, rect, 0.25)
   if (n > 0) {
-    store.syncStripScribbles(props.strip.id)
+    store.syncStripScribbles(props.strip.id, true, 'saab')
     return true
   }
   return false
@@ -5876,6 +5936,7 @@ function touchLongClickHasLeftAction(el: Element | null): boolean {
     el.closest('.callsign') ||
     el.closest('.callsign-box') ||
     el.closest('.pg-cs') ||
+    el.closest('.std-cs') ||
     el.closest('.note-text') ||
     el.closest('.vehicle-cs') ||
     el.closest('[data-left-click]')
@@ -5902,6 +5963,7 @@ function handleStationaryLongClick(clientX: number, clientY: number) {
         (under.closest('.callsign') ||
           under.closest('.callsign-box') ||
           under.closest('.pg-cs') ||
+          under.closest('.std-cs') ||
           under.closest('.note-text') ||
           under.closest('.vehicle-cs') ||
           under.closest('[data-left-click]'))) ||
@@ -6861,6 +6923,19 @@ function onGroundStateClick(action: string) {
   background-clip: border-box;
 }
 
+/* Std paper uses the same coloured frame as ESGG; lock the body height. */
+.flight-strip.look-paper.look-std {
+  height: var(--strip-body-h);
+}
+.std-zoom-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
 /* Paper body height shell (no SAAB action keys — assume via pin drag / ES) */
 .paper-with-actions {
   display: flex;
@@ -6951,7 +7026,7 @@ function onGroundStateClick(action: string) {
   min-width: 0;
   overflow: hidden;
   display: grid;
-  /* Borders nudged left vs VatFSP — give cols 6–7 (RTE/RFL + CTOT/CRZ) more room */
+  /* Same tracks as the generic strip: 400 : 250 : 460 : 200 : 200 : 250 : 500. */
   grid-template-columns:
     minmax(0, 1.9fr)
     minmax(0, 0.9fr)

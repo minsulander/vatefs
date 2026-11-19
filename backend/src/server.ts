@@ -1880,7 +1880,7 @@ function buildStatusMessage(): StatusMessage {
         essa0826Owner: essaMode ? resolveEssa0826Owner() : undefined,
         essaTwrSplit: essaMode ? isEssaTwrSplitOnline() : undefined,
         essaGndSplit: essaMode ? isEssaGndSplitOnline() : undefined,
-        look: staticConfig.look === 'paper' ? 'paper' : 'saab',
+        look: staticConfig.look === 'paper' || staticConfig.look === 'std' ? staticConfig.look : 'saab',
         saabLayoutsMode: saabMode,
         saabLayoutId: saabMode ? (staticConfig.saabLayoutId ?? activeSaabLayoutId) : null,
         saabLayouts: saabMode ? (staticConfig.saabLayouts ?? []) : undefined,
@@ -4477,13 +4477,16 @@ function sendStrips(socket: WebSocket) {
 }
 
 function sendScribbles(socket: WebSocket) {
-    const all = scribbleStore.snapshotAll()
-    let n = 0
-    for (const [stripId, strokes] of Object.entries(all)) {
-        sendMessage(socket, { type: "scribbleUpdate", stripId, strokes })
-        n++
+    const all = scribbleStore.snapshotCanvases()
+    for (const row of all) {
+        sendMessage(socket, {
+            type: "scribbleUpdate",
+            stripId: row.stripId,
+            canvas: row.canvas,
+            strokes: row.strokes,
+        })
     }
-    if (n) console.log(`Sent ${n} scribble strip(s) to client`)
+    if (all.length) console.log(`Sent ${all.length} scribble canvas(es) to client`)
 }
 
 function broadcastScribbleUpdate(
@@ -4491,9 +4494,16 @@ function broadcastScribbleUpdate(
     strokes: ScribbleStrokePayload[],
     exclude?: WebSocket,
     updatedAt?: string,
+    canvas?: "saab" | "paper",
 ) {
     broadcast(
-        { type: "scribbleUpdate", stripId, strokes, ...(updatedAt ? { updatedAt } : {}) },
+        {
+            type: "scribbleUpdate",
+            stripId,
+            strokes,
+            ...(canvas ? { canvas } : {}),
+            ...(updatedAt ? { updatedAt } : {}),
+        },
         exclude,
     )
 }
@@ -4912,7 +4922,7 @@ function applyRemoteScribble(
     }
 
     scribbleStore.setScribbles(stripId, strokes, { remoteUpdatedAt: updatedAt })
-    broadcastScribbleUpdate(stripId, strokes, undefined, updatedAt)
+    broadcastScribbleUpdate(stripId, scribbleStore.getScribbles(stripId), undefined, updatedAt)
 }
 
 /** Sweatbox/Local: stop live-VATSIM feeds; live/playback: restore. */
@@ -8775,8 +8785,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case "scribbleSet": {
-            const strokes = scribbleStore.setScribbles(message.stripId, message.strokes)
-            broadcastScribbleUpdate(message.stripId, strokes, socket)
+            const canvas =
+                message.canvas === "saab" || message.canvas === "paper"
+                    ? message.canvas
+                    : undefined
+            if (canvas) {
+                const strokes = scribbleStore.setCanvas(message.stripId, canvas, message.strokes)
+                broadcastScribbleUpdate(message.stripId, strokes, socket, undefined, canvas)
+            } else {
+                const strokes = scribbleStore.setScribbles(message.stripId, message.strokes)
+                broadcastScribbleUpdate(message.stripId, strokes, socket)
+            }
             break
         }
 
@@ -8907,6 +8926,17 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 broadcastStrip(updatedStrip)
                 void pushStripToRemote(updatedStrip.id)
                 console.log(`[NOTE] Updated note ${message.stripId}: "${message.text.substring(0, 30)}"`)
+            }
+            break
+        }
+
+        case "updateStdMark": {
+            const index = message.index
+            if (index !== 1 && index !== 2 && index !== 3) break
+            const updatedStrip = store.updateStdMark(message.stripId, index, message.text ?? "")
+            if (updatedStrip) {
+                broadcastStrip(updatedStrip)
+                console.log(`[STD] ${message.stripId} mark${index}="${(message.text || "").slice(0, 20)}"`)
             }
             break
         }
