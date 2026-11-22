@@ -28,7 +28,7 @@ const shared = {
   bottom: false,
 } satisfies Partial<FlightStrip>
 
-const esgg: FlightStrip = { ...shared, id: 'example-esgg' }
+const ad: FlightStrip = { ...shared, id: 'example-ad' }
 const generic: FlightStrip = { ...shared, id: 'example-std', oat: true, ctot: '1140' }
 </script>
 
@@ -44,9 +44,9 @@ const generic: FlightStrip = { ...shared, id: 'example-std', oat: true, ctot: '1
         FRUL är <strong>I</strong>. Den generiska remsan har en OAT-stjärna uppe till vänster i den högra rutans nedre del.
       </p>
       <section>
-        <h2>ESGG</h2>
+        <h2>AD</h2>
         <div class="examples-strip">
-          <FlightStripView :strip="esgg" bay-id="example" section-id="example" force-look="paper" />
+          <FlightStripView :strip="ad" bay-id="example" section-id="example" force-look="paper" />
         </div>
       </section>
       <section>

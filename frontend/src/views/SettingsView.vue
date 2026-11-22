@@ -50,7 +50,7 @@
                 </p>
             </div>
 
-            <template v-if="efs.isPaperLook">
+            <template v-if="efs.isPaperLook || efs.isStdLook">
                 <div class="scribble-mode-option mb-4">
                     <div class="ui-scale-label">Strip print mode</div>
                     <v-btn-toggle
@@ -335,7 +335,7 @@
                 Only works with ES in focus, so when EFS is running on (other) networked device!
             </p>
 
-            <template v-if="!efs.isPaperLook">
+            <template v-if="!efs.isPaperLook && !efs.isStdLook">
                 <div class="scribble-mode-option mb-4 mt-2">
                     <div class="ui-scale-label">Auto resize strips</div>
                     <v-btn-toggle

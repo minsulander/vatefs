@@ -87,6 +87,13 @@ export interface UserSettings {
     /** Manual ESGG paper role selection (CD / GND / TWR) */
     esggRoles?: string[]
     esggRolesManual?: boolean
+    /** Manual generic paper covering (AD / T / P) */
+    paperRoles?: string[]
+    paperRolesManual?: boolean
+    /** Generic paper ES/TopSky link for ASSUME/transfer (default on) */
+    paperEsLinked?: boolean
+    /** Optional paper dividers currently open (e.g. pushback) */
+    paperOpenSectionIds?: string[]
     /** @deprecated Merged into syncEnabled. Ignored on load; dropped on save. */
     scribbleSyncEnabled?: boolean
     /** @deprecated Merged into syncEnabled. Ignored on load; dropped on save. */

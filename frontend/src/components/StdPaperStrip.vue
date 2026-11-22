@@ -5,8 +5,12 @@ import { useEfsStore } from '@/store/efs'
 import {
   compactRfl,
   routeWords,
-  airportCode,
+  airportDisplayParts,
 } from '@/strip/stdStripFields'
+import {
+  removeClrScribbles,
+  useStripScribbles,
+} from '@/composables/useStripScribbles'
 
 const props = defineProps<{ strip: FlightStrip }>()
 const emit = defineEmits<{
@@ -15,6 +19,12 @@ const emit = defineEmits<{
   'callsign-touch': [event: TouchEvent]
 }>()
 const store = useEfsStore()
+
+const stripIdRef = computed(() => props.strip.id)
+const { hasClrReadScribble, hasClrCorrectScribble } = useStripScribbles(
+  stripIdRef,
+  'paper',
+)
 
 function hhmm(raw: string | undefined): string {
   if (!raw) return ''
@@ -26,50 +36,101 @@ function hhmm(raw: string | undefined): string {
 const timeText = computed(() =>
   hhmm(props.strip.stripType === 'arrival' ? props.strip.eta : props.strip.eobt),
 )
+const eobtText = computed(() => hhmm(props.strip.eobt))
+/**
+ * Local: EOBT + filed EET (FPL) → calculated arrival (UTC HHmm).
+ * Both from flight plan — missing either → blank.
+ */
+const localArrivalText = computed(() => {
+  const eobt = eobtText.value
+  const eet = hhmm(props.strip.filedEet)
+  if (!eobt || !eet) return ''
+  const depMin = parseInt(eobt.slice(0, 2), 10) * 60 + parseInt(eobt.slice(2, 4), 10)
+  const eetMin = parseInt(eet.slice(0, 2), 10) * 60 + parseInt(eet.slice(2, 4), 10)
+  if (!Number.isFinite(depMin) || !Number.isFinite(eetMin)) return ''
+  const total = depMin + eetMin
+  const outHh = String(Math.floor(total / 60) % 24).padStart(2, '0')
+  const outMm = String(total % 60).padStart(2, '0')
+  return `${outHh}${outMm}`
+})
 const ctot = computed(() => hhmm(props.strip.ctot))
 
-const adep = computed(() => airportCode(props.strip.adep))
-const ades = computed(() => airportCode(props.strip.ades))
-const points = computed(() => routeWords(props.strip.route))
-const rfl = computed(() => compactRfl(props.strip.rfl))
-const clrRead = computed(() => !!(props.strip.clearance || props.strip.clearanceReadback))
-
-const isArrival = computed(() => props.strip.stripType === 'arrival')
-
-/** Sector box: ESMS is Malmö ACC sector L (ZZZL). Other airports are ZZ + ICAO suffix. */
-const sectorCode = computed(() => {
-  const icao = (props.strip.ades || '').trim().toUpperCase()
-  if (!icao || icao === '????') return ''
-  if (icao === 'ESMS') return 'ZZZL'
-  return icao.length >= 2 ? `ZZ${icao.slice(-2)}` : ''
-})
-
-/** ETN as UTC HHmm: now plus minutes until sector entry. */
-const etnText = computed(() => {
-  const min = props.strip.sectorEntryMin
-  if (min == null || !Number.isFinite(min) || min < 0) return ''
-  const t = new Date(Date.now() + min * 60_000)
-  const hh = String(t.getUTCHours()).padStart(2, '0')
-  const mm = String(t.getUTCMinutes()).padStart(2, '0')
-  return `${hh}${mm}`
-})
-const depCoord = computed(
-  () => props.strip.stripType === 'departure' || props.strip.stripType === 'local',
-)
-const clrCoordinated = computed(() =>
-  depCoord.value ? !!props.strip.coo : props.strip.stdMark1 === '✓',
-)
-
-function onCoordinatedClick() {
-  if (depCoord.value) {
-    store.setCoo(props.strip.id, !props.strip.coo)
-    return
-  }
-  const on = props.strip.stdMark1 === '✓'
-  store.updateStdMark(props.strip.id, 1, on ? '' : '✓')
+/** Own aerodrome from login callsign / myAirports — blank on T strips. */
+function isOwnAirport(icao: string | undefined): boolean {
+  const code = (icao || '').trim().toUpperCase()
+  if (!code || code === '????' || code === 'ZZZZ') return false
+  if (store.myAirports.some((a) => a.toUpperCase() === code)) return true
+  const cs = (store.myCallsign || '').trim().toUpperCase()
+  return !!cs && cs.startsWith(code)
 }
 
-function onClrReadClick() {
+const adepParts = computed(() =>
+  isOwnAirport(props.strip.adep)
+    ? { prefix: '', visible: '' }
+    : airportDisplayParts(props.strip.adep),
+)
+const adesParts = computed(() =>
+  isOwnAirport(props.strip.ades)
+    ? { prefix: '', visible: '' }
+    : airportDisplayParts(props.strip.ades),
+)
+const points = computed(() =>
+  routeWords(props.strip.route, props.strip.stripType === 'arrival'),
+)
+const rfl = computed(() => compactRfl(props.strip.rfl))
+
+/** FRUL: hide IFR (I); only show V / Y / Z. */
+const frulText = computed(() => {
+  const r = (props.strip.flightRules || '').trim().toUpperCase()
+  return r === 'V' || r === 'Y' || r === 'Z' ? r : ''
+})
+
+const isArrival = computed(() => props.strip.stripType === 'arrival')
+const isLocal = computed(() => props.strip.stripType === 'local')
+const isDepLayout = computed(
+  () => props.strip.stripType === 'departure' || props.strip.stripType === 'local',
+)
+
+/** CLR Received — local only on std (not lockstep with Given / ES CLR). */
+const clrReceived = computed(
+  () => !!props.strip.clearanceRead && !props.strip.paperClrReadSuppressed,
+)
+
+/** CLR Given — ES clearance / readback correct. */
+const clrGiven = computed(
+  () => !!(props.strip.clearance || props.strip.clearanceReadback),
+)
+
+const canUseClrBoxes = computed(
+  () => store.isController && store.allowMoveOwnedStrip(props.strip),
+)
+
+function onClrReceivedClick() {
+  if (!isDepLayout.value || !canUseClrBoxes.value) return
+  if (hasClrReadScribble.value) {
+    removeClrScribbles(props.strip.id, 'clr-read')
+    // Std: Received is independent — clear local mark even if Given is on
+    if (props.strip.clearanceRead) {
+      store.sendStripAction(props.strip.id, 'toggleClearanceRead')
+    }
+    return
+  }
+  if (props.strip.paperClrReadSuppressed) {
+    store.sendStripAction(props.strip.id, 'restorePaperClrRead')
+    return
+  }
+  store.sendStripAction(props.strip.id, 'toggleClearanceRead')
+}
+
+function onClrGivenClick() {
+  if (!isDepLayout.value || !canUseClrBoxes.value) return
+  if (hasClrCorrectScribble.value) {
+    removeClrScribbles(props.strip.id, 'clr-correct')
+    if (clrGiven.value) {
+      store.sendStripAction(props.strip.id, 'toggleClearanceReadback')
+    }
+    return
+  }
   store.sendStripAction(props.strip.id, 'toggleClearanceReadback')
 }
 </script>
@@ -89,7 +150,7 @@ function onClrReadClick() {
       <div class="std-tas"><span class="std-glyph std-glyph-right">{{ strip.tas || '' }}</span></div>
       <div class="std-type">
         <span class="std-glyph std-glyph-right std-type-line">
-          <span class="std-frul" title="Flight rules">{{ strip.flightRules || 'I' }}</span>
+          <span v-if="frulText" class="std-frul" title="Flight rules">{{ frulText }}</span>
           <span>{{ strip.aircraftType }}<template v-if="strip.wakeTurbulence">/{{ strip.wakeTurbulence }}</template></span>
         </span>
       </div>
@@ -97,55 +158,89 @@ function onClrReadClick() {
     </div>
 
     <div class="std-col std-split">
-      <div class="std-cell std-time"><span class="std-glyph">{{ timeText }}</span></div>
-      <div class="std-cell" />
+      <!-- Local: EOBT top · EOBT+ETE (calculated arrival) bottom -->
+      <div class="std-cell std-time">
+        <span class="std-glyph">{{ isLocal ? eobtText : timeText }}</span>
+      </div>
+      <div
+        v-if="isLocal"
+        class="std-cell std-time"
+        title="EOBT + EET (FPL)"
+      >
+        <span class="std-glyph">{{ localArrivalText }}</span>
+      </div>
+      <div v-else class="std-cell" />
     </div>
 
     <div class="std-col std-sid" />
 
-    <div class="std-col std-split std-adep">
-      <div v-if="isArrival" class="std-cell std-entry" title="Sector / ETN">
-        <span class="std-glyph">{{ sectorCode }}</span>
-        <span class="std-glyph">{{ etnText }}</span>
+    <div class="std-ad-block">
+      <div class="std-col std-split std-adep">
+        <!-- ARR: keep std-entry (right rule); no ZZ**/ETN text on T strips -->
+        <div v-if="isArrival" class="std-cell std-entry" aria-hidden="true" />
+        <button
+          v-else
+          type="button"
+          class="std-cell std-mark"
+          data-paper-flag="clr-read"
+          title="CLR Received"
+          :disabled="!canUseClrBoxes"
+          @pointerdown.stop
+          @click.stop="onClrReceivedClick"
+        >
+          <svg
+            v-if="clrReceived && !hasClrReadScribble"
+            class="std-clr-mark"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M4 13.5 L10 19.5 L20.5 5.5" />
+          </svg>
+        </button>
+        <div
+          class="std-cell std-ad"
+          :title="adepParts.visible ? strip.adepName || strip.adep : undefined"
+        >
+          <span class="std-glyph">
+            <span v-if="adepParts.prefix" class="std-ad-es" aria-hidden="true">{{ adepParts.prefix }}</span>{{ adepParts.visible }}
+          </span>
+        </div>
       </div>
-      <button
-        v-else
-        type="button"
-        class="std-cell std-mark"
-        title="CLR Coordinated"
-        @pointerdown.stop
-        @click.stop="onCoordinatedClick"
-      >
-        <svg
-          v-if="clrCoordinated"
-          class="std-clr-mark"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path d="M4 13.5 L10 19.5 L20.5 5.5" />
-        </svg>
-      </button>
-      <div class="std-cell std-ad" :title="strip.adepName || strip.adep"><span class="std-glyph">{{ adep }}</span></div>
-    </div>
 
-    <div class="std-col std-split">
-      <button
-        type="button"
-        class="std-cell std-mark"
-        title="CLR Read"
-        @pointerdown.stop
-        @click.stop="onClrReadClick"
-      >
-        <svg
-          v-if="clrRead"
-          class="std-clr-mark"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
+      <div class="std-col std-split">
+        <button
+          v-if="isDepLayout"
+          type="button"
+          class="std-cell std-mark"
+          data-paper-flag="clr-correct"
+          title="CLR Given"
+          :disabled="!canUseClrBoxes"
+          @pointerdown.stop
+          @click.stop="onClrGivenClick"
         >
-          <path d="M4 13.5 L10 19.5 L20.5 5.5" />
-        </svg>
-      </button>
-      <div class="std-cell std-ad" :title="strip.adesName || strip.ades"><span class="std-glyph">{{ ades }}</span></div>
+          <svg
+            v-if="clrGiven && !hasClrCorrectScribble"
+            class="std-clr-mark"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M4 13.5 L10 19.5 L20.5 5.5" />
+          </svg>
+        </button>
+        <div v-else class="std-cell" aria-hidden="true" />
+        <div
+          class="std-cell std-ad"
+          :title="adesParts.visible ? strip.adesName || strip.ades : undefined"
+        >
+          <span class="std-glyph">
+            <span v-if="adesParts.prefix" class="std-ad-es" aria-hidden="true">{{ adesParts.prefix }}</span>{{ adesParts.visible }}
+          </span>
+        </div>
+      </div>
+
+      <div v-if="strip.sts" class="std-sts" :title="`STS/${strip.sts}`">
+        <span class="std-glyph">{{ strip.sts }}</span>
+      </div>
     </div>
 
     <div class="std-col std-split">
@@ -304,6 +399,15 @@ function onClrReadClick() {
 .std-time .std-glyph {
   grid-row: 2;
 }
+.std-ad-block {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  position: relative;
+}
 .std-col.std-adep {
   border-right: none;
 }
@@ -315,6 +419,21 @@ function onClrReadClick() {
 }
 .std-ad .std-glyph {
   grid-row: 2;
+}
+/* Invisible ES keeps PA/GG/… in the same slot as a full four-letter ICAO */
+.std-ad-es {
+  visibility: hidden;
+}
+/* Item 18 STS/ — center of ADEP/ADES box, top half of the airport row */
+.std-sts {
+  position: absolute;
+  left: 50%;
+  top: 62.5%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  pointer-events: none;
+  line-height: 1;
+  white-space: nowrap;
 }
 .std-clr-mark {
   width: calc(20px * var(--strip-scale, 1));
@@ -343,6 +462,9 @@ function onClrReadClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.std-mark:disabled {
+  cursor: default;
 }
 .std-adep > .std-mark,
 .std-adep > .std-entry {

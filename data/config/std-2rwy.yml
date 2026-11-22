@@ -1,11 +1,11 @@
-# Standard paper board with a second runway bay.
-# Same ground and TMA bays as STD; the extra bay is only the other runway.
+# Legacy dual-runway paper board — hidden from the config menu.
+# PAPER mode adds the second runway bay from active runways instead.
 
 name: STD 2 RWY
 look: std
 radarRange: 25
 arrivalRange: 100
-arrivalEtaMinutes: 20
+arrivalEtaMinutes: 30
 
 include:
   - std-rules.yml
@@ -31,7 +31,7 @@ layout:
           hideHeader: true
           addFromTop: true
         runway:
-          title: <rwy1>
+          title: RWY <rwy1>
           addFromTop: false
     bay3:
       sections:
@@ -40,7 +40,7 @@ layout:
           hideHeader: true
           addFromTop: true
         runway_b:
-          title: <rwy2>
+          title: RWY <rwy2>
           addFromTop: false
     bay4:
       sections:

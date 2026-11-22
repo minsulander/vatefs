@@ -1,12 +1,11 @@
-# Standard paper flight-progress board (not Landvetter).
-# One runway: departures left, runway in the middle, arrivals / TMA right.
-# Printed strips land in pending departure or pending arrival and stay until dragged.
+# Legacy generic paper board — hidden from the config menu.
+# Use paper.yml (PAPER). Kept as an include/overlay source.
 
 name: STD
 look: std
 radarRange: 25
 arrivalRange: 100
-arrivalEtaMinutes: 20
+arrivalEtaMinutes: 30
 
 include:
   - std-rules.yml
@@ -32,7 +31,7 @@ layout:
           hideHeader: true
           addFromTop: true
         runway:
-          title: <drwy>
+          title: RWY <drwy>
           addFromTop: false
     bay3:
       sections:

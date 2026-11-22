@@ -654,9 +654,41 @@ export interface EfsStaticConfig {
     /** True when esggRoles were set manually (skip auto-detect until cleared) */
     esggRolesManual?: boolean
 
+    /**
+     * Generic paper covering roles (AD / T / P) — what you act as.
+     * Only used when look is std (not Landvetter CD/GND/TWR).
+     */
+    paperRoles?: Array<'AD' | 'T' | 'P'>
+
+    /**
+     * Generic paper staffed positions for bay layout (your login + online).
+     * Sequence column splits out when P is staffed.
+     */
+    paperLayoutRoles?: Array<'AD' | 'T' | 'P'>
+
+    /** Positions this airport offers (from paper-positions.yml). */
+    paperAvailableRoles?: Array<'AD' | 'T' | 'P'>
+
+    /** True when paperRoles were set manually (skip auto covering until cleared). */
+    paperRolesManual?: boolean
+
+    /**
+     * Generic paper: ES/TopSky link for ASSUME / transfer.
+     * Default true. Ground-state moveRules always run regardless.
+     */
+    paperEsLinked?: boolean
+
+    /** Optional paper dividers currently open (e.g. pushback). */
+    paperOpenSectionIds?: Set<string>
+
     /** Bay template for multiAirport mode (logical section ids) */
     bayTemplate?: {
-        sections: Record<string, { title: string; addFromTop?: boolean; height?: number }>
+        sections: Record<string, {
+            title: string
+            addFromTop?: boolean
+            height?: number
+            heightPct?: number
+        }>
     }
 
     /** Number of visible column slots in multiAirport mode */

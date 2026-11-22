@@ -23,6 +23,11 @@ const ESGG_LAT = 57.6628
 const ESGG_LON = 12.2798
 const ESGG_ELEV = 506
 
+// ESSB (Bromma)
+const ESSB_LAT = 59.3544
+const ESSB_LON = 17.9417
+const ESSB_ELEV = 47
+
 // C-box visual-check airports
 const ESMS_LAT = 55.535564
 const ESMS_LON = 13.376327
@@ -105,10 +110,13 @@ function grpStandMenuArrivalMessages(): PluginMessage[] {
     })
     // Extra Landvetter / Malmö inbounds so those menus look busier
     out.push(
+        // No sectorEntryMin → ESGG paper shows ZZGG + ETA (not ZZGE/ZZGW)
         fpUpdate("STGG2", "ESSA", "ESGG", "A321", {
             flightRules: "I",
             rfl: 28000,
             arrRwy: "03",
+            star: "RISMA4L",
+            eta: "1610",
         }),
         ctrUpdate("STGG2", {
             squawk: "2210",
@@ -139,6 +147,17 @@ function grpStandMenuArrivalMessages(): PluginMessage[] {
     return out
 }
 
+/** Filed TAS for mock FPLs (N0xxx) when not set in opts. */
+function defaultMockTas(aircraftType: string): string {
+    const t = (aircraftType || "").toUpperCase()
+    if (/^(R44|C172|PA28|P28|DV20|SR2)/.test(t)) return "N0120"
+    if (/^(AT7|AT75|AT76|DH8|DHC)/.test(t)) return "N0250"
+    if (/^(E17|E19|E29|CRJ|A22)/.test(t)) return "N0380"
+    if (/^(A31|A32|A20|B73|B38|B39)/.test(t)) return "N0440"
+    if (/^(A33|A35|B77|B78|B74)/.test(t)) return "N0470"
+    return "N0420"
+}
+
 function fpUpdate(
     callsign: string,
     origin: string,
@@ -152,6 +171,7 @@ function fpUpdate(
         origin,
         destination,
         aircraftType,
+        tas: defaultMockTas(aircraftType),
         ...opts,
     }
 }
@@ -194,7 +214,10 @@ export const mockPluginMessages: PluginMessage[] = [
         flightRules: "I",
         rfl: 28000,
         arrRwy: "03",
-        star: "SOPAM1A",
+        star: "NEGIL3L",
+        sectorEntryMin: 14,
+        eta: "1545",
+        fplRemarks: "STS/HOSP RMK/OAT",
     }),
     ctrUpdate("BLX812", {
         squawk: "2612",
@@ -206,6 +229,144 @@ export const mockPluginMessages: PluginMessage[] = [
     radarUpdate("BLX812", ESGG_ELEV + 900, ESGG_LAT + 0.015, ESGG_LON + 0.012, {
         groundSpeed: 190,
         controller: MOCK_MYSELF_CALLSIGN,
+    }),
+
+    // === ESMS (Sturup) AD board samples ===
+    fpUpdate("SAS90M", "ESSA", "ESMS", "A320", {
+        flightRules: "I",
+        rfl: 22000,
+        arrRwy: "17",
+        star: "NEGIL3L",
+        eta: "1620",
+        sectorEntryMin: 11,
+    }),
+    ctrUpdate("SAS90M", {
+        squawk: "4511",
+        groundstate: "ARR",
+        clearance: true,
+        stand: "5",
+        controller: "ESMS_TWR",
+    }),
+    radarUpdate("SAS90M", ESMS_ELEV + 1200, ESMS_LAT + 0.02, ESMS_LON + 0.015, {
+        groundSpeed: 210,
+        controller: "ESMS_TWR",
+    }),
+
+    fpUpdate("NAX12M", "ESMS", "ESGG", "B738", {
+        flightRules: "I",
+        rfl: 24000,
+        depRwy: "17",
+        eobt: "1555",
+    }),
+    ctrUpdate("NAX12M", {
+        squawk: "4512",
+        groundstate: "TAXI",
+        clearance: true,
+        stand: "8",
+        controller: "ESMS_TWR",
+    }),
+    radarUpdate("NAX12M", ESMS_ELEV + 20, ESMS_LAT + 0.002, ESMS_LON + 0.003, {
+        groundSpeed: 15,
+        controller: "ESMS_TWR",
+    }),
+
+    fpUpdate("SEHMS", "ESMS", "ESMS", "R44", {
+        flightRules: "V",
+        rfl: 1500,
+        eobt: "1605",
+    }),
+    ctrUpdate("SEHMS", {
+        squawk: "7000",
+        groundstate: "TAXI",
+        controller: "ESMS_TWR",
+    }),
+    radarUpdate("SEHMS", ESMS_ELEV + 10, ESMS_LAT - 0.001, ESMS_LON + 0.001, {
+        groundSpeed: 5,
+        controller: "ESMS_TWR",
+    }),
+
+    fpUpdate("KLM33M", "EHAM", "ESMS", "E190", {
+        flightRules: "I",
+        rfl: 28000,
+        arrRwy: "11",
+        eta: "1635",
+    }),
+    ctrUpdate("KLM33M", {
+        squawk: "4513",
+        groundstate: "LINEUP",
+        controller: "ESMS_TWR",
+    }),
+    radarUpdate("KLM33M", ESMS_ELEV + 50, ESMS_LAT + 0.004, ESMS_LON - 0.006, {
+        groundSpeed: 8,
+        controller: "ESMS_TWR",
+    }),
+
+    // === ESSB (Bromma) AD board samples ===
+    fpUpdate("SAS12B", "ESSA", "ESSB", "AT76", {
+        flightRules: "I",
+        rfl: 5000,
+        arrRwy: "12",
+        eta: "1615",
+    }),
+    ctrUpdate("SAS12B", {
+        squawk: "4711",
+        groundstate: "ARR",
+        clearance: true,
+        stand: "10",
+        controller: "ESSB_TWR",
+    }),
+    radarUpdate("SAS12B", ESSB_ELEV + 800, ESSB_LAT + 0.012, ESSB_LON + 0.01, {
+        groundSpeed: 160,
+        controller: "ESSB_TWR",
+    }),
+
+    fpUpdate("BRA55B", "ESSB", "ESGG", "AT76", {
+        flightRules: "I",
+        rfl: 16000,
+        depRwy: "12",
+        eobt: "1550",
+    }),
+    ctrUpdate("BRA55B", {
+        squawk: "4712",
+        groundstate: "TAXI",
+        clearance: true,
+        stand: "5",
+        controller: "ESSB_TWR",
+    }),
+    radarUpdate("BRA55B", ESSB_ELEV + 15, ESSB_LAT + 0.001, ESSB_LON + 0.002, {
+        groundSpeed: 12,
+        controller: "ESSB_TWR",
+    }),
+
+    fpUpdate("NAX8SB", "ENGM", "ESSB", "B738", {
+        flightRules: "I",
+        rfl: 18000,
+        arrRwy: "12",
+        eta: "1630",
+    }),
+    ctrUpdate("NAX8SB", {
+        squawk: "4713",
+        groundstate: "",
+        controller: "ESSB_TWR",
+    }),
+    radarUpdate("NAX8SB", ESSB_ELEV + 2500, ESSB_LAT + 0.03, ESSB_LON - 0.02, {
+        groundSpeed: 220,
+        controller: "ESSB_TWR",
+    }),
+
+    fpUpdate("SEHBR", "ESSB", "ESSB", "C172", {
+        flightRules: "V",
+        rfl: 1500,
+        eobt: "1608",
+    }),
+    ctrUpdate("SEHBR", {
+        squawk: "7001",
+        groundstate: "NSTS",
+        controller: "ESSB_TWR",
+    }),
+    radarUpdate("SEHBR", ESSB_ELEV + 5, ESSB_LAT - 0.001, ESSB_LON + 0.001, {
+        groundSpeed: 0,
+        controller: "ESSB_TWR",
     }),
 
     fpUpdate("SAS911", "ENGM", "ESSA", "A320", {
@@ -523,7 +684,7 @@ export const mockPluginMessages: PluginMessage[] = [
     }),
     radarUpdate("COOENQ1", ESNQ_ELEV, ESNQ_LAT + 0.008, ESNQ_LON + 0.008),
 
-    // === ESPA (Luleå) — a few departures and arrivals on runway 14 ===
+    // === ESPA (Luleå) — departures + arrivals on runway 14 (paper APP board) ===
     fpUpdate("SAS41L", "ESPA", "ESSA", "B738", {
         flightRules: "I",
         rfl: 35000,
@@ -551,7 +712,7 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate("NAX32P", {
         squawk: "4612",
         groundstate: "STUP",
-        clearance: true,
+        clearance: false,
         stand: "6",
         controller: "ESPA_TWR",
     }),
@@ -567,11 +728,44 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate("FIN8LL", {
         squawk: "4613",
         groundstate: "TAXI",
-        clearance: true,
+        clearance: false,
         stand: "2",
         controller: "ESPA_TWR",
     }),
     radarUpdate("FIN8LL", 65, 65.55, 22.11),
+
+    fpUpdate("LOT4PA", "ESPA", "EPWA", "B738", {
+        flightRules: "I",
+        rfl: 35000,
+        depRwy: "14",
+        route: "RESNA N623 NEGIL",
+        eobt: "1120",
+        ctot: "1140",
+    }),
+    ctrUpdate("LOT4PA", {
+        squawk: "4614",
+        groundstate: "PUSH",
+        clearance: false,
+        stand: "5",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("LOT4PA", 65, 65.545, 22.12),
+
+    fpUpdate("DLH9LN", "ESPA", "EDDF", "A320", {
+        flightRules: "I",
+        rfl: 36000,
+        depRwy: "14",
+        route: "TOPLA Z208 ARSUT",
+        eobt: "1135",
+    }),
+    ctrUpdate("DLH9LN", {
+        squawk: "4615",
+        groundstate: "LINEUP",
+        clearance: false,
+        stand: "7",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("DLH9LN", 65, 65.549, 22.115, { groundSpeed: 5 }),
 
     fpUpdate("SAS42L", "ESSA", "ESPA", "B738", {
         flightRules: "I",
@@ -580,13 +774,14 @@ export const mockPluginMessages: PluginMessage[] = [
         star: "RESNA2B",
         route: "NOSLI N623 RESNA",
         sectorEntryMin: 18,
+        fplRemarks: "STS/HOSP",
     }),
     ctrUpdate("SAS42L", {
         squawk: "4621",
         groundstate: "ARR",
-        controller: "ESPA_TWR",
+        controller: "ESPA_APP",
     }),
-    radarUpdate("SAS42L", 4500, 65.62, 22.05, { groundSpeed: 240, controller: "ESPA_TWR" }),
+    radarUpdate("SAS42L", 4500, 65.62, 22.05, { groundSpeed: 240, controller: "ESPA_APP" }),
 
     fpUpdate("NAX91P", "ENGM", "ESPA", "B38M", {
         flightRules: "I",
@@ -598,9 +793,37 @@ export const mockPluginMessages: PluginMessage[] = [
     ctrUpdate("NAX91P", {
         squawk: "4622",
         groundstate: "",
-        controller: "ESOS_CTR",
+        controller: "ESPA_APP",
     }),
-    radarUpdate("NAX91P", 8000, 65.7, 21.95, { groundSpeed: 280 }),
+    radarUpdate("NAX91P", 8000, 65.7, 21.95, { groundSpeed: 280, controller: "ESPA_APP" }),
+
+    fpUpdate("BAW77L", "EGLL", "ESPA", "A21N", {
+        flightRules: "I",
+        rfl: 38000,
+        arrRwy: "14",
+        route: "NOSLI N623 RESNA",
+        sectorEntryMin: 22,
+    }),
+    ctrUpdate("BAW77L", {
+        squawk: "4624",
+        groundstate: "ARR",
+        controller: "ESPA_APP",
+    }),
+    radarUpdate("BAW77L", 6000, 65.58, 22.0, { groundSpeed: 250, controller: "ESPA_APP" }),
+
+    fpUpdate("KLM12P", "EHAM", "ESPA", "E190", {
+        flightRules: "I",
+        rfl: 33000,
+        arrRwy: "14",
+        route: "TOPLA Z208 ARSUT",
+        sectorEntryMin: 12,
+    }),
+    ctrUpdate("KLM12P", {
+        squawk: "4625",
+        groundstate: "",
+        controller: "ESPA_F_APP",
+    }),
+    radarUpdate("KLM12P", 3500, 65.56, 22.08, { groundSpeed: 210, controller: "ESPA_F_APP" }),
 
     fpUpdate("BRA214", "ESGG", "ESPA", "AT76", {
         flightRules: "I",
@@ -660,6 +883,10 @@ function mockRwyConfigForAirports(
     out.ESMS = {
         "17": { arr: true, dep: true },
         "35": { arr: false, dep: false },
+    }
+    out.ESSB = {
+        "12": { arr: true, dep: true },
+        "30": { arr: false, dep: false },
     }
     out.ESPA = {
         "14": { arr: true, dep: true },

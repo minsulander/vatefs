@@ -20,6 +20,21 @@
         </button>
       </div>
 
+      <button
+        v-if="store.paperRolesMode"
+        type="button"
+        class="paper-es-link-btn"
+        :class="{ 'is-linked': store.paperEsLinked }"
+        :title="
+          store.paperEsLinked
+            ? 'ES/TopSky linked — ASSUME & transfer on (ground states always on)'
+            : 'ES/TopSky unlinked — ASSUME & transfer off (ground states still on)'
+        "
+        @click="store.setPaperEsLinked(!store.paperEsLinked)"
+      >
+        ES/TopSky
+      </button>
+
       <div
         v-if="!store.isPaperLook && !store.isStdLook"
         class="bay-bg-slider"
@@ -47,7 +62,7 @@
     </div>
 
     <div class="tiny-strips">
-      <!-- Paper look: printer sits where ESSA strip-create buttons are (center) -->
+      <!-- Paper/std boards: printer in the center tiny-strip row -->
       <button
         v-if="showPrintQueue"
         type="button"
@@ -67,7 +82,20 @@
         <span v-if="pendingPrintCount > 0" class="print-badge">{{ pendingPrintCount }}</span>
       </button>
 
-      <template v-if="!store.isPaperLook">
+      <!-- Paper/std: PUSHBACK toggle — same chrome as the bay divider -->
+      <button
+        v-if="showPushbackTiny"
+        type="button"
+        class="tiny-pushback-divider"
+        :class="{ 'is-open': pushbackOpen }"
+        :title="pushbackOpen ? 'Remove PUSHBACK divider' : 'Add PUSHBACK divider'"
+        @click="onPushbackClick"
+      >
+        <span class="tiny-pushback-divider-label">PUSHBACK</span>
+      </button>
+
+      <!-- SAAB / non-paper: create tiny strips in the bar -->
+      <template v-if="!store.isPaperLook && !store.isStdLook">
         <div
           class="tiny-strip tiny-strip-vehicle"
           :class="{ 'look-essa': store.essaRolesMode }"
@@ -189,10 +217,41 @@ const store = useEfsStore()
 const ws = getWorkspace()
 const chromeScale = useEfsChromeScaleValue()
 const barIconSize = computed(() => Math.max(14, Math.round(18 * chromeScale.value)))
+
+const pushbackOpen = computed(() =>
+  store.paperOpenSectionIds.includes('pushback') ||
+  store.layout.bays.some((b) => b.sections.some((s) => s.id === 'pushback')),
+)
+
+/** ESMS AD board: TAXI/PUSHBACK is one host — no separate PUSHBACK tiny. */
+const esmsCombinedTaxiPushback = computed(() => {
+  const taxi = store.layout.bays
+    .flatMap((b) => b.sections)
+    .find((s) => s.id === 'taxi')
+  return (taxi?.title || '').toUpperCase().includes('PUSHBACK')
+})
+
+/** PUSHBACK posang is AD ground-board only — hide for T / P. */
+const showPushbackTiny = computed(
+  () =>
+    store.paperRolesMode &&
+    !esmsCombinedTaxiPushback.value &&
+    store.paperRoles.includes('AD'),
+)
+
+function onPushbackClick() {
+  if (!showPushbackTiny.value) return
+  if (pushbackOpen.value) {
+    store.paperCloseSection('pushback')
+    return
+  }
+  store.paperEnsureSection('pushback', 'PUSHBACK')
+}
 const bayBgIconSize = computed(() => Math.max(16, Math.round(22 * chromeScale.value)))
 const bayBgBrightness = useBayBgBrightness()
 const printOpen = ref(false)
-const showPrintQueue = computed(() => store.isPaperLook)
+/** Printer for all paper boards: AD strips (look:paper) and T strips (look:std). */
+const showPrintQueue = computed(() => store.isPaperLook || store.isStdLook)
 const pendingPrintCount = computed(() =>
   store.stripPrintMode === 'manual' ? store.pendingPrintFlights.length : 0,
 )
@@ -783,6 +842,67 @@ function findDropTarget(x: number, y: number): DropTarget | null {
 .tiny-strip-arr { --tiny-type: #daa520; }
 .tiny-strip-cross { --tiny-type: #881fe0; }
 .tiny-strip-note { --tiny-type: #888; }
+
+/* Match paper section-header--paper divider chrome */
+.tiny-pushback-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: calc(28px * var(--bb));
+  min-width: calc(110px * var(--bb));
+  margin: 0;
+  padding: 0 calc(10px * var(--bb));
+  border: none;
+  border-radius: 0;
+  background: #111;
+  color: #f0f0f0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  user-select: none;
+  transition: filter 0.12s ease, opacity 0.12s ease;
+}
+.tiny-pushback-divider:hover {
+  filter: brightness(1.25);
+}
+.tiny-pushback-divider.is-open {
+  box-shadow: inset 0 0 0 1px #666;
+  opacity: 0.7;
+}
+.tiny-pushback-divider-label {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: calc(13px * var(--bb));
+  font-weight: 700;
+  letter-spacing: calc(1.2px * var(--bb));
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.paper-es-link-btn {
+  flex-shrink: 0;
+  height: calc(28px * var(--bb));
+  padding: 0 calc(10px * var(--bb));
+  border: 1px solid #555;
+  border-radius: 2px;
+  background: #2a2a2e;
+  color: #aaa;
+  font-size: calc(11px * var(--bb));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.paper-es-link-btn.is-linked {
+  background: #1e3a2a;
+  border-color: #3d8f5f;
+  color: #9ddeb8;
+}
+.paper-es-link-btn:hover {
+  filter: brightness(1.1);
+}
 /* Vehicle create button: red on RTC / other SAAB. ESSA roles is dark grey, matching the strip frame. */
 .tiny-strip-vehicle { --tiny-type: #c62828; }
 .tiny-strip-vehicle.look-essa { --tiny-type: #2a2a2a; }

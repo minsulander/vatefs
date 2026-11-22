@@ -1,11 +1,12 @@
-# VatEFS ESGG (Gothenburg Landvetter) — paper FPS look
-# Single runway, 4 bays. Airports from EuroScope rwyconfig or --airport ESGG
+# Landvetter paper board — hidden from the config menu.
+# Loaded as an overlay when PAPER mode + ESGG TWR/GND/DEL login.
+# Menu entry is paper.yml (PAPER).
 
 name: ESGG
 look: paper
 radarRange: 25  # nm (deps / general)
 arrivalRange: 100  # nm — arrivals also show within this range
-arrivalEtaMinutes: 20  # arrivals also show when ETE ≤ this (minutes)
+arrivalEtaMinutes: 30  # arrivals also show when ETE ≤ this (minutes)
 
 include:
   - common-rules.yml

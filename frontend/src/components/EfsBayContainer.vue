@@ -206,27 +206,62 @@ function bayHasKlack(bayId: string, columnIndex: number): boolean {
   return false
 }
 
+/** Generic paper: role-based default pan when T or P is staffed. */
+const paperRoleScroll = computed(() => {
+  if (!store.isStdLook || !store.paperRolesMode) return false
+  const staffed = store.paperLayoutRoles ?? []
+  return staffed.includes('T') || staffed.includes('P')
+})
+
+const isPaperBoard = computed(
+  () => store.isPaperLook || (store.isStdLook && store.paperRolesMode),
+)
+
+/**
+ * How many bay columns fill the viewport (config ±, 2–5).
+ * Honors the user setting; only clamped to the actual bay count.
+ */
 const visibleCols = computed(() => {
   const n = store.esggVisibleColumns
-  return n >= 2 && n <= 5 ? n : 4
+  const preferred = n >= 2 && n <= 5 ? n : 4
+  const bayCount = bays.value.length
+  if (bayCount <= 0) return preferred
+  return Math.min(preferred, Math.max(2, bayCount))
 })
 
 /**
- * Physical strip table: column width = window / visibleCols (2–5);
- * scrollbar pans when more bays exist (layout/roles unchanged).
+ * Physical strip table: fixed column width + bottom scrollbar only when
+ * more bays exist than fit in the viewport (visibleCols).
  */
-const tableScroll = computed(() => store.isPaperLook && store.esggRolesMode)
+const tableScroll = computed(
+  () => isPaperBoard.value && bays.value.length > visibleCols.value,
+)
 
 /**
  * Covering GND on a 5-col board (GND/CD staffed with TWR): pan so INBOUND
  * is one column off-screen. Solo TWR covering GND stays 4-col — no pan.
  */
 const panHideInbound = computed(() => {
+  if (!store.isPaperLook || !store.esggRolesMode) return false
   if (!tableScroll.value) return false
   const covering = store.esggRoles ?? []
   if (!covering.includes('GND')) return false
   if (bays.value.length < 5) return false
   return bays.value.some((b) => b.sections.some((s) => s.id === 'inbound'))
+})
+
+/** Generic paper: T/P covering pans away from clearance/taxi (left). */
+const panHideGround = computed(() => {
+  if (!paperRoleScroll.value) return false
+  const covering = store.paperRoles ?? []
+  return covering.includes('T') || (covering.includes('P') && !covering.includes('AD'))
+})
+
+/** Generic paper: AD-only covering keeps ground in view (TMA off to the right). */
+const panHideTma = computed(() => {
+  if (!paperRoleScroll.value) return false
+  const covering = store.paperRoles ?? []
+  return covering.includes('AD') && !covering.includes('T') && !covering.includes('P')
 })
 
 function measureColWidth() {
@@ -247,9 +282,16 @@ function applyDefaultScroll() {
   const el = scrollEl.value
   if (!el || !tableScroll.value) return
   const colW = el.clientWidth / visibleCols.value
-  // GND working the right side of the table: hide INBOUND, keep scroll available
   applyingDefaultScroll = true
-  el.scrollLeft = panHideInbound.value ? Math.round(colW) : 0
+  if (panHideInbound.value || panHideGround.value) {
+    // Hide leftmost bay (INBOUND or CLEARANCE/TAXI)
+    el.scrollLeft = Math.round(colW)
+  } else if (panHideTma.value) {
+    // Keep ground visible; TMA stays off-screen to the right
+    el.scrollLeft = 0
+  } else {
+    el.scrollLeft = 0
+  }
   requestAnimationFrame(() => {
     applyingDefaultScroll = false
   })
@@ -270,8 +312,10 @@ onMounted(() => {
     ro = new ResizeObserver(() => {
       measureColWidth()
       updateBayGutterScale()
-      // Keep GND pan after resize unless the user already scrolled
-      if (!userScrolled && panHideInbound.value) applyDefaultScroll()
+      // Keep role pan after resize unless the user already scrolled
+      if (!userScrolled && (panHideInbound.value || panHideGround.value || panHideTma.value)) {
+        applyDefaultScroll()
+      }
     })
     if (scrollEl.value) ro.observe(scrollEl.value)
   }
@@ -291,7 +335,17 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  [tableScroll, bays, panHideInbound, visibleCols, () => store.esggRoles.join(',')],
+  [
+    tableScroll,
+    bays,
+    panHideInbound,
+    panHideGround,
+    panHideTma,
+    visibleCols,
+    () => store.esggRoles.join(','),
+    () => store.paperRoles.join(','),
+    () => store.paperLayoutRoles.join(','),
+  ],
   () => {
     userScrolled = false
     requestAnimationFrame(() => {
@@ -360,11 +414,10 @@ function onContainerClick() {
   overflow: visible;
 }
 
-/* Physical table: 4 bay-widths visible; scrollbar along the bottom for bay5 */
+/* Physical table: scrollbar only while content actually overflows */
 .efs-bay-content--table-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: rgba(201, 166, 107, 0.55) rgba(0, 0, 0, 0.25);
 }

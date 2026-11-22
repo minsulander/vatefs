@@ -719,8 +719,8 @@ onMounted(() => {
     for (let i = 0; i < sections.length - 1; i++) {
       const section = sections[i]
       const el = sectionEls[i] as HTMLElement | undefined
-      // Headerless zones size to content — do not lock pixel height
-      if (!section || section.height || section.hideHeader || !el) continue
+      // Headerless / heightPct zones — do not lock pixel height
+      if (!section || section.height || section.heightPct || section.hideHeader || !el) continue
       const height = el.getBoundingClientRect().height
       store.setSectionHeight(props.bay.id, section.id, height, false)
     }

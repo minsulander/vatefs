@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import {
   compactEssaRolesLabel,
   compactEsggRolesLabel,
+  compactPaperRolesLabel,
   formatEssaRolesLabel,
 } from './roleLabel'
 
@@ -86,6 +87,12 @@ check('ESGG densify ladder', () => {
   assert.equal(compactEsggRolesLabel(['TWR', 'GND', 'CD'], 1), 'CD, GND, TWR')
   assert.equal(compactEsggRolesLabel(['TWR', 'GND', 'CD'], 2), 'C, G, T')
   assert.equal(compactEsggRolesLabel(['TWR', 'GND', 'CD'], 3), '')
+})
+
+check('paper roles densify respects available', () => {
+  assert.equal(compactPaperRolesLabel(['AD', 'T', 'P'], ['AD', 'T'], 0), 'AD, T')
+  assert.equal(compactPaperRolesLabel(['AD', 'T', 'P'], ['AD', 'T', 'P'], 0), 'AD, T, P')
+  assert.equal(compactPaperRolesLabel(['AD'], ['AD'], 3), '')
 })
 
 check('each densify level shortens (or equals) prior for long covering set', () => {

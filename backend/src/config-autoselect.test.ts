@@ -25,8 +25,10 @@ check("essa_gnd → essa.yml", () => {
     assert.equal(configFileForLoginCallsign("essa_gnd"), "essa.yml")
 })
 
-check("ESGG_APP → esgg.yml", () => {
-    assert.equal(configFileForLoginCallsign("ESGG_APP"), "esgg.yml")
+check("ESGG_* → paper.yml (unified paper board)", () => {
+    assert.equal(configFileForLoginCallsign("ESGG_APP"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESGG_TWR"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESGG_F_APP"), "paper.yml")
 })
 
 check("ESSR_CTR → multiairport.yml", () => {
@@ -41,19 +43,31 @@ check("ESMM_APP → multiairport.yml", () => {
     assert.equal(configFileForLoginCallsign("ESMM_APP"), "multiairport.yml")
 })
 
-check("ESMS_TWR and ESMS_GND → saab.yml / 1rwy3", () => {
-    assert.equal(configFileForLoginCallsign("ESMS_TWR"), "saab.yml")
-    assert.equal(configFileForLoginCallsign("ESMS_GND"), "saab.yml")
-    assert.equal(configFileForLoginCallsign("ESMS__TWR"), "saab.yml")
+check("ESMS_* → paper.yml (Sturup via PAPER overlay)", () => {
+    assert.equal(configFileForLoginCallsign("ESMS_TWR"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESMS_GND"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESMS_DEL"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESMS_APP"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESMS__TWR"), "paper.yml")
     assert.deepEqual(configForLoginCallsign("ESMS_TWR"), {
-        file: "saab.yml",
-        saabLayoutId: "1rwy3",
+        file: "paper.yml",
     })
 })
 
-check("ESMS_DEL / ESMS_APP → no autoselect", () => {
-    assert.equal(configFileForLoginCallsign("ESMS_DEL"), undefined)
-    assert.equal(configFileForLoginCallsign("ESMS_APP"), undefined)
+check("ESSB_* → paper.yml (Bromma via PAPER overlay)", () => {
+    assert.equal(configFileForLoginCallsign("ESSB_TWR"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESSB_GND"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESSB_DEL"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESSB_APP"), "paper.yml")
+    assert.deepEqual(configForLoginCallsign("ESSB_TWR"), {
+        file: "paper.yml",
+    })
+})
+
+check("ESPA_* → paper.yml", () => {
+    assert.equal(configFileForLoginCallsign("ESPA_APP"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESPA_TWR"), "paper.yml")
+    assert.equal(configFileForLoginCallsign("ESPA_F_APP"), "paper.yml")
 })
 
 check("bare ESSA / ESSR → no autoselect", () => {

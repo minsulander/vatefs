@@ -6,6 +6,7 @@ import type {
     EfsLayout,
     FlightStrip,
     Gap,
+    PaperStripFamily,
     ScribbleStrokePayload,
     Section,
     UiSettings,
@@ -145,6 +146,20 @@ export interface StatusMessage {
     esggRoles?: string[]
     /** True when ESGG roles were chosen manually */
     esggRolesManual?: boolean
+    /** Generic paper AD/T/P roles active (look:std) */
+    paperRolesMode?: boolean
+    /** Covering paper roles (AD / T / P) */
+    paperRoles?: string[]
+    /** True when paper covering roles were chosen manually */
+    paperRolesManual?: boolean
+    /** Staffed paper roles for bay layout */
+    paperLayoutRoles?: string[]
+    /** Positions this airport offers (subset of AD/T/P) */
+    paperAvailableRoles?: string[]
+    /** Generic paper: ES/TopSky ASSUME/transfer link (default true) */
+    paperEsLinked?: boolean
+    /** Optional paper dividers currently open (e.g. pushback) */
+    paperOpenSectionIds?: string[]
     /**
      * ESSA TWR AOR split: runway ends we cover (e.g. 01L,19R).
      * Undefined = all runways (solo / no split). Used to hide MAP/breakout for uncovered ARR.
@@ -390,6 +405,8 @@ export interface PendingPrintFlightInfo {
     eobt?: string
     ctot?: string
     assr?: string
+    /** Paper AD vs TMA family this board would print */
+    paperStripFamily?: PaperStripFamily
 }
 
 export interface PendingPrintListMessage {
@@ -909,6 +926,33 @@ export interface SetEsggRolesMessage {
     manual: boolean
 }
 
+export interface SetPaperRolesMessage {
+    type: 'setPaperRoles'
+    /** Covering AD / T / P; ignored when manual is false (auto) */
+    roles: string[]
+    /** true = manual override; false = return to auto-detect */
+    manual: boolean
+}
+
+/** Generic paper: toggle ES/TopSky ASSUME/transfer link (not ground states). */
+export interface SetPaperEsLinkedMessage {
+    type: 'setPaperEsLinked'
+    linked: boolean
+}
+
+/** Add an optional paper divider (e.g. pushback). */
+export interface PaperEnsureSectionMessage {
+    type: 'paperEnsureSection'
+    sectionId: string
+    title?: string
+}
+
+/** Remove an optional paper divider. */
+export interface PaperCloseSectionMessage {
+    type: 'paperCloseSection'
+    sectionId: string
+}
+
 /** Toggle or set a RWY occupied/closed flag (broadcast to all clients). */
 export interface SetRwyFlagMessage {
     type: 'setRwyFlag'
@@ -1021,7 +1065,7 @@ export interface GrpStandMessage {
     action: 'assign' | 'auto' | 'publish' | 'clear'
 }
 
-export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | SetSectionAddFromTopMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | CdmMasterToggleMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateStdMarkMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetSigStateMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | UpdateWorkspaceStoreMessage | SetEssaRolesMessage | SetWorkspaceOpenSectionsMessage | SetEssaRwyConfigMessage | SetEsggRolesMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | SpawnStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage | RequestStandMenuMessage | GrpStandMessage | RequestPluginRestartMessage | DismissPluginDesyncMessage
+export type ClientMessage = RequestMessage | ReloadFeedsMessage | MoveStripMessage | ReorderStripsMessage | SetGapMessage | SetSectionHeightMessage | SetSectionAddFromTopMessage | StripActionMessage | StripAssignMessage | DeleteStripMessage | ListDeletedStripsMessage | RestoreStripMessage | DclActionMessage | CdmMasterToggleMessage | DclRejectMessage | DclSendMessage | DclSetModeMessage | SwitchConfigMessage | SwitchSaabLayoutMessage | SaabEnsureSectionMessage | CreateStripMessage | UpdateNoteMessage | UpdateStdMarkMessage | UpdateVehicleStripMessage | UpdateRemarksMessage | UpdateHpMessage | UpdateHsMessage | SetCooMessage | InitiateXflCoordinationMessage | AcceptCoordinationMessage | RefuseCoordinationMessage | ReleaseStripMessage | ManualTransferMessage | HandoverAssistantTransferMessage | ViffReaMessage | ViffUpdateEobtMessage | ViffUpdateTobtMessage | ViffReadyTobtMessage | ViffToggleReadyStartupMessage | SetTsacMessage | SetCtocMessage | SetAtdMessage | SetQnhGivenMessage | SetSigStateMessage | SetKlackMessage | SetHighlightMessage | SetColumnAirportMessage | AddActiveAirportMessage | RemoveActiveAirportMessage | SetColumnCountMessage | UpdateUserSettingsMessage | UpdateWorkspaceStoreMessage | SetEssaRolesMessage | SetWorkspaceOpenSectionsMessage | SetEssaRwyConfigMessage | SetEsggRolesMessage | SetPaperRolesMessage | SetPaperEsLinkedMessage | PaperEnsureSectionMessage | PaperCloseSectionMessage | SetRwyFlagMessage | SetEssaSepIndicatorsMessage | ListPendingPrintMessage | PrintStripMessage | SpawnStripMessage | AmendFlightPlanMessage | ScribbleSetMessage | ScribbleSyncPushMessage | SetVatsimCidMessage | RequestCidSuggestMessage | RequestStandMenuMessage | GrpStandMessage | RequestPluginRestartMessage | DismissPluginDesyncMessage
 
 // Type guards for message parsing
 
@@ -1047,5 +1091,5 @@ export function isClientMessage(data: unknown): data is ClientMessage {
         return false
     }
     const type = (data as { type: unknown }).type
-    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'setSectionAddFromTop' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'cdmMasterToggle' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'switchSaabLayout' || type === 'saabEnsureSection' || type === 'createStrip' || type === 'updateNote' || type === 'updateStdMark' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setSigState' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'updateWorkspaceStore' || type === 'setEssaRoles' || type === 'setWorkspaceOpenSections' || type === 'setEssaRwyConfig' || type === 'setEsggRoles' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'spawnStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest' || type === 'requestStandMenu' || type === 'grpStand' || type === 'requestPluginRestart' || type === 'dismissPluginDesync'
+    return type === 'request' || type === 'reloadFeeds' || type === 'moveStrip' || type === 'reorderStrips' || type === 'setGap' || type === 'setSectionHeight' || type === 'setSectionAddFromTop' || type === 'stripAction' || type === 'stripAssign' || type === 'deleteStrip' || type === 'listDeletedStrips' || type === 'restoreStrip' || type === 'dclAction' || type === 'cdmMasterToggle' || type === 'dclReject' || type === 'dclSend' || type === 'dclSetMode' || type === 'switchConfig' || type === 'switchSaabLayout' || type === 'saabEnsureSection' || type === 'createStrip' || type === 'updateNote' || type === 'updateStdMark' || type === 'updateVehicleStrip' || type === 'updateRemarks' || type === 'updateHp' || type === 'updateHs' || type === 'setCoo' || type === 'initiateXflCoordination' || type === 'acceptCoordination' || type === 'refuseCoordination' || type === 'releaseStrip' || type === 'manualTransfer' || type === 'handoverAssistantTransfer' || type === 'viffRea' || type === 'viffUpdateEobt' || type === 'viffUpdateTobt' || type === 'viffReadyTobt' || type === 'viffToggleReadyStartup' || type === 'setTsac' || type === 'setCtoc' || type === 'setAtd' || type === 'setQnhGiven' || type === 'setSigState' || type === 'setKlack' || type === 'setHighlight' || type === 'setColumnAirport' || type === 'addActiveAirport' || type === 'removeActiveAirport' || type === 'setColumnCount' || type === 'updateUserSettings' || type === 'updateWorkspaceStore' || type === 'setEssaRoles' || type === 'setWorkspaceOpenSections' || type === 'setEssaRwyConfig' || type === 'setEsggRoles' || type === 'setPaperRoles' || type === 'setPaperEsLinked' || type === 'paperEnsureSection' || type === 'paperCloseSection' || type === 'setRwyFlag' || type === 'setEssaSepIndicators' || type === 'listPendingPrint' || type === 'printStrip' || type === 'spawnStrip' || type === 'amendFlightPlan' || type === 'scribbleSet' || type === 'scribbleSyncPush' || type === 'setVatsimCid' || type === 'requestCidSuggest' || type === 'requestStandMenu' || type === 'grpStand' || type === 'requestPluginRestart' || type === 'dismissPluginDesync'
 }

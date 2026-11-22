@@ -1,0 +1,13 @@
+# Which paper board positions exist at each airport.
+# AD = tower (TWR / GND / DEL / remote tower)
+# T  = approach (APP)
+# P  = director / final — ESE position ICAO_F_APP, matched by SI or primary
+#      frequency (not a _DIR login suffix)
+#
+# Airports not listed default to AD only. Do not invent positions.
+# ESGG is not listed: Landvetter stays on CD / GND / TWR (DEL / GND / TWR).
+
+airports:
+  ESPA: [AD, T, P]
+  ESMS: [AD]
+  ESSB: [AD]

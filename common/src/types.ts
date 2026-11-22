@@ -3,10 +3,22 @@
 export type StripType = 'departure' | 'arrival' | 'local' | 'vfr' | 'cross' | 'note' | 'vehicle'
 export type FlightRules = 'I' | 'V' | 'Y' | 'Z' // IFR, VFR, IFR->VFR, VFR->IFR
 export type WakeCategory = 'L' | 'M' | 'H' | 'J' // Light, Medium, Heavy, Super
+/**
+ * Paper board strip family for AD vs TMA (T+P) physical strips.
+ * - unified: one strip when covering includes AD and T (top-down)
+ * - ad: ground/AD board only
+ * - tma: approach board shared by T and P
+ */
+export type PaperStripFamily = 'unified' | 'ad' | 'tma'
 
 export interface FlightStrip {
     id: string
     callsign: string
+    /**
+     * Paper AD vs TMA family. When `ad`/`tma`, strip id / syncKey use `#ad` / `#tma`
+     * so IRIS scribble does not collide across boards.
+     */
+    paperStripFamily?: PaperStripFamily
     /** Radiotelephony designator from ICAO_Airlines.txt (e.g. "SCANDINAVIAN") */
     rtfCallsign?: string
 
@@ -63,6 +75,15 @@ export interface FlightStrip {
     // Times
     eobt?: string              // Estimated Off Block Time (HHmm)
     eta?: string               // Estimated Time of Arrival (HHmm)
+    /**
+     * Radar/ES predicted minutes to destination (not FPL EET).
+     */
+    ete?: number
+    /**
+     * Filed EET from FPL (HHmm duration, item 15).
+     * T paper local: bottom of col 2 = EOBT + this → calculated arrival.
+     */
+    filedEet?: string
     /** Minutes until entry into my sectors (ES ETN); 0 = already inside */
     sectorEntryMin?: number
     /** Actual Time of Departure (HHmm) — shown in dep triangle after airborne */
@@ -213,6 +234,11 @@ export interface FlightStrip {
     flightCategory?: string
     /** Item 18 RMK/ contains OAT — star in the standard strip's right-hand bottom cell. */
     oat?: boolean
+    /**
+     * Item 18 STS/ indicator(s) for the standard strip (e.g. HOSP, HEAD).
+     * Shown centered in the top half of the ADEP/ADES box.
+     */
+    sts?: string
     /** Peer sync: show DCL in the paper CLR-read box when this client has no Hoppie status. */
     syncedDclMark?: boolean
 
@@ -322,8 +348,13 @@ export interface Section {
     id: string
     title: string
     height?: number            // Section height in pixels (for resize)
+    /**
+     * Fixed share of the bay body (1–100). Used instead of content-lock pixel
+     * height — e.g. ESMS FATO bottom ¼ / TAXI middle ½.
+     */
+    heightPct?: number
     addFromTop?: boolean       // Whether new strips are added at top (default: true) or bottom
-    /** When true, omit the section header bar (strips only). Used by paper ESGG layout. */
+    /** When true, omit the section header bar (strips only). Used by paper AD layout. */
     hideHeader?: boolean
 }
 

@@ -14,6 +14,7 @@
 
 import type { Bay, EfsLayout, Section } from "@vatefs/common"
 import type { ControllerRole } from "./config-types.js"
+import { isAdStripTowerBoard } from "./paper-roles.js"
 
 export type EsggPositionRole = "CD" | "GND" | "TWR"
 
@@ -34,13 +35,21 @@ export function normalizeEsggRoles(roles: string[] | undefined): EsggPositionRol
     return sortEsggRoles(out)
 }
 
-/** Paper ESGG config (look:paper + ESGG in airports). */
+/**
+ * Landvetter paper board roles (CD/GND/TWR).
+ * Only ESGG tower-side (look:paper). ESMS/ESSB use AD/T/P; everyone else is look:std.
+ */
 export function isEsggRolesConfig(config: {
     look?: string
+    myCallsign?: string
     myAirports?: string[]
 }): boolean {
     if (config.look !== "paper") return false
-    return (config.myAirports ?? []).some((a) => a.toUpperCase() === "ESGG")
+    if (isAdStripTowerBoard(config)) return false
+    const cs = (config.myCallsign ?? "").trim().toUpperCase()
+    if (cs.startsWith("ESGG")) return true
+    const airports = (config.myAirports ?? []).map((a) => a.toUpperCase())
+    return airports.length > 0 && airports.every((a) => a === "ESGG")
 }
 
 export function esggRoleToControllerRole(role: EsggPositionRole): ControllerRole {

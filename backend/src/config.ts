@@ -59,12 +59,29 @@ export {
     refreshEsggRolesIfAuto,
     restoreEsggRolesFromSettings,
     hasEsggPositionRole,
+    isPaperRolesConfig,
+    isPaperStripLook,
+    refreshPaperRolesIfAuto,
+    setPaperRoles,
+    restorePaperRolesFromSettings,
+    isPaperEsLinked,
+    setPaperEsLinked,
+    setPaperOpenSectionIds,
+    ensurePaperOpenSection,
+    closePaperOpenSection,
     getActingControllerRole,
     normalizeControllerCallsign,
     controllerCallsignsEqual,
 } from "./static-config.js"
 
 export type { EsggPositionRole } from "./esgg-roles.js"
+export type { PaperPositionRole } from "./paper-roles.js"
+export {
+    PAPER_CONFIG_FILE,
+    isUnifiedPaperConfigFile,
+    resolvePaperConfigFile,
+    isEsggTowerCallsign,
+} from "./paper-roles.js"
 
 // Re-export rules engine functions
 export {

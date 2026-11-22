@@ -28,8 +28,40 @@ import {
     normalizeEsggRoles,
     type EsggPositionRole,
 } from "./esgg-roles.js"
+import {
+    computeAutoPaperRoles,
+    computePaperStaffedRoles,
+    highestPaperControllerRole,
+    isAdStripTowerBoard,
+    PAPER_OPTIONAL_SECTION_PUSHBACK,
+    paperAllowsOptionalPushback,
+    paperAvailableForAirports,
+    primaryPaperAirport,
+    resolvePaperPositionRole,
+    type PaperPositionRole,
+} from "./paper-roles.js"
+import { normalizePaperRoles, sortPaperRoles } from "./paper-positions.js"
 
 export { isEssaRolesConfig, isEsggRolesConfig }
+
+/**
+ * Generic paper AD/T/P mode.
+ * look:std = generic board; look:paper + ESMS/ESSB = AD strip chrome with AD roles
+ * (Landvetter look:paper keeps CD/GND/TWR via isEsggRolesConfig).
+ */
+export function isPaperRolesConfig(config: {
+    look?: string
+    myCallsign?: string
+    myAirports?: string[]
+}): boolean {
+    if (config.look === "std") return true
+    return isAdStripTowerBoard(config)
+}
+
+/** Paper FPS boards: AD strips (look:paper) and T strips (look:std). */
+export function isPaperStripLook(config: { look?: string }): boolean {
+    return config.look === "paper" || config.look === "std"
+}
 
 /**
  * Top-down controller hierarchy, lowest to highest.
@@ -71,7 +103,7 @@ const defaultConfig: EfsStaticConfig = {
     myAirports: [],
     radarRangeNm: 25,
     arrivalRangeNm: 100,
-    arrivalEtaMinutes: 20,
+    arrivalEtaMinutes: 30,
     groundRangeNm: 3,
     layout: { bays: [] },
     sectionToBay: new Map(),
@@ -95,9 +127,10 @@ function recomputeMyRolesByAirport() {
     const myCallsignRole = staticConfig.myRole
     if (!myCallsignRole || staticConfig.myAirports.length === 0) {
         staticConfig.myRolesByAirport = undefined
-        // Still refresh ESGG/ESSA auto roles so layout does not stick on a stale remap
+        // Still refresh ESGG/ESSA/paper auto roles so layout does not stick on a stale remap
         refreshEssaRolesIfAuto()
         refreshEsggRolesIfAuto()
+        refreshPaperRolesIfAuto()
         return
     }
 
@@ -122,6 +155,7 @@ function recomputeMyRolesByAirport() {
     staticConfig.myRolesByAirport = rolesByAirport
     refreshEssaRolesIfAuto()
     refreshEsggRolesIfAuto()
+    refreshPaperRolesIfAuto()
 }
 
 /**
@@ -187,6 +221,12 @@ export function applyConfig(config: EfsStaticConfig) {
     staticConfig.esggRoles = undefined
     staticConfig.esggLayoutRoles = undefined
     staticConfig.esggRolesManual = undefined
+    staticConfig.paperRoles = undefined
+    staticConfig.paperLayoutRoles = undefined
+    staticConfig.paperAvailableRoles = undefined
+    staticConfig.paperRolesManual = undefined
+    staticConfig.paperEsLinked = undefined
+    staticConfig.paperOpenSectionIds = undefined
     // Workspace open-section sync is client-owned; drop stale board until reconnect
     staticConfig.workspaceOpenSectionIds = undefined
     staticConfig.workspaceOpenSectionsFingerprint = undefined
@@ -228,6 +268,7 @@ export function applyConfig(config: EfsStaticConfig) {
     recomputeMyRolesByAirport()
     refreshEssaRolesIfAuto()
     refreshEsggRolesIfAuto()
+    refreshPaperRolesIfAuto()
 }
 
 /**
@@ -375,17 +416,28 @@ export function setIsController(isController: boolean) {
 }
 
 /**
- * Update my frequency (called when myselfUpdate is received)
+ * Update my frequency (called when myselfUpdate is received).
+ * Returns true when paper AD/T/P covering changed (F_APP via ESE freq match).
  */
-export function setMyFrequency(frequency: number | undefined) {
+export function setMyFrequency(frequency: number | undefined): boolean {
+    const prev = staticConfig.myFrequency
     staticConfig.myFrequency = frequency
+    const freqChanged =
+        prev !== frequency &&
+        !(prev != null && frequency != null && Math.abs(prev - frequency) < 0.0015)
+    if (!freqChanged) return false
+    return refreshPaperRolesIfAuto()
 }
 
 /**
- * Update my position ID / SI (called when myselfUpdate is received)
+ * Update my position ID / SI (called when myselfUpdate is received).
+ * Returns true when paper AD/T/P covering changed (F_APP via ESE SI).
  */
-export function setMyPositionId(positionId: string | undefined) {
-    staticConfig.myPositionId = positionId || undefined
+export function setMyPositionId(positionId: string | undefined): boolean {
+    const next = positionId || undefined
+    if (staticConfig.myPositionId === next) return false
+    staticConfig.myPositionId = next
+    return refreshPaperRolesIfAuto()
 }
 
 /**
@@ -453,11 +505,15 @@ export function isParallelTwr(myCallsign: string | undefined, otherCallsign: str
 export function setMyRole(role: ControllerRole): boolean {
     const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     const prevEsggLayout = esggRolesKey(staticConfig.esggLayoutRoles)
+    const prevPaper = paperRolesKey(staticConfig.paperRoles)
+    const prevPaperLayout = paperRolesKey(staticConfig.paperLayoutRoles)
     staticConfig.myRole = role
     recomputeMyRolesByAirport()
     return (
         esggRolesKey(staticConfig.esggRoles) !== prevEsgg ||
-        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout
+        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout ||
+        paperRolesKey(staticConfig.paperRoles) !== prevPaper ||
+        paperRolesKey(staticConfig.paperLayoutRoles) !== prevPaperLayout
     )
 }
 
@@ -517,6 +573,8 @@ export function updateOnlineController(
     const prevEssa = essaRolesKey(staticConfig.essaRoles)
     const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     const prevEsggLayout = esggRolesKey(staticConfig.esggLayoutRoles)
+    const prevPaper = paperRolesKey(staticConfig.paperRoles)
+    const prevPaperLayout = paperRolesKey(staticConfig.paperLayoutRoles)
     const prev = staticConfig.onlineControllers.get(upper)
     // Update SI when present, but never treat SI-only churn as a roles change.
     // EuroScope often re-sends controllers with fluctuating position IDs; that used to
@@ -533,7 +591,9 @@ export function updateOnlineController(
         rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
         essaRolesKey(staticConfig.essaRoles) !== prevEssa ||
         esggRolesKey(staticConfig.esggRoles) !== prevEsgg ||
-        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout
+        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout ||
+        paperRolesKey(staticConfig.paperRoles) !== prevPaper ||
+        paperRolesKey(staticConfig.paperLayoutRoles) !== prevPaperLayout
     )
 }
 
@@ -593,13 +653,17 @@ export function removeOnlineController(callsign: string): boolean {
     const prevEssa = essaRolesKey(staticConfig.essaRoles)
     const prevEsgg = esggRolesKey(staticConfig.esggRoles)
     const prevEsggLayout = esggRolesKey(staticConfig.esggLayoutRoles)
+    const prevPaper = paperRolesKey(staticConfig.paperRoles)
+    const prevPaperLayout = paperRolesKey(staticConfig.paperLayoutRoles)
     recomputeMyRolesByAirport()
 
     return (
         rolesChanged(prevRoles, staticConfig.myRolesByAirport) ||
         essaRolesKey(staticConfig.essaRoles) !== prevEssa ||
         esggRolesKey(staticConfig.esggRoles) !== prevEsgg ||
-        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout
+        esggRolesKey(staticConfig.esggLayoutRoles) !== prevEsggLayout ||
+        paperRolesKey(staticConfig.paperRoles) !== prevPaper ||
+        paperRolesKey(staticConfig.paperLayoutRoles) !== prevPaperLayout
     )
 }
 
@@ -840,13 +904,205 @@ export function hasEsggPositionRole(role: EsggPositionRole): boolean {
 /**
  * Acting callsign-style role for paper ESGG GND/TWR checks.
  * Prefer highest covering ESGG role when paper roles are active.
+ * Generic paper AD/T/P uses the highest covered paper role.
  */
 export function getActingControllerRole(): ControllerRole | undefined {
     if (isEsggRolesConfig(staticConfig) && staticConfig.esggRoles && staticConfig.esggRoles.length > 0) {
         return highestEsggControllerRole(staticConfig.esggRoles) ?? staticConfig.myRole
     }
+    if (isPaperRolesConfig(staticConfig) && staticConfig.paperRoles && staticConfig.paperRoles.length > 0) {
+        return highestPaperControllerRole(staticConfig.paperRoles) ?? staticConfig.myRole
+    }
     return staticConfig.myRole
 }
 
-export type { EssaPositionRole, EsggPositionRole }
+function paperRolesKey(roles: PaperPositionRole[] | undefined): string {
+    return (roles ?? []).join(",")
+}
+
+/** Online paper roles at our primary airport (excludes self). */
+function onlinePaperRolesAtAirport(icao: string): PaperPositionRole[] {
+    const out: PaperPositionRole[] = []
+    const prefix = icao.toUpperCase()
+    if (!staticConfig.onlineControllers) return out
+    for (const ctrl of staticConfig.onlineControllers.values()) {
+        if (!ctrl.callsign.toUpperCase().startsWith(prefix)) continue
+        const paper = resolvePaperPositionRole({
+            callsign: ctrl.callsign,
+            frequency: ctrl.frequency,
+            positionId: ctrl.positionId,
+            airport: icao,
+            controllerRole: ctrl.role,
+        })
+        if (paper) out.push(paper)
+    }
+    return out
+}
+
+/**
+ * Recompute generic paper covering + layout (staffed) roles.
+ * Only when look is std. Landvetter tower uses ESGG roles instead.
+ * Director (P) comes from ESE _F_APP via SI / primary frequency, not _DIR.
+ * When paperRolesManual, covering stays user-chosen (cut to catalog); layout still auto.
+ */
+export function refreshPaperRolesIfAuto(): boolean {
+    if (!isPaperRolesConfig(staticConfig)) {
+        if (
+            staticConfig.paperRoles !== undefined ||
+            staticConfig.paperLayoutRoles !== undefined ||
+            staticConfig.paperAvailableRoles !== undefined ||
+            staticConfig.paperRolesManual !== undefined
+        ) {
+            staticConfig.paperRoles = undefined
+            staticConfig.paperLayoutRoles = undefined
+            staticConfig.paperAvailableRoles = undefined
+            staticConfig.paperRolesManual = undefined
+            return true
+        }
+        return false
+    }
+
+    const available = paperAvailableForAirports(
+        staticConfig.myAirports,
+        staticConfig.myCallsign,
+    )
+    const icao =
+        primaryPaperAirport(staticConfig.myAirports, staticConfig.myCallsign) ?? ""
+    const myPaper = resolvePaperPositionRole({
+        callsign: staticConfig.myCallsign,
+        frequency: staticConfig.myFrequency,
+        positionId: staticConfig.myPositionId,
+        airport: icao,
+        controllerRole: staticConfig.myRole,
+    })
+    const online = onlinePaperRolesAtAirport(icao)
+    const nextLayout = computePaperStaffedRoles(myPaper, online, available)
+    const availSet = new Set(available)
+    // Manual covering is sticky until the user presses Auto — never re-run
+    // computeAutoPaperRoles while paperRolesManual (even if login role is unchecked).
+    const nextCovering = staticConfig.paperRolesManual
+        ? sortPaperRoles((staticConfig.paperRoles ?? []).filter((r) => availSet.has(r)))
+        : computeAutoPaperRoles(myPaper, nextLayout, available)
+
+    const changed =
+        paperRolesKey(staticConfig.paperRoles) !== paperRolesKey(nextCovering) ||
+        paperRolesKey(staticConfig.paperLayoutRoles) !== paperRolesKey(nextLayout) ||
+        paperRolesKey(staticConfig.paperAvailableRoles) !== paperRolesKey(available)
+
+    staticConfig.paperAvailableRoles = available
+    staticConfig.paperLayoutRoles = nextLayout
+    staticConfig.paperRoles = nextCovering
+
+    // PUSHBACK posang is AD-only — drop when covering is T and/or P
+    if (
+        !paperAllowsOptionalPushback(nextCovering) &&
+        staticConfig.paperOpenSectionIds?.has(PAPER_OPTIONAL_SECTION_PUSHBACK)
+    ) {
+        staticConfig.paperOpenSectionIds.delete(PAPER_OPTIONAL_SECTION_PUSHBACK)
+        return true
+    }
+
+    return changed
+}
+
+/**
+ * Set generic paper covering roles (manual picker or Auto).
+ * When manual=false, immediately re-runs auto covering.
+ */
+export function setPaperRoles(roles: PaperPositionRole[], manual: boolean): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return false
+
+    if (!manual) {
+        const wasManual = !!staticConfig.paperRolesManual
+        staticConfig.paperRolesManual = false
+        const autoChanged = refreshPaperRolesIfAuto()
+        return wasManual || autoChanged
+    }
+
+    const available = new Set(
+        staticConfig.paperAvailableRoles ??
+            paperAvailableForAirports(staticConfig.myAirports, staticConfig.myCallsign),
+    )
+    const next = sortPaperRoles(normalizePaperRoles(roles).filter((r) => available.has(r)))
+    const changed =
+        paperRolesKey(staticConfig.paperRoles) !== paperRolesKey(next) ||
+        !staticConfig.paperRolesManual
+    staticConfig.paperRoles = next
+    staticConfig.paperRolesManual = true
+    return changed
+}
+
+/** Restore paper covering from persisted user settings (after applyConfig). */
+export function restorePaperRolesFromSettings(
+    roles: PaperPositionRole[] | undefined,
+    manual: boolean | undefined,
+) {
+    if (!isPaperRolesConfig(staticConfig)) return
+    if (manual && roles) {
+        staticConfig.paperRolesManual = true
+        staticConfig.paperRoles = normalizePaperRoles(roles)
+        // Refresh layout/available; keep manual covering (cut to catalog)
+        refreshPaperRolesIfAuto()
+    } else {
+        staticConfig.paperRolesManual = false
+        refreshPaperRolesIfAuto()
+    }
+}
+
+/** ES/TopSky link for ASSUME/transfer on generic paper (default on). */
+export function isPaperEsLinked(): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return true
+    return staticConfig.paperEsLinked !== false
+}
+
+export function setPaperEsLinked(linked: boolean): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return false
+    const next = !!linked
+    if (staticConfig.paperEsLinked === next) return false
+    staticConfig.paperEsLinked = next
+    return true
+}
+
+export function setPaperOpenSectionIds(sectionIds: string[]): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return false
+    const next = new Set(
+        sectionIds.map((s) => s.trim().toLowerCase()).filter(Boolean),
+    )
+    const prev = staticConfig.paperOpenSectionIds
+    const same =
+        !!prev &&
+        prev.size === next.size &&
+        [...next].every((id) => prev.has(id))
+    if (same) return false
+    staticConfig.paperOpenSectionIds = next
+    return true
+}
+
+export function ensurePaperOpenSection(sectionId: string): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return false
+    const id = sectionId.trim().toLowerCase()
+    if (!id) return false
+    const set = staticConfig.paperOpenSectionIds ?? new Set<string>()
+    if (set.has(id)) return false
+    set.add(id)
+    staticConfig.paperOpenSectionIds = set
+    return true
+}
+
+export function closePaperOpenSection(sectionId: string): boolean {
+    if (!isPaperRolesConfig(staticConfig)) return false
+    const id = sectionId.trim().toLowerCase()
+    if (!id) return false
+    const set = staticConfig.paperOpenSectionIds ?? new Set<string>()
+    const had = set.has(id)
+    if (had) {
+        set.delete(id)
+        staticConfig.paperOpenSectionIds = set
+    }
+    // Idempotent: still report success so clients can refresh even if open-ids
+    // were already cleared while the divider remained visible.
+    return true
+}
+
+export type { EssaPositionRole, EsggPositionRole, PaperPositionRole }
 

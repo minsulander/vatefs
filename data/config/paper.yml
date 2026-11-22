@@ -1,0 +1,50 @@
+# Unified paper flight-progress board.
+# Menu name: PAPER (ESGG/ESMS/ESSB are overlays — not separate menu entries).
+# AD strips only for GG / MS / SB tower-side; everyone else → T strips + AD+T board:
+#   ESGG DEL/GND/TWR    → Landvetter (look: paper, CD/GND/TWR)
+#   ESMS DEL/GND/TWR    → Sturup AD board (look: paper, esms.yml)
+#   ESSB DEL/GND/TWR    → Bromma AD board (look: paper, essb.yml)
+#   All other positions → generic AD+T board (look: std, T strips, AD/T/P roles)
+# One or two runway bays follow active runways (no separate STD 2 RWY menu).
+
+name: PAPER
+look: std
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 30
+
+include:
+  - std-rules.yml
+
+layout:
+  bays:
+    bay1:
+      sections:
+        pending_dep:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        clearance:
+          title: CLEARANCE
+          addFromTop: true
+        taxi:
+          title: TAXI
+          addFromTop: false
+    bay2:
+      sections:
+        sequence:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway:
+          title: RWY <drwy>
+          addFromTop: false
+    bay3:
+      sections:
+        pending_arr:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        tma_ctr:
+          title: TMA CTR
+          addFromTop: true

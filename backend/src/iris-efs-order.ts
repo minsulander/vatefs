@@ -120,9 +120,21 @@ export function normalizeAtd(value: string | null | undefined): string | null {
     return /^\d{4}$/.test(hhmm) ? hhmm : null
 }
 
-export function irisStripKey(strip: Pick<FlightStrip, "callsign" | "syncKey" | "id">): string {
+export function irisStripKey(
+    strip: Pick<FlightStrip, "callsign" | "syncKey" | "id" | "paperStripFamily">,
+): string {
     const cs = (strip.callsign || "").trim().toUpperCase()
-    if (cs) return cs
+    if (cs) {
+        // Prefer explicit family field, then #ad/#tma on syncKey/id
+        let family = strip.paperStripFamily
+        if (!family || family === "unified") {
+            const fromId = (strip.syncKey || strip.id || "").trim()
+            const m = fromId.match(/#(ad|tma)$/i)
+            if (m) family = m[1]!.toLowerCase() as "ad" | "tma"
+        }
+        if (family === "ad" || family === "tma") return `${cs}#${family}`
+        return cs
+    }
     return strip.syncKey || strip.id
 }
 
@@ -131,14 +143,21 @@ export function irisStripKey(strip: Pick<FlightStrip, "callsign" | "syncKey" | "
  * Match the local strip anyway so a create echo does not materialize a second strip.
  */
 export function stripMatchesRemoteKey(
-    strip: Pick<FlightStrip, "callsign" | "syncKey" | "id">,
+    strip: Pick<FlightStrip, "callsign" | "syncKey" | "id" | "paperStripFamily">,
     remoteKey: string,
 ): boolean {
     const key = remoteKey.trim().toUpperCase()
     if (!key) return false
     if (irisStripKey(strip).toUpperCase() === key) return true
     if (strip.id.toUpperCase() === key) return true
-    return (strip.syncKey || "").toUpperCase() === key
+    if ((strip.syncKey || "").toUpperCase() === key) return true
+    // Plain callsign remote key should not match a family-suffixed local strip
+    const cs = (strip.callsign || "").trim().toUpperCase()
+    if (cs && key === cs) {
+        const family = strip.paperStripFamily
+        if (family === "ad" || family === "tma") return false
+    }
+    return false
 }
 
 export function stripNmSuffix(value: string): string {

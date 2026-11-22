@@ -560,9 +560,11 @@ const ZOOM_INTERACTIVE_CLICK_SELECTOR = [
   '.pg-goa-zone',
   '.pg-cs',
   '.std-cs',
+  '.std-mark',
   '.pg-sid',
   '.pg-time-eobt',
   '.strip-cock-hit',
+  '[data-paper-flag]',
 ].join(', ')
 
 function elementUnderDraw(clientX: number, clientY: number): HTMLElement | null {
@@ -696,9 +698,14 @@ function flushHotspotFlagsFromScribbles() {
   const canToggleClrCto = store.allowMoveOwnedStrip(s)
   if (canToggleClrCto) {
     if (tags.read && hasShapeMatchedPaperScribble(id, 'clr-read')) {
-      const alreadyOn = !!(s.clearance || s.clearanceReadback || s.clearanceRead)
+      // Std: Received is local-only; ESGG still treats Given/ES CLR as Received on
+      const alreadyOn = store.isStdLook
+        ? !!s.clearanceRead
+        : !!(s.clearance || s.clearanceReadback || s.clearanceRead)
       if (!alreadyOn) store.sendStripAction(id, 'toggleClearanceRead')
     }
+    // Std: do not also fire Given from the same zoom-close when Received ink matched —
+    // only apply Given if there is matching Given ink (independent boxes).
     if (tags.correct && hasShapeMatchedPaperScribble(id, 'clr-correct')) {
       const alreadyOn = !!(s.clearance || s.clearanceReadback)
       if (!alreadyOn) store.sendStripAction(id, 'toggleClearanceReadback')
@@ -888,16 +895,22 @@ function commitStrokeMaybeClr(points: string) {
     return
   }
 
-  // DEP: CLR / CFTO / ATD hotspots
-  const readRect = hotspotScribbleRect(root.querySelector('.pg-adep .pg-clr-check'))
-  const correctRect = hotspotScribbleRect(root.querySelector('.pg-ades .pg-clr-check'))
+  // DEP: CLR Received / CLR Given / CFTO / ATD hotspots (ESGG + generic std)
+  const readRect = hotspotScribbleRect(
+    root.querySelector('[data-paper-flag="clr-read"]') ??
+      root.querySelector('.pg-adep .pg-clr-check'),
+  )
+  const correctRect = hotspotScribbleRect(
+    root.querySelector('[data-paper-flag="clr-correct"]') ??
+      root.querySelector('.pg-ades .pg-clr-check'),
+  )
   const ctoRect = hotspotScribbleRect(
     root.querySelector('[data-paper-flag="cfto"]') ?? root.querySelector('.pg-cto-check'),
   )
   const atdRect = hotspotScribbleRect(root.querySelector('.pg-atd-cell'))
 
   let tag: PaperScribbleTag | undefined
-  // Prefer correct (col 5) / CFTO over neighbours when stroke straddles a divider.
+  // Prefer Given (col 5) / CFTO over neighbours when stroke straddles a divider.
   if (correctRect && strokeMatchesClrBox(points, correctRect)) tag = 'clr-correct'
   else if (readRect && strokeMatchesClrBox(points, readRect)) tag = 'clr-read'
   else if (ctoRect && strokeMatchesClrBox(points, ctoRect)) tag = 'cto'

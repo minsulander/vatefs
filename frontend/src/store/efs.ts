@@ -54,6 +54,7 @@ import {
     replaceScribbleCanvases,
     setStripScribbles,
     getStripScribbles,
+    type PaperScribbleTag,
     type ScribbleCanvas,
     type ScribbleStroke,
 } from "@/composables/useStripScribbles"
@@ -490,7 +491,18 @@ export const useEfsStore = defineStore("efs", () => {
     const esggRoles = ref<string[]>([])
     const esggRolesManual = ref(false)
 
-    /** How many bay columns fit in the ESGG window (2–5); scroll pans the rest. */
+    // Generic paper roles (AD / T / P)
+    const paperRolesMode = ref(false)
+    const paperRoles = ref<string[]>([])
+    const paperRolesManual = ref(false)
+    const paperLayoutRoles = ref<string[]>([])
+    const paperAvailableRoles = ref<string[]>([])
+    /** ES/TopSky ASSUME/transfer link (default on) */
+    const paperEsLinked = ref(true)
+    /** Optional paper dividers currently open (e.g. pushback) */
+    const paperOpenSectionIds = ref<string[]>([])
+
+    /** How many bay columns fit in the PAPER window (2–5); scroll pans the rest. */
     const ESGG_VISIBLE_COLS_KEY = 'vatefs-esgg-visible-columns'
     const esggVisibleColumns = ref(loadEsggVisibleColumns())
 
@@ -504,6 +516,7 @@ export const useEfsStore = defineStore("efs", () => {
         return 4
     }
 
+    /** PAPER / Landvetter: change how many columns are viewed (persisted). */
     function adjustEsggVisibleColumns(delta: number) {
         const next = Math.min(5, Math.max(2, esggVisibleColumns.value + delta))
         if (next === esggVisibleColumns.value) return
@@ -1216,7 +1229,7 @@ export const useEfsStore = defineStore("efs", () => {
         const local = strokes.map((s) => {
             const color =
                 s.color === 'red' || s.color === 'black' || s.color === 'blue' ? s.color : 'blue'
-            const tag =
+            const tag: PaperScribbleTag | undefined =
                 s.tag === 'clr-read' ||
                 s.tag === 'clr-correct' ||
                 s.tag === 'cto' ||
@@ -1910,6 +1923,13 @@ export const useEfsStore = defineStore("efs", () => {
         esggRolesMode?: boolean
         esggRoles?: string[]
         esggRolesManual?: boolean
+        paperRolesMode?: boolean
+        paperRoles?: string[]
+        paperRolesManual?: boolean
+        paperLayoutRoles?: string[]
+        paperAvailableRoles?: string[]
+        paperEsLinked?: boolean
+        paperOpenSectionIds?: string[]
         essaCoveredRunways?: string[]
         essa0826Owner?: 'TWR-E' | 'TWR-W' | 'TWR-S' | null
         essaTwrSplit?: boolean
@@ -1969,6 +1989,35 @@ export const useEfsStore = defineStore("efs", () => {
         }
         if (typeof message.esggRolesManual === 'boolean') {
             esggRolesManual.value = message.esggRolesManual
+        }
+        if (typeof message.paperRolesMode === 'boolean') {
+            paperRolesMode.value = message.paperRolesMode
+            if (!message.paperRolesMode) {
+                paperRoles.value = []
+                paperRolesManual.value = false
+                paperLayoutRoles.value = []
+                paperAvailableRoles.value = []
+                paperEsLinked.value = true
+                paperOpenSectionIds.value = []
+            }
+        }
+        if (message.paperRoles) {
+            paperRoles.value = message.paperRoles
+        }
+        if (typeof message.paperRolesManual === 'boolean') {
+            paperRolesManual.value = message.paperRolesManual
+        }
+        if (message.paperLayoutRoles) {
+            paperLayoutRoles.value = message.paperLayoutRoles
+        }
+        if (message.paperAvailableRoles) {
+            paperAvailableRoles.value = message.paperAvailableRoles
+        }
+        if (typeof message.paperEsLinked === 'boolean') {
+            paperEsLinked.value = message.paperEsLinked
+        }
+        if (message.paperOpenSectionIds) {
+            paperOpenSectionIds.value = message.paperOpenSectionIds
         }
         if (typeof message.saabLayoutsMode === 'boolean') {
             saabLayoutsMode.value = message.saabLayoutsMode
@@ -2453,11 +2502,15 @@ export const useEfsStore = defineStore("efs", () => {
         return false
     }
 
-    /** Notes/vehicles always; else assume owner, or either party while a transfer is pending. */
+    /**
+     * Notes/vehicles always; else assume owner, or either party while a transfer is pending.
+     * Paper FPB (Landvetter + generic std): all strips are movable (pair with ASSUME-any).
+     */
     function allowMoveOwnedStrip(strip: FlightStrip): boolean {
         if (strip.stripType === 'note' || strip.stripType === 'vehicle') return true
         if (strip.isAssumed) return true
         if (strip.transferPending === 'in' || strip.transferPending === 'out') return true
+        if (isPaperLook.value || isStdLook.value) return true
         return !isStripOwnedByOther(strip)
     }
 
@@ -2748,6 +2801,8 @@ export const useEfsStore = defineStore("efs", () => {
         }
 
         section.height = newHeight
+        // Drop config share so resize pixels take effect (ESMS heightPct mid-dividers)
+        if (section.heightPct != null) delete section.heightPct
 
         // Send update to server only if change exceeds threshold
         if (broadcast && Math.abs(newHeight - oldHeight) >= HEIGHT_CHANGE_THRESHOLD) {
@@ -3335,6 +3390,33 @@ export const useEfsStore = defineStore("efs", () => {
             essaRolesManual.value = false
         }
         sendMessage({ type: 'setEssaRoles', roles, manual })
+    }
+
+    /** Set paper covering (AD/T/P) manually, or pass manual=false for auto. */
+    function setPaperRoles(roles: string[], manual: boolean) {
+        if (manual) {
+            paperRoles.value = [...roles]
+            paperRolesManual.value = true
+        } else {
+            paperRolesManual.value = false
+        }
+        sendMessage({ type: 'setPaperRoles', roles, manual })
+    }
+
+    /** Generic paper: ES/TopSky ASSUME/transfer link (not ground states). */
+    function setPaperEsLinked(linked: boolean) {
+        paperEsLinked.value = linked
+        sendMessage({ type: 'setPaperEsLinked', linked })
+    }
+
+    /** Add optional paper divider (e.g. pushback). */
+    function paperEnsureSection(sectionId: string, title?: string) {
+        sendMessage({ type: 'paperEnsureSection', sectionId, title })
+    }
+
+    /** Remove optional paper divider. */
+    function paperCloseSection(sectionId: string) {
+        sendMessage({ type: 'paperCloseSection', sectionId })
     }
 
     /** Sync open workspace section ids so backend can gate CTR DEP automoves (ESSA/OTHER). */
@@ -4211,10 +4293,21 @@ export const useEfsStore = defineStore("efs", () => {
         airportCoverage,
         airportRxFrequencies,
         setEssaRoles,
+        setPaperRoles,
+        setPaperEsLinked,
+        paperEnsureSection,
+        paperCloseSection,
         setWorkspaceOpenSections,
         esggRolesMode,
         esggRoles,
         esggRolesManual,
+        paperRolesMode,
+        paperRoles,
+        paperRolesManual,
+        paperLayoutRoles,
+        paperAvailableRoles,
+        paperEsLinked,
+        paperOpenSectionIds,
         esggVisibleColumns,
         adjustEsggVisibleColumns,
         essaRwyConfigId,

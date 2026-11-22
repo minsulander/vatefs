@@ -1,0 +1,29 @@
+---
+description: Numbered paper-strip cell names (box 1–10) for AD/T strip talk
+alwaysApply: true
+---
+
+# Paper strip box numbers
+
+When the user refers to strip **box N**, use this layout (AD = ESGG/ESSB/ESMS `look: paper`; T = generic `look: std` — same numbering):
+
+```
+┌────────┬─────┬────────┬─────┬─────┬─────┬┄┄┄┄┄┐
+│        │  2  │        │  5  │  6  │  7  │     │
+│   1    ├─────┤   4    ├─────┴─────┼─────┤ 10  │
+│        │  3  │        │     8     │  9  │     │
+└────────┴─────┴────────┴───────────┴─────┴┄┄┄┄┄┘
+```
+
+- **1** — Left ID column (C/S · TAS · FRUL+ATYP/WTC · ASSR). Full height.
+- **2** — Time top (DEP: EOBT · ARR: ETA).
+- **3** — Time bottom (DEP: CTO|ATD · ARR: CTL|ATA).
+- **4** — SID / route procedure column (ARR often empty / G/A). Full height.
+- **5** — Top above airports, left (DEP: CLR Received · ARR: entry/sector).
+- **6** — Top above airports, right (DEP: CLR Given · ARR: empty top).
+- **7** — Top of route band (DEP: REA · std T: empty/points top).
+- **8** — Airport row spanning under 5+6 (ADEP | ADES). No vertical split in the middle on AD.
+- **9** — Bottom of route band (DEP: FPL / ATIS+QNH · std T: route points).
+- **10** — Far-right column (DEP: CTOT / RFL bands · std T: RFL). Separator to 7/9 is the **dashed** (half/soft) edge on AD.
+
+Source diagram: user-provided numbered strip chrome. Prefer “box 5” over CSS class names in chat unless implementing code.

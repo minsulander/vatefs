@@ -731,6 +731,55 @@ export function getEsePositionByCallsign(callsign: string | undefined): EsePosit
     return positionsByCallsign.get(callsign.toUpperCase())
 }
 
+/** ESE director / final positions are normally ICAO_F_APP (facility token F). */
+export function isEseDirectorCallsign(callsign: string | null | undefined): boolean {
+    if (!callsign) return false
+    return /_F_APP\b/i.test(callsign.trim())
+}
+
+const FREQ_MATCH_TOLERANCE_MHZ = 0.0015
+
+/**
+ * Match an ESE [POSITIONS] row by primary frequency (and optional airport).
+ * Used when login callsign is e.g. ESPA_APP but the primed freq is ESPA_F_APP.
+ */
+export function getEsePositionByFrequency(
+    frequency: number | undefined | null,
+    airport?: string | null,
+): EsePosition | undefined {
+    if (frequency == null || !(frequency > 0)) return undefined
+    const icao = (airport ?? "").trim().toUpperCase()
+    let fallback: EsePosition | undefined
+    for (const pos of positionsBySi.values()) {
+        if (Math.abs(pos.frequency - frequency) > FREQ_MATCH_TOLERANCE_MHZ) continue
+        if (icao && pos.airport.toUpperCase() === icao) return pos
+        if (!fallback) fallback = pos
+    }
+    return icao ? undefined : fallback
+}
+
+/**
+ * Resolve the ESE position for a login: SI first, then frequency (+ airport),
+ * then exact ESE callsign. Login callsign alone does not pick F_APP over APP.
+ */
+export function resolveEsePosition(opts: {
+    callsign?: string | null
+    frequency?: number | null
+    positionId?: string | null
+    airport?: string | null
+}): EsePosition | undefined {
+    const bySi = getEsePositionBySi(opts.positionId ?? undefined)
+    if (bySi) return bySi
+
+    const airport =
+        opts.airport ??
+        (opts.callsign && opts.callsign.length >= 4 ? opts.callsign.slice(0, 4) : undefined)
+    const byFreq = getEsePositionByFrequency(opts.frequency, airport)
+    if (byFreq) return byFreq
+
+    return getEsePositionByCallsign(opts.callsign ?? undefined)
+}
+
 function isTwrRole(role: string): boolean {
     return role === "TWR" || role.endsWith("TWR") || role.includes("TOWER")
 }

@@ -38,6 +38,27 @@
         ><template v-if="rolesOnlyChrome">Roles</template><template v-else><span v-if="!hideRolesPrefix">Roles: </span>{{ esggRolesLabel }}</template></span>
       </div>
 
+      <!-- Generic paper: covering AD / T / P (only roles the airport has) -->
+      <div v-if="efs.paperRolesMode" class="top-status-cluster top-status-cluster--roles">
+        <span
+          class="essa-status-btn esgg-rwy-label"
+          :title="paperRwyTitle"
+        >{{ paperRwyLabel }}</span>
+        <button
+          v-if="paperRolesVisible"
+          type="button"
+          class="essa-status-btn essa-status-btn--roles"
+          :class="{ 'is-manual': efs.paperRolesManual }"
+          :title="paperRolesStatusTitle"
+          @click="openPaperRolesDialog"
+        >
+          <template v-if="rolesOnlyChrome">Roles</template>
+          <template v-else>
+            <span v-if="!hideRolesPrefix" class="essa-roles-prefix">Roles:</span>{{ hideRolesPrefix ? '' : ' ' }}{{ paperRolesLabel }}
+          </template>
+        </button>
+      </div>
+
       <!-- ESSA status indicators (also editable via menu) -->
       <div v-if="efs.essaRolesMode" class="top-status-cluster top-status-cluster--roles">
         <button
@@ -171,6 +192,28 @@
             <button type="button" class="efs-popup-footer essa-roles-action" @click="essaRolesDialog = false">Cancel</button>
             <button type="button" class="efs-popup-footer essa-roles-action" @click="onEssaRolesAuto">Auto</button>
             <button type="button" class="efs-popup-footer essa-roles-action" @click="onEssaRolesOk">OK</button>
+          </div>
+        </div>
+      </v-dialog>
+      <v-dialog v-model="paperRolesDialog" max-width="320" scrim content-class="essa-roles-dialog-wrap">
+        <div class="efs-popup-menu efs-popup-menu--wide" @click.stop>
+          <div class="efs-popup-header">Roles</div>
+          <div class="efs-popup-section">Covering</div>
+          <div class="efs-popup-list">
+            <label
+              v-for="role in paperRoleChoices"
+              :key="role"
+              class="efs-popup-item efs-popup-item--start"
+              :class="{ selected: draftPaperRoles.includes(role) }"
+            >
+              <input v-model="draftPaperRoles" type="checkbox" :value="role" class="essa-role-check" />
+              <span>{{ paperRoleDialogLabel(role) }}</span>
+            </label>
+          </div>
+          <div class="essa-roles-actions">
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="paperRolesDialog = false">Cancel</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onPaperRolesAuto">Auto</button>
+            <button type="button" class="efs-popup-footer essa-roles-action" @click="onPaperRolesOk">OK</button>
           </div>
         </div>
       </v-dialog>
@@ -325,11 +368,6 @@
           v-model="dclLogDialogOpen"
           :strip="dclLogStrip"
         />
-        <span
-          v-if="efs.esggRolesMode"
-          class="essa-status-btn esgg-rwy-label"
-          :title="esggRwyTitle"
-        >{{ esggRwyLabel }}</span>
       </div>
       </div>
       <!-- Config + everything to its right must never be clipped by long Roles/RWY text -->
@@ -405,7 +443,7 @@
                 >+</button>
               </span>
               <span
-                v-else-if="isEsggPaperConfig(config) && config.file === efs.activeConfig"
+                v-else-if="isPaperModeConfig(config) && config.file === efs.activeConfig"
                 class="column-count-ctrl"
                 title="Columns visible on screen (scroll for the rest)"
                 @click.stop
@@ -424,7 +462,7 @@
                 <button
                   type="button"
                   class="column-count-btn"
-                  :disabled="efs.esggVisibleColumns >= 5"
+                  :disabled="efs.esggVisibleColumns >= paperVisibleColumnsMax"
                   title="More columns on screen"
                   @click="efs.adjustEsggVisibleColumns(1)"
                 >+</button>
@@ -519,12 +557,31 @@
               'is-warn': connLevel === 'warn',
               'is-off': connLevel === 'err',
               'is-icon': showConnReloadIcon,
+              'is-badge': connLevel !== 'ok' && !showConnReloadIcon,
             }"
             :title="connTitle"
             @click="onConnReload"
           >
             <v-icon v-if="showConnReloadIcon" :size="connIconSize" aria-hidden="true">mdi-autorenew</v-icon>
-            <span v-else class="top-conn-label">{{ connLabel }}</span>
+            <span v-else-if="connLevel === 'ok'" class="top-conn-label">OK</span>
+            <span
+              v-else
+              class="top-conn-badge"
+              :class="connLevel === 'err' ? 'top-conn-badge--err' : 'top-conn-badge--warn'"
+              :aria-label="connBadgeAria"
+            >
+              <svg
+                class="top-conn-tri"
+                viewBox="2.7 3.1 18.6 17.5"
+                preserveAspectRatio="xMidYMid meet"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 3.2c.55 0 1.05.3 1.32.78l8.05 14.2c.27.48.26 1.07-.03 1.53-.28.46-.78.74-1.32.74H3.98c-.54 0-1.04-.28-1.32-.74-.29-.46-.3-1.05-.03-1.53l8.05-14.2C10.95 3.5 11.45 3.2 12 3.2z"
+                />
+              </svg>
+              <span class="top-conn-count">{{ connBadgeCount }}</span>
+            </span>
           </button>
         </div>
         <Teleport to="body">
@@ -932,6 +989,7 @@ import {
 import {
   compactEssaRolesLabel,
   compactEsggRolesLabel,
+  compactPaperRolesLabel,
   type EssaRolesCompactLevel,
 } from "@/workspace/roleLabel"
 import { useInfoStripMenu } from "@/composables/useInfoStrips"
@@ -1133,7 +1191,8 @@ const connIconSize = computed(() => Math.max(16, Math.round(18 * chromeScale.val
  * Badge level (#64): worst wins.
  * ERR — WS down, plugin down, EuroScope dir missing, ESAA package missing
  * WARN — Hoppie / stands / ESE / TopSky / CDM local / UDP aging
- * OK — otherwise (black label, no coloured background)
+ * OK — otherwise (plain OK label)
+ * Not-OK: yellow/red rounded triangle with issue count.
  */
 type ConnLevel = 'ok' | 'warn' | 'err'
 const CONN_WARN_FEED_KEYS = [
@@ -1164,29 +1223,47 @@ const hoppieConfigWarnApplies = computed(() => {
   return (hasEssa || hasEsgg) && !(hasEssa && hasEsgg)
 })
 
-const connLevel = computed((): ConnLevel => {
-  if (!efs.connected || !efs.pluginConnected) return 'err'
+const connIssueCounts = computed(() => {
+  let err = 0
+  let warn = 0
+  if (!efs.connected) err++
+  if (!efs.pluginConnected) err++
   const f = efs.feeds
-  if (f?.euroscopeDir && !f.euroscopeDir.ok) return 'err'
-  if (f?.esaaPackage && !f.esaaPackage.ok) return 'err'
+  if (f?.euroscopeDir && !f.euroscopeDir.ok) err++
+  if (f?.esaaPackage && !f.esaaPackage.ok) err++
 
   const pluginDetail = f?.plugin?.detail ?? ''
-  if (/UDP aging|UDP stale/i.test(pluginDetail)) return 'warn'
+  if (efs.pluginConnected && /UDP aging|UDP stale/i.test(pluginDetail)) warn++
   for (const key of CONN_WARN_FEED_KEYS) {
     if (key === 'cdmLocal' && !cdmLocalWarnApplies.value) continue
     if (key === 'hoppieConfig' && !hoppieConfigWarnApplies.value) continue
-    // Live Hoppie session feed: only warn when DCL airport applies
     if (key === 'hoppie' && !hoppieConfigWarnApplies.value) continue
     const item = f?.[key]
-    if (item && !item.ok) return 'warn'
+    if (item && !item.ok) warn++
   }
+  return { err, warn }
+})
+
+const connLevel = computed((): ConnLevel => {
+  if (connIssueCounts.value.err > 0) return 'err'
+  if (connIssueCounts.value.warn > 0) return 'warn'
   return 'ok'
 })
-const connLabel = computed(() => {
-  if (connLevel.value === 'err') return 'ERR'
-  if (connLevel.value === 'warn') return 'WARN'
-  return 'OK'
+
+/** Count inside the triangle: errors + warnings. Colour still follows worst level. */
+const connBadgeCount = computed(() => {
+  const { err, warn } = connIssueCounts.value
+  return err + warn
 })
+
+const connBadgeAria = computed(() => {
+  const { err, warn } = connIssueCounts.value
+  const parts: string[] = []
+  if (err > 0) parts.push(`${err} error${err === 1 ? '' : 's'}`)
+  if (warn > 0) parts.push(`${warn} warning${warn === 1 ? '' : 's'}`)
+  return parts.join(', ') || 'issues'
+})
+
 /** Prefer UDP bind conflict detail when plugin feed reports it */
 const connTitle = computed(() => {
   if (connLevel.value === 'ok') return 'Connected - click to reload'
@@ -1195,7 +1272,7 @@ const connTitle = computed(() => {
     if (plugin?.detail && /UDP/i.test(plugin.detail)) {
       return `${plugin.detail} - click to reload`
     }
-    return 'Degraded feeds - click to reload'
+    return `${connBadgeAria.value} - click to reload`
   }
   const plugin = efs.feeds?.plugin
   if (plugin && !plugin.ok && plugin.detail?.includes('UDP')) {
@@ -1204,7 +1281,7 @@ const connTitle = computed(() => {
   if (efs.feeds?.esaaPackage && !efs.feeds.esaaPackage.ok) {
     return 'ESAA package not found - click to reload'
   }
-  return 'Not fully connected - click to reload'
+  return `${connBadgeAria.value} - click to reload`
 })
 
 const detectedSiLabel = computed(() => {
@@ -1279,6 +1356,8 @@ const essaTwrRoles = ['TWR-E', 'TWR-W'] as const
 const essaAppRoles = ['APP'] as const
 const essaRolesDialog = ref(false)
 const draftEssaRoles = ref<string[]>([])
+const paperRolesDialog = ref(false)
+const draftPaperRoles = ref<string[]>([])
 
 const essaRwyDialog = ref(false)
 const draftEssaRwyId = ref<string | null>(null)
@@ -1458,6 +1537,76 @@ const esggRolesStatusTitle = computed(
     `Covering (from your position + who is online below): ${esggRolesFullLabel.value}`,
 )
 
+function sortPaperRolesDisplay(roles: string[]): string[] {
+  const order = ['AD', 'T', 'P']
+  return [...roles].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+}
+
+/** Hide the Roles chip when the airport only has AD (nothing to choose among). */
+const paperRolesVisible = computed(() => {
+  const avail = efs.paperAvailableRoles ?? []
+  return avail.length > 1
+})
+
+const paperRolesFullLabel = computed(() => {
+  const allow = new Set((efs.paperAvailableRoles ?? []).map((r) => r.toUpperCase()))
+  const roles = sortPaperRolesDisplay(efs.paperRoles).filter(
+    (r) => allow.size === 0 || allow.has(r.toUpperCase()),
+  )
+  return roles.length ? roles.join(', ') : '-'
+})
+
+const paperRolesLabel = computed(() =>
+  compactPaperRolesLabel(efs.paperRoles, efs.paperAvailableRoles, chromeDenseLevel.value),
+)
+
+const paperRoleChoices = computed(() =>
+  sortPaperRolesDisplay(efs.paperAvailableRoles ?? []),
+)
+
+function paperRoleDialogLabel(role: string): string {
+  if (role === 'AD') return 'AD (tower)'
+  if (role === 'T') return 'T (approach)'
+  if (role === 'P') return 'P (director)'
+  return role
+}
+
+const paperRolesStatusTitle = computed(() => {
+  const full = paperRolesFullLabel.value
+  const airport = efs.paperAvailableRoles?.length
+    ? ` · Airport: ${sortPaperRolesDisplay(efs.paperAvailableRoles).join(', ')}`
+    : ''
+  return efs.paperRolesManual
+    ? `Paper roles (manual override): ${full}${airport}`
+    : `Covering (from your position + who is online): ${full}${airport}`
+})
+
+const paperRwyLabel = computed(() => {
+  const cs = (efs.myCallsign || '').trim().toUpperCase()
+  const fromCs = cs.length >= 4 ? cs.slice(0, 4) : ''
+  const icao = (fromCs || efs.myAirports[0] || '').toUpperCase()
+  if (!icao) return 'RWY: -'
+  const info =
+    efs.atisInfo.find((a) => a.airport.toUpperCase() === icao) ||
+    efs.atisInfo.find((a) => {
+      const arr = a.arrRunways ?? []
+      const dep = a.depRunways ?? []
+      return arr.length + dep.length > 0
+    })
+  if (!info) return 'RWY: -'
+  const arr = info.arrRunways ?? []
+  const dep = info.depRunways ?? []
+  const set = new Set<string>()
+  for (const r of [...arr, ...dep]) {
+    const t = (r || '').trim().toUpperCase()
+    if (t) set.add(t)
+  }
+  if (!set.size) return 'RWY: -'
+  return `RWY: ${[...set].sort().join('/')}`
+})
+
+const paperRwyTitle = computed(() => paperRwyLabel.value)
+
 /** Active ESGG runway(s) from ATIS / rwyconfig — only 03 / 21. */
 const esggRwyLabel = computed(() => {
   const info = efs.atisInfo.find((a) => a.airport.toUpperCase() === 'ESGG')
@@ -1585,6 +1734,12 @@ watch(essaRolesDialog, (open) => {
   }
 })
 
+watch(paperRolesDialog, (open) => {
+  if (open) {
+    draftPaperRoles.value = [...efs.paperRoles]
+  }
+})
+
 watch(essaRwyDialog, (open) => {
   if (open) {
     if (essaRwyHoverShowTimer) {
@@ -1617,6 +1772,20 @@ function onEssaRolesAuto() {
   ws.invalidateLayoutPrompt()
   efs.setEssaRoles([], false)
   essaRolesDialog.value = false
+}
+
+function openPaperRolesDialog() {
+  paperRolesDialog.value = true
+}
+
+function onPaperRolesOk() {
+  efs.setPaperRoles([...draftPaperRoles.value], true)
+  paperRolesDialog.value = false
+}
+
+function onPaperRolesAuto() {
+  efs.setPaperRoles([], false)
+  paperRolesDialog.value = false
 }
 
 function onEssaRwyOk() {
@@ -2008,11 +2177,19 @@ function isRtcConfig(config: ConfigInfo): boolean {
   return config.name === 'RTC' || config.file.toLowerCase().includes('multiairport')
 }
 
-function isEsggPaperConfig(config: ConfigInfo): boolean {
+/** Unified PAPER menu (+ legacy ESGG): show visible-column ± while active. */
+function isPaperModeConfig(config: ConfigInfo): boolean {
   const f = config.file.toLowerCase()
   const n = config.name.toUpperCase()
-  return f.includes('esgg') || n === 'ESGG'
+  return f.includes('paper') || n === 'PAPER' || f.includes('esgg') || n === 'ESGG'
 }
+
+/** Cap + at bay count (and 5) so the control matches what can actually be shown. */
+const paperVisibleColumnsMax = computed(() => {
+  const bayCount = efs.getBays?.length ?? 0
+  if (bayCount <= 0) return 5
+  return Math.min(5, Math.max(2, bayCount))
+})
 
 function onConfigClick(file: string) {
   const config = efs.availableConfigs.find(c => c.file === file)
@@ -2020,8 +2197,8 @@ function onConfigClick(file: string) {
   if (file !== efs.activeConfig) {
     efs.switchConfig(file)
   }
-  // Stay open on RTC / ESGG so column ± buttons remain usable (ESSA bays ± lives next to Layouts)
-  if (!isRtcConfig(config) && !isEsggPaperConfig(config)) {
+  // Stay open on RTC / PAPER so column ± buttons remain usable (ESSA bays ± lives next to Layouts)
+  if (!isRtcConfig(config) && !isPaperModeConfig(config)) {
     configMenuOpen.value = false
   }
 }
@@ -2666,9 +2843,9 @@ span.essa-status-btn.esgg-roles-readonly {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Wide enough for WARN; fixed so icon swap doesn’t resize */
-  width: calc(44px * var(--tb));
-  min-width: calc(44px * var(--tb));
+  /* Same box for OK, triangle, and reload icon */
+  width: calc(32px * var(--tb));
+  min-width: calc(32px * var(--tb));
   height: calc(28px * var(--tb));
   margin: 0;
   padding: 0;
@@ -2682,11 +2859,66 @@ span.essa-status-btn.esgg-roles-readonly {
   box-sizing: border-box;
 }
 
+.top-conn-btn.is-badge {
+  border-color: transparent;
+  background: transparent;
+}
+
 .top-conn-label {
   font-size: calc(12px * var(--tb));
   font-weight: 600;
   letter-spacing: 0.04em;
   line-height: 1;
+}
+
+.top-conn-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.top-conn-tri {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.top-conn-badge--warn .top-conn-tri {
+  fill: #eab308;
+  stroke: #ca8a04;
+  stroke-width: 0.6;
+}
+
+.top-conn-badge--err .top-conn-tri {
+  fill: #dc2626;
+  stroke: #b91c1c;
+  stroke-width: 0.6;
+}
+
+.top-conn-count {
+  position: relative;
+  z-index: 1;
+  font-size: calc(13px * var(--tb));
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  /* Sit slightly low in the triangle’s visual center */
+  transform: translateY(calc(3px * var(--tb)));
+  font-variant-numeric: tabular-nums;
+}
+
+.top-conn-badge--warn .top-conn-count {
+  color: #1c1917;
+}
+
+.top-conn-badge--err .top-conn-count {
+  color: #fff;
 }
 
 .top-conn-btn :deep(.v-icon) {
@@ -2698,32 +2930,25 @@ span.essa-status-btn.esgg-roles-readonly {
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* WARN — yellow background, dark text for contrast (#64) */
-.top-conn-btn.is-warn {
+/* Hover / status-open: plain reload affordance (keep level tint lightly) */
+.top-conn-btn.is-warn.is-icon {
   border-color: #ca8a04;
   background: #eab308;
   color: #1c1917;
 }
 
-.top-conn-btn.is-warn:hover,
-.top-conn-btn.is-warn.is-icon {
+.top-conn-btn.is-warn.is-icon:hover {
   background: #facc15;
-  border-color: #ca8a04;
-  color: #1c1917;
 }
 
-/* ERR — red background, white text */
-.top-conn-btn.is-off {
+.top-conn-btn.is-off.is-icon {
   border-color: #b91c1c;
   background: #b91c1c;
   color: #fff;
 }
 
-.top-conn-btn.is-off:hover,
-.top-conn-btn.is-off.is-icon {
+.top-conn-btn.is-off.is-icon:hover {
   background: #dc2626;
-  border-color: #dc2626;
-  color: #fff;
 }
 
 .efs-top-bar :deep(.dcl-btn.v-btn) {

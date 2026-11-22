@@ -46,6 +46,16 @@ import {
     isEsggRolesConfig,
     syncSectionToBayFromLayout,
 } from "./esgg-roles.js"
+import {
+    applyPaperDualRunwayLayout,
+    applyPaperApproachDivider,
+    applyPaperCoveringLayout,
+    applyPaperOptionalSections,
+    applyPaperRoleLayout,
+    paperNeedsSecondRunway,
+    syncPaperSectionToBayFromLayout,
+} from "./paper-roles.js"
+import { isPaperRolesConfig } from "./static-config.js"
 
 /**
  * Resolve template variables in section titles.
@@ -62,11 +72,20 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
     )
     if (!hasTemplates) return layout
 
-    // Collect active runways across all airports
+    // Prefer login ICAO runways (ESPA_APP → ESPA) so sibling ES-active fields
+    // with empty RWY selection do not blank the divider title.
     const allArrRunways: string[] = []
     const allDepRunways: string[] = []
     if (config.activeRunways) {
-        for (const airport of config.myAirports) {
+        const primary =
+            (config.myCallsign && config.myCallsign.trim().length >= 4
+                ? config.myCallsign.trim().slice(0, 4).toUpperCase()
+                : undefined) || config.myAirports[0]
+        const airports =
+            primary && config.activeRunways[primary]
+                ? [primary]
+                : config.myAirports
+        for (const airport of airports) {
             const rwy = config.activeRunways[airport]
             if (rwy) {
                 allArrRunways.push(...rwy.arr)
@@ -75,13 +94,14 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
         }
     }
 
-    const arrRwyStr = allArrRunways.join('/') || '??'
-    const depRwyStr = allDepRunways.join('/') || '??'
+    // Empty when nothing selected — titles like "RWY <drwy>" become plain "RWY"
+    const arrRwyStr = allArrRunways.join('/')
+    const depRwyStr = allDepRunways.join('/')
     const runwayOrder: string[] = []
     for (const rwy of [...allDepRunways, ...allArrRunways]) {
         if (rwy && !runwayOrder.includes(rwy)) runwayOrder.push(rwy)
     }
-    const rwy1 = runwayOrder[0] || '??'
+    const rwy1 = runwayOrder[0] || ''
     const rwy2 = runwayOrder[1] || rwy1
 
     return {
@@ -94,6 +114,8 @@ function resolveLayoutTemplates(layout: EfsLayout, config: EfsStaticConfig): Efs
                     .replace('<drwy>', depRwyStr)
                     .replace('<rwy1>', rwy1)
                     .replace('<rwy2>', rwy2)
+                    .replace(/\s+/g, ' ')
+                    .trim(),
             }))
         }))
     }
@@ -144,6 +166,9 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "canEditClearance",
     "direct",
     "clearance",
+    "clearanceRead",
+    "clearanceReadback",
+    "paperClrReadSuppressed",
     "clearedForTakeoff",
     "clearedToLand",
     "airborne",
@@ -159,6 +184,7 @@ const STRIP_COMPARE_FIELDS: Array<keyof FlightStrip> = [
     "stdMark3",
     "flightCategory",
     "oat",
+    "sts",
     "hasMatchingFlight",
     "groundstate",
     // CDM / vIFF — must be compared or TOBT/TSAT/REA-only updates are dropped
@@ -778,6 +804,47 @@ class EfsStore {
             syncSectionToBayFromLayout(staticConfig.sectionToBay, withHeights)
         }
 
+        if (isPaperRolesConfig(staticConfig)) {
+            const dual = paperNeedsSecondRunway(
+                staticConfig.activeRunways,
+                staticConfig.myAirports,
+            )
+            withHeights = applyPaperDualRunwayLayout(withHeights, dual)
+            if (dual) {
+                // runway_b is created at runtime — keep a matching drag rule
+                const has = staticConfig.moveRules.some((r) => r.toSectionId === "runway_b")
+                if (!has) {
+                    staticConfig.moveRules.push({
+                        id: "to_runway_b",
+                        toSectionId: "runway_b",
+                        command: { type: "setGroundstate", value: "LINEUP" },
+                        priority: 50,
+                    })
+                }
+            }
+            withHeights = applyPaperRoleLayout(
+                withHeights,
+                staticConfig.paperLayoutRoles ?? staticConfig.paperRoles ?? [],
+            )
+            // Covering T / T+P without AD → 4-bay approach board
+            withHeights = applyPaperCoveringLayout(
+                withHeights,
+                staticConfig.paperRoles ?? [],
+            )
+            // Covering exclusively P: APPROACH divider in middle bay
+            withHeights = applyPaperApproachDivider(
+                withHeights,
+                staticConfig.paperRoles ?? [],
+            )
+            // Optional dividers (PUSHBACK) from bottom-bar add/remove (AD only)
+            withHeights = applyPaperOptionalSections(
+                withHeights,
+                staticConfig.paperOpenSectionIds,
+                staticConfig.paperRoles ?? [],
+            )
+            syncPaperSectionToBayFromLayout(staticConfig.sectionToBay, withHeights)
+        }
+
         return resolveLayoutTemplates(withHeights, staticConfig)
     }
 
@@ -793,7 +860,7 @@ class EfsStore {
             // Align bayIds after CD ALL+TSAT column merge (max 4 columns)
             return remapBayIdsToLayout(remapped, this.getLayout())
         }
-        if (isEsggRolesConfig(staticConfig)) {
+        if (isEsggRolesConfig(staticConfig) || isPaperRolesConfig(staticConfig)) {
             return remapBayIdsToLayout(strips, this.getLayout())
         }
         return strips
@@ -961,33 +1028,40 @@ class EfsStore {
         if (!strip) return null
 
         // Other-assumed strips stay where rules placed them (notes/vehicles have no owner).
-        // Ownership = ES tracking callsign and/or SI (live flight + strip). Paper: incoming transfer OK.
+        // Ownership = ES tracking callsign and/or SI (live flight + strip).
+        // Paper FPB (look paper/std): drag always allowed — physical strips move freely.
         // Peer vatefs-sync placement updates bypass ownership (shared bay view).
         if (!opts?.fromSync) {
-            const flight = flightStore.getFlight(strip.callsign)
-            const liveOwner = flight?.controller?.trim()
-            const liveSi = flight?.controllerId?.trim()
-            const myCs = staticConfig.myCallsign?.trim()
-            const mySi = staticConfig.myPositionId?.trim()
-            const ownerCs = (strip.ownerCallsign || liveOwner || '').trim()
-            const trackedByMe =
-                (!!myCs && !!liveOwner && liveOwner.toUpperCase() === myCs.toUpperCase()) ||
-                (!!mySi && !!liveSi && liveSi.toUpperCase() === mySi.toUpperCase()) ||
-                !!strip.isAssumed
-            const liveOwnedByOther =
-                !trackedByMe && (!!liveOwner || !!liveSi || !!strip.ownedByOther || !!ownerCs)
-            const allowIncomingTransferDrag =
-                staticConfig.look === 'paper' && strip.transferPending === 'in'
-            if (
-                liveOwnedByOther &&
-                strip.stripType !== 'note' &&
-                strip.stripType !== 'vehicle' &&
-                !allowIncomingTransferDrag
-            ) {
-                console.log(
-                    `[MOVE] rejected ${strip.callsign || stripId}: owned by ${ownerCs || liveOwner || liveSi || 'other'}`,
-                )
-                return null
+            const paperBoard =
+                staticConfig.look === "paper" || staticConfig.look === "std"
+            if (!paperBoard) {
+                const flight = flightStore.getFlight(strip.callsign)
+                const liveOwner = flight?.controller?.trim()
+                const liveSi = flight?.controllerId?.trim()
+                const myCs = staticConfig.myCallsign?.trim()
+                const mySi = staticConfig.myPositionId?.trim()
+                const ownerCs = (strip.ownerCallsign || liveOwner || "").trim()
+                const trackedByMe =
+                    (!!myCs &&
+                        !!liveOwner &&
+                        liveOwner.toUpperCase() === myCs.toUpperCase()) ||
+                    (!!mySi &&
+                        !!liveSi &&
+                        liveSi.toUpperCase() === mySi.toUpperCase()) ||
+                    !!strip.isAssumed
+                const liveOwnedByOther =
+                    !trackedByMe &&
+                    (!!liveOwner || !!liveSi || !!strip.ownedByOther || !!ownerCs)
+                if (
+                    liveOwnedByOther &&
+                    strip.stripType !== "note" &&
+                    strip.stripType !== "vehicle"
+                ) {
+                    console.log(
+                        `[MOVE] rejected ${strip.callsign || stripId}: owned by ${ownerCs || liveOwner || liveSi || "other"}`,
+                    )
+                    return null
+                }
             }
         }
 
@@ -1108,6 +1182,8 @@ class EfsStore {
 
         if (changed) {
             section.height = newHeight
+            // User resize replaces YAML heightPct (ESMS mid-dividers)
+            if (section.heightPct != null) delete section.heightPct
         }
 
         return { section, changed }

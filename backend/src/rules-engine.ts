@@ -911,6 +911,14 @@ export function determineActionForFlight(
         return 'ASSUME'
     }
 
+    // Paper FPB (Landvetter + generic std): offer ASSUME on any strip we do not track
+    if (
+        (config.look === 'paper' || config.look === 'std') &&
+        !isTrackedByMyself(flight, config)
+    ) {
+        return 'ASSUME'
+    }
+
     return undefined
 }
 

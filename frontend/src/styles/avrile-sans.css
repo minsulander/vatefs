@@ -1,9 +1,27 @@
+/* EFS print face — edited Avrile Sans cut matched to IRL FPS strips.
+ * Used by T strips (StdPaperStrip). AD strips use Microsoft Sans Serif. */
 @font-face {
   font-family: "Avrile Sans";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("../assets/fonts/AvrileSans-Regular.woff") format("woff");
+  src: url("../assets/fonts/AvrileSans-EFS.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Avrile Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/fonts/AvrileSans-EFS-Medium.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Avrile Sans";
+  font-style: normal;
+  font-weight: 550;
+  font-display: swap;
+  src: url("../assets/fonts/AvrileSans-EFS-550.woff") format("woff");
 }
 
 @font-face {
@@ -11,5 +29,13 @@
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("../assets/fonts/AvrileSans-SemiBold.woff") format("woff");
+  src: url("../assets/fonts/AvrileSans-EFS-SemiBold.woff") format("woff");
+}
+
+@font-face {
+  font-family: "Avrile Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/AvrileSans-EFS-Bold.woff") format("woff");
 }

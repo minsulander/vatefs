@@ -220,7 +220,12 @@
           <span class="pg-hdr-freq-mhz">124,680</span>
         </div>
       </template>
-      <template v-else-if="store.isStdLook && isRunwaySectionId(section.id)">
+      <template
+        v-else-if="
+          (store.isStdLook || (store.isPaperLook && store.paperRolesMode)) &&
+          (isRunwaySectionId(section.id) || isStdPaperBayTitle)
+        "
+      >
         <span class="section-title section-title--paper-lg section-title--paper-center">{{ section.title }}</span>
       </template>
       <template v-else-if="store.isPaperLook && showPabananRwy">
@@ -1159,11 +1164,15 @@ function isWorkspaceSectionDrag(e: DragEvent): boolean {
 
 function onHeaderMouseDown(e: MouseEvent) {
   if (props.workspaceMode || store.multiAirport) return // pointerdown handles divider drag
+  const t = e.target as HTMLElement | null
+  if (t?.closest('button, .section-hdr-btn, a, input, select, textarea')) return
   if (store.isPaperLook || store.isStdLook) onResizeStart(e)
 }
 
 function onHeaderTouchStart(e: TouchEvent) {
   if (props.workspaceMode || store.multiAirport) return
+  const t = e.target as HTMLElement | null
+  if (t?.closest('button, .section-hdr-btn, a, input, select, textarea')) return
   if (store.isPaperLook || store.isStdLook) onResizeStart(e)
 }
 
@@ -1450,26 +1459,80 @@ function isAbovePushSectionId(sectionId: string): boolean {
   return sectionId === 'above_push'
 }
 
+function isTmaAboveSectionId(sectionId: string): boolean {
+  return (
+    sectionId === 'tma_dep_above' ||
+    sectionId === 'tma_arr_above' ||
+    sectionId === 'app_above'
+  )
+}
+
+function isSequenceSectionId(sectionId: string): boolean {
+  return (
+    sectionId === 'sequence' ||
+    sectionId === 'sequence_b' ||
+    sectionId.startsWith('sequence_')
+  )
+}
+
 /**
  * Paper zones that stick the main list to the bottom:
  * headerless INBOUND / above KLARERING / above PÅ BANAN / above START-UP (CD→GND),
  * and PÅ TAXI (mixed ARR-on-top / DEP-on-bottom stack, bottom-justified in the bay).
+ * Std T-board: headerless zones above DEP/ARR mid-dividers.
+ * AD middle bay: sequence above RWY.
  * Pin tray is reversed to top via CSS.
  */
-const stickBottomZone = computed(
-  () =>
+const stickBottomZone = computed(() => {
+  // ESMS AD board: pending stay top-oriented (not Landvetter stick-bottom)
+  if (
     store.isPaperLook &&
-    ((!!props.section.hideHeader &&
-      (isPendingDepSectionId(props.section.id) ||
-        isAbovePushSectionId(props.section.id) ||
-        isCtrArrSectionId(props.section.id) ||
-        isInboundSectionId(props.section.id, props.section.title))) ||
-      isTaxiSectionId(props.section.id)),
-)
+    store.paperRolesMode &&
+    (props.section.id === 'pending_dep' || props.section.id === 'pending_arr')
+  ) {
+    return false
+  }
+  return (
+    (store.isPaperLook &&
+      ((!!props.section.hideHeader &&
+        (isPendingDepSectionId(props.section.id) ||
+          isAbovePushSectionId(props.section.id) ||
+          isCtrArrSectionId(props.section.id) ||
+          isInboundSectionId(props.section.id, props.section.title) ||
+          isSequenceSectionId(props.section.id))) ||
+        isTaxiSectionId(props.section.id))) ||
+    (store.isStdLook &&
+      !!props.section.hideHeader &&
+      (isTmaAboveSectionId(props.section.id) || isSequenceSectionId(props.section.id)))
+  )
+})
 
 function isRunwaySectionId(sectionId: string): boolean {
   return sectionId === 'runway' || sectionId.startsWith('runway_') || sectionId.endsWith('_runway')
 }
+
+/** Std / ESMS AD board: centered bay titles (DEP / ARR / APP / TAXI / FATO / …). */
+const isStdPaperBayTitle = computed(() => {
+  // look:std, or look:paper with AD roles (ESMS — not Landvetter CD/GND/TWR)
+  if (!store.isStdLook && !(store.isPaperLook && store.paperRolesMode)) return false
+  const id = props.section.id
+  const title = (props.section.title || '').toUpperCase()
+  if (
+    id === 'tma_dep' ||
+    id === 'tma_arr' ||
+    id === 'app' ||
+    id === 'pushback' ||
+    id === 'fato' ||
+    id === 'taxi'
+  ) {
+    return true
+  }
+  // T-without-AD board reuses tma_ctr as ARR
+  if (id === 'tma_ctr' && title === 'ARR') return true
+  // APP mid-divider may include runway (e.g. "APP 32")
+  if (title === 'APP' || title.startsWith('APP ')) return true
+  return false
+})
 
 /** Larger title: UTFLYGNING / PÅ TAXI / PÅ BANAN */
 const paperLargeTitle = computed(
@@ -1477,7 +1540,8 @@ const paperLargeTitle = computed(
     store.isPaperLook &&
     (isCtrDepSectionId(props.section.id) ||
       isTaxiSectionId(props.section.id) ||
-      isRunwaySectionId(props.section.id)),
+      isRunwaySectionId(props.section.id) ||
+      props.section.id === 'fato'),
 )
 
 const showPabananRwy = computed(
@@ -3681,20 +3745,30 @@ const sectionStyle = computed(() => {
   // Workspace + RTC free-Y: allow heights below the classic 80px floor
   const freeY = props.workspaceMode || store.multiAirport
 
-  // Last section always flexes to fill remaining space
-  if (props.isLastSection) {
-    return {
-      flex: '1 1 auto',
-      minHeight: freeY || noHeader ? '0px' : '80px',
-    }
-  }
-  // Other sections: apply stored height, don't grow or shrink
-  // Using flex: 0 0 auto prevents other sections from "bumping" during resize
+  // Pixel height (user resize) wins over YAML heightPct so mid-dividers move
   if (props.section.height != null) {
     return {
       height: `${props.section.height}px`,
       flex: '0 0 auto',
       minHeight: freeY ? '0px' : undefined,
+      // Keep fixed-size last sections (e.g. RWY 11/29) at the bay floor
+      ...(props.isLastSection ? { marginTop: 'auto' } : {}),
+    }
+  }
+  // Fixed bay share — also on last section (ESMS FATO / RWY 11/29 bottom ¼)
+  if (props.section.heightPct != null) {
+    return {
+      flex: `0 0 ${props.section.heightPct}%`,
+      minHeight: '0px',
+      maxHeight: `${props.section.heightPct}%`,
+      ...(props.isLastSection ? { marginTop: 'auto' } : {}),
+    }
+  }
+  // Last section flexes to fill remaining space when no fixed size
+  if (props.isLastSection) {
+    return {
+      flex: '1 1 auto',
+      minHeight: freeY || noHeader ? '0px' : '80px',
     }
   }
   // Headerless strip zones (e.g. pending above KLARERING) size to content

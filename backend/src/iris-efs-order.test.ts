@@ -65,11 +65,38 @@ function strip(
         qnhGiven: partial.qnhGiven,
         noteText: partial.noteText,
         atd: partial.atd,
+        paperStripFamily: partial.paperStripFamily,
     }
 }
 
 check("stripKey uppercase callsign", () => {
     assert.equal(irisStripKey(strip({ callsign: "sas123", sectionId: "taxi_dep" })), "SAS123")
+})
+
+check("stripKey includes paper family suffix", () => {
+    assert.equal(
+        irisStripKey(
+            strip({
+                callsign: "sas123",
+                sectionId: "tma_dep",
+                paperStripFamily: "tma",
+                id: "SAS123#tma",
+                syncKey: "SAS123#tma",
+            }),
+        ),
+        "SAS123#tma",
+    )
+    assert.equal(
+        irisStripKey(
+            strip({
+                callsign: "sas123",
+                sectionId: "pending_dep",
+                id: "SAS123#ad",
+                syncKey: "SAS123#ad",
+            }),
+        ),
+        "SAS123#ad",
+    )
 })
 
 check("synthetic stripKey matches VatIRIS uppercase echo", () => {

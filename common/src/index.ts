@@ -12,6 +12,7 @@ export type {
     StripType,
     FlightRules,
     WakeCategory,
+    PaperStripFamily,
     FlightStrip,
     Section,
     Bay,
@@ -180,6 +181,14 @@ export {
 export type { LopDirectMode, LopDirectSuggestion, LopDirectInput } from "./auto-direct.js"
 
 export { parsePobFromRemarks, withPobInRemarks } from "./fpl-remarks.js"
+
+export {
+    normalizeEsggArrRwy,
+    esggStarEntryFix,
+    esggArrAppSide,
+    esggArrSectorCode,
+} from "./esgg-arr-sector.js"
+export type { EsggArrAppSide } from "./esgg-arr-sector.js"
 
 export {
     requiresAccCoordination,

@@ -1,0 +1,51 @@
+# Stockholm/Bromma AD board — hidden from the config menu.
+# Loaded as a PAPER overlay for ESSB DEL/GND/TWR (or sole myAirport ESSB).
+# Menu entry is paper.yml (PAPER). Uses AD strip chrome (look: paper) + AD roles.
+# Single runway 12/30.
+
+name: ESSB
+look: paper
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 30
+
+include:
+  - std-rules.yml
+
+layout:
+  bays:
+    # Bay 1: pending · CLEARANCE · TAXI/PUSHBACK
+    bay1:
+      sections:
+        pending_dep:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        clearance:
+          title: CLEARANCE
+          addFromTop: true
+        taxi:
+          title: TAXI/PUSHBACK
+          addFromTop: false
+
+    # Bay 2: active runway (12 or 30)
+    bay2:
+      sections:
+        sequence:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway:
+          title: RWY <drwy>
+          addFromTop: false
+
+    # Bay 3: pending arrivals · TMA
+    bay3:
+      sections:
+        pending_arr:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        tma_ctr:
+          title: TMA
+          addFromTop: true

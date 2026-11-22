@@ -203,8 +203,25 @@ import {
     resolveEsaaPluginsDir,
     resolveIcaoAirlinesFile,
 } from "./euroscope-paths.js"
-import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, setWorkspaceOpenSectionIds, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, getActingControllerRole, controllerCallsignsEqual } from "./config.js"
+import { setMyCallsign, setMyAirports, setIsController, setMyFrequency, setMyPositionId, setActiveRunways, setEssaAssignedRunways, staticConfig, determineMoveAction, applyConfig, parseControllerRole, setMyRole, updateOnlineController, removeOnlineController, clearOnlineControllers, getControllerCallsign, setActiveAirports, setColumnAirport, setColumnCount, rebuildMultiAirportLayout, isEssaRolesConfig, setEssaRoles, restoreEssaRolesFromSettings, setWorkspaceOpenSectionIds, isEsggRolesConfig, setEsggRoles, restoreEsggRolesFromSettings, hasEsggPositionRole, isPaperRolesConfig, isPaperStripLook, setPaperRoles, restorePaperRolesFromSettings, isPaperEsLinked, setPaperEsLinked, setPaperOpenSectionIds, ensurePaperOpenSection, closePaperOpenSection, getActingControllerRole, controllerCallsignsEqual, PAPER_CONFIG_FILE, isUnifiedPaperConfigFile, resolvePaperConfigFile } from "./config.js"
+import {
+    PAPER_OPTIONAL_SECTION_PUSHBACK,
+    isPaperTmaAssumeCross,
+    isPaperTpPinSectionId,
+    layoutHasCombinedTaxiPushback,
+    paperAllowsOptionalPushback,
+    paperIsExclusiveP,
+    parsePaperFamilyStripId,
+    resolvePaperPositionRole,
+    resolvePaperTpPinSectionId,
+    callsignToPaperRole,
+} from "./paper-roles.js"
 import type { ControllerRole, EuroscopeCommand, EssaPositionRole, EsggPositionRole } from "./config.js"
+import { loadPaperPositionsCatalog, normalizePaperRoles } from "./paper-positions.js"
+import {
+    applyUnifiedPaperPresentation,
+    clearPaperPresentation,
+} from "./paper-presentation.js"
 import {
     normalizeEssaRoles,
     remapBayIdsToLayout,
@@ -442,6 +459,7 @@ const cliArgs = parseArgs()
 
 // Configuration management
 const configDir = path.join(dataDir, "config")
+loadPaperPositionsCatalog(configDir)
 let availableConfigs: ConfigFileInfo[] = scanConfigDirectory(configDir)
 const initialResolved = resolveConfigPath(
     dataDir,
@@ -477,6 +495,10 @@ try {
     applyConfig(config)
     if (isSaabLayoutsConfig(staticConfig)) {
         activeSaabLayoutId = staticConfig.saabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID
+    }
+    if (isUnifiedPaperConfigFile(activeConfigFile)) {
+        const presented = applyUnifiedPaperPresentation(configDir, activeConfigFile)
+        activeConfigFile = presented.activeFile
     }
 } catch (err) {
     console.error(`Failed to load config: ${err instanceof Error ? err.message : err}`)
@@ -658,7 +680,12 @@ if (EUROSCOPE_DIR) {
     // Explicit `--config` wins over last-used layout (dev / forced RTC etc.)
     if (savedSettings.activeConfig && !cliArgs.config) {
         const legacyLayout = LEGACY_CONFIG_TO_SAAB_LAYOUT[savedSettings.activeConfig]
-        const restoreFile = legacyLayout ? SAAB_CONFIG_FILE : savedSettings.activeConfig
+        const paperResolved = resolvePaperConfigFile(savedSettings.activeConfig)
+        const restoreFile = legacyLayout
+            ? SAAB_CONFIG_FILE
+            : (paperResolved && isUnifiedPaperConfigFile(paperResolved)
+                ? PAPER_CONFIG_FILE
+                : savedSettings.activeConfig)
         const restoreSaabLayout =
             legacyLayout ??
             (restoreFile === SAAB_CONFIG_FILE
@@ -685,6 +712,10 @@ if (EUROSCOPE_DIR) {
                         activeConfig: SAAB_CONFIG_FILE,
                         saabLayoutId: activeSaabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID,
                     })
+                } else if (isUnifiedPaperConfigFile(restoreFile)) {
+                    const presented = applyUnifiedPaperPresentation(configDir, restoreFile)
+                    activeConfigFile = presented.activeFile
+                    saveUserSettings({ activeConfig: PAPER_CONFIG_FILE })
                 }
             } catch (err) {
                 console.warn(`Failed to restore saved config: ${err instanceof Error ? err.message : err}`)
@@ -754,6 +785,30 @@ if (EUROSCOPE_DIR) {
             saveUserSettings({ esggRoles: [], esggRolesManual: false })
         }
     }
+    if (isPaperRolesConfig(staticConfig) && !cliArgs.mock) {
+        const roles = normalizePaperRoles(savedSettings.paperRoles)
+        restorePaperRolesFromSettings(roles, savedSettings.paperRolesManual)
+        if (savedSettings.paperRolesManual) {
+            console.log(`Restoring manual paper roles: ${roles.join(", ")}`)
+        }
+        if (typeof savedSettings.paperEsLinked === "boolean") {
+            setPaperEsLinked(savedSettings.paperEsLinked)
+        }
+        if (Array.isArray(savedSettings.paperOpenSectionIds)) {
+            setPaperOpenSectionIds(savedSettings.paperOpenSectionIds)
+            if (
+                staticConfig.paperOpenSectionIds?.has(PAPER_OPTIONAL_SECTION_PUSHBACK) &&
+                !staticConfig.moveRules.some((r) => r.toSectionId === PAPER_OPTIONAL_SECTION_PUSHBACK)
+            ) {
+                staticConfig.moveRules.push({
+                    id: "to_pushback",
+                    toSectionId: PAPER_OPTIONAL_SECTION_PUSHBACK,
+                    command: { type: "setGroundstate", value: "PUSH" },
+                    priority: 40,
+                })
+            }
+        }
+    }
 } else {
     console.warn(
         "EuroScope directory not found (tried APPDATA, Documents\\EuroScope, Program Files (x86), VATSIM/drive_c)",
@@ -806,6 +861,20 @@ function isAutoParkAvailable(): boolean {
     return staticConfig.myAirports.some((a) => hasStandData(a))
 }
 
+/**
+ * Airports VatEFS tracks from EuroScope rwyconfig.
+ * ES may mark uncontrolled fields active (e.g. ESNP next to ESPA) — only accept
+ * ICAOs that exist in airports.csv AND are listed in the EFS stand package
+ * (GRpluginStands), or match our own login prefix.
+ */
+function isEfsSystemAirport(icao: string): boolean {
+    const code = icao.trim().toUpperCase()
+    if (!code || !getAirportByIcao(code)) return false
+    if (hasStandData(code)) return true
+    const cs = staticConfig.myCallsign?.trim().toUpperCase() ?? ""
+    return cs.length >= 4 && cs.startsWith(code)
+}
+
 // Load CTR/TIZ boundary data from LFV (async, non-fatal)
 loadCtrData().catch((err) => {
     console.warn(`Failed to load CTR data: ${err instanceof Error ? err.message : err}`)
@@ -815,6 +884,11 @@ loadCtrData().catch((err) => {
 if (cliArgs.callsign) {
     setMyCallsign(cliArgs.callsign)
     console.log(`Callsign set to: ${cliArgs.callsign}`)
+    // PAPER presentation depends on the login (ESGG tower → Landvetter board)
+    if (isUnifiedPaperConfigFile(activeConfigFile)) {
+        const presented = applyUnifiedPaperPresentation(configDir, activeConfigFile)
+        activeConfigFile = presented.activeFile
+    }
 }
 
 // Apply command-line airports or mock default
@@ -906,7 +980,21 @@ function executeMoveCommand(
             break
         }
 
-        case "setClearance":
+        case "setClearance": {
+            // T+P / TMA: clearance checkbox is local — do not write EuroScope CLR
+            const stripType = stripForAssume?.stripType
+            if (
+                flightStore.paperClrCheckboxesLocalOnly() ||
+                !flightStore.paperClrGivenDrivesEuroScope(stripType)
+            ) {
+                if (flightStore.paperClrCheckboxesLocalOnly()) {
+                    flight.clearanceReadback = !!command.value
+                    if (staticConfig.look === "paper" && command.value) {
+                        flight.clearanceRead = true
+                    }
+                }
+                break
+            }
             // Plugin ToggleClearanceFlag always flips — never UDP when already at desired
             // (e.g. CD ALL → TAXI → CD ALL would otherwise turn CLR on and force TSAT)
             if (!!flight.clearance === !!command.value) {
@@ -915,6 +1003,7 @@ function executeMoveCommand(
             sendUdp(JSON.stringify({ type: "toggleClearanceFlag", callsign, desired: command.value }))
             flightStore.applyOptimisticClearance(callsign, command.value)
             break
+        }
 
         case "setClearedToLand":
             if (command.value) {
@@ -1263,6 +1352,27 @@ function clearHsHpForAppDepTransfer(flight: Flight, callsign: string) {
     }
 }
 
+/** Online controller login callsign for a generic paper role (AD/T/P). */
+function resolveOnlinePaperRoleCallsign(
+    role: "AD" | "T" | "P",
+): string | undefined {
+    if (!staticConfig.onlineControllers) return undefined
+    const myCs = (staticConfig.myCallsign || "").toUpperCase()
+    for (const ctrl of staticConfig.onlineControllers.values()) {
+        const cs = (ctrl.callsign || "").toUpperCase()
+        if (!cs || cs === myCs) continue
+        const r =
+            resolvePaperPositionRole({
+                callsign: ctrl.callsign,
+                positionId: ctrl.positionId,
+                frequency: ctrl.frequency,
+                controllerRole: ctrl.role,
+            }) ?? callsignToPaperRole(ctrl.callsign)
+        if (r === role) return ctrl.callsign
+    }
+    return undefined
+}
+
 /**
  * Determine the callsign of the controller to hand a flight off to.
  * Based on my callsign role and the strip/flight context.
@@ -1406,19 +1516,41 @@ if (cliArgs.mock) {
     }
 
     // Set controller role from mock callsign (or CLI override)
-    const mockRole = parseControllerRole(cliArgs.callsign ?? mockMyselfUpdate.callsign, staticConfig.myAirports)
+    const mockCs = (cliArgs.callsign ?? mockMyselfUpdate.callsign).toUpperCase()
+    const mockRole = parseControllerRole(mockCs, staticConfig.myAirports)
     setMyRole(mockRole)
+    // ESPA APP mock: primed approach freq + SI (ESE ESPA_APP = 125.455 / PAA)
+    if (mockCs === "ESPA_APP") {
+        setMyFrequency(125.455)
+        setMyPositionId("PAA")
+    }
     console.log(
         `Mock data enabled (callsign: ${cliArgs.callsign ?? mockMyselfUpdate.callsign}, role: ${mockRole}, airports: ${staticConfig.myAirports.join(", ")})`,
     )
 
+    if (isUnifiedPaperConfigFile(activeConfigFile)) {
+        const presented = applyUnifiedPaperPresentation(configDir, activeConfigFile)
+        activeConfigFile = presented.activeFile
+    }
+
     // Spoof AFV RX for column freq visual review (after ESE load — see applyCliAfvRxSpoof)
     queueMicrotask(() => applyCliAfvRxSpoof())
+
+    // Paper ESPA APP: man AD + T + P (self APP, online TWR + F_APP)
+    if (isPaperRolesConfig(staticConfig) && mockCs === "ESPA_APP") {
+        updateOnlineController("ESPA_TWR", 128.205, staticConfig.myAirports, "PA")
+        updateOnlineController("ESPA_F_APP", 130.805, staticConfig.myAirports, "PAF")
+        console.log(
+            `Mock paper roles: covering [${(staticConfig.paperRoles ?? []).join(", ")}] | ` +
+                `staffed [${(staticConfig.paperLayoutRoles ?? []).join(", ")}] | ` +
+                `available [${(staticConfig.paperAvailableRoles ?? []).join(", ")}]`,
+        )
+        console.log("Mock ESPA online: ESPA_TWR (AD), ESPA_F_APP (P); self ESPA_APP (T)")
+    }
 
     // ESSA role boards: TWR top-down covers CD+GND+TWR (no separate GND online —
     // that would dim CD / PENDING). GND mock keeps split peers for ZH/ZK HP prefs.
     if (isEssaRolesConfig(staticConfig)) {
-        const mockCs = (cliArgs.callsign ?? mockMyselfUpdate.callsign).toUpperCase()
         const mockAsGnd = /_GND\b/.test(mockCs)
         if (mockAsGnd) {
             setEssaRoles(["GND-E", "GND-N", "GND-W"], true)
@@ -1840,6 +1972,7 @@ setInterval(checkPluginStale, 2000)
 function buildStatusMessage(): StatusMessage {
     const essaMode = isEssaRolesConfig(staticConfig)
     const esggMode = isEsggRolesConfig(staticConfig)
+    const paperMode = isPaperRolesConfig(staticConfig)
     const saabMode = isSaabLayoutsConfig(staticConfig)
     const feeds = buildFeedsStatus()
     lastEssaSplitFp = essaSplitStatusFp()
@@ -1876,6 +2009,15 @@ function buildStatusMessage(): StatusMessage {
         esggRolesMode: esggMode,
         esggRoles: esggMode ? (staticConfig.esggRoles ?? []) : undefined,
         esggRolesManual: esggMode ? !!staticConfig.esggRolesManual : undefined,
+        paperRolesMode: paperMode,
+        paperRoles: paperMode ? (staticConfig.paperRoles ?? []) : undefined,
+        paperRolesManual: paperMode ? !!staticConfig.paperRolesManual : undefined,
+        paperLayoutRoles: paperMode ? (staticConfig.paperLayoutRoles ?? []) : undefined,
+        paperAvailableRoles: paperMode ? (staticConfig.paperAvailableRoles ?? []) : undefined,
+        paperEsLinked: paperMode ? isPaperEsLinked() : undefined,
+        paperOpenSectionIds: paperMode
+            ? [...(staticConfig.paperOpenSectionIds ?? [])]
+            : undefined,
         essaCoveredRunways: essaMode ? getMyEssaCoveredRunways() : undefined,
         essa0826Owner: essaMode ? resolveEssa0826Owner() : undefined,
         essaTwrSplit: essaMode ? isEssaTwrSplitOnline() : undefined,
@@ -1980,7 +2122,7 @@ function buildAirportRxFrequencies(): Record<string, string> {
 let lastPendingPrintFp = ''
 
 function broadcastPendingPrintList() {
-    if (staticConfig.look !== 'paper' || currentUiSettings.stripPrintMode !== 'manual') {
+    if (!isPaperStripLook(staticConfig) || currentUiSettings.stripPrintMode !== 'manual') {
         if (lastPendingPrintFp !== '[]') {
             lastPendingPrintFp = '[]'
             broadcast({ type: 'pendingPrintList', flights: [] })
@@ -2396,9 +2538,11 @@ function switchConfig(
     file: string,
     opts?: { manual?: boolean; saabLayoutId?: string },
 ) {
-    const configInfo = availableConfigs.find(c => c.file === file)
+    // Legacy ESMS/ESSB/ESGG/STD menu files fold into unified PAPER
+    const menuFile = resolvePaperConfigFile(file) ?? file
+    const configInfo = availableConfigs.find(c => c.file === menuFile)
     if (!configInfo) {
-        console.error(`Config file not found: ${file}`)
+        console.error(`Config file not found: ${menuFile}`)
         return
     }
 
@@ -2409,25 +2553,32 @@ function switchConfig(
     const saved = loadUserSettings()
     const saabLayoutId =
         opts?.saabLayoutId ??
-        (file === SAAB_CONFIG_FILE
+        (menuFile === SAAB_CONFIG_FILE
             ? (saved.saabLayoutId ?? activeSaabLayoutId ?? DEFAULT_SAAB_LAYOUT_ID)
             : undefined)
 
     console.log(
-        `Switching config to: ${configInfo.name} (${file}` +
+        `Switching config to: ${configInfo.name} (${menuFile}` +
             (saabLayoutId ? ` / ${saabLayoutId}` : '') +
+            (file !== menuFile ? `; legacy ${file}` : '') +
             `)`,
     )
 
     try {
         const config = loadConfig(configInfo.fullPath, { saabLayoutId })
         applyConfig(config)
-        activeConfigFile = file
+        activeConfigFile = menuFile
         activeSaabLayoutId = isSaabLayoutsConfig(staticConfig)
             ? (staticConfig.saabLayoutId ?? saabLayoutId)
             : undefined
+        if (!isUnifiedPaperConfigFile(menuFile)) {
+            clearPaperPresentation()
+        } else {
+            const presented = applyUnifiedPaperPresentation(configDir, menuFile)
+            activeConfigFile = presented.activeFile
+        }
         saveUserSettings({
-            activeConfig: file,
+            activeConfig: activeConfigFile,
             ...(activeSaabLayoutId ? { saabLayoutId: activeSaabLayoutId } : {}),
         })
 
@@ -2438,6 +2589,29 @@ function switchConfig(
         if (isEsggRolesConfig(staticConfig)) {
             restoreEsggRolesFromSettings(undefined, false)
             saveUserSettings({ esggRoles: [], esggRolesManual: false })
+        }
+        if (isPaperRolesConfig(staticConfig)) {
+            const roles = normalizePaperRoles(saved.paperRoles)
+            restorePaperRolesFromSettings(roles, saved.paperRolesManual)
+            if (typeof saved.paperEsLinked === "boolean") {
+                setPaperEsLinked(saved.paperEsLinked)
+            }
+            if (Array.isArray(saved.paperOpenSectionIds)) {
+                setPaperOpenSectionIds(saved.paperOpenSectionIds)
+                if (
+                    staticConfig.paperOpenSectionIds?.has(PAPER_OPTIONAL_SECTION_PUSHBACK) &&
+                    !staticConfig.moveRules.some(
+                        (r) => r.toSectionId === PAPER_OPTIONAL_SECTION_PUSHBACK,
+                    )
+                ) {
+                    staticConfig.moveRules.push({
+                        id: "to_pushback",
+                        toSectionId: PAPER_OPTIONAL_SECTION_PUSHBACK,
+                        command: { type: "setGroundstate", value: "PUSH" },
+                        priority: 40,
+                    })
+                }
+            }
         }
 
         store.reprocessAllFlights()
@@ -3287,11 +3461,14 @@ function assumePendingAppInboundOnCtl(strip: {
 }
 
 /**
- * ESGG paper: assume an unowned strip (no controller / SI). Does not steal.
- * Returns false if already mine or owned by another.
+ * Paper (ESGG look:paper or generic std AD/T/P): assume an unowned strip.
+ * Does not steal. Gated by paperEsLinked on generic paper (ASSUME/transfer only).
  */
 function assumeUntrackedPaperFlight(flight: Flight, reason: string): boolean {
-    if (staticConfig.look !== "paper") return false
+    const esggPaper = staticConfig.look === "paper"
+    const stdPaper = isPaperRolesConfig(staticConfig)
+    if (!esggPaper && !stdPaper) return false
+    if (stdPaper && !isPaperEsLinked()) return false
 
     const myCs = (staticConfig.myCallsign || "").toUpperCase()
     const mySi = (staticConfig.myPositionId || "").toUpperCase()
@@ -4769,11 +4946,18 @@ function applyRemoteScribble(
         // EFS-only flight flags (CLR correct / CTL / CTO / softGA stay on EuroScope).
         // cfto and atd are EFS-owned for Stripview. Do not copy inbound values
         // onto the flight — IRIS must not echo a different ATD or CFTO back.
+        // AD ↔ T+P: family-suffixed stripKeys (#ad / #tma) must not share CLR checkboxes.
         if (strip && strip.stripType !== "note" && strip.stripType !== "vehicle") {
             const flight = flightStore.getFlight(strip.callsign)
             if (flight) {
                 let flagsChanged = false
                 let ctlChanged = false
+                const remoteFamily = parsePaperFamilyStripId(syncKey).family
+                const localFamily = flightStore.paperStripFamily()
+                const clrMetaCrossFamily =
+                    (remoteFamily === "ad" || remoteFamily === "tma") &&
+                    (localFamily === "ad" || localFamily === "tma") &&
+                    remoteFamily !== localFamily
                 if (
                     staticConfig.look === "paper" &&
                     typeof meta?.ctl === "boolean" &&
@@ -4817,7 +5001,7 @@ function applyRemoteScribble(
                             }
                         }
                     }
-                    if (typeof meta.clearanceReadback === "boolean") {
+                    if (!clrMetaCrossFamily && typeof meta.clearanceReadback === "boolean") {
                         if (meta.clearanceReadback && !flight.clearanceReadback) {
                             flight.clearanceReadback = true
                             flagsChanged = true
@@ -4836,7 +5020,11 @@ function applyRemoteScribble(
                 if ((holdSyncedPlacement || ctlChanged) && flight.lastSectionRule === "manual") {
                     flight.placementStickyKey = flightStore.placementStickyFingerprint(flight)
                 }
-                if (meta?.clearanceRead !== undefined && !!flight.clearanceRead !== !!meta.clearanceRead) {
+                if (
+                    !clrMetaCrossFamily &&
+                    meta?.clearanceRead !== undefined &&
+                    !!flight.clearanceRead !== !!meta.clearanceRead
+                ) {
                     // Do not clear ES CLR via sync — only the local paper "read" bit
                     if (meta.clearanceRead) {
                         flight.clearanceRead = true
@@ -5541,6 +5729,171 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         )
                     ) {
                         stateChanged = true
+                    }
+                } else if (
+                    // Std T-board: drag from above DEP/ARR into the divider below → ASSUME
+                    flight &&
+                    isPaperRolesConfig(staticConfig) &&
+                    isPaperEsLinked() &&
+                    isPaperTmaAssumeCross(fromSectionId, canonicalTargetSectionId)
+                ) {
+                    if (
+                        assumeUntrackedPaperFlight(
+                            flight,
+                            `TMA cross ${fromSectionId}→${canonicalTargetSectionId}`,
+                        )
+                    ) {
+                        stateChanged = true
+                    }
+                }
+
+                // Std paper T↔P: drop on APP (T→P) or pin-bottom DEP/ARR (P→T)
+                if (
+                    flight &&
+                    isPaperRolesConfig(staticConfig) &&
+                    isPaperEsLinked() &&
+                    !!fromSectionId &&
+                    fromSectionId !== canonicalTargetSectionId
+                ) {
+                    const covering = staticConfig.paperRoles ?? []
+                    const iAmP = covering.length === 1 && covering[0] === "P"
+                    // Endast T (inte T+P): APP-drop = ge till P
+                    const iAmTOnly =
+                        covering.includes("T") &&
+                        !covering.includes("AD") &&
+                        !covering.includes("P")
+                    const toApp = canonicalTargetSectionId === "app"
+                    const toPinHost =
+                        message.isBottom && isPaperTpPinSectionId(canonicalTargetSectionId)
+                    const leftTpPin =
+                        fromBottom &&
+                        !message.isBottom &&
+                        flightStore.isPaperTpPinned(result.strip.callsign)
+
+                    if (toApp && iAmTOnly) {
+                        const pCs = resolveOnlinePaperRoleCallsign("P")
+                        const pinSid = resolvePaperTpPinSectionId(
+                            store.getLayout(),
+                            result.strip.stripType,
+                        )
+                        const pinBay =
+                            staticConfig.sectionToBay.get(pinSid) ?? result.strip.bayId
+                        // Move into DEP/ARR pin host (APP is only the give gesture)
+                        const moved = store.moveStrip(
+                            result.strip.id,
+                            pinBay,
+                            pinSid,
+                            0,
+                            true,
+                        )
+                        if (moved) {
+                            result.strip = moved.strip
+                            for (const shifted of flightStore.getLastShiftedCallsigns()) {
+                                const ss = flightStore.regenerateStrip(shifted)
+                                if (ss) {
+                                    const applied = store.updateStripFromFlight(ss, {
+                                        allowPositionChange: true,
+                                    })
+                                    if (applied) broadcastStrip(applied)
+                                }
+                            }
+                        }
+                        if (pCs) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "transfer",
+                                    callsign: result.strip.callsign,
+                                    targetCallsign: pCs,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flight.handoffTargetController = pCs
+                            flight.handoffOptimisticUntil = Date.now() + 3000
+                        }
+                        flightStore.startPaperTpPin(result.strip.callsign)
+                        const pinned = flightStore.pinPaperTpTray(result.strip.callsign)
+                        if (pinned) {
+                            const applied = store.updateStripFromFlight(pinned.strip, {
+                                allowPositionChange: true,
+                            })
+                            result.strip = applied
+                            for (const shifted of pinned.shiftedCallsigns) {
+                                const ss = flightStore.regenerateStrip(shifted)
+                                if (ss) {
+                                    const appliedShift = store.updateStripFromFlight(ss, {
+                                        allowPositionChange: true,
+                                    })
+                                    if (appliedShift) broadcastStrip(appliedShift)
+                                }
+                            }
+                        }
+                        stateChanged = true
+                        console.log(
+                            `[MOVE] ${result.strip.callsign}: T→P via APP → pin ${pinSid}` +
+                                (pCs ? ` + XFER → ${pCs}` : " (no P online)"),
+                        )
+                    } else if (toPinHost && (iAmP || paperIsExclusiveP(covering))) {
+                        const tCs = resolveOnlinePaperRoleCallsign("T")
+                        if (tCs) {
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "transfer",
+                                    callsign: result.strip.callsign,
+                                    targetCallsign: tCs,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flight.handoffTargetController = tCs
+                            flight.handoffOptimisticUntil = Date.now() + 3000
+                        }
+                        flightStore.startPaperTpPin(result.strip.callsign)
+                        const pinned = flightStore.pinPaperTpTray(result.strip.callsign)
+                        if (pinned) {
+                            const applied = store.updateStripFromFlight(pinned.strip, {
+                                allowPositionChange: true,
+                            })
+                            result.strip = applied
+                            for (const shifted of pinned.shiftedCallsigns) {
+                                const ss = flightStore.regenerateStrip(shifted)
+                                if (ss) {
+                                    const appliedShift = store.updateStripFromFlight(ss, {
+                                        allowPositionChange: true,
+                                    })
+                                    if (appliedShift) broadcastStrip(appliedShift)
+                                }
+                            }
+                        }
+                        stateChanged = true
+                        console.log(
+                            `[MOVE] ${result.strip.callsign}: P→T pin ${canonicalTargetSectionId}` +
+                                (tCs ? ` + XFER → ${tCs}` : " (no T online)"),
+                        )
+                    } else if (leftTpPin) {
+                        flightStore.markPaperTpDragReleased(result.strip.callsign)
+                        flightStore.clearPaperTpPinned(result.strip.callsign)
+                        if (
+                            assumeUntrackedPaperFlight(
+                                flight,
+                                `T↔P pin accept ${fromSectionId}`,
+                            )
+                        ) {
+                            stateChanged = true
+                        } else if (isPaperEsLinked()) {
+                            // Already mine / pending in — still ASSUME to confirm receive
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "assume",
+                                    callsign: result.strip.callsign,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flight.controller = staticConfig.myCallsign
+                            flight.controllerId = staticConfig.myPositionId
+                            flight.handoffTargetController = ""
+                            flight.handoffOptimisticUntil = undefined
+                            flight.ownershipOptimisticUntil = Date.now() + 5000
+                            stateChanged = true
+                            console.log(
+                                `[MOVE] ${result.strip.callsign}: ASSUME (T↔P pin accept)`,
+                            )
+                        }
                     }
                 }
 
@@ -6377,15 +6730,33 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 console.log(`[ACTION] ${message.action} on ${message.stripId} (${strip.callsign})`)
                 const flight = flightStore.getFlight(strip.callsign)
 
+                // Generic paper: ES/TopSky link off → block ASSUME / XFER only
+                // (ground-state actions and moveRules still run).
+                if (
+                    isPaperRolesConfig(staticConfig) &&
+                    !isPaperEsLinked() &&
+                    (message.action === "ASSUME" || message.action === "XFER")
+                ) {
+                    console.log(
+                        `[PAPER] ES/TopSky unlinked — skip ${message.action} on ${strip.callsign}`,
+                    )
+                    break
+                }
+
                 // READY is a compound action: set DE-ICE groundstate + transfer
                 // (+ ESSA CDM Ready Startup / ASRT+REA — same as plugin Ready Start-up)
                 if (message.action === "READY") {
-                    if (flight) {
+                    const paperLinked = !isPaperRolesConfig(staticConfig) || isPaperEsLinked()
+                    if (flight && paperLinked) {
                         assumeUntrackedPaperDepLocal(flight, strip.stripType, "READY")
                     }
-                    const targetCallsign = resolveXferTarget(strip, flight)
+                    const targetCallsign = paperLinked
+                        ? resolveXferTarget(strip, flight)
+                        : ""
                     sendUdp(JSON.stringify({ type: "setGroundState", callsign: strip.callsign, state: "DE-ICE" }))
-                    sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    if (paperLinked) {
+                        sendUdp(JSON.stringify({ type: "transfer", callsign: strip.callsign, targetCallsign } satisfies OutboundPluginCommand))
+                    }
                     void pushStripFlagsToRemote(strip.id)
                     if (flight && targetCallsign) {
                         flight.handoffTargetController = targetCallsign
@@ -6592,30 +6963,39 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         }
                     }
                 } else if (message.action === "toggleClearanceRead") {
-                    // Paper FPS col 4 (CLR read).
-                    // In CLEARED (or ES CLR set): unsetting also clears CLR correct + ES CLR → strip moves.
-                    // Otherwise: local toggle; unchecking also clears col 5 local mark.
+                    // Paper FPS col 4 (CLR Received / CLR read).
+                    // ESGG AD: In CLEARED (or ES CLR set) unsetting also clears Given + ES CLR.
+                    // Std / TMA covering: Received is local only — never touches ES CLR.
                     // Undo never RELEASE — ownership stays if already assumed.
                     if (flight) {
-                        const inCleared =
-                            strip.sectionId === "cleared" || strip.sectionId.endsWith("_cleared")
-                        if (flight.clearance || inCleared) {
-                            // Always UDP (same as toggleClearanceFlag) — --mock must not block ES sync
-                            sendUdp(
-                                JSON.stringify({
-                                    type: "toggleClearanceFlag",
-                                    callsign: strip.callsign,
-                                    desired: false,
-                                } satisfies OutboundPluginCommand),
-                            )
-                            flightStore.applyOptimisticClearance(strip.callsign, false)
-                            flight.clearanceRead = false
-                        } else {
+                        const tmaLocal = flightStore.paperClrCheckboxesLocalOnly()
+                        if (tmaLocal || staticConfig.look !== "paper") {
                             const turningOn = !flight.clearanceRead
                             flight.clearanceRead = !flight.clearanceRead
-                            if (!flight.clearanceRead) flight.clearanceReadback = false
                             if (turningOn) {
                                 assumeCdDelKlareringDep(flight, strip.stripType, "CLR read")
+                            }
+                        } else {
+                            const inCleared =
+                                strip.sectionId === "cleared" || strip.sectionId.endsWith("_cleared")
+                            if (flight.clearance || inCleared) {
+                                // Always UDP (same as toggleClearanceFlag) — --mock must not block ES sync
+                                sendUdp(
+                                    JSON.stringify({
+                                        type: "toggleClearanceFlag",
+                                        callsign: strip.callsign,
+                                        desired: false,
+                                    } satisfies OutboundPluginCommand),
+                                )
+                                flightStore.applyOptimisticClearance(strip.callsign, false)
+                                flight.clearanceRead = false
+                            } else {
+                                const turningOn = !flight.clearanceRead
+                                flight.clearanceRead = !flight.clearanceRead
+                                if (!flight.clearanceRead) flight.clearanceReadback = false
+                                if (turningOn) {
+                                    assumeCdDelKlareringDep(flight, strip.stripType, "CLR read")
+                                }
                             }
                         }
                         reevaluateAndBroadcast(strip.callsign)
@@ -6639,19 +7019,35 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         pushPaperStripIfNeeded(strip.id)
                     }
                 } else if (message.action === "toggleClearanceReadback") {
-                    // Paper FPS col 5 (CLR correct) — sets/clears EuroScope CLR flag.
-                    // Checking 5 also checks 4. ES CLR on shows both as checked.
+                    // Paper FPS col 5 (CLR Given / CLR correct).
+                    // AD/unified DEP+local: sets/clears EuroScope CLR flag.
+                    // TMA covering (T+P): local checkbox only — never UDP to ES.
+                    // Arrivals: local checkbox only (no ES CLR).
+                    // ESGG AD: checking Given also checks Received. Std: never touch Received.
                     if (flight) {
-                        const desired = !(flight.clearance || flight.clearanceReadback)
-                        // Always UDP — do not gate on !mock (inbound ES→EFS still works under --mock)
-                        sendUdp(
-                            JSON.stringify({
-                                type: "toggleClearanceFlag",
-                                callsign: strip.callsign,
-                                desired,
-                            } satisfies OutboundPluginCommand),
-                        )
-                        flightStore.applyOptimisticClearance(strip.callsign, desired)
+                        const drivesEs = flightStore.paperClrGivenDrivesEuroScope(strip.stripType)
+                        const desired = drivesEs
+                            ? !(flight.clearance || flight.clearanceReadback)
+                            : !flight.clearanceReadback
+                        const prevRead = flight.clearanceRead
+                        if (drivesEs) {
+                            // Always UDP — do not gate on !mock (inbound ES→EFS still works under --mock)
+                            sendUdp(
+                                JSON.stringify({
+                                    type: "toggleClearanceFlag",
+                                    callsign: strip.callsign,
+                                    desired,
+                                } satisfies OutboundPluginCommand),
+                            )
+                            flightStore.applyOptimisticClearance(strip.callsign, desired)
+                            if (staticConfig.look !== "paper") {
+                                // Bulletproof: Given must not drag Received along on std
+                                flight.clearanceRead = prevRead
+                            }
+                        } else {
+                            flight.clearanceReadback = desired
+                            // Never mirror onto flight.clearance — that is ES-owned / AD-driven
+                        }
                         // Paper: checking CLR correct must keep the DCL word in the left box.
                         // CD/DEL: CLR correct on → ASSUME (undo does not RELEASE)
                         if (desired) {
@@ -6659,6 +7055,9 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                         }
                         reevaluateAndBroadcast(strip.callsign)
                         pushPaperStripIfNeeded(strip.id)
+                        if (staticConfig.look === "std") {
+                            void pushStripToRemote(strip.id)
+                        }
                     }
                 // GOA: MISAP_ + MAP heading/CFL (ESSA Appendix A or ESGG H020/H200 + A030)
                 } else if (message.action === "GOA") {
@@ -7668,6 +8067,10 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case "manualTransfer": {
+            if (isPaperRolesConfig(staticConfig) && !isPaperEsLinked()) {
+                console.log(`[PAPER] ES/TopSky unlinked — skip manualTransfer`)
+                break
+            }
             const strip = store.getStrip(message.stripId)
             if (!strip) {
                 console.log(`[TRANSFER] Strip ${message.stripId} not found`)
@@ -8066,7 +8469,7 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                     store.reprocessAllFlights()
                     broadcastRefresh("Auto PARK enabled")
                 }
-                if (update.stripPrintMode === "auto" && staticConfig.look === "paper") {
+                if (update.stripPrintMode === "auto" && isPaperStripLook(staticConfig)) {
                     // Create all previously gated strips
                     store.reprocessAllFlights()
                     broadcastRefresh("Strip print mode: auto")
@@ -8095,11 +8498,11 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
         }
 
         case "printStrip": {
-            if (staticConfig.look !== "paper") {
+            if (!isPaperStripLook(staticConfig)) {
                 sendMessage(socket, {
                     type: "notify",
                     level: "error",
-                    text: "Strip print is only available in paper-look config",
+                    text: "Strip print is only available in paper strip modes",
                 })
                 break
             }
@@ -8271,6 +8674,104 @@ async function handleTypedMessage(socket: WebSocket, message: ClientMessage) {
                 broadcastStatus()
                 broadcastLayout()
                 broadcastRefresh("ESGG roles changed")
+            }
+            break
+        }
+
+        case "setPaperRoles": {
+            if (!isPaperRolesConfig(staticConfig)) break
+            const roles = normalizePaperRoles(message.roles)
+            if (setPaperRoles(roles, message.manual)) {
+                const covering = staticConfig.paperRoles ?? []
+                // PUSHBACK is AD-only — drop it when covering is T and/or P
+                if (
+                    !paperAllowsOptionalPushback(covering) &&
+                    staticConfig.paperOpenSectionIds?.has(PAPER_OPTIONAL_SECTION_PUSHBACK)
+                ) {
+                    closePaperOpenSection(PAPER_OPTIONAL_SECTION_PUSHBACK)
+                    saveUserSettings({
+                        paperOpenSectionIds: [...(staticConfig.paperOpenSectionIds ?? [])],
+                    })
+                }
+                saveUserSettings({
+                    paperRoles: message.manual ? roles : [],
+                    paperRolesManual: message.manual,
+                })
+                console.log(
+                    `[PAPER] Roles ${message.manual ? "manual" : "auto"}: ${covering.join(", ")}`,
+                )
+                flightStore.syncPaperStripFamily()
+                // Sync TMA section→bay before reprocess/print (inactive DEP/ARR)
+                store.getLayout()
+                store.reprocessAllFlights()
+                broadcast({
+                    type: "pendingPrintList",
+                    flights: flightStore.listPendingPrint(),
+                })
+                broadcastStatus()
+                broadcastLayout()
+                broadcastRefresh("Paper roles changed")
+            }
+            break
+        }
+
+        case "setPaperEsLinked": {
+            if (!isPaperRolesConfig(staticConfig)) break
+            if (setPaperEsLinked(!!message.linked)) {
+                saveUserSettings({ paperEsLinked: !!message.linked })
+                console.log(`[PAPER] ES/TopSky link: ${message.linked ? "on" : "off"}`)
+                broadcastStatus()
+            }
+            break
+        }
+
+        case "paperEnsureSection": {
+            if (!isPaperRolesConfig(staticConfig)) break
+            const sectionId = String(message.sectionId || "")
+                .trim()
+                .toLowerCase()
+            if (sectionId !== PAPER_OPTIONAL_SECTION_PUSHBACK) break
+            // ESMS: TAXI/PUSHBACK is a combined host — no separate divider
+            if (layoutHasCombinedTaxiPushback(staticConfig.layout)) break
+            // T / P approach boards — no PUSHBACK posang
+            if (!paperAllowsOptionalPushback(staticConfig.paperRoles ?? [])) break
+            if (ensurePaperOpenSection(sectionId)) {
+                // Drag onto PUSHBACK → set groundstate PUSH (independent of ES link)
+                if (!staticConfig.moveRules.some((r) => r.toSectionId === sectionId)) {
+                    staticConfig.moveRules.push({
+                        id: "to_pushback",
+                        toSectionId: sectionId,
+                        command: { type: "setGroundstate", value: "PUSH" },
+                        priority: 40,
+                    })
+                }
+                saveUserSettings({
+                    paperOpenSectionIds: [...(staticConfig.paperOpenSectionIds ?? [])],
+                })
+                console.log(`[PAPER] Open optional section: ${sectionId}`)
+                broadcastLayout()
+                broadcastStatus()
+            }
+            break
+        }
+
+        case "paperCloseSection": {
+            if (!isPaperRolesConfig(staticConfig)) break
+            const sectionId = String(message.sectionId || "")
+                .trim()
+                .toLowerCase()
+            if (closePaperOpenSection(sectionId)) {
+                // Drop transient move rule; strips fall back via reprocess
+                staticConfig.moveRules = staticConfig.moveRules.filter(
+                    (r) => r.toSectionId !== sectionId,
+                )
+                saveUserSettings({
+                    paperOpenSectionIds: [...(staticConfig.paperOpenSectionIds ?? [])],
+                })
+                console.log(`[PAPER] Close optional section: ${sectionId}`)
+                store.reprocessAllFlights()
+                broadcastLayout()
+                broadcastStatus()
             }
             break
         }
@@ -9408,7 +9909,7 @@ wsServer.on("connection", (socket) => {
         strips: store.getDeletedStripInfos(),
     })
     sendMessage(socket, { type: "aupR16", ...getAupR16Status() })
-    if (staticConfig.look === "paper" && currentUiSettings.stripPrintMode === "manual") {
+    if (isPaperStripLook(staticConfig) && currentUiSettings.stripPrintMode === "manual") {
         sendMessage(socket, {
             type: "pendingPrintList",
             flights: flightStore.listPendingPrint(),
@@ -9630,11 +10131,11 @@ app.get("/api/fsp", (_req, res) => {
 })
 
 app.get("/api/printer/status", (_req, res) => {
-    const enabled = !!currentUiSettings.fspServerEnabled && staticConfig.look === "paper"
+    const enabled = !!currentUiSettings.fspServerEnabled && isPaperStripLook(staticConfig)
     res.json({
         connected: enabled,
         deviceInfo: enabled
-            ? `VatEFS paper strips (${staticConfig.look === "paper" ? "paper" : "saab"})`
+            ? `VatEFS paper strips (${staticConfig.look})`
             : "VatEFS FSP server disabled",
         service: "vatefs",
         enabled,
@@ -9655,10 +10156,10 @@ app.post("/api/print/external", async (req, res) => {
         console.log(
             `[FSP] POST /api/print/external look=${staticConfig.look} enabled=${!!currentUiSettings.fspServerEnabled} cs=${callsign ?? "(blank)"}`,
         )
-        if (staticConfig.look !== "paper") {
+        if (!isPaperStripLook(staticConfig)) {
             res.status(400).json({
-                error: "Paper look required",
-                details: "Switch VatEFS to an ESGG/paper config to accept IRIS strip prints",
+                error: "Paper strip mode required",
+                details: "Switch VatEFS to a paper/std board to accept IRIS strip prints",
             })
             return
         }
@@ -10256,7 +10757,7 @@ app.get("/*splat", (req, res) => res.sendFile(publicDir + "/index.html"))
 const server = app.listen(port, "0.0.0.0", () => {
     console.log(`EFS backend ${constants.version} listening at http://0.0.0.0:${port}`)
     const fspUrls = listFspServerBaseUrls(port)
-    const fspOn = !!currentUiSettings.fspServerEnabled && staticConfig.look === "paper"
+    const fspOn = !!currentUiSettings.fspServerEnabled && isPaperStripLook(staticConfig)
     console.log(
         `[FSP] ${fspOn ? "enabled" : "disabled"} look=${staticConfig.look} url=${fspUrls[0] ?? "n/a"}`,
     )
@@ -10570,6 +11071,8 @@ udpIn.on("message", (msg, rinfo) => {
             const callsignChanged = previousCallsign !== msg.callsign
             const esggRolesAtStart = (staticConfig.esggRoles ?? []).join(",")
             const esggLayoutAtStart = (staticConfig.esggLayoutRoles ?? []).join(",")
+            const paperRolesAtStart = (staticConfig.paperRoles ?? []).join(",")
+            const paperLayoutAtStart = (staticConfig.paperLayoutRoles ?? []).join(",")
 
             // Plugin reports its own compiled version — only trust UDP, never a DLL on disk
             if (typeof msg.pluginVersion === "string" && msg.pluginVersion.trim()) {
@@ -10681,10 +11184,11 @@ udpIn.on("message", (msg, rinfo) => {
                 if (isMultiAirportConfig(staticConfig)) {
                     // RTC: only ES-active airports (airport-level flag). A selected RWY alone
                     // must not put e.g. ESGG on the top bar when the airport is not active.
+                    // Uncontrolled ES-active fields (ESNP etc.) stay out unless in EFS stands.
                     const fromEs = [
                         ...new Set(
                             fromAirportFlags
-                                .filter((a) => getAirportByIcao(a))
+                                .filter((a) => isEfsSystemAirport(a))
                                 .map((a) => a.toUpperCase()),
                         ),
                     ]
@@ -10709,7 +11213,7 @@ udpIn.on("message", (msg, rinfo) => {
                 } else {
                     const discovered =
                         fromAirportFlags.length > 0 ? fromAirportFlags : fromRunwayFlags
-                    const knownAirports = discovered.filter((a) => getAirportByIcao(a))
+                    const knownAirports = discovered.filter((a) => isEfsSystemAirport(a))
                     if (knownAirports.length > 0) {
                         const previousAirports = [...staticConfig.myAirports].sort()
                         const nextAirports = [...knownAirports].sort()
@@ -10727,6 +11231,20 @@ udpIn.on("message", (msg, rinfo) => {
                             clearAutoDepPrepSession()
                             broadcastRefresh(`Airports changed to ${knownAirports.join(", ")}`)
                             broadcastUserSettings()
+                        }
+                        // PAPER: ESMS/ESSB AD board follows sole airport even without tower callsign
+                        if (airportsChanged && isUnifiedPaperConfigFile(activeConfigFile)) {
+                            const presented = applyUnifiedPaperPresentation(
+                                configDir,
+                                activeConfigFile,
+                            )
+                            activeConfigFile = presented.activeFile
+                            if (presented.changed) {
+                                store.reprocessAllFlights()
+                                broadcastConfigList()
+                                broadcastRefresh("Paper board presentation updated")
+                                broadcastLayout()
+                            }
                         }
                     }
                 }
@@ -10759,11 +11277,23 @@ udpIn.on("message", (msg, rinfo) => {
                 ensureAupR16Service()
             }
 
-            // ESSA_* / ESGG_* / ESSR_*|ESOS_*|ESMM_* / ESMS*TWR|ESMS*GND → layout (on callsign change).
+            // ESSA_* / ESGG_* / ESMS_* / ESSB_* / ESSR_*|ESOS_*|ESMM_* → layout (on callsign change).
             maybeAutoSelectConfigFromCallsign(
                 msg.frequency ?? staticConfig.myFrequency,
                 msg.callsign ?? staticConfig.myCallsign,
             )
+
+            // Unified PAPER: ESGG / ESMS / ESSB overlays follow login
+            if (callsignChanged && isUnifiedPaperConfigFile(activeConfigFile)) {
+                const presented = applyUnifiedPaperPresentation(configDir, activeConfigFile)
+                activeConfigFile = presented.activeFile
+                if (presented.changed) {
+                    store.reprocessAllFlights()
+                    broadcastConfigList()
+                    broadcastRefresh("Paper board presentation updated")
+                    broadcastLayout()
+                }
+            }
 
             // Broadcast updated status to all clients
             broadcastStatus()
@@ -10781,6 +11311,27 @@ udpIn.on("message", (msg, rinfo) => {
                 store.reprocessAllFlights()
                 broadcastLayout()
                 broadcastRefresh("ESGG covering/layout roles updated")
+            }
+
+            // Generic paper: staffed AD/T/P drives sequence column + covering
+            const paperRolesNow = (staticConfig.paperRoles ?? []).join(",")
+            const paperLayoutNow = (staticConfig.paperLayoutRoles ?? []).join(",")
+            if (
+                isPaperRolesConfig(staticConfig) &&
+                (paperRolesNow !== paperRolesAtStart || paperLayoutNow !== paperLayoutAtStart)
+            ) {
+                console.log(
+                    `[PAPER] Covering: ${paperRolesNow || "(none)"} | layout staffed: ${paperLayoutNow || "(none)"}`,
+                )
+                flightStore.syncPaperStripFamily()
+                store.getLayout()
+                store.reprocessAllFlights()
+                broadcast({
+                    type: "pendingPrintList",
+                    flights: flightStore.listPendingPrint(),
+                })
+                broadcastLayout()
+                broadcastRefresh("Paper covering/layout roles updated")
             }
 
             // Recalculate DCL availability when airports change
@@ -11127,7 +11678,7 @@ udpIn.on("message", (msg, rinfo) => {
             }
 
             // Paper manual print: keep pending queue in sync (eligible flights without strips)
-            if (staticConfig.look === "paper" && currentUiSettings.stripPrintMode === "manual") {
+            if (isPaperStripLook(staticConfig) && currentUiSettings.stripPrintMode === "manual") {
                 broadcastPendingPrintList()
             }
             // If result is empty (no strip, no delete), nothing changed - don't log

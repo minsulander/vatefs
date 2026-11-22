@@ -29,24 +29,32 @@ export function useSectionResize() {
   const isResizing = ref(false)
   const resizeState = ref<ResizeState | null>(null)
 
-  const MIN_HEIGHT = 80
+  /**
+   * SAAB keeps an 80px floor. Paper/std often has a headerless pin zone above
+   * TMA CTR / ARR (pending_arr) that is near 0px when empty — an 80px floor
+   * made maxShrink negative and locked the divider.
+   */
+  function minSectionHeight(): number {
+    return store.isPaperLook || store.isStdLook ? 0 : 80
+  }
   /** Approximate strip row height — snap divider to strip-aligned positions (SAAB only). */
   const SNAP_STRIP_PX = 44
   const SNAP_THRESHOLD_PX = 10
 
   function snapHeight(height: number, pairTotal: number): number {
-    const maxH = pairTotal - MIN_HEIGHT
-    let h = Math.max(MIN_HEIGHT, Math.min(maxH, height))
+    const minH = minSectionHeight()
+    const maxH = pairTotal - minH
+    let h = Math.max(minH, Math.min(maxH, height))
     // ESGG paper: free drag — no equal-split / strip-grid snap on bay headers
     if (store.isPaperLook || store.isStdLook) return Math.round(h)
     // Snap to equal split
     const half = pairTotal / 2
     if (Math.abs(h - half) <= SNAP_THRESHOLD_PX) return Math.round(half)
     // Snap to strip-height grid from the top of the pair
-    const steps = Math.round((h - MIN_HEIGHT) / SNAP_STRIP_PX)
-    const snapped = MIN_HEIGHT + steps * SNAP_STRIP_PX
+    const steps = Math.round((h - minH) / SNAP_STRIP_PX)
+    const snapped = minH + steps * SNAP_STRIP_PX
     if (Math.abs(h - snapped) <= SNAP_THRESHOLD_PX) {
-      return Math.max(MIN_HEIGHT, Math.min(maxH, snapped))
+      return Math.max(minH, Math.min(maxH, snapped))
     }
     return Math.round(h)
   }
@@ -110,9 +118,10 @@ export function useSectionResize() {
     // Dragging up = section above gets smaller, section below gets larger
     let delta = clientY - resizeState.value.startY
 
-    // Clamp delta so neither section goes below MIN_HEIGHT
-    const maxGrow = resizeState.value.belowStartHeight - MIN_HEIGHT
-    const maxShrink = resizeState.value.aboveStartHeight - MIN_HEIGHT
+    // Clamp delta so neither section goes below the look-specific floor
+    const minH = minSectionHeight()
+    const maxGrow = resizeState.value.belowStartHeight - minH
+    const maxShrink = resizeState.value.aboveStartHeight - minH
     delta = Math.max(-maxShrink, Math.min(maxGrow, delta))
 
     const pairTotal =

@@ -86,7 +86,7 @@
           @click.stop="sizeMenuOpen = true"
         >Size…</button>
         <button
-          v-if="paperLook && canDragStrip && !isLargeView"
+          v-if="paperKlack && canDragStrip && !isLargeView"
           type="button"
           class="efs-popup-item"
           @click.stop="klackMenuOpen = true"
@@ -103,7 +103,7 @@
 
     <v-menu v-model="klackMenuOpen" :target="menuPosition" location="end" :z-index="overlayMenuZ + 1" :close-on-content-click="true">
       <div class="efs-popup-menu" @click.stop>
-        <div class="efs-popup-header">{{ paperLook ? 'Klack' : 'Cock' }}</div>
+        <div class="efs-popup-header">{{ paperKlack ? 'Klack' : 'Cock' }}</div>
         <div class="efs-popup-list">
           <button type="button" class="efs-popup-item" @click="onKlackMenu('right')">RIGHT</button>
           <button type="button" class="efs-popup-item" @click="onKlackMenu('left')">LEFT</button>
@@ -112,7 +112,7 @@
             type="button"
             class="efs-popup-item"
             @click="onKlackMenu(null)"
-          >{{ paperLook ? 'Reset Klack' : 'Reset Cock' }}</button>
+          >{{ paperKlack ? 'Reset Klack' : 'Reset Cock' }}</button>
         </div>
       </div>
     </v-menu>
@@ -265,8 +265,10 @@
     class="strip-host"
     :class="{
       'strip-host--paper': (paperLook || stdLook) && (!isNote || isPaperEmptyFlightHolder) && !isVehicle,
-      'strip-host--cocked': !paperLook && !stdLook && (!!strip.klack || klackPulling),
+      'strip-host--cocked':
+        !isLargeView && !paperLook && !stdLook && (!!strip.klack || klackPulling),
       'strip-host--saab-cock': showSaabCockEdges,
+      'strip-host--paper-klack': showPaperKlackEdges,
       'strip-host--klack-instant': klackInstant,
     }"
     :style="{ ...klackHostStyle, ...cockHostStyle }"
@@ -290,24 +292,24 @@
       />
     </div>
     <!--
-      SAAB cock hits live on the host (not inside .flight-strip) so they sit on the
-      type-coloured CSS border — overflow:hidden on the strip would clip them.
+      Cock/klack hits live on the host (not inside .flight-strip) so they sit on the
+      type-coloured CSS border — overflow:hidden on SAAB would clip them.
     -->
     <button
-      v-if="showSaabCockEdges"
+      v-if="showCockEdgeHits"
       type="button"
       class="strip-cock-hit strip-cock-hit--left"
-      title="Cock left"
-      aria-label="Cock left"
+      :title="paperKlack ? 'Klack left' : 'Cock left'"
+      :aria-label="paperKlack ? 'Klack left' : 'Cock left'"
       @pointerdown.stop
       @click.stop="onCockEdgeClick('left')"
     />
     <button
-      v-if="showSaabCockEdges"
+      v-if="showCockEdgeHits"
       type="button"
       class="strip-cock-hit strip-cock-hit--right"
-      title="Cock right"
-      aria-label="Cock right"
+      :title="paperKlack ? 'Klack right' : 'Cock right'"
+      :aria-label="paperKlack ? 'Klack right' : 'Cock right'"
       @pointerdown.stop
       @click.stop="onCockEdgeClick('right')"
     />
@@ -340,9 +342,10 @@
       'no-drag': !canDragStrip && !isLargeView,
       /* OTHER + RTC share SAAB strip chrome; ESSA keeps its own scheme */
       'rtc-layout': useSaabSharedLayout,
-      'klack-left': !klackPulling && strip.klack === 'left',
-      'klack-right': !klackPulling && strip.klack === 'right',
-      'klack-pulling': klackPulling,
+      /* Zoom overlay must stay flush — klack × --strip-scale looks skewed */
+      'klack-left': !isLargeView && !klackPulling && strip.klack === 'left',
+      'klack-right': !isLargeView && !klackPulling && strip.klack === 'right',
+      'klack-pulling': !isLargeView && klackPulling,
       'klack-instant': klackInstant,
     }]"
     :style="klackPullStyle"
@@ -845,7 +848,8 @@
                 'pg-clr-dcl': paperShowDclRead,
               }"
               :disabled="!canUsePaperClickspots"
-              :title="paperShowDclRead ? paperTip('DCL', 'DCL sent') : paperTip('CLR read', 'CLR read')"
+              :title="paperShowDclRead ? paperTip('DCL', 'DCL sent') : paperTip('CLR Received', 'CLR Received')"
+              data-paper-flag="clr-read"
               @click.stop="onPaperClearanceReadClick"
             >
               <span v-if="paperShowDclRead" class="pg-dcl-mark">DCL</span>
@@ -858,7 +862,15 @@
                 <path d="M4 13.5 L10 19.5 L20.5 5.5" />
               </svg>
             </button>
-            <!-- ARR: keep top half empty so ICAO+RWY stay on bottom row -->
+            <!-- ARR sector box: ESGG ZZGx+ETN/ETA · ESSB ZZSB+ETA -->
+            <div
+              v-else-if="paperEsggArrSector || paperEsggArrEtn"
+              class="pg-ad-top pg-ad-entry"
+              :title="paperEsggArrTimeTitle"
+            >
+              <span class="pg-entry-line">{{ paperEsggArrSector }}</span>
+              <span class="pg-entry-line">{{ paperEsggArrEtn }}</span>
+            </div>
             <div v-else class="pg-ad-top" aria-hidden="true" />
             <!-- Bottom row: non-std DEP RWY top-justified + ADEP -->
             <div class="pg-ad-bot">
@@ -873,6 +885,8 @@
                 :title="paperTip('ADEP', strip.adepName || 'ADEP')"
               >{{ strip.adep && strip.adep !== '????' ? strip.adep : '' }}</div>
             </div>
+            <!-- Item 18 STS/ — center of ADEP|ADES, top half of airport row -->
+            <div v-if="strip.sts" class="pg-sts" :title="`STS/${strip.sts}`">{{ strip.sts }}</div>
           </div>
           <div class="pg-ades pg-mid-rule pg-vline" :class="{ 'pg-ades-dep': !isArrLayout }">
             <button
@@ -881,7 +895,8 @@
               class="pg-clr-check"
               :class="{ checked: paperClearanceReadback, disabled: !canUsePaperClickspots }"
               :disabled="!canUsePaperClickspots"
-              :title="paperTip('CLR correct', 'CLR correct (readback)')"
+              :title="paperTip('CLR Given', 'CLR Given')"
+              data-paper-flag="clr-correct"
               @click.stop="onPaperClearanceReadbackClick"
             >
               <svg
@@ -970,15 +985,22 @@
                 {{ paperCtot }}
               </span>
             </div>
-            <div class="pg-band" />
+            <div class="pg-oat" title="OAT">
+              <span v-if="strip.oat">*</span>
+            </div>
             <div
               class="pg-crz"
               :class="{ ghost: !paperCrz }"
               :title="paperTip('CRZ', 'Cruise level')"
             >{{ paperCrz }}</div>
           </div>
-          <div v-else class="pg-ctot pg-arr-eobt" :class="{ ghost: !paperEobt }" title="EOBT">
-            {{ paperEobt }}
+          <div v-else class="pg-ctot pg-ctot-arr">
+            <div class="pg-oat" title="OAT">
+              <span v-if="strip.oat">*</span>
+            </div>
+            <div class="pg-arr-eobt" :class="{ ghost: !paperEobt }" title="EOBT">
+              {{ paperEobt }}
+            </div>
           </div>
         </div>
 
@@ -1709,6 +1731,7 @@
 import { ref, computed, nextTick, onMounted, onUpdated, onUnmounted, watch } from 'vue'
 import {
   DEFAULT_TRANSITION_ALTITUDE_FT,
+  esggArrSectorCode,
   extractTmaEntryPoint,
   extractTmaExitPoint,
   formatEfsLevel,
@@ -2162,23 +2185,41 @@ function onKlackMenu(klack: 'left' | 'right' | null) {
   store.setKlack(props.strip.id, klack)
 }
 
+/**
+ * Landvetter (`paper`) and generic (`std`) share one klack gesture + distance.
+ * Do not branch on paperLook alone — std was incorrectly using SAAB cock math.
+ */
+const paperKlack = computed(() => paperLook.value || stdLook.value)
+
 /** SAAB: type-coloured side frame is the cock hit target. */
 const showSaabCockEdges = computed(
   () =>
-    !paperLook.value &&
-    !stdLook.value &&
+    !paperKlack.value &&
     !props.isLargeView &&
     props.strip.stripType !== 'note' &&
     props.strip.stripType !== 'vehicle',
 )
 
+/** Paper: same coloured L/R border click-to-klack as SAAB cock edges. */
+const showPaperKlackEdges = computed(
+  () =>
+    paperKlack.value &&
+    !props.isLargeView &&
+    props.strip.stripType !== 'note' &&
+    props.strip.stripType !== 'vehicle',
+)
+
+const showCockEdgeHits = computed(
+  () => showSaabCockEdges.value || showPaperKlackEdges.value,
+)
+
 /**
  * Click left/right frame (always via flush — drag may left↔right in one gesture):
- * - Already cocked → either edge resets to flush
- * - Flush → cock that side
+ * - Already cocked/klacked → either edge resets to flush
+ * - Flush → cock/klack that side
  */
 function onCockEdgeClick(side: 'left' | 'right') {
-  if (!showSaabCockEdges.value) return
+  if (!showCockEdgeHits.value) return
   if (props.strip.klack) {
     store.setKlack(props.strip.id, null)
     return
@@ -2197,7 +2238,7 @@ const usesCombinedStripPointer = computed(
   () =>
     !props.isLargeView &&
     canDragStrip.value &&
-    (paperLook.value || stdLook.value || showSaabCockEdges.value),
+    (paperKlack.value || showSaabCockEdges.value),
 )
 const KLACK_BASE_PX = 28
 const PAPER_ARM_PX = 8
@@ -2233,13 +2274,13 @@ function setKlackPullBayActive(active: boolean) {
 /**
  * Sideways snap distance.
  * SAAB cock: strip margin-x + half bay gutter → outer edge sits mid bay-border.
- * Paper klack: fixed design offset × bay/strip scale.
+ * Paper klack (Landvetter + generic std): fixed design offset × bay/strip scale.
  */
 function readKlackAmtPx(): number {
   const el = stripElement.value || stripHostEl.value
   if (!el) return KLACK_BASE_PX
   const styles = getComputedStyle(el)
-  if (!paperLook.value) {
+  if (!paperKlack.value) {
     const gutterRaw = styles.getPropertyValue('--efs-bay-gutter').trim()
     const gutter = parseFloat(gutterRaw) || 8
     const marginRaw = styles.getPropertyValue('--cock-strip-margin-x').trim()
@@ -2258,7 +2299,7 @@ const SAAB_KLACK_SNAP_MULT = 5
 
 function klackSnapThresholdPx(): number {
   const amt = klackAmtPx.value
-  if (!paperLook.value && showSaabCockEdges.value) return amt * SAAB_KLACK_SNAP_MULT
+  if (!paperKlack.value && showSaabCockEdges.value) return amt * SAAB_KLACK_SNAP_MULT
   return amt * PAPER_KLACK_SNAP_THRESHOLD
 }
 
@@ -2286,7 +2327,7 @@ function captureDragOrigin() {
 function klackOffsetFromPointer(): number {
   const dx = dragLastClientX - paperStartX
   // SAAB needs headroom past 5× cock distance so the snap threshold is reachable
-  const max = !paperLook.value && showSaabCockEdges.value
+  const max = !paperKlack.value && showSaabCockEdges.value
     ? klackAmtPx.value * (SAAB_KLACK_SNAP_MULT + 0.5)
     : klackAmtPx.value * 2.2
   return Math.max(-max, Math.min(max, klackBaseX + dx))
@@ -2332,7 +2373,8 @@ function applyCockAfterUnifiedDrop(stripId: string, forcedSameSpot?: boolean) {
 const klackPullStyle = computed(() => undefined)
 
 const klackHostStyle = computed(() => {
-  if (!paperLook.value && !showSaabCockEdges.value && !props.strip.klack) return undefined
+  if (props.isLargeView) return undefined
+  if (!paperKlack.value && !showSaabCockEdges.value && !props.strip.klack) return undefined
   return {
     '--klack-amt': `${klackAmtPx.value || KLACK_BASE_PX}px`,
   }
@@ -2717,10 +2759,18 @@ const CALLSIGN_FONT_MAX = 26
 const CALLSIGN_FONT_MIN = 11
 const FIT_FONT_MIN = 7
 const stripScale = ref(1)
-/** Host hit width = strip --frame-side (8px × strip-scale). */
+/** Host hit width = strip --frame-side (8px × strip-scale); paper also offsets for side margin. */
 const cockHostStyle = computed(() => {
-  if (!showSaabCockEdges.value) return undefined
+  if (!showCockEdgeHits.value) return undefined
   const s = stripScale.value > 0 ? stripScale.value : 1
+  if (showPaperKlackEdges.value) {
+    return {
+      '--cock-frame-side': `${8 * s}px`,
+      '--cock-strip-margin-x': `${4 * s}px`,
+      '--cock-strip-margin-y': '0px',
+      '--paper-klack-amt': `${KLACK_BASE_PX * s}px`,
+    } as Record<string, string>
+  }
   return { '--cock-frame-side': `${8 * s}px` } as Record<string, string>
 })
 const bayScribbleStrokeWidth = computed(() => scribbleStrokeWidthCss(stripScale.value))
@@ -2941,6 +2991,82 @@ const paperEobt = computed(() => formatPaperHhmm(props.strip.eobt))
 const paperPrimaryTime = computed(() =>
   isArrLayout.value ? formatPaperHhmm(props.strip.eta) : formatPaperHhmm(props.strip.eobt),
 )
+
+/** Paper ARR airport for sector box (ADES / strip airport / RTC column / session). */
+const paperArrAirport = computed(() => {
+  const ades = (props.strip.ades || '').trim().toUpperCase()
+  if (ades && ades !== '????' && ades !== 'ZZZZ') return ades
+  const apt = (props.strip.airport || rtcColumnIcao.value || '').trim().toUpperCase()
+  if (apt) return apt
+  if (store.isPaperLook && store.myAirports.length === 1) {
+    return store.myAirports[0]!.toUpperCase()
+  }
+  return ''
+})
+
+/** True when this paper strip is an ESGG arrival (session or RTC column). */
+const paperEsggArr = computed(() => {
+  if (!paperLook.value || !isArrLayout.value) return false
+  return paperArrAirport.value === 'ESGG'
+})
+
+/** Bromma AD ARR — fixed ZZSB + ETA (no E/W split). */
+const paperEssbArr = computed(() => {
+  if (!paperLook.value || !isArrLayout.value) return false
+  return paperArrAirport.value === 'ESSB'
+})
+
+/**
+ * ARR col 4 top sector code:
+ * - ESGG: sectorEntryMin + STAR/entry AoR → ZZGE / ZZGW, else ZZGG
+ * - ESSB: ZZSB
+ */
+const paperEsggArrSector = computed(() => {
+  if (paperEssbArr.value) return 'ZZSB'
+  if (!paperEsggArr.value) return ''
+  const atis = store.atisInfo.find((a) => a.airport === 'ESGG')
+  const arrRwy = props.strip.runway || atis?.arrRunways?.[0]
+  const tmaEntry =
+    props.strip.tmaEntry ||
+    extractTmaEntryPoint(props.strip.route || props.strip.extractedRoute, props.strip.star)
+  return esggArrSectorCode({
+    star: props.strip.star,
+    tmaEntry,
+    arrRwy,
+    sectorEntryMin: props.strip.sectorEntryMin,
+  })
+})
+
+/** True when strip has a usable EuroScope sector-entry estimate (ESGG ETN only). */
+const paperEsggHasSectorEntry = computed(() => {
+  if (paperEssbArr.value) return false
+  if (!paperEsggArr.value) return false
+  const min = props.strip.sectorEntryMin
+  return min != null && Number.isFinite(min) && min >= 0
+})
+
+/**
+ * Time under sector code:
+ * - ESSB: always ETA
+ * - ESGG: ETN when sector entry known, else ETA
+ */
+const paperEsggArrEtn = computed(() => {
+  if (paperEssbArr.value) return formatPaperHhmm(props.strip.eta)
+  if (!paperEsggArr.value) return ''
+  if (paperEsggHasSectorEntry.value) {
+    const min = props.strip.sectorEntryMin!
+    const t = new Date(Date.now() + min * 60_000)
+    const hh = String(t.getUTCHours()).padStart(2, '0')
+    const mm = String(t.getUTCMinutes()).padStart(2, '0')
+    return `${hh}${mm}`
+  }
+  return formatPaperHhmm(props.strip.eta)
+})
+
+const paperEsggArrTimeTitle = computed(() => {
+  if (paperEssbArr.value) return 'Sector / ETA'
+  return paperEsggHasSectorEntry.value ? 'Sector / ETN' : 'Sector / ETA'
+})
 /** DEP col 2 bottom-left: cleared for takeoff (DEPA; paper keeps it after ATD) */
 const paperCto = computed(() => !!props.strip.clearedForTakeoff)
 /** ARR col 2 bottom-left: cleared to land */
@@ -3127,20 +3253,20 @@ function paperTip(shortLabel: string, longLabel: string): string {
   return paperLook.value ? shortLabel : longLabel
 }
 
-/** Paper col 4 — CLR read (also on when readback or ES CLR; unsetting in CLEARED clears ES CLR) */
+/** Paper col 4 — CLR Received (also on when Given / ES CLR; unsetting in CLEARED clears ES CLR) */
 const paperClearanceRead = computed(
   () => !!(props.strip.clearance || props.strip.clearanceReadback || props.strip.clearanceRead),
 )
-/** Left check is hidden after DCL dismiss until the next explicit read click. */
+/** Left check is hidden after DCL dismiss until the next explicit Received click. */
 const paperLeftMarkOn = computed(
   () => paperClearanceRead.value && !props.strip.paperClrReadSuppressed,
 )
-/** Paper col 5 — CLR correct (sets ES CLR; also on when ES CLR) */
+/** Paper col 5 — CLR Given (sets ES CLR; also on when ES CLR) */
 const paperClearanceReadback = computed(
   () => !!(props.strip.clearance || props.strip.clearanceReadback),
 )
 /**
- * ESGG paper: after DCL send (and while DONE/WILCO), show felt "DCL" in CLR read
+ * ESGG paper: after DCL send (and while DONE/WILCO), show felt "DCL" in CLR Received
  * instead of the checkmark. Freehand clr-read ink wins if present.
  */
 const paperShowDclRead = computed(() => {
@@ -3387,14 +3513,18 @@ async function onPobClear() {
   pobMenuOpen.value = false
 }
 
-/** Context menu ASSUME — untracked / inbound handoff only (not when already assumed by me) */
-const canAssumeFromMenu = computed(
-  () =>
-    store.isController &&
-    !isLocalOnlyStrip.value &&
-    !props.strip.isAssumed &&
-    !store.isStripOwnedByOther(props.strip),
-)
+/**
+ * Context menu / action-key ASSUME.
+ * Paper FPB: any strip not already assumed by me (may take ownership).
+ * SAAB/OTHER: untracked / inbound handoff only — never steal.
+ */
+const canAssumeFromMenu = computed(() => {
+  if (!store.isController || isLocalOnlyStrip.value || props.strip.isAssumed) {
+    return false
+  }
+  if (paperKlack.value || store.isPaperLook || store.isStdLook) return true
+  return !store.isStripOwnedByOther(props.strip)
+})
 
 /**
  * Contact me — setting on, untracked arrivals only.
@@ -3458,7 +3588,8 @@ const displayActions = computed(() => {
 
 /**
  * Drag: notes/vehicles always; own/untracked flights when controller.
- * Other-assumed flights locked — paper exception: incoming transfer to me only.
+ * Paper FPB: all strips (ownership lock lifted — same as ASSUME-any).
+ * SAAB/OTHER: other-assumed locked except pending transfer parties.
  */
 const canDragStrip = computed(() => {
   if (props.isLargeView) return false
@@ -6000,6 +6131,8 @@ function onDragAreaTouchStart(event: TouchEvent) {
     target.closest('.exp-chip') ||
     target.closest('.ctrl-arrow') ||
     target.closest('.pg-clr-check') ||
+    target.closest('.std-mark') ||
+    target.closest('[data-paper-flag]') ||
     target.closest('.pg-cto-check') ||
     target.closest('.pg-atis-qnh') ||
     target.closest('.remarks-input') ||
@@ -7549,6 +7682,25 @@ function onGroundStateClick(action: string) {
 .pg-adep { grid-area: adep; }
 .pg-ades { grid-area: ades; }
 
+/* Item 18 STS/ — same print face as ICAO, centered on ADEP|ADES divider */
+.pg-sts {
+  position: absolute;
+  left: 100%;
+  top: 62.5%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--pg-print);
+  font-size: calc(10px * var(--strip-scale));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+  color: #000;
+  white-space: nowrap;
+}
+
 .pg-clr-check {
   flex: 1 1 0;
   display: flex;
@@ -7601,6 +7753,25 @@ function onGroundStateClick(action: string) {
 .pg-ad-top {
   flex: 1 1 0;
   min-height: 0;
+}
+
+/* ESGG ARR: ZZGE/ZZGW + ETN stacked in col 4 top (std-entry layout) */
+.pg-ad-entry {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  justify-items: center;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.pg-entry-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* Bottom row of ADEP/ADES: RWY top-justified, ICAO bottom */
@@ -7670,9 +7841,22 @@ function onGroundStateClick(action: string) {
   z-index: 2;
 }
 
-.pg-band {
+/* Band 3 — OAT star from item 18 RMK/OAT (same slot as std strip) */
+.pg-oat {
+  grid-row: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
   min-height: 0;
   min-width: 0;
+  padding: calc(1px * var(--strip-scale)) calc(2px * var(--strip-scale)) 0;
+  font-family: var(--pg-print);
+  font-size: calc(9px * var(--strip-scale));
+  font-weight: 700;
+  line-height: 1;
+  color: #000;
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Col 6 bands 1–2: REA scribble (display-only; auto on ready) */
@@ -7802,8 +7986,15 @@ function onGroundStateClick(action: string) {
   text-transform: uppercase;
 }
 
-/* ARR: EOBT in lower half */
+/* ARR: OAT band 3 + EOBT band 4 */
+.pg-ctot-arr {
+  grid-template-rows: 1fr 1fr 1fr 1fr;
+}
+.pg-ctot-arr .pg-oat {
+  grid-row: 3;
+}
 .pg-arr-eobt {
+  grid-row: 4;
   display: flex;
   align-items: flex-end;
   justify-content: flex-start;
@@ -8054,6 +8245,11 @@ function onGroundStateClick(action: string) {
 .flight-strip.look-paper.klack-left {
   transform: translateX(calc(-28px * var(--bay-scale, var(--strip-scale))));
 }
+/* Zoom panel: never apply bay klack (scale would exaggerate sideways shift) */
+.flight-strip.is-large-view.klack-left,
+.flight-strip.is-large-view.klack-right {
+  transform: none;
+}
 .flight-strip.look-paper.klack-pulling {
   /* transform from klackPullStyle while dragging sideways */
   z-index: 1;
@@ -8109,14 +8305,15 @@ function onGroundStateClick(action: string) {
   transition: transform 160ms ease-out;
 }
 .strip-host--saab-cock:has(.dragging) .strip-cock-hit,
+.strip-host--paper-klack:has(.dragging) .strip-cock-hit,
 .strip-host--klack-instant .strip-cock-hit {
   transition: none;
 }
 .strip-cock-hit--left {
-  left: var(--cock-strip-margin-x);
+  left: var(--cock-strip-margin-x, 0px);
 }
 .strip-cock-hit--right {
-  right: var(--cock-strip-margin-x);
+  right: var(--cock-strip-margin-x, 0px);
 }
 /* No border wash — clickability is cursor only */
 .strip-cock-hit:hover,
@@ -8124,12 +8321,18 @@ function onGroundStateClick(action: string) {
   background: transparent;
   outline: none;
 }
-/* When cocked, hits move with the strip (same mid-gutter offset) */
+/* When cocked/klacked, hits move with the strip */
 .strip-host--saab-cock:has(.klack-left) .strip-cock-hit {
   transform: translateX(calc(-1 * var(--saab-cock-amt, 8px)));
 }
 .strip-host--saab-cock:has(.klack-right) .strip-cock-hit {
   transform: translateX(var(--saab-cock-amt, 8px));
+}
+.strip-host--paper-klack:has(.klack-left) .strip-cock-hit {
+  transform: translateX(calc(-1 * var(--paper-klack-amt, var(--klack-amt, 28px))));
+}
+.strip-host--paper-klack:has(.klack-right) .strip-cock-hit {
+  transform: translateX(var(--paper-klack-amt, var(--klack-amt, 28px)));
 }
 
 .strip-scribble-layer {

@@ -143,6 +143,28 @@ export function compactEsggRolesLabel(
   return parts.join(', ')
 }
 
+/**
+ * Generic paper covering roles (AD / T / P), filtered to what the airport offers.
+ * Densify: 0–1 full, 2 single letters, 3 empty.
+ */
+export function compactPaperRolesLabel(
+  roles: string[],
+  available: string[] | undefined,
+  level: EssaRolesCompactLevel = 0,
+): string {
+  const order = ['AD', 'T', 'P'] as const
+  const allow =
+    available && available.length > 0
+      ? new Set(available.map((r) => r.toUpperCase()))
+      : null
+  const set = new Set(roles.map((r) => r.toUpperCase()))
+  const parts = order.filter((r) => set.has(r) && (!allow || allow.has(r)))
+  if (parts.length === 0) return level >= 3 ? '' : '-'
+  if (level >= 3) return ''
+  if (level >= 2) return parts.join(', ')
+  return parts.join(', ')
+}
+
 export type EssaRoleCombination = {
   roles: string[]
   roleKey: string

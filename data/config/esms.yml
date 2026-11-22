@@ -1,0 +1,143 @@
+# Malmö/Sturup AD board — hidden from the config menu.
+# Loaded as a PAPER overlay for ESMS DEL/GND/TWR (or sole myAirport ESMS).
+# Menu entry is paper.yml (PAPER). Uses AD strip chrome (look: paper) + AD roles.
+
+name: ESMS
+look: paper
+radarRange: 25
+arrivalRange: 100
+arrivalEtaMinutes: 30
+
+layout:
+  bays:
+    # Bay 1: pending (top) · TAXI/PUSHBACK (~½) · FATO (remainder, resizable)
+    bay1:
+      sections:
+        pending_dep:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        taxi:
+          title: TAXI/PUSHBACK
+          addFromTop: false
+          heightPct: 50
+        fato:
+          title: FATO
+          addFromTop: false
+
+    # Bay 2: active main runway (17 or 35 from rwyconfig)
+    bay2:
+      sections:
+        sequence:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+        runway:
+          title: RWY <drwy>
+          addFromTop: false
+
+    # Bay 3: pending arr (top ~¾) · RWY 11/29 (remainder, resizable)
+    bay3:
+      sections:
+        pending_arr:
+          title: ""
+          hideHeader: true
+          addFromTop: true
+          heightPct: 75
+        runway_b:
+          title: RWY 11/29
+          addFromTop: false
+
+sectionRules:
+  # Printed strips land in pending until dragged
+  pending_dep_print:
+    sectionId: pending_dep
+    direction: departure
+    priority: 40
+
+  pending_local_print:
+    sectionId: pending_dep
+    direction: local
+    priority: 40
+
+  pending_arr_print:
+    sectionId: pending_arr
+    direction: arrival
+    priority: 40
+
+  pending_cross_print:
+    sectionId: pending_arr
+    direction: cross
+    priority: 40
+
+  # FATO — VFR / local (manual drag also works)
+  fato_local:
+    sectionId: fato
+    direction: local
+    ifr: false
+    priority: 35
+
+  fato_arr_vfr:
+    sectionId: fato
+    direction: arrival
+    ifr: false
+    priority: 34
+
+  # Crosswind 11/29 — not the active arr/dep runway (third runway)
+  runway_b_lineup:
+    sectionId: runway_b
+    direction: either
+    groundstates: [LINEUP, DEPA]
+    depRunway: false
+    arrRunway: false
+    priority: 55
+
+deleteRules:
+  delete_dep_high_transferred:
+    direction: departure
+    controller: not_myself
+    minAltitudeAboveField: 2500
+    priority: 100
+
+  delete_parked:
+    direction: arrival
+    groundstates: [PARK]
+    priority: 100
+
+  delete_parked_local:
+    direction: local
+    groundstates: [PARK]
+    priority: 100
+
+  delete_beyond_range:
+    beyondRange: true
+    priority: 10
+
+moveRules:
+  to_taxi:
+    toSectionId: taxi
+    command:
+      type: setGroundstate
+      value: TAXI
+    priority: 40
+
+  to_fato:
+    toSectionId: fato
+    command:
+      type: setGroundstate
+      value: TAXI
+    priority: 35
+
+  to_runway:
+    toSectionId: runway
+    command:
+      type: setGroundstate
+      value: LINEUP
+    priority: 50
+
+  to_runway_b:
+    toSectionId: runway_b
+    command:
+      type: setGroundstate
+      value: LINEUP
+    priority: 51

@@ -64,6 +64,8 @@ interface YamlLayoutBlock {
             title: string
             addFromTop?: boolean
             height?: number
+            /** Percent of bay body height (1–100); skips content pixel-lock. */
+            heightPct?: number
             hideHeader?: boolean
             visibleFor?: EssaFamily[]
         }>
@@ -124,11 +126,19 @@ function transformLayout(yamlLayout: YamlLayoutBlock): {
                 sectionVisibleFor.set(sectionId, sectionData.visibleFor)
             }
 
+            const heightPct =
+                typeof sectionData.heightPct === "number" &&
+                Number.isFinite(sectionData.heightPct) &&
+                sectionData.heightPct > 0 &&
+                sectionData.heightPct <= 100
+                    ? sectionData.heightPct
+                    : undefined
             sections.push({
                 id: sectionId,
                 title: sectionData.title,
                 addFromTop: sectionData.addFromTop,
                 height: sectionData.height,
+                heightPct,
                 hideHeader: sectionData.hideHeader,
             })
         }
@@ -409,7 +419,7 @@ export function loadConfig(configPath: string, options?: LoadConfigOptions): Efs
         myAirports: [],
         radarRangeNm: yamlConfig.radarRange ?? 25,
         arrivalRangeNm: yamlConfig.arrivalRange ?? 100,
-        arrivalEtaMinutes: yamlConfig.arrivalEtaMinutes ?? 20,
+        arrivalEtaMinutes: yamlConfig.arrivalEtaMinutes ?? 30,
         groundRangeNm: yamlConfig.groundRange ?? 3,
         layout,
         sectionToBay,
@@ -466,6 +476,13 @@ export function resolveConfigPath(dataDir: string, fileOrPath: string): {
             saabLayoutId: legacyLayout,
         }
     }
+    // Legacy ESGG / STD / STD 2 RWY → unified PAPER menu file
+    if (base === 'esgg.yml' || base === 'std.yml' || base === 'std-2rwy.yml') {
+        return {
+            fullPath: path.join(dataDir, 'config', 'paper.yml'),
+            file: 'paper.yml',
+        }
+    }
     const fullPath = path.isAbsolute(fileOrPath)
         ? fileOrPath
         : path.join(dataDir, 'config', base)
@@ -476,6 +493,15 @@ export function resolveConfigPath(dataDir: string, fileOrPath: string): {
  * Scan a directory for selectable YAML config files and extract their names.
  * Files without a `layout`, `layouts`, or `bayTemplate` key are include fragments and are skipped.
  */
+/** Internal / legacy paper overlays — not shown in the config menu (use PAPER). */
+const HIDDEN_MENU_CONFIG_FILES = new Set([
+    'esgg.yml',
+    'esms.yml',
+    'essb.yml',
+    'std.yml',
+    'std-2rwy.yml',
+])
+
 export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
     if (!fs.existsSync(configDir)) {
         return []
@@ -485,6 +511,7 @@ export function scanConfigDirectory(configDir: string): ConfigFileInfo[] {
     const configs: ConfigFileInfo[] = []
 
     for (const file of files) {
+        if (HIDDEN_MENU_CONFIG_FILES.has(file)) continue
         const fullPath = path.join(configDir, file)
         try {
             const content = fs.readFileSync(fullPath, 'utf8')
