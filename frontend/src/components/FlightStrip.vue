@@ -680,8 +680,14 @@
             <!-- Bottom cell of col 1 (ASSR); left half = rising / clickzone -->
             <div
               class="pg-assr"
-              :class="{ ghost: !strip.squawk }"
-              :title="paperAssrTitle"
+              :class="{
+                ghost: !displayAssr,
+                'squawk-empty': !displayAssr && ssrCoordActive,
+                'squawk-resettable': !!displayAssr && ssrCoordActive,
+              }"
+              :title="ssrCoordActive ? assrTitle : paperAssrTitle"
+              @click.stop="ssrCoordActive ? onAssrClick() : undefined"
+              @dblclick.stop="ssrCoordActive ? onAssrDblClick() : undefined"
             >
               <button
                 v-if="paperShowXferDiagClickspot"
@@ -690,7 +696,21 @@
                 :title="paperXferDiagTitle"
                 @click.stop="onPaperXferDiagClick"
               />
-              <span class="pg-assr-val">{{ strip.squawk || '' }}</span>
+              <template v-if="ssrCoordActive && assrEditing">
+                <input
+                  ref="assrEditInput"
+                  v-model="assrEditText"
+                  class="assr-edit-input"
+                  maxlength="4"
+                  inputmode="numeric"
+                  @blur="onAssrEditBlur"
+                  @keydown.enter="onAssrEditBlur"
+                  @keydown.escape="onAssrEditCancel"
+                  @click.stop
+                  @dblclick.stop
+                />
+              </template>
+              <span v-else class="pg-assr-val">{{ displayAssr }}</span>
             </div>
           </div>
 

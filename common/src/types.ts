@@ -502,9 +502,10 @@ export interface UiSettings {
      */
     autoLopSsr: AutoLopSsrMode
     /**
-     * RTC ASSR Simulation: for LOP verbal-ACC SSR airports, hide live ES ASSR until
-     * manual entry or double-click TopSky generate/override. Default on.
-     * (Legacy settings key: rtcSsrSimulation — migrated on load.)
+     * RTC ASSR Simulation: at Swedish towers outside Typ 1 / TopSky fields,
+     * hide live ES ASSR on all strips (DEP/ARR/local) until manual entry or
+     * double-click TopSky generate/override.
+     * Default on. (Legacy settings key: rtcSsrSimulation — migrated on load.)
      */
     rtcAssrSimulation: boolean
     /**

@@ -840,6 +840,23 @@ export const mockPluginMessages: PluginMessage[] = [
     }),
     radarUpdate("BRA214", 65, 65.538, 22.13, { groundSpeed: 20, controller: "ESPA_TWR" }),
 
+    // Local VFR pattern (ESPA↔ESPA)
+    fpUpdate("SEHPA", "ESPA", "ESPA", "C172", {
+        flightRules: "V",
+        rfl: 1500,
+        eobt: "1145",
+        filedEet: "0045",
+        depRwy: "14",
+        route: "DCT",
+    }),
+    ctrUpdate("SEHPA", {
+        squawk: "7002",
+        groundstate: "NSTS",
+        stand: "9",
+        controller: "ESPA_TWR",
+    }),
+    radarUpdate("SEHPA", 65, 65.544, 22.119, { groundSpeed: 0, controller: "ESPA_TWR" }),
+
     // === GRP stand-menu arrivals (one+ per airport with GRP stands) ===
     ...grpStandMenuArrivalMessages(),
 ]

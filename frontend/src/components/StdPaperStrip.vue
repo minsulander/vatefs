@@ -20,6 +20,9 @@ const emit = defineEmits<{
 }>()
 const store = useEfsStore()
 
+/** Hide live ES ASSR when RTC ASSR Simulation applies (non–Typ 1 Swedish DEP). */
+const displayAssr = computed(() => store.displayAssrForStrip(props.strip))
+
 const stripIdRef = computed(() => props.strip.id)
 const { hasClrReadScribble, hasClrCorrectScribble } = useStripScribbles(
   stripIdRef,
@@ -55,34 +58,19 @@ const localArrivalText = computed(() => {
 })
 const ctot = computed(() => hhmm(props.strip.ctot))
 
-/** Own aerodrome from login callsign / myAirports — blank on T strips. */
-function isOwnAirport(icao: string | undefined): boolean {
-  const code = (icao || '').trim().toUpperCase()
-  if (!code || code === '????' || code === 'ZZZZ') return false
-  if (store.myAirports.some((a) => a.toUpperCase() === code)) return true
-  const cs = (store.myCallsign || '').trim().toUpperCase()
-  return !!cs && cs.startsWith(code)
-}
-
-const adepParts = computed(() =>
-  isOwnAirport(props.strip.adep)
-    ? { prefix: '', visible: '' }
-    : airportDisplayParts(props.strip.adep),
-)
-const adesParts = computed(() =>
-  isOwnAirport(props.strip.ades)
-    ? { prefix: '', visible: '' }
-    : airportDisplayParts(props.strip.ades),
-)
-const points = computed(() =>
-  routeWords(props.strip.route, props.strip.stripType === 'arrival'),
-)
+const adepParts = computed(() => airportDisplayParts(props.strip.adep))
+const adesParts = computed(() => airportDisplayParts(props.strip.ades))
+/** Box 9 route points — DEP/local only (ARR blank). */
+const points = computed((): [string, string] => {
+  if (props.strip.stripType === 'arrival') return ['', '']
+  return routeWords(props.strip.route, false)
+})
 const rfl = computed(() => compactRfl(props.strip.rfl))
 
-/** FRUL: hide IFR (I); only show V / Y / Z. */
+/** FRUL: I / V / Y / Z. */
 const frulText = computed(() => {
   const r = (props.strip.flightRules || '').trim().toUpperCase()
-  return r === 'V' || r === 'Y' || r === 'Z' ? r : ''
+  return r === 'I' || r === 'V' || r === 'Y' || r === 'Z' ? r : ''
 })
 
 const isArrival = computed(() => props.strip.stripType === 'arrival')
@@ -154,7 +142,9 @@ function onClrGivenClick() {
           <span>{{ strip.aircraftType }}<template v-if="strip.wakeTurbulence">/{{ strip.wakeTurbulence }}</template></span>
         </span>
       </div>
-      <div class="std-sq" title="ASSR"><span class="std-glyph std-glyph-right">{{ strip.squawk || '' }}</span></div>
+      <div class="std-sq" title="ASSR">
+        <span class="std-glyph std-glyph-right">{{ displayAssr }}</span>
+      </div>
     </div>
 
     <div class="std-col std-split">
@@ -312,7 +302,6 @@ function onClrGivenClick() {
   overflow: hidden;
 }
 .std-cs,
-.std-tas,
 .std-ctot {
   font-weight: 600;
 }
@@ -324,6 +313,13 @@ function onClrGivenClick() {
   text-overflow: clip;
   white-space: nowrap;
   cursor: pointer;
+  font-size: calc(12px * var(--strip-scale, 1));
+}
+.std-cs .std-glyph {
+  transform: none;
+}
+.std-tas {
+  font-weight: 400;
 }
 .std-tas,
 .std-type,

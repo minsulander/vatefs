@@ -3322,13 +3322,19 @@ export const useEfsStore = defineStore("efs", () => {
 
     /**
      * Hide live ES ASSR (manual/coordination mode) for this strip.
-     * Keys off ADEP via SSR_COORDINATION_AIRPORTS (e.g. ESNS), not bay/config —
-     * works on 1RWY3BAY and other non-multiAirport layouts. Never ESSA/ESGG,
-     * arrivals, or local. An assigned EuroScope code stays visible otherwise.
+     * Non–Typ 1 Swedish towers (e.g. ESNS): blank ASSR on all strips (DEP/ARR/local).
+     * ARR keys off ADES; DEP/local off ADEP. Typ 1 (ESSB/ESMS/ESPA/ÖKC/…) keep ES ASSR.
      */
     function isSsrCoordinationActive(strip: FlightStrip): boolean {
         if (!rtcAssrSimulation.value) return false
-        if (!requiresSsrCoordination(strip.adep, { stripType: strip.stripType })) return false
+        if (
+            !requiresSsrCoordination(strip.adep, {
+                stripType: strip.stripType,
+                ades: strip.ades,
+            })
+        ) {
+            return false
+        }
         if (ssrCoordOverrideIds.value.has(strip.id)) return false
         return true
     }

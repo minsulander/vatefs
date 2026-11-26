@@ -21,18 +21,24 @@ export function airportDisplayParts(code: string | undefined): {
   return { prefix: '', visible: full }
 }
 
-/** FL300 → 300, A050 → 050, 30000 ft → 300. */
+/**
+ * RFL in ICAO FPL item-15 form: F320 / A050.
+ * Accepts FL320, A50, bare hundreds (320), or feet (32000).
+ */
 export function compactRfl(rfl: string | undefined): string {
   if (!rfl) return ''
   const raw = rfl.trim().toUpperCase()
+  const prefixed = raw.match(/^([AFSM])(\d{1,4})$/)
+  if (prefixed?.[1] && prefixed[2]) {
+    return prefixed[1] + prefixed[2].padStart(3, '0').slice(-3)
+  }
   const fl = raw.match(/^FL(\d+)$/)
-  if (fl?.[1]) return fl[1].padStart(3, '0')
-  const alt = raw.match(/^A(\d+)$/)
-  if (alt?.[1]) return alt[1].padStart(3, '0').slice(-3)
+  if (fl?.[1]) return 'F' + fl[1].padStart(3, '0').slice(-3)
   if (/^\d+$/.test(raw)) {
     const n = Number(raw)
-    if (n >= 1000) return String(Math.round(n / 100)).padStart(3, '0')
-    return raw.padStart(3, '0')
+    const hundreds = n >= 1000 ? Math.round(n / 100) : n
+    // Bare digits from formatCflMenuLabel are FL hundreds (A* keeps its prefix).
+    return 'F' + String(hundreds).padStart(3, '0').slice(-3)
   }
   return raw
 }

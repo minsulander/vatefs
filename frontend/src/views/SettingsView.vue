@@ -316,10 +316,10 @@
                 @update:model-value="onRtcAssrSimulation"
             />
             <p class="text-caption text-grey ml-13" style="margin-top: -15px">
-                Departures from LOP verbal-ACC SSR airports (ESNS, ESCF, ESGJ, ESGT, …): hide
-                live ES ASSR until you enter a manual code (click) or double-click to generate via
-                TopSky — regardless of which bay/config is loaded. ESSA, ESGG, arrivals, and local
-                flights always show the EuroScope code. On by default.
+                Non–Typ 1 Swedish towers (ESNS, ESOE, ESGJ, …): hide live ES ASSR on all strips
+                (DEP/ARR/local) until you enter a manual code (click) or double-click to generate via
+                TopSky — regardless of which bay/config is loaded. Typ 1 (ESSB, ESMS, ESPA, ÖKC, …)
+                and ESSA/ESGG keep the EuroScope code. On by default.
             </p>
 
             <v-switch

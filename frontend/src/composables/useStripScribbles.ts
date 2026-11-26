@@ -79,7 +79,7 @@ export function scribbleStrokeWidthCss(stripScaleOrWidthPx: number, isWidth = fa
   const scale = isWidth
     ? stripScaleOrWidthPx / SCRIBBLE_STRIP_REF_WIDTH_PX
     : stripScaleOrWidthPx
-  return Math.max(0.75, SCRIBBLE_STROKE_AT_REF_PX * scale)
+  return SCRIBBLE_STROKE_AT_REF_PX * scale
 }
 
 /** viewBox for currently visible bands (full-strip SVG). Prefer per-band viewBoxes for display. */

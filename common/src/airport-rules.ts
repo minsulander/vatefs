@@ -181,49 +181,50 @@ export function requiresAccCoordination(
 }
 
 /**
- * LOP airports where SSR is passed verbally during ACC coordination
- * (hide live ES ASSR until override / TopSky generate).
- * ESTL intentionally omitted — always show normal ES SSR there.
+ * Typ 1 TWR/APP — TopSky-linked (live ES ASSR / AllocateSSR).
+ * RTC ASSR Simulation hides ASSR on *all* paper strips at Swedish towers
+ * that are *not* in this set (DEP/ARR/local keyed off the tower ICAO).
+ *
+ * a–j: Bromma, Kiruna, Luleå, Ronneby, Sturup, Såtenäs, Umeå, Visby,
+ *      ÖKC (ESCF/ESSL/ESSP), Östersund. Plus ESSA/ESGG.
  */
-const SSR_COORDINATION_AIRPORTS = new Set([
+const TYPE1_TOPSKY_SSR_AIRPORTS = new Set([
     "ESCF",
-    "ESGJ",
-    "ESGT",
-    "ESIA",
-    "ESKN",
-    "ESMK",
-    "ESMQ",
-    "ESMX",
-    "ESNS",
-    "ESNX",
-    "ESOE",
-    "ESOK",
-    "ESPE",
-    "ESSD",
-    "ESSL",
-    "ESSP",
+    "ESDF",
+    "ESGG",
+    "ESIB",
+    "ESMS",
+    "ESNQ",
+    "ESNU",
+    "ESNZ",
+    "ESPA",
+    "ESSA",
+    "ESSB",
+    "ESSV",
 ])
 
 export type SsrCoordinationOpts = {
-    /** Local strips keep normal ES SSR at all SSR-callout airports (no hide mode). */
+    /** Arrival → ADES is the tower; DEP/local → ADEP. */
     stripType?: string | null
+    /** Destination ICAO — used when stripType is arrival. */
+    ades?: string | null
 }
 
 /**
- * True when ADEP uses verbal-ACC SSR coordination (hide ES ASSR until override).
- * Only departures (and callers that omit strip type). Arrivals and local strips
- * always show the EuroScope code — ESSA/ESGG top-down must not blank an assigned SSR.
- * Independent of EST / NeedsCoordination. ESSA, ESGG, and ESTL are not in the set.
+ * True when the tower airport needs verbal-ACC SSR simulation (hide ES ASSR
+ * until override). Applies to all strip types at non–Typ 1 Swedish towers.
+ * ARR keys off ADES; DEP/local/other key off ADEP. Non-ES never hides.
  */
 export function requiresSsrCoordination(
     adep: string | undefined | null,
     opts?: SsrCoordinationOpts,
 ): boolean {
-    if (!adep) return false
-    const icao = adep.trim().toUpperCase()
-    if (!SSR_COORDINATION_AIRPORTS.has(icao)) return false
     const kind = (opts?.stripType || "").toLowerCase()
-    if (kind === "local" || kind === "arrival") return false
+    const raw = kind === "arrival" ? (opts?.ades ?? adep) : adep
+    if (!raw) return false
+    const icao = raw.trim().toUpperCase()
+    if (!icao.startsWith("ES")) return false
+    if (TYPE1_TOPSKY_SSR_AIRPORTS.has(icao)) return false
     return true
 }
 
