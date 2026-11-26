@@ -186,10 +186,9 @@ export function requiresAccCoordination(
  * that are *not* in this set (DEP/ARR/local keyed off the tower ICAO).
  *
  * a–j: Bromma, Kiruna, Luleå, Ronneby, Sturup, Såtenäs, Umeå, Visby,
- *      ÖKC (ESCF/ESSL/ESSP), Östersund. Plus ESSA/ESGG.
+ *      Östersund. Plus ESSA/ESGG. (ÖKC ESCF/ESSL/ESSP are not Typ 1.)
  */
 const TYPE1_TOPSKY_SSR_AIRPORTS = new Set([
-    "ESCF",
     "ESDF",
     "ESGG",
     "ESIB",

@@ -39,7 +39,7 @@ assert(requiresAccCoordination("ESKC") === false, "ESKC no ATS")
 assert(requiresAccCoordination(undefined) === false, "undefined adep")
 
 assert(requiresSsrCoordination("ESOE") === true, "ESOE not Typ1 → SSR coord")
-assert(requiresSsrCoordination("ESCF") === false, "ESCF ÖKC Typ1 → show ES SSR")
+assert(requiresSsrCoordination("ESCF") === true, "ESCF ÖKC not Typ1 → SSR coord")
 assert(requiresSsrCoordination("ESNS") === true, "ESNS not Typ1 → SSR coord")
 assert(requiresSsrCoordination("ESNS", { stripType: "departure" }) === true, "ESNS dep SSR coord")
 assert(requiresSsrCoordination("ESTL") === true, "ESTL not Typ1 → SSR coord")
@@ -47,7 +47,7 @@ assert(requiresSsrCoordination("ESGG") === false, "ESGG Typ1 → show ES SSR")
 assert(requiresSsrCoordination("ESPE") === true, "ESPE not Typ1 → SSR coord")
 assert(requiresSsrCoordination("ESPE", { stripType: "local" }) === true, "ESPE local SSR coord")
 assert(requiresSsrCoordination("ESOE", { stripType: "local" }) === true, "ESOE local SSR coord")
-assert(requiresSsrCoordination("ESCF", { stripType: "local" }) === false, "ESCF local Typ1 show")
+assert(requiresSsrCoordination("ESCF", { stripType: "local" }) === true, "ESCF local SSR coord")
 assert(requiresSsrCoordination("ESPE", { stripType: "departure" }) === true, "ESPE dep SSR coord")
 assert(requiresSsrCoordination("ESOE", { stripType: "departure" }) === true, "ESOE dep SSR coord")
 assert(requiresSsrCoordination("ESSA") === false, "ESSA Typ1 → show ES SSR")
@@ -66,8 +66,8 @@ assert(
     "ARR ADEP=ADES ESOE hides",
 )
 assert(
-    requiresSsrCoordination("ESGG", { stripType: "arrival", ades: "ESCF" }) === false,
-    "ARR to ESCF Typ1 shows SSR",
+    requiresSsrCoordination("ESGG", { stripType: "arrival", ades: "ESCF" }) === true,
+    "ARR to ESCF hides SSR",
 )
 assert(
     requiresSsrCoordination("ESOE", { stripType: "arrival" }) === true,
